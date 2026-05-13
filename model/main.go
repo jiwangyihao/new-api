@@ -402,6 +402,13 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`max_purchase_per_user`" + ` integer DEFAULT 0,
 ` + "`upgrade_group`" + ` varchar(64) DEFAULT '',
 ` + "`total_amount`" + ` bigint NOT NULL DEFAULT 0,
+` + "`monthly_token_limit`" + ` bigint NOT NULL DEFAULT 0,
+` + "`concurrency_limit`" + ` integer NOT NULL DEFAULT 0,
+` + "`is_trial`" + ` numeric DEFAULT 0,
+` + "`public_visible`" + ` numeric DEFAULT 1,
+` + "`trial_duration_hours`" + ` integer NOT NULL DEFAULT 0,
+` + "`reward_eligible`" + ` numeric DEFAULT 1,
+` + "`business_code`" + ` varchar(64) DEFAULT NULL,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
 ` + "`created_at`" + ` bigint,
@@ -435,6 +442,13 @@ PRIMARY KEY (` + "`id`" + `)
 		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
 		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
 		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
+		{Name: "monthly_token_limit", DDL: "`monthly_token_limit` bigint NOT NULL DEFAULT 0"},
+		{Name: "concurrency_limit", DDL: "`concurrency_limit` integer NOT NULL DEFAULT 0"},
+		{Name: "is_trial", DDL: "`is_trial` numeric DEFAULT 0"},
+		{Name: "public_visible", DDL: "`public_visible` numeric DEFAULT 1"},
+		{Name: "trial_duration_hours", DDL: "`trial_duration_hours` integer NOT NULL DEFAULT 0"},
+		{Name: "reward_eligible", DDL: "`reward_eligible` numeric DEFAULT 1"},
+		{Name: "business_code", DDL: "`business_code` varchar(64) DEFAULT NULL"},
 		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
 		{Name: "created_at", DDL: "`created_at` bigint"},
@@ -445,6 +459,11 @@ PRIMARY KEY (` + "`id`" + `)
 			continue
 		}
 		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+			return err
+		}
+	}
+	if !DB.Migrator().HasIndex(tableName, "idx_subscription_plans_business_code") {
+		if err := DB.Exec("CREATE UNIQUE INDEX `idx_subscription_plans_business_code` ON `" + tableName + "` (`business_code`)").Error; err != nil {
 			return err
 		}
 	}

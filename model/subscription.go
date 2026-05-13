@@ -171,6 +171,14 @@ type SubscriptionPlan struct {
 	// Total quota (amount in quota units, 0 = unlimited)
 	TotalAmount int64 `json:"total_amount" gorm:"type:bigint;not null;default:0"`
 
+	MonthlyTokenLimit  int64   `json:"monthly_token_limit" gorm:"type:bigint;not null;default:0"`
+	ConcurrencyLimit   int     `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
+	IsTrial            bool    `json:"is_trial" gorm:"default:false"`
+	PublicVisible      bool    `json:"public_visible" gorm:"default:true"`
+	TrialDurationHours int     `json:"trial_duration_hours" gorm:"type:int;not null;default:0"`
+	RewardEligible     bool    `json:"reward_eligible" gorm:"default:true"`
+	BusinessCode       *string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
+
 	// Quota reset period for plan
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
@@ -238,6 +246,12 @@ type UserSubscription struct {
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
+
+	TokenLimit        int64  `json:"token_limit" gorm:"type:bigint;not null;default:0"`
+	TokenUsed         int64  `json:"token_used" gorm:"type:bigint;not null;default:0"`
+	ConcurrencyLimit  int    `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
+	GrantReason       string `json:"grant_reason" gorm:"type:varchar(32);default:'';index"`
+	GrantSourceUserId int    `json:"grant_source_user_id" gorm:"type:int;default:0;index"`
 
 	StartTime int64  `json:"start_time" gorm:"bigint"`
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
@@ -456,7 +470,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {
@@ -484,20 +498,24 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		}
 	}
 	sub := &UserSubscription{
-		UserId:        userId,
-		PlanId:        plan.Id,
-		AmountTotal:   plan.TotalAmount,
-		AmountUsed:    0,
-		StartTime:     now.Unix(),
-		EndTime:       endUnix,
-		Status:        "active",
-		Source:        source,
-		LastResetTime: lastReset,
-		NextResetTime: nextReset,
-		UpgradeGroup:  upgradeGroup,
-		PrevUserGroup: prevGroup,
-		CreatedAt:     common.GetTimestamp(),
-		UpdatedAt:     common.GetTimestamp(),
+		UserId:           userId,
+		PlanId:           plan.Id,
+		AmountTotal:      plan.TotalAmount,
+		AmountUsed:       0,
+		TokenLimit:       plan.MonthlyTokenLimit,
+		TokenUsed:        0,
+		ConcurrencyLimit: plan.ConcurrencyLimit,
+		GrantReason:      source,
+		StartTime:        now.Unix(),
+		EndTime:          endUnix,
+		Status:           "active",
+		Source:           source,
+		LastResetTime:    lastReset,
+		NextResetTime:    nextReset,
+		UpgradeGroup:     upgradeGroup,
+		PrevUserGroup:    prevGroup,
+		CreatedAt:        common.GetTimestamp(),
+		UpdatedAt:        common.GetTimestamp(),
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err

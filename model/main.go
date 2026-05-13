@@ -415,51 +415,54 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`updated_at`" + ` bigint,
 PRIMARY KEY (` + "`id`" + `)
 )`
-		return DB.Exec(createSQL).Error
-	}
-	var cols []struct {
-		Name string `gorm:"column:name"`
-	}
-	if err := DB.Raw("PRAGMA table_info(`" + tableName + "`)").Scan(&cols).Error; err != nil {
-		return err
-	}
-	existing := make(map[string]struct{}, len(cols))
-	for _, c := range cols {
-		existing[c.Name] = struct{}{}
-	}
-	required := []sqliteColumnDef{
-		{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
-		{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
-		{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},
-		{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'USD'"},
-		{Name: "duration_unit", DDL: "`duration_unit` varchar(16) NOT NULL DEFAULT 'month'"},
-		{Name: "duration_value", DDL: "`duration_value` integer NOT NULL DEFAULT 1"},
-		{Name: "custom_seconds", DDL: "`custom_seconds` bigint NOT NULL DEFAULT 0"},
-		{Name: "enabled", DDL: "`enabled` numeric DEFAULT 1"},
-		{Name: "sort_order", DDL: "`sort_order` integer DEFAULT 0"},
-		{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
-		{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
-		{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
-		{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
-		{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
-		{Name: "monthly_token_limit", DDL: "`monthly_token_limit` bigint NOT NULL DEFAULT 0"},
-		{Name: "concurrency_limit", DDL: "`concurrency_limit` integer NOT NULL DEFAULT 0"},
-		{Name: "is_trial", DDL: "`is_trial` numeric DEFAULT 0"},
-		{Name: "public_visible", DDL: "`public_visible` numeric DEFAULT 1"},
-		{Name: "trial_duration_hours", DDL: "`trial_duration_hours` integer NOT NULL DEFAULT 0"},
-		{Name: "reward_eligible", DDL: "`reward_eligible` numeric DEFAULT 1"},
-		{Name: "business_code", DDL: "`business_code` varchar(64) DEFAULT NULL"},
-		{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
-		{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
-		{Name: "created_at", DDL: "`created_at` bigint"},
-		{Name: "updated_at", DDL: "`updated_at` bigint"},
-	}
-	for _, col := range required {
-		if _, ok := existing[col.Name]; ok {
-			continue
-		}
-		if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+		if err := DB.Exec(createSQL).Error; err != nil {
 			return err
+		}
+	} else {
+		var cols []struct {
+			Name string `gorm:"column:name"`
+		}
+		if err := DB.Raw("PRAGMA table_info(`" + tableName + "`)").Scan(&cols).Error; err != nil {
+			return err
+		}
+		existing := make(map[string]struct{}, len(cols))
+		for _, c := range cols {
+			existing[c.Name] = struct{}{}
+		}
+		required := []sqliteColumnDef{
+			{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
+			{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
+			{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},
+			{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'USD'"},
+			{Name: "duration_unit", DDL: "`duration_unit` varchar(16) NOT NULL DEFAULT 'month'"},
+			{Name: "duration_value", DDL: "`duration_value` integer NOT NULL DEFAULT 1"},
+			{Name: "custom_seconds", DDL: "`custom_seconds` bigint NOT NULL DEFAULT 0"},
+			{Name: "enabled", DDL: "`enabled` numeric DEFAULT 1"},
+			{Name: "sort_order", DDL: "`sort_order` integer DEFAULT 0"},
+			{Name: "stripe_price_id", DDL: "`stripe_price_id` varchar(128) DEFAULT ''"},
+			{Name: "creem_product_id", DDL: "`creem_product_id` varchar(128) DEFAULT ''"},
+			{Name: "max_purchase_per_user", DDL: "`max_purchase_per_user` integer DEFAULT 0"},
+			{Name: "upgrade_group", DDL: "`upgrade_group` varchar(64) DEFAULT ''"},
+			{Name: "total_amount", DDL: "`total_amount` bigint NOT NULL DEFAULT 0"},
+			{Name: "monthly_token_limit", DDL: "`monthly_token_limit` bigint NOT NULL DEFAULT 0"},
+			{Name: "concurrency_limit", DDL: "`concurrency_limit` integer NOT NULL DEFAULT 0"},
+			{Name: "is_trial", DDL: "`is_trial` numeric DEFAULT 0"},
+			{Name: "public_visible", DDL: "`public_visible` numeric DEFAULT 1"},
+			{Name: "trial_duration_hours", DDL: "`trial_duration_hours` integer NOT NULL DEFAULT 0"},
+			{Name: "reward_eligible", DDL: "`reward_eligible` numeric DEFAULT 1"},
+			{Name: "business_code", DDL: "`business_code` varchar(64) DEFAULT NULL"},
+			{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
+			{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
+			{Name: "created_at", DDL: "`created_at` bigint"},
+			{Name: "updated_at", DDL: "`updated_at` bigint"},
+		}
+		for _, col := range required {
+			if _, ok := existing[col.Name]; ok {
+				continue
+			}
+			if err := DB.Exec("ALTER TABLE `" + tableName + "` ADD COLUMN " + col.DDL).Error; err != nil {
+				return err
+			}
 		}
 	}
 	if !DB.Migrator().HasIndex(tableName, "idx_subscription_plans_business_code") {

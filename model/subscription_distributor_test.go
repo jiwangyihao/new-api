@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -50,4 +51,26 @@ func TestSubscriptionPlanBusinessCode_RejectsDuplicateNonEmpty(t *testing.T) {
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7204, Title: "Basic A", Enabled: true, BusinessCode: &code}).Error)
 	dup := "basic_monthly"
 	require.Error(t, DB.Create(&SubscriptionPlan{Id: 7205, Title: "Basic B", Enabled: true, BusinessCode: &dup}).Error)
+}
+
+func TestEnsureSubscriptionPlanTableSQLite_CreatesBusinessCodeUniqueIndexOnFreshTable(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.True(t, DB.Migrator().HasIndex("subscription_plans", "idx_subscription_plans_business_code"))
+
+	code := "basic_monthly"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7210, Title: "Basic A", Enabled: true, BusinessCode: &code}).Error)
+	dup := "basic_monthly"
+	require.Error(t, DB.Create(&SubscriptionPlan{Id: 7211, Title: "Basic B", Enabled: true, BusinessCode: &dup}).Error)
 }

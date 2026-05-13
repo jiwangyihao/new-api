@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -149,7 +148,7 @@ func TestSubscriptionBillingPreConsumesEstimatedTokens(t *testing.T) {
 	preConsumeForBillingTest(t, ctx, relayInfo, 1000)
 
 	assert.Equal(t, int64(10), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000-10, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 10_000-1000, getTokenRemainQuota(t, tokenID))
 }
 
 func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *testing.T) {
@@ -185,16 +184,8 @@ func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
 		SubscriptionPostDelta:                 0,
 	}
 	remaining := relayInfo.SubscriptionAmountTotal - (relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta)
-	remainingText := loggerFormatSubscriptionRemainingForTest(relayInfo, remaining)
+	remainingText := subscriptionRemainingText(relayInfo, remaining)
 	assert.Equal(t, logger.FormatQuota(1), remainingText)
-}
-
-func loggerFormatSubscriptionRemainingForTest(relayInfo *relaycommon.RelayInfo, remaining int64) string {
-	remainingText := logger.FormatQuota(int(remaining))
-	if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionPreConsumed > 0 && relayInfo.SubscriptionAmountTotal > 0 {
-		remainingText = fmt.Sprintf("%d tokens", remaining)
-	}
-	return remainingText
 }
 
 func TestSubscriptionBillingUsesMeteredTokens(t *testing.T) {

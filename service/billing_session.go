@@ -434,9 +434,8 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				amount:    subConsume,
 			},
 		}
-		// 必须传 subConsume 而非 preConsumedQuota，保证 SubscriptionFunding.amount、
-		// preConsume 参数和 FinalPreConsumedQuota 三者一致，避免订阅多扣费。
-		if apiErr := session.preConsume(c, int(subConsume)); apiErr != nil {
+		// SubscriptionFunding.amount 使用 estimated token；preConsume 入参仍是 wallet quota，保证 token key 预扣/校验不被 token 口径替代。
+		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
 			return nil, apiErr
 		}
 		return session, nil

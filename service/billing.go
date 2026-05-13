@@ -39,8 +39,7 @@ type BillingSettleInput struct {
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
 	return SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{
-		WalletQuota:        actualQuota,
-		SubscriptionTokens: int64(actualQuota),
+		WalletQuota: actualQuota,
 	})
 }
 

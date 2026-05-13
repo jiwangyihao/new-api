@@ -174,6 +174,27 @@ func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *test
 	assert.Equal(t, int64(100), relayInfo.SubscriptionPreConsumed+relayInfo.SubscriptionPostDelta)
 }
 
+func TestSettleBillingWrapperDoesNotSynthesizeSubscriptionTokens(t *testing.T) {
+	truncate(t)
+	const userID = 8071
+	const tokenID = 8072
+	const planID = 8073
+	const subID = 8074
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-wrapper", 10_000)
+	seedDistributorPlan(t, planID, "plan-wrapper", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-wrapper", "req-wrapper", "subscription_only")
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	require.NoError(t, SettleBilling(ctx, relayInfo, 999))
+
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID), "legacy/non-text settlement wrapper must not synthesize distributor token usage from wallet quota")
+	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
+	assert.Equal(t, int64(-10), relayInfo.SubscriptionPostDelta)
+}
+
 func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		BillingSource:                         BillingSourceSubscription,

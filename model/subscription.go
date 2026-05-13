@@ -830,15 +830,16 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 }
 
 type SubscriptionPreConsumeResult struct {
-	UserSubscriptionId int
-	PreConsumed        int64
-	AmountTotal        int64
-	AmountUsedBefore   int64
-	AmountUsedAfter    int64
-	TokenLimit         int64
-	TokenUsedBefore    int64
-	TokenUsedAfter     int64
-	TokenRemaining     int64
+	UserSubscriptionId      int
+	PreConsumed             int64
+	AmountTotal             int64
+	AmountUsedBefore        int64
+	AmountUsedAfter         int64
+	TokenLimit              int64
+	TokenUsedBefore         int64
+	TokenUsedAfter          int64
+	TokenRemaining          int64
+	DistributorTokenBilling bool
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -973,7 +974,7 @@ func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
 	return reason == "trial_code" || reason == "invite_trial"
 }
 
-func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64) {
+func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64, distributor bool) {
 	if result == nil || sub == nil {
 		return
 	}
@@ -985,6 +986,7 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.TokenLimit = sub.TokenLimit
 	result.TokenUsedBefore = tokenBefore
 	result.TokenUsedAfter = sub.TokenUsed
+	result.DistributorTokenBilling = distributor
 	if sub.TokenLimit > 0 {
 		remaining := sub.TokenLimit - sub.TokenUsed
 		if remaining < 0 {
@@ -1059,7 +1061,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := tx.Where("id = ?", existing.UserSubscriptionId).First(&sub).Error; err != nil {
 				return err
 			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed)
+			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, nil))
 			return nil
 		}
 
@@ -1113,7 +1115,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 					if dup.Status == "refunded" {
 						return errors.New("subscription pre-consume already refunded")
 					}
-					fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed)
+					fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
 					return nil
 				}
 				return err
@@ -1126,7 +1128,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, amount, amountUsedBefore, tokenUsedBefore)
+			fillSubscriptionPreConsumeResult(returnValue, &sub, amount, amountUsedBefore, tokenUsedBefore, distributor)
 			return nil
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)

@@ -1,12 +1,14 @@
 package service
 
 import (
+	"fmt"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -127,6 +129,72 @@ func assertSubscriptionBillingSettle(t *testing.T, name string, usage *dto.Usage
 	assert.Equal(t, 999, getTokenUsedQuota(t, tokenID), "token key used quota must use wallet quota")
 	assert.Equal(t, int64(1_000), relayInfo.SubscriptionAmountTotal, "compat field must expose token limit for distributor subscription")
 	assert.Equal(t, wantTokens, relayInfo.SubscriptionAmountUsedAfterPreConsume+relayInfo.SubscriptionPostDelta, "compat field must expose token used for distributor subscription")
+	assert.Equal(t, wantTokens, relayInfo.SubscriptionPreConsumed+relayInfo.SubscriptionPostDelta, "subscription consumed compatibility field must use token units")
+}
+
+func TestSubscriptionBillingPreConsumesEstimatedTokens(t *testing.T) {
+	truncate(t)
+	const userID = 8041
+	const tokenID = 8042
+	const planID = 8043
+	const subID = 8044
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-estimated-preconsume", 10_000)
+	seedDistributorPlan(t, planID, "plan-estimated-preconsume", 500)
+	seedDistributorSubscription(t, subID, userID, planID, 500, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-estimated-preconsume", "req-estimated-preconsume", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 1000)
+
+	assert.Equal(t, int64(10), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000-10, getTokenRemainQuota(t, tokenID))
+}
+
+func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *testing.T) {
+	truncate(t)
+	const userID = 8051
+	const tokenID = 8052
+	const planID = 8053
+	const subID = 8054
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-reserve", 10_000)
+	seedDistributorPlan(t, planID, "plan-reserve", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-reserve", "req-reserve", "subscription_only")
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	require.NotNil(t, relayInfo.Billing)
+	require.NoError(t, relayInfo.Billing.Reserve(100))
+	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 100, SubscriptionTokens: 100}))
+
+	assert.Equal(t, int64(100), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(100), relayInfo.SubscriptionAmountUsedAfterPreConsume+relayInfo.SubscriptionPostDelta)
+	assert.Equal(t, int64(100), relayInfo.SubscriptionPreConsumed+relayInfo.SubscriptionPostDelta)
+}
+
+func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		BillingSource:                         BillingSourceSubscription,
+		SubscriptionId:                        1,
+		SubscriptionPreConsumed:               0,
+		SubscriptionAmountTotal:               100,
+		SubscriptionAmountUsedAfterPreConsume: 99,
+		SubscriptionPostDelta:                 0,
+	}
+	remaining := relayInfo.SubscriptionAmountTotal - (relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta)
+	remainingText := loggerFormatSubscriptionRemainingForTest(relayInfo, remaining)
+	assert.Equal(t, logger.FormatQuota(1), remainingText)
+}
+
+func loggerFormatSubscriptionRemainingForTest(relayInfo *relaycommon.RelayInfo, remaining int64) string {
+	remainingText := logger.FormatQuota(int(remaining))
+	if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionPreConsumed > 0 && relayInfo.SubscriptionAmountTotal > 0 {
+		remainingText = fmt.Sprintf("%d tokens", remaining)
+	}
+	return remainingText
 }
 
 func TestSubscriptionBillingUsesMeteredTokens(t *testing.T) {

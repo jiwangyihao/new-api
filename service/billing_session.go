@@ -23,16 +23,17 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	relayInfo        *relaycommon.RelayInfo
-	funding          FundingSource
-	preConsumedQuota int  // 实际预扣额度（信任用户可能为 0）
-	tokenConsumed    int  // 令牌额度实际扣减量
-	extraReserved    int  // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted          bool // 是否命中信任额度旁路
-	fundingSettled   bool // funding.Settle 已成功，资金来源已提交
-	settled          bool // Settle 全部完成（资金 + 令牌）
-	refunded         bool // Refund 已调用
-	mu               sync.Mutex
+	relayInfo               *relaycommon.RelayInfo
+	funding                 FundingSource
+	preConsumedQuota        int   // 实际预扣额度（信任用户可能为 0）
+	preConsumedSubscription int64 // 订阅资金来源预扣 token 数；钱包路径不用
+	tokenConsumed           int   // 令牌额度实际扣减量
+	extraReserved           int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	trusted                 bool  // 是否命中信任额度旁路
+	fundingSettled          bool  // funding.Settle 已成功，资金来源已提交
+	settled                 bool  // Settle 全部完成（资金 + 令牌）
+	refunded                bool  // Refund 已调用
+	mu                      sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -57,7 +58,7 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 	walletDelta := input.WalletQuota - s.preConsumedQuota
 	fundingDelta := walletDelta
 	if s.funding.Source() == BillingSourceSubscription {
-		fundingDelta64 := input.SubscriptionTokens - int64(s.preConsumedQuota)
+		fundingDelta64 := input.SubscriptionTokens - s.preConsumedSubscription
 		if fundingDelta64 > int64(^uint(0)>>1) || fundingDelta64 < -int64(^uint(0)>>1)-1 {
 			return fmt.Errorf("subscription token delta out of int range: %d", fundingDelta64)
 		}
@@ -187,6 +188,19 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 		return err
 	}
 
+	if sub, ok := s.funding.(*SubscriptionFunding); ok {
+		sub.preConsumed += int64(delta)
+		sub.TokenUsedAfter += int64(delta)
+		sub.AmountUsedAfter += int64(delta)
+		if sub.TokenLimit > 0 {
+			remaining := sub.TokenLimit - sub.TokenUsedAfter
+			if remaining < 0 {
+				remaining = 0
+			}
+			sub.TokenRemaining = remaining
+		}
+		s.preConsumedSubscription += int64(delta)
+	}
 	s.preConsumedQuota += delta
 	s.tokenConsumed += delta
 	s.extraReserved += delta
@@ -239,6 +253,11 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	}
 
 	s.preConsumedQuota = effectiveQuota
+	if sub, ok := s.funding.(*SubscriptionFunding); ok {
+		s.preConsumedSubscription = sub.preConsumed
+	} else {
+		s.preConsumedSubscription = int64(effectiveQuota)
+	}
 
 	// ---- 同步 RelayInfo 兼容字段 ----
 	s.syncRelayInfo()
@@ -339,14 +358,14 @@ func (s *BillingSession) syncRelayInfo() {
 
 	if sub, ok := s.funding.(*SubscriptionFunding); ok {
 		info.SubscriptionId = sub.subscriptionId
-		info.SubscriptionPreConsumed = sub.preConsumed + int64(s.extraReserved)
+		info.SubscriptionPreConsumed = sub.preConsumed
 		info.SubscriptionPostDelta = 0
-		if sub.TokenLimit > 0 || sub.TokenUsedAfter > 0 {
+		if sub.DistributorTokenBilling {
 			info.SubscriptionAmountTotal = sub.TokenLimit
-			info.SubscriptionAmountUsedAfterPreConsume = sub.TokenUsedAfter + int64(s.extraReserved)
+			info.SubscriptionAmountUsedAfterPreConsume = sub.TokenUsedAfter
 		} else {
 			info.SubscriptionAmountTotal = sub.AmountTotal
-			info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
+			info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter
 		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
@@ -399,7 +418,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
-		subConsume := int64(preConsumedQuota)
+		subConsume := int64(relayInfo.GetEstimatePromptTokens())
+		if subConsume <= 0 {
+			subConsume = int64(preConsumedQuota)
+		}
 		if subConsume <= 0 {
 			subConsume = 1
 		}

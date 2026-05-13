@@ -519,7 +519,7 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 			return
 		}
 		remainingText := logger.FormatQuota(int(remaining))
-		if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionAmountTotal > 0 {
+		if relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionPreConsumed > 0 && relayInfo.SubscriptionAmountTotal > 0 {
 			remainingText = fmt.Sprintf("%d tokens", remaining)
 		}
 

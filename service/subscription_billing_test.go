@@ -184,8 +184,27 @@ func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
 		SubscriptionPostDelta:                 0,
 	}
 	remaining := relayInfo.SubscriptionAmountTotal - (relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta)
-	remainingText := subscriptionRemainingText(relayInfo, remaining)
+	remainingText := subscriptionRemainingText(false, remaining)
 	assert.Equal(t, logger.FormatQuota(1), remainingText)
+}
+
+func TestDistributorSubscriptionNotificationUsesTokenFormatting(t *testing.T) {
+	truncate(t)
+	const userID = 8061
+	const tokenID = 8062
+	const planID = 8063
+	const subID = 8064
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-notify", 10_000)
+	seedDistributorPlan(t, planID, "plan-notify", 100)
+	seedDistributorSubscription(t, subID, userID, planID, 100, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-notify", "req-notify", "subscription_only")
+	preConsumeForBillingTest(t, ctx, relayInfo, 99)
+
+	remaining := relayInfo.SubscriptionAmountTotal - relayInfo.SubscriptionAmountUsedAfterPreConsume
+	assert.Equal(t, "1 tokens", subscriptionRemainingText(true, remaining))
 }
 
 func TestSubscriptionBillingUsesMeteredTokens(t *testing.T) {

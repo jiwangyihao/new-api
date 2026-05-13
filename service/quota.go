@@ -498,14 +498,14 @@ func checkAndSendQuotaNotify(relayInfo *relaycommon.RelayInfo, quota int, preCon
 	})
 }
 
-func subscriptionRemainingText(relayInfo *relaycommon.RelayInfo, remaining int64) string {
-	if relayInfo != nil && relayInfo.BillingSource == BillingSourceSubscription && relayInfo.SubscriptionAmountTotal > 0 && relayInfo.SubscriptionPlanTitle != "" {
+func subscriptionRemainingText(distributorTokenBilling bool, remaining int64) string {
+	if distributorTokenBilling {
 		return fmt.Sprintf("%d tokens", remaining)
 	}
 	return logger.FormatQuota(int(remaining))
 }
 
-func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
+func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo, distributorTokenBilling bool) {
 	gopool.Go(func() {
 		if relayInfo == nil {
 			return
@@ -525,7 +525,7 @@ func checkAndSendSubscriptionQuotaNotify(relayInfo *relaycommon.RelayInfo) {
 		if remaining >= int64(threshold) {
 			return
 		}
-		remainingText := subscriptionRemainingText(relayInfo, remaining)
+		remainingText := subscriptionRemainingText(distributorTokenBilling, remaining)
 
 		prompt := "您的订阅额度即将用尽"
 		topUpLink := PaymentReturnURL("/console/topup")

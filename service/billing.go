@@ -80,7 +80,11 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 
 		if input.WalletQuota != 0 || input.SubscriptionTokens != 0 {
 			if relayInfo.BillingSource == BillingSourceSubscription {
-				checkAndSendSubscriptionQuotaNotify(relayInfo)
+				distributorTokenBilling := false
+				if session, ok := relayInfo.Billing.(*BillingSession); ok {
+					distributorTokenBilling = session.IsDistributorTokenBilling()
+				}
+				checkAndSendSubscriptionQuotaNotify(relayInfo, distributorTokenBilling)
 			} else {
 				checkAndSendQuotaNotify(relayInfo, walletDelta, preConsumed)
 			}

@@ -167,6 +167,13 @@ func (s *BillingSession) GetPreConsumedQuota() int {
 	return s.preConsumedQuota
 }
 
+func (s *BillingSession) IsDistributorTokenBilling() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.funding.(*SubscriptionFunding)
+	return ok && sub.DistributorTokenBilling
+}
+
 func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -36,6 +36,32 @@ func seedDistributorPlan(t *testing.T, id int, code string, tokenLimit int64) {
 	require.NoError(t, model.DB.Create(plan).Error)
 }
 
+func seedLegacySubscriptionPlan(t *testing.T, id int, title string) {
+	t.Helper()
+	ensureSubscriptionBillingTables(t)
+	plan := &model.SubscriptionPlan{
+		Id:      id,
+		Title:   title,
+		Enabled: true,
+	}
+	require.NoError(t, model.DB.Create(plan).Error)
+}
+
+func seedLegacySubscription(t *testing.T, id int, userId int, planId int, amountTotal int64, amountUsed int64) {
+	t.Helper()
+	sub := &model.UserSubscription{
+		Id:          id,
+		UserId:      userId,
+		PlanId:      planId,
+		AmountTotal: amountTotal,
+		AmountUsed:  amountUsed,
+		Status:      "active",
+		StartTime:   time.Now().Unix(),
+		EndTime:     time.Now().Add(30 * 24 * time.Hour).Unix(),
+	}
+	require.NoError(t, model.DB.Create(sub).Error)
+}
+
 func seedDistributorSubscription(t *testing.T, id int, userId int, planId int, tokenLimit int64, tokenUsed int64) {
 	t.Helper()
 	sub := &model.UserSubscription{
@@ -193,6 +219,26 @@ func TestSettleBillingWrapperDoesNotSynthesizeSubscriptionTokens(t *testing.T) {
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID), "legacy/non-text settlement wrapper must not synthesize distributor token usage from wallet quota")
 	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
 	assert.Equal(t, int64(-10), relayInfo.SubscriptionPostDelta)
+}
+
+func TestSettleBillingWrapperPreservesLegacySubscriptionQuota(t *testing.T) {
+	truncate(t)
+	const userID = 8081
+	const tokenID = 8082
+	const planID = 8083
+	const subID = 8084
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-legacy-wrapper", 10_000)
+	seedLegacySubscriptionPlan(t, planID, "legacy-wrapper")
+	seedLegacySubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-legacy-wrapper", "req-legacy-wrapper", "subscription_only")
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	require.NoError(t, SettleBilling(ctx, relayInfo, 999))
+
+	assert.Equal(t, int64(999), getSubscriptionUsed(t, subID), "legacy wrapper settlement must continue using quota amount")
+	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
+	assert.Equal(t, int64(989), relayInfo.SubscriptionPostDelta)
 }
 
 func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {

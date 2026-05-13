@@ -86,7 +86,7 @@
   - 密码注册与 GitHub / OAuth 注册路径已经读取邀请参数并写入邀请关系。
 - `common/constants.go`、`model/option.go`、`controller/misc.go`
   - 已有 `PasswordLoginEnabled`、`PasswordRegisterEnabled`、`RegisterEnabled`、`GitHubOAuthEnabled` 等配置。
-  - `/api/status` 已向前端返回登录注册能力状态。
+  - 前端类型已兼容部分登录注册状态字段；本任务至少要求后端 `/api/status` 新增 `github_only_signup_enabled`。
 - `web/default/src/features/subscriptions/*`
   - 已有订阅套餐类型、API、管理端创建编辑抽屉、订阅列表和用户购买弹窗。
 - `web/default/src/features/auth/*`
@@ -101,9 +101,9 @@
 | 套餐标识 | 展示名 | 价格 | 周期 | 并发上限 | token 限额 | 可售卖 | 可计入有效付费下级 |
 |---|---|---:|---|---:|---:|---|---|
 | `basic_monthly` | Basic | 40 元 | 1 个月 | 1 | 1,000,000,000 | 是 | 是 |
-| `plus_monthly` | Plus | 80 元 | 1 个月 | 5 | 2,000,000,000 | 是 | 是 |
+| `standard_monthly` | Standard | 80 元 | 1 个月 | 5 | 2,000,000,000 | 是 | 是 |
 | `pro_monthly` | Pro | 160 元 | 1 个月 | 10 | 5,000,000,000 | 是 | 是 |
-| `team_monthly` | Team | 660 元 | 1 个月 | 50 | 10,000,000,000 | 是 | 是 |
+| `max_monthly` | Max | 660 元 | 1 个月 | 50 | 10,000,000,000 | 是 | 是 |
 
 ### 4.2 试用套餐
 
@@ -114,6 +114,7 @@
 说明：
 
 - token 限额按订阅周期内累计实际 token 计算。
+- 正式套餐与试用套餐默认 `currency = "CNY"`；价格字段以人民币元展示和支付配置为准。
 - 「token 不限量」只表示套餐不设周期 token 上限；仍必须受并发、模型权限、系统限流和基础人机校验约束。
 - 分销模式不使用原有 `TotalAmount` / `AmountUsed` 作为套餐限制口径。旧字段可保留用于迁移兼容，但不能作为用户展示或订阅限制依据。
 
@@ -132,7 +133,7 @@ IsTrial            bool   `json:"is_trial" gorm:"default:false"`
 PublicVisible      bool   `json:"public_visible" gorm:"default:true"`
 TrialDurationHours int    `json:"trial_duration_hours" gorm:"type:int;not null;default:0"`
 RewardEligible     bool   `json:"reward_eligible" gorm:"default:true"`
-BusinessCode       string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
+BusinessCode       *string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
 ```
 
 字段语义：
@@ -143,7 +144,7 @@ BusinessCode       string `json:"business_code" gorm:"type:varchar(64);uniqueInd
 - `public_visible`：用户端是否展示和售卖。试用套餐为 `false`。
 - `trial_duration_hours`：试用时长。试用套餐为 `24`，正式套餐为 `0`。
 - `reward_eligible`：该套餐通过真实订单购买后是否可计入邀请月度权益判断。
-- `business_code`：稳定业务标识，避免用自增 ID 绑定运营规则。
+- `business_code`：稳定业务标识，避免用自增 ID 绑定运营规则；分销套餐必须非空，历史套餐和普通自定义套餐允许为 `NULL`。唯一约束只约束非空值，多个 `NULL` 必须可共存。
 
 ### 5.2 修改 `model.UserSubscription`
 
@@ -196,7 +197,7 @@ type TrialCode struct {
 
 ### 5.4 新增 `TrialRedemption`
 
-文件：`model/trial_redemption.go`
+文件：`model/trial_code.go`
 
 ```go
 type TrialRedemption struct {
@@ -211,7 +212,7 @@ type TrialRedemption struct {
 约束：
 
 - 同一用户只能拥有一次 `grant_reason in ('trial_code', 'invite_trial')` 的试用订阅。
-- GitHub OAuth 建号流程中，GitHub ID 是主要身份去重依据，避免同一 GitHub 身份重复领取试用。
+- OAuth 建号流程中，provider user id 是主要身份去重依据；GitHub provider 使用 GitHub ID，避免同一 GitHub 身份重复领取试用。
 
 ### 5.5 新增 `InvitationMonthlyEntitlement`
 
@@ -253,7 +254,7 @@ type InvitationMonthlyEntitlement struct {
 
 兼容策略：
 
-- 所有新增列必须有默认值。
+- 新增列除 `business_code` 外必须有默认值；`business_code` 对历史数据默认为 `NULL`，不能用空字符串默认值配合唯一索引导致多条旧套餐迁移失败。
 - 旧订阅数据的 `token_limit = 0` 不应误判为无限正式套餐；只有 `is_trial = true` 或明确迁移标记的订阅可按不限量处理。
 - 旧 `TotalAmount` / `AmountUsed` 只用于旧功能兼容，不参与分销套餐限制。
 
@@ -275,9 +276,10 @@ func SubscriptionMeteredTokens(usage *dto.Usage) int64
 
 - OpenAI Chat Completions：优先使用 `usage.TotalTokens`；`PromptTokensDetails.CachedTokens` 是 input tokens 的子集时只单独记录，不额外相加。
 - OpenAI Responses：优先使用 `usage.TotalTokens`；`input_tokens_details.cached_tokens` 单独记录，不对 `total_tokens` 重复相加。
-- Anthropic / Claude：`input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens` 都计入；如果已归一到 `PromptTokensDetails.CachedTokens`、`PromptTokensDetails.CachedCreationTokens`、`ClaudeCacheCreation5mTokens`、`ClaudeCacheCreation1hTokens`，按归一化后的字段精确计入一次。
+- Anthropic / Claude：原生 Claude usage 中，`input_tokens`、`output_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens` 都计入；即使原生 `TotalTokens` 只等于 input + output，也必须额外补计 cache read/create。若 Claude 已被归一化为 OpenAI-style usage，并通过 `UsageSource = "anthropic"` 或等价字段表示 `TotalTokens` 已包含 cache，则直接使用 `TotalTokens`，不得再次补加 cached 明细。`ClaudeCacheCreation5mTokens` / `ClaudeCacheCreation1hTokens` 只作为 cache creation 明细拆分；当 `CachedCreationTokens` 大于拆分和时，按总量计入一次。
 - Gemini：计入 `promptTokenCount`、`candidatesTokenCount`、`toolUsePromptTokenCount`，并确保 `cachedContentTokenCount` 被记录；如果 provider 的总 token 已包含 cached content，则不重复相加。
-- 音频、图片、reasoning token 按现有 `dto.Usage` 明细纳入统一 token 口径。
+- 默认规则：已有 `TotalTokens` 时使用 `TotalTokens`；没有 `TotalTokens` 时优先使用 `PromptTokens + CompletionTokens`，不要因为存在 cached 明细就默认额外相加。只有 Anthropic / Claude 等已确认 input 字段不包含 cache read/create 的归一化语义，才补计 cached read/create。
+- 文本生成响应中的音频、reasoning token 按现有 `dto.Usage` 明细纳入统一 token 口径；但非文本 relay / 异步任务（images、audio-only、embeddings、rerank、Midjourney、Suno、视频等）不纳入分销订阅 token 消耗，不能更新 `UserSubscription.TokenUsed`。这些路径应继续使用钱包 / 旧 quota 资金来源，或在订阅-only 用户下拒绝对应资金来源。
 - 上游没有 usage 时，使用现有估算逻辑兜底，并在消费日志 `other` 中标记 `usage_estimated = true`。
 
 ### 7.3 预扣与结算
@@ -316,11 +318,16 @@ func SubscriptionMeteredTokens(usage *dto.Usage) int64
 
 不新增 Go module 依赖。New API 当前已经依赖 go-redis，并已有 `common.RDB`、`common.RedisEnabled`、`REDIS_CONN_STRING` 初始化逻辑。本功能复用现有 Redis 能力。
 
-部署层面：
+部署层面策略：
 
-- 单进程开发环境可以关闭并发限制或使用本地测试 limiter。
-- 生产单机可以使用 Redis 或进程内 limiter，但进程内 limiter 不支持多实例精确限制。
-- 生产多实例必须配置共享 Redis，否则无法保证用户级实时并发准确性。
+| 场景 | 默认行为 | 可配置行为 | 说明 |
+|---|---|---|---|
+| `common.RedisEnabled = true` 且 Redis 命令成功 | 使用 Redis Lua 精确计数 | 无 | 推荐生产配置。 |
+| `common.RedisEnabled = true` 但 Redis 命令失败 | fail-closed，返回 429 | `SubscriptionConcurrencyFailOpen = true` 时放行 | 防止 Redis 故障导致并发超卖。 |
+| `common.RedisEnabled = false` 且 `SubscriptionConcurrencyRequireRedis = false` | 使用进程内 limiter | 无 | 仅适合开发、测试或明确单实例部署。 |
+| `common.RedisEnabled = false` 且 `SubscriptionConcurrencyRequireRedis = true` | fail-closed，返回 429 | `SubscriptionConcurrencyFailOpen = true` 时放行 | 多实例生产应开启该开关并配置共享 Redis。 |
+
+结论：Redis 不是新增代码依赖，但多实例生产部署的精确并发限制需要运行时 Redis。
 
 ### 8.2 计数范围
 
@@ -335,6 +342,7 @@ func SubscriptionMeteredTokens(usage *dto.Usage) int64
 
 - Midjourney、Suno、视频等异步任务接口。
 - 仅查询、模型列表、余额、日志等控制台接口。
+- 非文本 relay / 异步任务（images、audio-only、embeddings、rerank、Midjourney、Suno、视频等）也不纳入分销订阅 token 消耗。
 
 ### 8.3 服务接口
 
@@ -367,9 +375,9 @@ acquire 使用 Lua：当前值达到 limit 则拒绝，否则 `INCR` 并刷新 T
 
 Redis 不可用策略：
 
-- 新增系统配置 `SubscriptionConcurrencyFailOpen`，默认 `false`。
-- 默认 fail-closed，返回 HTTP 429，避免超卖并发。
-- 若运营明确开启 fail-open，则记录系统错误日志并放行请求。
+- Redis 已启用但命令失败时，默认 fail-closed 返回 HTTP 429；`SubscriptionConcurrencyFailOpen = true` 时记录错误并放行。
+- Redis 未启用时，默认按单实例使用进程内 limiter；当 `SubscriptionConcurrencyRequireRedis = true` 时 fail-closed，除非显式开启 `SubscriptionConcurrencyFailOpen`。
+- 进程内 limiter 仅用于开发、测试或明确接受单实例约束的部署，不能作为多实例生产方案。多实例生产要保证并发准确性，必须配置共享 Redis 并开启 `SubscriptionConcurrencyRequireRedis`。
 
 ### 8.5 relay 接入点
 
@@ -401,10 +409,11 @@ Redis 不可用策略：
   "password": "pass",
   "email": "user@example.com",
   "aff_code": "INVITER",
-  "trial_code": "TRIAL2026",
-  "turnstile_token": "..."
+  "trial_code": "TRIAL2026"
 }
 ```
+
+邮箱注册继续沿用现有注册接口的人机校验传输方式：前端通过 `POST /api/user/register?turnstile=...` 提交 Turnstile token，后端复用现有 middleware / helper 校验。`trial_code` 放在 JSON body；不要另行定义 body 字段 `turnstile_token` 作为邮箱注册路径的新契约。
 
 规则：
 
@@ -413,27 +422,56 @@ Redis 不可用策略：
 - 输入了 trial code 时必须进行 Turnstile 或现有等价人机校验。
 - 同一用户只能领取一次试用。
 
-### 9.2 GitHub OAuth 首次建号
+### 9.2 OAuth 首次建号确认
 
-GitHub-only 模式下，新用户创建流程为：
+所有允许创建新用户的 OAuth provider 都必须走统一建号确认流程，不能在 OAuth 回调中直接创建平台账号并绕过用户手动输入 trial code 与人机校验。GitHub-only signup 开启时，只有 GitHub provider 能进入该流程；非 GitHub provider 不能创建新用户。
 
-1. 用户点击 GitHub 登录。
-2. GitHub OAuth 成功后，后端保存短期 pending OAuth session，不立即创建平台用户。
-3. 前端跳转到「完成账号创建」页面。
-4. 页面展示 GitHub 用户名和邮箱，并提供：
+统一流程：
+
+1. 用户点击 OAuth provider 登录。
+2. OAuth 成功后，如果能匹配到已有平台账号，则直接登录。
+3. 如果没有匹配到已有平台账号，后端保存短期 pending OAuth session，不立即创建平台用户。
+4. 后端返回 `oauth_onboarding_required` 响应，前端跳转到「完成账号创建」页面。
+5. 页面展示 provider 返回的用户名和邮箱；GitHub-only signup 下展示 GitHub 用户名和邮箱。
+6. 页面提供：
    - trial code 输入框（可选）；
    - 密码和确认密码输入框（可选但推荐）；
    - 协议勾选；
    - Turnstile 或同类人机校验。
-5. 用户提交后，后端在同一事务中创建平台账号、绑定 GitHub 身份、设置密码、处理邀请关系、发放试用。
+7. 用户提交后，后端在同一事务中创建平台账号、绑定 OAuth 身份、设置密码、处理邀请关系、发放试用。
 
-如果 OAuth 匹配到已有平台账号，则直接登录，不进入建号确认页。
+建号确认接口响应契约：
 
-### 9.3 非 GitHub OAuth
+```json
+{
+  "success": true,
+  "message": "oauth_onboarding_required",
+  "data": {
+    "pending_token": "...",
+    "provider": "github",
+    "login": "octocat",
+    "email": "octocat@example.com"
+  }
+}
+```
 
-GitHub-only 开启时，非 GitHub OAuth 不允许创建新用户。是否允许已有用户绑定或登录非 GitHub OAuth 由现有配置控制，但不能绕过「新用户必须由 GitHub 创建」规则。
+建号确认提交字段：
 
-### 9.4 发放服务
+```json
+{
+  "pending_token": "...",
+  "trial_code": "TRIAL2026",
+  "password": "...",
+  "terms_accepted": true,
+  "turnstile_token": "..."
+}
+```
+
+建号确认页每次完成新账号创建都必须执行 Turnstile 或等价人机校验；不能只在填写 trial code 时校验。若 provider 未返回可用邮箱（例如 GitHub email 为空），页面必须要求用户输入邮箱，并复用现有邮箱唯一性与验证流程。
+
+OAuth 建号确认必须使用专用校验 helper 从 JSON body 的 `turnstile_token` 调用 Cloudflare siteverify 或等价服务；不能读取 query 参数 `turnstile`，也不能因为 session 中已有 `turnstile = true` 而跳过本次校验。邮箱注册路径可以继续复用现有 query/session middleware，但 OAuth onboarding POST 必须每次新建账号都校验 body token。
+
+### 9.3 发放服务
 
 创建：`service/trial_grant.go`
 
@@ -507,8 +545,8 @@ func RunMonthlyInvitationEntitlementSweep(at time.Time, limit int) error
 
 - 密码注册接口拒绝创建新用户。
 - 非 GitHub OAuth 不允许创建新用户。
-- GitHub OAuth 可创建新用户。
-- GitHub OAuth 首次建号确认页允许设置密码。
+- GitHub OAuth 可创建新用户，但必须先进入 OAuth 建号确认页。
+- OAuth 建号确认页允许设置密码。
 - 已设置密码的 GitHub 创建账号，可以用 GitHub 用户名或邮箱加密码登录。
 - `GetStatus` 返回 `github_only_signup_enabled`。
 - 管理端保存配置时，如果开启 GitHub-only signup 但 `GitHubOAuthEnabled = false` 或 `GitHubClientId` 为空，必须拒绝保存。
@@ -525,8 +563,9 @@ GitHub 首次建号时：
 
 - 登录页保留密码登录入口，因为 GitHub 创建账号可设置密码。
 - 注册页在 GitHub-only signup 开启时隐藏邮箱注册表单，只展示 GitHub 创建账号入口。
-- OAuth 建号确认页展示 trial code、密码、人机校验和协议勾选。
-- 非 GitHub provider 不展示为「注册」入口。
+- 所有允许创建新用户的 OAuth provider 在首次建号时都进入 OAuth 建号确认页；GitHub-only signup 开启时只展示 GitHub 注册入口。
+- OAuth 建号确认页展示 provider 用户名、邮箱、trial code、密码、人机校验和协议勾选。
+- 非 GitHub provider 不展示为 GitHub-only signup 下的「注册」入口。
 
 ## 12. 支付与订阅购买
 
@@ -595,15 +634,24 @@ GitHub 首次建号时：
 
 页面职责：
 
-- 展示 GitHub 返回的用户名和邮箱。
+- 展示 provider 返回的用户名和邮箱；GitHub provider 展示 GitHub login/email。
+- provider 未返回可用邮箱时，要求用户输入邮箱，并复用现有邮箱校验流程。
 - 允许用户输入 trial code。
 - 允许用户设置密码。
-- 执行 Turnstile 或同类人机校验。
+- 每次完成新账号创建都执行 Turnstile 或同类人机校验。
 - 提交后完成平台账号创建。
 
 ### 13.4 邀请权益展示
 
-扩展 `web/default/src/features/wallet/components/affiliate-rewards-card.tsx`：
+扩展后端用户邀请权益数据契约，供前端 `web/default/src/features/wallet/components/affiliate-rewards-card.tsx` 使用。可以扩展 `/api/user/self`，也可以新增 `/api/user/aff/entitlement`；实现必须返回：
+
+- `direct_invite_count`：直属邀请总人数。
+- `qualified_active_count`：当前有效付费直属下级人数。
+- `reward_month`：当前评估月份。
+- `entitled`：本月是否已获得 Basic 权益。
+- `entitlement_end_time`：本月权益有效期结束时间。
+
+前端展示：
 
 - 展示直属邀请人数。
 - 展示当前有效付费直属下级人数。
@@ -637,7 +685,7 @@ func EnsureDistributorDefaultPlans() error
 
 行为：
 
-- 按 `business_code` upsert 5 个套餐：`trial_24h`、`basic_monthly`、`plus_monthly`、`pro_monthly`、`team_monthly`。
+- 按 `business_code` upsert 5 个套餐：`trial_24h`、`basic_monthly`、`standard_monthly`、`pro_monthly`、`max_monthly`。
 - 仅在不存在同名 `business_code` 时创建，不覆盖管理员已修改的价格、标题和支付产品 ID。
 - 可由管理员通过环境变量或系统设置启用一次性初始化：`DISTRIBUTOR_DEFAULT_PLANS_ENABLED=true`。
 
@@ -682,7 +730,9 @@ New API 使用 AGPL-3.0。当前策略是继续使用 New API 作为 base 项目
 - `service/subscription_concurrency_test.go`
   - acquire 达到上限后返回超并发错误。
   - release 幂等。
-  - Redis 不可用且 fail-closed 时拒绝。
+  - Redis disabled 单实例使用进程内 limiter。
+  - `SubscriptionConcurrencyRequireRedis = true` 且 Redis disabled 时 fail-closed；显式 fail-open 时放行。
+  - Redis enabled 但命令失败时 fail-closed；显式 fail-open 时放行。
 - `service/invitation_reward_test.go`
   - 当月存在 2 个有效直属付费下级时发放 Basic 权益。
   - 只有 1 个有效直属付费下级时不发放。
@@ -693,10 +743,14 @@ New API 使用 AGPL-3.0。当前策略是继续使用 New API 作为 base 项目
   - GitHub-only signup 开启时密码注册拒绝。
   - GitHub-only signup 开启时密码登录仍允许已设置密码的 GitHub 创建账号。
   - 非 GitHub OAuth 不能创建新用户。
-  - GitHub OAuth 首次建号确认页可设置密码和 trial code。
+  - OAuth 首次建号确认页可设置密码和 trial code；GitHub provider 路径必须覆盖。
+  - OAuth 建号确认必须校验 Turnstile 或等价人机校验。
+  - provider 未返回邮箱时必须要求用户输入邮箱并通过现有邮箱校验。
 - `controller/subscription_trial_purchase_test.go`
   - 用户购买接口不返回试用套餐。
   - 支付接口拒绝购买试用套餐。
+- `controller/invitation_entitlement_test.go`
+  - 邀请权益状态接口返回 `direct_invite_count`、`qualified_active_count`、`reward_month`、`entitled`、`entitlement_end_time`。
 
 ### 17.2 前端验证
 
@@ -715,7 +769,7 @@ bun run build
 - 用户购买页只展示正式套餐，只展示 token 与并发口径。
 - 邮箱注册页显示 trial code 输入框。
 - GitHub-only signup 开启后注册页只显示 GitHub 建号入口，但登录页保留密码登录。
-- GitHub OAuth 首次建号确认页可输入 trial code、设置密码并进行人机校验。
+- OAuth 首次建号确认页可输入 trial code、设置密码并进行人机校验；GitHub provider 路径必须覆盖。
 - 试用码管理页可创建、禁用、删除试用码。
 - 应用教程页可复制 Base URL、API Key 和配置片段。
 
@@ -753,7 +807,7 @@ go test ./model ./service ./controller ./relay/... -count=1
 - [ ] token-only 订阅扣费：订阅预扣、结算和重置只使用 token。
 - [ ] Redis 并发租约：复用项目现有 Redis 能力实现 acquire / release 与 relay 接入。
 - [ ] 试用码注册链路：邮箱注册 trial code 输入、人机校验、邀请试用。
-- [ ] GitHub OAuth 建号确认页：trial code、密码设置、人机校验、平台账号创建。
+- [ ] OAuth 建号确认页：trial code、密码设置、人机校验、平台账号创建；GitHub provider 路径必须覆盖。
 - [ ] 月度邀请权益：有效付费下级统计、月度 Basic 权益发放、定时 sweep。
 - [ ] GitHub-only signup：只限制新用户创建方式，保留 GitHub 创建账号的密码登录。
 - [ ] 支付购买保护：隐藏试用套餐并拒绝购买试用套餐。
@@ -769,7 +823,7 @@ go test ./model ./service ./controller ./relay/... -count=1
 - 正式套餐按 1B / 2B / 5B / 10B token 限额阻断超额请求。
 - 订阅套餐不再使用价格倍率 quota 作为限制口径。
 - 试用套餐 token 不限量，但只能 1 并发，且 24 小时后失效。
-- 邮箱注册和 GitHub OAuth 建号确认页都支持手动输入 trial code。
+- 邮箱注册和 OAuth 建号确认页都支持手动输入 trial code；GitHub provider 路径必须覆盖。
 - trial code 输入路径有人机校验。
 - GitHub-only signup 开启后，只有 GitHub OAuth 能创建新用户；GitHub 创建账号可设置密码，并可用 GitHub 用户名或邮箱登录。
 - 用户端无法看到或购买试用套餐。

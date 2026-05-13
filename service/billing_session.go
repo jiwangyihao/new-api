@@ -435,10 +435,11 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &SubscriptionFunding{
-				requestId: relayInfo.RequestId,
-				userId:    relayInfo.UserId,
-				modelName: relayInfo.OriginModelName,
-				amount:    subConsume,
+				requestId:                     relayInfo.RequestId,
+				userId:                        relayInfo.UserId,
+				modelName:                     relayInfo.OriginModelName,
+				amount:                        subConsume,
+				PendingDistributorTokenAmount: subConsume,
 			},
 		}
 		// SubscriptionFunding.amount 使用 estimated token；preConsume 入参仍是 wallet quota，保证 token key 预扣/校验不被 token 口径替代。

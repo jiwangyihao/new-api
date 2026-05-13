@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -165,8 +166,8 @@ func TestSubscriptionBillingPreConsumesEstimatedTokens(t *testing.T) {
 	const subID = 8044
 	seedUser(t, userID, 10_000)
 	seedToken(t, tokenID, userID, "sk-estimated-preconsume", 10_000)
-	seedDistributorPlan(t, planID, "plan-estimated-preconsume", 500)
-	seedDistributorSubscription(t, subID, userID, planID, 500, 0)
+	seedDistributorPlan(t, planID, "plan-estimated-preconsume", 5_000)
+	seedDistributorSubscription(t, subID, userID, planID, 5_000, 0)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-estimated-preconsume", "req-estimated-preconsume", "subscription_only")
@@ -239,6 +240,26 @@ func TestSettleBillingWrapperPreservesLegacySubscriptionQuota(t *testing.T) {
 	assert.Equal(t, int64(999), getSubscriptionUsed(t, subID), "legacy wrapper settlement must continue using quota amount")
 	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
 	assert.Equal(t, int64(989), relayInfo.SubscriptionPostDelta)
+}
+
+func TestLegacySubscriptionPreConsumeUsesQuotaUnits(t *testing.T) {
+	truncate(t)
+	const userID = 8101
+	const tokenID = 8102
+	const planID = 8103
+	const subID = 8104
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-legacy-preconsume", 10_000)
+	seedLegacySubscriptionPlan(t, planID, "legacy-preconsume")
+	seedLegacySubscription(t, subID, userID, planID, 200, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-legacy-preconsume", "req-legacy-preconsume", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	apiErr := PreConsumeBilling(ctx, 1_000, relayInfo)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID))
 }
 
 func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
@@ -345,6 +366,7 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-estimated", "req-estimated", "subscription_only")
 	relayInfo.ChannelId = 8015
+	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
 	relayInfo.SetEstimatePromptTokens(6)
 	preConsumeForBillingTest(t, ctx, relayInfo, 6)
 
@@ -357,6 +379,31 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, true, other["usage_estimated"])
+}
+
+func TestPostTextConsumeQuotaSkipsDistributorTokensForNonTextRelay(t *testing.T) {
+	truncate(t)
+	const userID = 8091
+	const tokenID = 8092
+	const planID = 8093
+	const subID = 8094
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-embedding", 10_000)
+	seedChannel(t, 8095)
+	seedDistributorPlan(t, planID, "plan-embedding", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-embedding", "req-embedding", "subscription_only")
+	relayInfo.ChannelId = 8095
+	relayInfo.RelayMode = relayconstant.RelayModeEmbeddings
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 6}, nil)
+
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000-6, getTokenRemainQuota(t, tokenID), "token key quota still uses wallet quota")
 }
 
 func TestWalletBillingStillUsesQuota(t *testing.T) {

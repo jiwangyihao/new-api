@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -319,6 +320,32 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil {
+		return false
+	}
+	switch relayInfo.RelayMode {
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
+		return true
+	default:
+		return false
+	}
+}
+
+func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens int64) int64 {
+	if relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription {
+		return tokens
+	}
+	session, ok := relayInfo.Billing.(*BillingSession)
+	if !ok || !session.IsDistributorTokenBilling() {
+		return tokens
+	}
+	if !distributorTokenBillingEligibleForText(relayInfo) {
+		return 0
+	}
+	return tokens
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
 	originUsage := usage
 	if usage == nil {
@@ -335,6 +362,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if usageEstimated && subscriptionTokens == 0 {
 		subscriptionTokens = int64(summary.PromptTokens + summary.CompletionTokens)
 	}
+	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false

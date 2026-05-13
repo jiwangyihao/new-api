@@ -71,25 +71,29 @@ type SubscriptionFunding struct {
 	requestId      string
 	userId         int
 	modelName      string
-	amount         int64 // 预扣的订阅 token 数
+	amount         int64 // 预扣的订阅 token 或 legacy quota 数
 	subscriptionId int
 	preConsumed    int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
-	AmountTotal             int64
-	AmountUsedAfter         int64
-	TokenLimit              int64
-	TokenUsedAfter          int64
-	TokenRemaining          int64
-	DistributorTokenBilling bool
-	PlanId                  int
-	PlanTitle               string
+	AmountTotal                   int64
+	AmountUsedAfter               int64
+	TokenLimit                    int64
+	TokenUsedAfter                int64
+	TokenRemaining                int64
+	DistributorTokenBilling       bool
+	PlanId                        int
+	PlanTitle                     string
+	PendingDistributorTokenAmount int64
 }
 
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
 
-func (s *SubscriptionFunding) PreConsume(_ int) error {
-	// amount 参数被忽略，使用内部 s.amount（已在构造时根据 preConsumedQuota 计算）
-	res, err := model.PreConsumeUserSubscription(s.requestId, s.userId, s.modelName, 0, s.amount)
+func (s *SubscriptionFunding) PreConsume(amount int) error {
+	preConsumeAmount := s.amount
+	if amount > 0 && (preConsumeAmount <= 0 || int64(amount) > preConsumeAmount) {
+		preConsumeAmount = int64(amount)
+	}
+	res, err := model.PreConsumeUserSubscription(s.requestId, s.userId, s.modelName, 0, preConsumeAmount)
 	if err != nil {
 		return err
 	}
@@ -100,6 +104,17 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.TokenLimit = res.TokenLimit
 	s.TokenUsedAfter = res.TokenUsedAfter
 	s.DistributorTokenBilling = res.DistributorTokenBilling
+	if s.DistributorTokenBilling && s.PendingDistributorTokenAmount > 0 && s.PendingDistributorTokenAmount < s.preConsumed {
+		delta := s.PendingDistributorTokenAmount - s.preConsumed
+		if err := model.PostConsumeUserSubscriptionDelta(s.subscriptionId, delta); err != nil {
+			return err
+		}
+		s.preConsumed = s.PendingDistributorTokenAmount
+		s.TokenUsedAfter += delta
+		if s.TokenUsedAfter < 0 {
+			s.TokenUsedAfter = 0
+		}
+	}
 	s.TokenRemaining = res.TokenRemaining
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {

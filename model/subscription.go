@@ -835,6 +835,10 @@ type SubscriptionPreConsumeResult struct {
 	AmountTotal        int64
 	AmountUsedBefore   int64
 	AmountUsedAfter    int64
+	TokenLimit         int64
+	TokenUsedBefore    int64
+	TokenUsedAfter     int64
+	TokenRemaining     int64
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -948,6 +952,47 @@ func (r *SubscriptionPreConsumeRecord) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+func isDistributorSubscription(sub *UserSubscription, plan *SubscriptionPlan) bool {
+	if sub == nil {
+		return false
+	}
+	if sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 {
+		return true
+	}
+	if plan != nil && plan.BusinessCode != nil && strings.TrimSpace(*plan.BusinessCode) != "" {
+		return true
+	}
+	return false
+}
+
+func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
+	if sub == nil || sub.TokenLimit != 0 {
+		return false
+	}
+	reason := strings.TrimSpace(sub.GrantReason)
+	return reason == "trial_code" || reason == "invite_trial"
+}
+
+func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64) {
+	if result == nil || sub == nil {
+		return
+	}
+	result.UserSubscriptionId = sub.Id
+	result.PreConsumed = preConsumed
+	result.AmountTotal = sub.AmountTotal
+	result.AmountUsedBefore = amountBefore
+	result.AmountUsedAfter = sub.AmountUsed
+	result.TokenLimit = sub.TokenLimit
+	result.TokenUsedBefore = tokenBefore
+	result.TokenUsedAfter = sub.TokenUsed
+	if sub.TokenLimit > 0 {
+		remaining := sub.TokenLimit - sub.TokenUsed
+		if remaining < 0 {
+			remaining = 0
+		}
+		result.TokenRemaining = remaining
+	}
+}
 func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
@@ -979,6 +1024,7 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		return nil
 	}
 	sub.AmountUsed = 0
+	sub.TokenUsed = 0
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
 	return tx.Save(sub).Error
@@ -1013,11 +1059,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := tx.Where("id = ?", existing.UserSubscriptionId).First(&sub).Error; err != nil {
 				return err
 			}
-			returnValue.UserSubscriptionId = sub.Id
-			returnValue.PreConsumed = existing.PreConsumed
-			returnValue.AmountTotal = sub.AmountTotal
-			returnValue.AmountUsedBefore = sub.AmountUsed
-			returnValue.AmountUsedAfter = sub.AmountUsed
+			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed)
 			return nil
 		}
 
@@ -1040,9 +1082,20 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
 				return err
 			}
-			usedBefore := sub.AmountUsed
-			if sub.AmountTotal > 0 {
-				remain := sub.AmountTotal - usedBefore
+			amountUsedBefore := sub.AmountUsed
+			tokenUsedBefore := sub.TokenUsed
+			distributor := isDistributorSubscription(&sub, plan)
+			if distributor {
+				if sub.TokenLimit > 0 {
+					remain := sub.TokenLimit - tokenUsedBefore
+					if remain < amount {
+						continue
+					}
+				} else if !isUnlimitedTrialSubscription(&sub) {
+					continue
+				}
+			} else if sub.AmountTotal > 0 {
+				remain := sub.AmountTotal - amountUsedBefore
 				if remain < amount {
 					continue
 				}
@@ -1060,24 +1113,20 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 					if dup.Status == "refunded" {
 						return errors.New("subscription pre-consume already refunded")
 					}
-					returnValue.UserSubscriptionId = sub.Id
-					returnValue.PreConsumed = dup.PreConsumed
-					returnValue.AmountTotal = sub.AmountTotal
-					returnValue.AmountUsedBefore = sub.AmountUsed
-					returnValue.AmountUsedAfter = sub.AmountUsed
+					fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed)
 					return nil
 				}
 				return err
 			}
-			sub.AmountUsed += amount
+			if distributor {
+				sub.TokenUsed += amount
+			} else {
+				sub.AmountUsed += amount
+			}
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
-			returnValue.UserSubscriptionId = sub.Id
-			returnValue.PreConsumed = amount
-			returnValue.AmountTotal = sub.AmountTotal
-			returnValue.AmountUsedBefore = usedBefore
-			returnValue.AmountUsedAfter = sub.AmountUsed
+			fillSubscriptionPreConsumeResult(returnValue, &sub, amount, amountUsedBefore, tokenUsedBefore)
 			return nil
 		}
 		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
@@ -1106,7 +1155,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 			record.Status = "refunded"
 			return tx.Save(&record).Error
 		}
-		if err := PostConsumeUserSubscriptionDelta(record.UserSubscriptionId, -record.PreConsumed); err != nil {
+		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
 			return err
 		}
 		record.Status = "refunded"
@@ -1205,20 +1254,42 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 		return nil
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		var sub UserSubscription
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
-			Where("id = ?", userSubscriptionId).
-			First(&sub).Error; err != nil {
-			return err
-		}
-		newUsed := sub.AmountUsed + delta
+		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
+	})
+}
+
+func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	var sub UserSubscription
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		Where("id = ?", userSubscriptionId).
+		First(&sub).Error; err != nil {
+		return err
+	}
+	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+	if err != nil && sub.PlanId > 0 {
+		return err
+	}
+	if isDistributorSubscription(&sub, plan) {
+		newUsed := sub.TokenUsed + delta
 		if newUsed < 0 {
 			newUsed = 0
 		}
-		if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-			return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+		if sub.TokenLimit > 0 && newUsed > sub.TokenLimit {
+			return fmt.Errorf("subscription token used exceeds limit, used=%d limit=%d", newUsed, sub.TokenLimit)
 		}
-		sub.AmountUsed = newUsed
+		sub.TokenUsed = newUsed
 		return tx.Save(&sub).Error
-	})
+	}
+	newUsed := sub.AmountUsed + delta
+	if newUsed < 0 {
+		newUsed = 0
+	}
+	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
+		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+	}
+	sub.AmountUsed = newUsed
+	return tx.Save(&sub).Error
 }

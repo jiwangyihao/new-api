@@ -39,40 +39,57 @@ type BillingSession struct {
 // 资金来源和令牌额度分两步提交：若资金来源已提交但令牌调整失败，
 // 会标记 fundingSettled 防止 Refund 对已提交的资金来源执行退款。
 func (s *BillingSession) Settle(actualQuota int) error {
+	return s.SettleWithInput(BillingSettleInput{
+		WalletQuota:        actualQuota,
+		SubscriptionTokens: int64(actualQuota),
+	})
+}
+
+func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.settled {
 		return nil
 	}
-	delta := actualQuota - s.preConsumedQuota
-	if delta == 0 {
+	if input.SubscriptionTokens < 0 {
+		input.SubscriptionTokens = 0
+	}
+	walletDelta := input.WalletQuota - s.preConsumedQuota
+	fundingDelta := walletDelta
+	if s.funding.Source() == BillingSourceSubscription {
+		fundingDelta64 := input.SubscriptionTokens - int64(s.preConsumedQuota)
+		if fundingDelta64 > int64(^uint(0)>>1) || fundingDelta64 < -int64(^uint(0)>>1)-1 {
+			return fmt.Errorf("subscription token delta out of int range: %d", fundingDelta64)
+		}
+		fundingDelta = int(fundingDelta64)
+	}
+	if fundingDelta == 0 && walletDelta == 0 {
 		s.settled = true
 		return nil
 	}
 	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）
-	if !s.fundingSettled {
-		if err := s.funding.Settle(delta); err != nil {
+	if fundingDelta != 0 && !s.fundingSettled {
+		if err := s.funding.Settle(fundingDelta); err != nil {
 			return err
 		}
 		s.fundingSettled = true
 	}
-	// 2) 调整令牌额度
+	// 2) 调整令牌额度。令牌额度始终使用 wallet quota 口径，不能使用订阅 token 口径。
 	var tokenErr error
-	if !s.relayInfo.IsPlayground {
-		if delta > 0 {
-			tokenErr = model.DecreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, delta)
+	if walletDelta != 0 && !s.relayInfo.IsPlayground {
+		if walletDelta > 0 {
+			tokenErr = model.DecreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, walletDelta)
 		} else {
-			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -delta)
+			tokenErr = model.IncreaseTokenQuota(s.relayInfo.TokenId, s.relayInfo.TokenKey, -walletDelta)
 		}
 		if tokenErr != nil {
-			// 资金来源已提交，令牌调整失败只能记录日志；标记 settled 防止 Refund 误退资金
 			common.SysLog(fmt.Sprintf("error adjusting token quota after funding settled (userId=%d, tokenId=%d, delta=%d): %s",
-				s.relayInfo.UserId, s.relayInfo.TokenId, delta, tokenErr.Error()))
+				s.relayInfo.UserId, s.relayInfo.TokenId, walletDelta, tokenErr.Error()))
 		}
 	}
 	// 3) 更新 relayInfo 上的订阅 PostDelta（用于日志）
 	if s.funding.Source() == BillingSourceSubscription {
-		s.relayInfo.SubscriptionPostDelta += int64(delta)
+		s.relayInfo.SubscriptionPostDelta += int64(fundingDelta)
 	}
 	s.settled = true
 	return tokenErr
@@ -324,8 +341,13 @@ func (s *BillingSession) syncRelayInfo() {
 		info.SubscriptionId = sub.subscriptionId
 		info.SubscriptionPreConsumed = sub.preConsumed + int64(s.extraReserved)
 		info.SubscriptionPostDelta = 0
-		info.SubscriptionAmountTotal = sub.AmountTotal
-		info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
+		if sub.TokenLimit > 0 || sub.TokenUsedAfter > 0 {
+			info.SubscriptionAmountTotal = sub.TokenLimit
+			info.SubscriptionAmountUsedAfterPreConsume = sub.TokenUsedAfter + int64(s.extraReserved)
+		} else {
+			info.SubscriptionAmountTotal = sub.AmountTotal
+			info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter + int64(s.extraReserved)
+		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
 	} else {

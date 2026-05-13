@@ -17,13 +17,13 @@ import (
 	"gorm.io/gorm"
 )
 
-var commonGroupCol string
-var commonKeyCol string
-var commonTrueVal string
-var commonFalseVal string
+var commonGroupCol = "`group`"
+var commonKeyCol = "`key`"
+var commonTrueVal = "1"
+var commonFalseVal = "0"
 
-var logKeyCol string
-var logGroupCol string
+var logKeyCol = "`key`"
+var logGroupCol = "`group`"
 
 func initCol() {
 	// init common column names

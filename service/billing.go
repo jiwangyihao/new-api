@@ -29,48 +29,66 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // SettleBilling — 后结算辅助函数
 // ---------------------------------------------------------------------------
 
+type BillingSettleInput struct {
+	WalletQuota        int
+	SubscriptionTokens int64
+	UsageEstimated     bool
+}
+
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
+	return SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{
+		WalletQuota:        actualQuota,
+		SubscriptionTokens: int64(actualQuota),
+	})
+}
+
+func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, input BillingSettleInput) error {
+	if input.SubscriptionTokens < 0 {
+		input.SubscriptionTokens = 0
+	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
-		delta := actualQuota - preConsumed
+		walletDelta := input.WalletQuota - preConsumed
 
-		if delta > 0 {
+		if walletDelta > 0 {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
-				logger.FormatQuota(delta),
-				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(walletDelta),
+				logger.FormatQuota(input.WalletQuota),
 				logger.FormatQuota(preConsumed),
 			))
-		} else if delta < 0 {
+		} else if walletDelta < 0 {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
-				logger.FormatQuota(-delta),
-				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(-walletDelta),
+				logger.FormatQuota(input.WalletQuota),
 				logger.FormatQuota(preConsumed),
 			))
 		} else {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
-				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(input.WalletQuota),
 			))
 		}
 
-		if err := relayInfo.Billing.Settle(actualQuota); err != nil {
+		if session, ok := relayInfo.Billing.(*BillingSession); ok {
+			if err := session.SettleWithInput(input); err != nil {
+				return err
+			}
+		} else if err := relayInfo.Billing.Settle(input.WalletQuota); err != nil {
 			return err
 		}
 
-		// 发送额度通知（订阅计费使用订阅剩余额度）
-		if actualQuota != 0 {
+		if input.WalletQuota != 0 || input.SubscriptionTokens != 0 {
 			if relayInfo.BillingSource == BillingSourceSubscription {
 				checkAndSendSubscriptionQuotaNotify(relayInfo)
 			} else {
-				checkAndSendQuotaNotify(relayInfo, actualQuota-preConsumed, preConsumed)
+				checkAndSendQuotaNotify(relayInfo, walletDelta, preConsumed)
 			}
 		}
 		return nil
 	}
 
-	// 回退：无 BillingSession 时使用旧路径
-	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
+	quotaDelta := input.WalletQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
 		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
 	}

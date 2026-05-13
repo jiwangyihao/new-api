@@ -32,6 +32,8 @@ func TestMain(m *testing.M) {
 	model.LOG_DB = db
 
 	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
 	common.LogConsumeEnabled = true

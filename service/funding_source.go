@@ -71,12 +71,15 @@ type SubscriptionFunding struct {
 	requestId      string
 	userId         int
 	modelName      string
-	amount         int64 // 预扣的订阅额度（subConsume）
+	amount         int64 // 预扣的订阅 token 数
 	subscriptionId int
 	preConsumed    int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal     int64
 	AmountUsedAfter int64
+	TokenLimit      int64
+	TokenUsedAfter  int64
+	TokenRemaining  int64
 	PlanId          int
 	PlanTitle       string
 }
@@ -93,6 +96,9 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.preConsumed = res.PreConsumed
 	s.AmountTotal = res.AmountTotal
 	s.AmountUsedAfter = res.AmountUsedAfter
+	s.TokenLimit = res.TokenLimit
+	s.TokenUsedAfter = res.TokenUsedAfter
+	s.TokenRemaining = res.TokenRemaining
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {
 		s.PlanId = planInfo.PlanId

@@ -330,6 +330,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
+	usageEstimated := originUsage == nil
+	subscriptionTokens := SubscriptionMeteredTokens(usage)
+	if usageEstimated && subscriptionTokens == 0 {
+		subscriptionTokens = int64(summary.PromptTokens + summary.CompletionTokens)
+	}
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
@@ -370,7 +375,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, summary.Quota); err != nil {
+	if err := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated}); err != nil {
 		logger.LogError(ctx, "error settling billing: "+err.Error())
 	}
 
@@ -397,6 +402,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		other["usage_semantic"] = "anthropic"
 	} else {
 		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.GroupRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, relayInfo.PriceData.GroupRatioInfo.GroupSpecialRatio)
+	}
+	if usageEstimated {
+		other["usage_estimated"] = true
 	}
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason

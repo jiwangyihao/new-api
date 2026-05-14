@@ -80,3 +80,36 @@ func TestRelayTaskDoesNotPreConsumeDistributorSubscription(t *testing.T) {
 	assert.NotEqual(t, service.BillingSourceSubscription, task.PrivateData.BillingSource)
 	assert.Zero(t, task.PrivateData.SubscriptionId)
 }
+
+func TestRelayTaskDistributorFallbackRestoresTokenBeforeWallet(t *testing.T) {
+	originalDB := model.DB
+	db := setupModelListControllerTestDB(t)
+	model.DB = db
+	t.Cleanup(func() { model.DB = originalDB })
+	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
+
+	const userID = 9201
+	const tokenID = 9202
+	const subID = 9203
+	seedQuota := 100
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "task_exact", Quota: seedQuota, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-task-exact", Status: common.TokenStatusEnabled, RemainQuota: seedQuota}).Error)
+	code := "controller-task-exact"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9204, Title: "Task Distributor", Enabled: true, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, PlanId: 9204, UserId: userID, TokenLimit: 1_000, ConcurrencyLimit: 1, Status: "active", StartTime: time.Now().Unix(), EndTime: time.Now().Add(24 * time.Hour).Unix()}).Error)
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("POST", "/v1/videos/generations", nil)
+	relayInfo := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatTask, RelayMode: relayconstant.RelayModeVideoSubmit, RequestId: "req-task-exact", UserId: userID, UserQuota: seedQuota, TokenId: tokenID, TokenKey: "sk-task-exact", OriginModelName: "video-model", UserSetting: dto.UserSetting{BillingPreference: "subscription_first"}, ChannelMeta: &relaycommon.ChannelMeta{}}
+	relayInfo.SetEstimatePromptTokens(6)
+
+	apiErr := service.PreConsumeBilling(ctx, seedQuota, relayInfo)
+	require.Nil(t, apiErr)
+	assert.Equal(t, service.BillingSourceWallet, relayInfo.BillingSource)
+	var token model.Token
+	require.NoError(t, model.DB.First(&token, tokenID).Error)
+	assert.Equal(t, 0, token.RemainQuota)
+	assert.Equal(t, seedQuota, token.UsedQuota)
+}

@@ -295,6 +295,27 @@ func getSubscriptionTokenUsedForTaskTest(t *testing.T, id int) int64 {
 	require.NoError(t, model.DB.Select("token_used").Where("id = ?", id).First(&sub).Error)
 	return sub.TokenUsed
 }
+func TestTaskBillingDoesNotAdjustBusinessCodedDistributorSubscription(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID, planID, subID = 81, 81, 81, 81, 82
+	const preConsumed = 2000
+	const tokenRemain = 8000
+	const tokenUsed int64 = 50
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-business-task", tokenRemain)
+	seedChannel(t, channelID)
+	code := "business-task"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Business Task", Enabled: true, BusinessCode: &code}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, TokenUsed: tokenUsed, Status: "active", StartTime: time.Now().Unix(), EndTime: time.Now().Add(30 * 24 * time.Hour).Unix()}).Error)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	RecalculateTaskQuota(ctx, task, 3000, "business-coded distributor task settle")
+	assert.Equal(t, tokenUsed, getSubscriptionTokenUsedForTaskTest(t, subID))
+}
+
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

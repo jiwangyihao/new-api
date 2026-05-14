@@ -89,10 +89,20 @@ func taskUsesDistributorSubscription(task *model.Task) bool {
 		return false
 	}
 	var sub model.UserSubscription
-	if err := model.DB.Select("token_limit", "concurrency_limit", "grant_reason").Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
+	if err := model.DB.Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
 		return false
 	}
-	return sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 || sub.GrantReason == "trial_code" || sub.GrantReason == "invite_trial" || sub.GrantReason == "monthly_invite_entitlement"
+	if sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 || sub.GrantReason == "trial_code" || sub.GrantReason == "invite_trial" || sub.GrantReason == "monthly_invite_entitlement" {
+		return true
+	}
+	if sub.PlanId <= 0 {
+		return false
+	}
+	var plan model.SubscriptionPlan
+	if err := model.DB.Select("business_code").Where("id = ?", sub.PlanId).First(&plan).Error; err != nil {
+		return false
+	}
+	return plan.BusinessCode != nil && strings.TrimSpace(*plan.BusinessCode) != ""
 }
 
 // taskAdjustFunding 调整任务的资金来源（钱包或订阅），delta > 0 表示扣费，delta < 0 表示退还。

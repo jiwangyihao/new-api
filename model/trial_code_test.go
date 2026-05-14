@@ -105,3 +105,20 @@ func TestAutoMigrateTrialCodeTables(t *testing.T) {
 	assert.True(t, DB.Migrator().HasTable(&TrialCode{}))
 	assert.True(t, DB.Migrator().HasTable(&TrialRedemption{}))
 }
+
+func TestReserveTrialCodeRedemptionSlotRejectsMaxedWithoutChangingCounter(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&TrialCode{}, &TrialRedemption{}))
+	plan := seedTrialPlanForTest(t, 7641)
+	trialCode := &TrialCode{Id: 7642, Code: "MAXGUARD", PlanId: plan.Id, Enabled: true, MaxRedemptions: 1, RedeemedCount: 1}
+	require.NoError(t, DB.Create(trialCode).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return reserveTrialCodeRedemptionSlot(tx, trialCode, common.GetTimestamp())
+	})
+	require.Error(t, err)
+
+	var after TrialCode
+	require.NoError(t, DB.First(&after, trialCode.Id).Error)
+	assert.Equal(t, 1, after.RedeemedCount)
+}

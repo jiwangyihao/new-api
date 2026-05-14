@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type TrialCode struct {
@@ -88,7 +87,7 @@ func ConsumeTrialCode(tx *gorm.DB, userId int, rawCode string) (*TrialCode, erro
 		return nil, errors.New("user has already received trial")
 	}
 	var trialCode TrialCode
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("code = ?", code).First(&trialCode).Error; err != nil {
+	if err := tx.Where("code = ?", code).First(&trialCode).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("invalid trial code")
 		}
@@ -101,9 +100,6 @@ func ConsumeTrialCode(tx *gorm.DB, userId int, rawCode string) (*TrialCode, erro
 	if trialCode.ExpiresAt > 0 && trialCode.ExpiresAt <= now {
 		return nil, errors.New("trial code expired")
 	}
-	if trialCode.MaxRedemptions > 0 && trialCode.RedeemedCount >= trialCode.MaxRedemptions {
-		return nil, errors.New("trial code redemption limit reached")
-	}
 	var plan SubscriptionPlan
 	if err := tx.Where("id = ?", trialCode.PlanId).First(&plan).Error; err != nil {
 		return nil, err
@@ -111,13 +107,34 @@ func ConsumeTrialCode(tx *gorm.DB, userId int, rawCode string) (*TrialCode, erro
 	if !plan.IsTrial {
 		return nil, errors.New("trial code plan is not trial")
 	}
+	if err := reserveTrialCodeRedemptionSlot(tx, &trialCode, now); err != nil {
+		return nil, err
+	}
+	trialCode.RedeemedCount++
 	redemption := &TrialRedemption{UserId: userId, TrialCodeId: trialCode.Id, Code: trialCode.Code}
 	if err := tx.Create(redemption).Error; err != nil {
 		return nil, err
 	}
-	trialCode.RedeemedCount++
-	if err := tx.Model(&TrialCode{}).Where("id = ?", trialCode.Id).Updates(map[string]any{"redeemed_count": trialCode.RedeemedCount, "updated_at": now}).Error; err != nil {
-		return nil, err
-	}
 	return &trialCode, nil
+}
+
+func reserveTrialCodeRedemptionSlot(tx *gorm.DB, trialCode *TrialCode, now int64) error {
+	if tx == nil || trialCode == nil || trialCode.Id <= 0 {
+		return errors.New("invalid trial code reservation")
+	}
+	query := tx.Model(&TrialCode{}).Where("id = ?", trialCode.Id)
+	if trialCode.MaxRedemptions > 0 {
+		query = query.Where("redeemed_count < ?", trialCode.MaxRedemptions)
+	}
+	result := query.Updates(map[string]any{
+		"redeemed_count": gorm.Expr("redeemed_count + ?", 1),
+		"updated_at":     now,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("trial code redemption limit reached")
+	}
+	return nil
 }

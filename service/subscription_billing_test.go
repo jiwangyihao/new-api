@@ -482,6 +482,32 @@ func TestPostAudioConsumeQuotaRejectsDistributorSubscriptionFirstWithoutWalletFa
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 }
 
+func TestPostAudioConsumeQuotaRejectsExhaustedDistributorSubscriptionFirstWithoutWalletFallback(t *testing.T) {
+	truncate(t)
+	const userID = 8141
+	const tokenID = 8142
+	const planID = 8143
+	const subID = 8144
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-audio-exhausted", 10_000)
+	seedChannel(t, 8145)
+	seedDistributorPlan(t, planID, "plan-audio-exhausted", 5)
+	seedDistributorSubscription(t, subID, userID, planID, 5, 5)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-audio-exhausted", "req-audio-exhausted", "subscription_first")
+	relayInfo.ChannelId = 8145
+	relayInfo.RelayMode = relayconstant.RelayModeAudioSpeech
+	relayInfo.SetEstimatePromptTokens(6)
+	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
+	require.NotNil(t, apiErr)
+	assert.Empty(t, relayInfo.BillingSource)
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(5), getSubscriptionTokenUsed(t, subID))
+}
+
 func TestWalletBillingStillUsesQuota(t *testing.T) {
 	truncate(t)
 	const userID = 8021

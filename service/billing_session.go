@@ -496,6 +496,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		session, apiErr := trySubscription()
 		if apiErr != nil {
 			if allowWalletFallback && apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				if hasDistributor, _ := model.HasActiveDistributorSubscription(relayInfo.UserId); hasDistributor && !distributorSubscriptionEligibleForBilling(relayInfo) {
+					return nil, types.NewErrorWithStatusCode(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeInvalidRequest, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+				}
 				return tryWallet()
 			}
 			return nil, apiErr

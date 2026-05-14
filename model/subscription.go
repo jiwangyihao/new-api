@@ -974,6 +974,29 @@ func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
 	return reason == "trial_code" || reason == "invite_trial"
 }
 
+func HasActiveDistributorSubscription(userId int) (bool, error) {
+	if userId <= 0 {
+		return false, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		Order("end_time asc, id asc").
+		Find(&subs).Error; err != nil {
+		return false, err
+	}
+	for _, sub := range subs {
+		plan, err := getSubscriptionPlanByIdTx(DB, sub.PlanId)
+		if err != nil {
+			continue
+		}
+		if isDistributorSubscription(&sub, plan) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64, distributor bool) {
 	if result == nil || sub == nil {
 		return

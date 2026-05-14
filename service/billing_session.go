@@ -505,7 +505,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			relayInfo.Billing = nil
 			relayInfo.BillingSource = ""
 			relayInfo.SubscriptionId = 0
-			if allowWalletFallback {
+			if allowWalletFallback && relayInfo.RelayFormat == types.RelayFormatTask {
 				return tryWallet()
 			}
 			return nil, types.NewErrorWithStatusCode(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeInvalidRequest, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())

@@ -20,7 +20,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -52,7 +51,11 @@ import {
   updateBillingPreference,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
-import { formatDuration, formatResetPeriod } from '@/features/subscriptions/lib'
+import {
+  formatConcurrencyLimit,
+  formatDuration,
+  formatTokenLimit,
+} from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
   UserSubscriptionRecord,
@@ -222,8 +225,8 @@ export function SubscriptionPlansCard({
   }
 
   const getUsagePercent = (sub: UserSubscriptionRecord) => {
-    const total = Number(sub?.subscription?.amount_total || 0)
-    const used = Number(sub?.subscription?.amount_used || 0)
+    const total = Number(sub?.subscription?.token_limit || 0)
+    const used = Number(sub?.subscription?.token_used || 0)
     if (total <= 0) return 0
     return Math.round((used / total) * 100)
   }
@@ -390,10 +393,10 @@ export function SubscriptionPlansCard({
               <div className='max-h-64 space-y-3 overflow-y-auto pr-1'>
                 {allSubscriptions.map((sub) => {
                   const subscription = sub.subscription
-                  const totalAmount = Number(subscription?.amount_total || 0)
-                  const usedAmount = Number(subscription?.amount_used || 0)
-                  const remainAmount =
-                    totalAmount > 0 ? Math.max(0, totalAmount - usedAmount) : 0
+                  const tokenLimit = Number(subscription?.token_limit || 0)
+                  const tokenUsed = Number(subscription?.token_used || 0)
+                  const remainTokens =
+                    tokenLimit > 0 ? Math.max(0, tokenLimit - tokenUsed) : 0
                   const planTitle =
                     planTitleMap.get(subscription?.plan_id) || ''
                   const remainDays = getRemainingDays(sub)
@@ -463,31 +466,35 @@ export function SubscriptionPlansCard({
                         </div>
                       )}
                       <div className='text-muted-foreground mt-1'>
-                        {t('Total Quota')}:{' '}
-                        {totalAmount > 0 ? (
+                        {t('Monthly Token Limit')}:{' '}
+                        {tokenLimit > 0 ? (
                           <Tooltip>
                             <TooltipTrigger
                               render={<span className='cursor-help' />}
                             >
-                              {formatQuota(usedAmount)}/
-                              {formatQuota(totalAmount)} · {t('Remaining')}{' '}
-                              {formatQuota(remainAmount)}
+                              {formatTokenLimit(tokenUsed, t)}/
+                              {formatTokenLimit(tokenLimit, t)} · {t('Remaining')}{' '}
+                              {formatTokenLimit(remainTokens, t)}
                             </TooltipTrigger>
                             <TooltipContent>
-                              {t('Raw Quota')}: {usedAmount}/{totalAmount} ·{' '}
-                              {t('Remaining')} {remainAmount}
+                              {t('Raw Tokens')}: {tokenUsed}/{tokenLimit} ·{' '}
+                              {t('Remaining')} {remainTokens}
                             </TooltipContent>
                           </Tooltip>
                         ) : (
-                          t('Unlimited')
+                          formatTokenLimit(0, t)
                         )}
-                        {totalAmount > 0 && (
+                        {tokenLimit > 0 && (
                           <span className='ml-2'>
                             {t('Used')} {usagePercent}%
                           </span>
                         )}
                       </div>
-                      {totalAmount > 0 && isActive && (
+                      <div className='text-muted-foreground mt-1'>
+                        {t('Concurrency Limit')}:{' '}
+                        {formatConcurrencyLimit(subscription?.concurrency_limit, t)}
+                      </div>
+                      {tokenLimit > 0 && isActive && (
                         <Progress value={usagePercent} className='mt-2 h-1.5' />
                       )}
                     </div>
@@ -510,7 +517,6 @@ export function SubscriptionPlansCard({
             {plans.map((p, index) => {
               const plan = p?.plan
               if (!plan) return null
-              const totalAmount = Number(plan.total_amount || 0)
               const price = Number(plan.price_amount || 0).toFixed(2)
               const isPopular = index === 0 && plans.length > 1
               const limit = Number(plan.max_purchase_per_user || 0)
@@ -519,12 +525,14 @@ export function SubscriptionPlansCard({
 
               const benefits = [
                 `${t('Validity Period')}: ${formatDuration(plan, t)}`,
-                formatResetPeriod(plan, t) !== t('No Reset')
-                  ? `${t('Quota Reset')}: ${formatResetPeriod(plan, t)}`
-                  : null,
-                totalAmount > 0
-                  ? `${t('Total Quota')}: ${formatQuota(totalAmount)}`
-                  : `${t('Total Quota')}: ${t('Unlimited')}`,
+                `${t('Monthly Token Limit')}: ${formatTokenLimit(
+                  plan.monthly_token_limit,
+                  t
+                )}`,
+                `${t('Concurrency Limit')}: ${formatConcurrencyLimit(
+                  plan.concurrency_limit,
+                  t
+                )}`,
                 limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
                 plan.upgrade_group
                   ? `${t('Upgrade Group')}: ${plan.upgrade_group}`

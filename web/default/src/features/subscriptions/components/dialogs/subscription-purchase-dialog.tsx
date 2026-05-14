@@ -43,7 +43,11 @@ import {
   paySubscriptionCreem,
   paySubscriptionEpay,
 } from '../../api'
-import { formatDuration, formatResetPeriod } from '../../lib'
+import {
+  formatConcurrencyLimit,
+  formatDuration,
+  formatTokenLimit,
+} from '../../lib'
 import type { PlanRecord } from '../../types'
 
 interface PaymentMethod {
@@ -89,7 +93,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
       ?.name ||
     selectedEpayMethod ||
     t('Select payment method')
-  const totalAmount = Number(plan.total_amount || 0)
   const price = Number(plan.price_amount || 0).toFixed(2)
   const limitReached =
     (props.purchaseLimit || 0) > 0 &&
@@ -216,21 +219,21 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 {formatDuration(plan, t)}
               </span>
             </div>
-            {formatResetPeriod(plan, t) !== t('No Reset') && (
-              <div className='flex justify-between'>
-                <span className='text-muted-foreground text-sm'>
-                  {t('Reset Period')}
-                </span>
-                <span className='text-sm'>{formatResetPeriod(plan, t)}</span>
-              </div>
-            )}
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-sm'>
-                {t('Total Quota')}
+                {t('Monthly Token Limit')}
               </span>
               <span className='flex items-center gap-1 text-sm'>
                 <Package className='h-3.5 w-3.5' />
-                {totalAmount > 0 ? totalAmount : t('Unlimited')}
+                {formatTokenLimit(plan.monthly_token_limit, t)}
+              </span>
+            </div>
+            <div className='flex items-center justify-between'>
+              <span className='text-muted-foreground text-sm'>
+                {t('Concurrency Limit')}
+              </span>
+              <span className='text-sm'>
+                {formatConcurrencyLimit(plan.concurrency_limit, t)}
               </span>
             </div>
             {plan.upgrade_group && (

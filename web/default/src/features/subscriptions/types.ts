@@ -40,6 +40,13 @@ export const subscriptionPlanSchema = z.object({
   upgrade_group: z.string().optional(),
   stripe_price_id: z.string().optional(),
   creem_product_id: z.string().optional(),
+  monthly_token_limit: z.number().optional(),
+  concurrency_limit: z.number().optional(),
+  is_trial: z.boolean().optional(),
+  public_visible: z.boolean().optional(),
+  trial_duration_hours: z.number().optional(),
+  reward_eligible: z.boolean().optional(),
+  business_code: z.string().optional(),
 })
 
 export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
@@ -63,6 +70,11 @@ export const userSubscriptionSchema = z.object({
   amount_total: z.number(),
   amount_used: z.number(),
   next_reset_time: z.number().optional(),
+  token_used: z.number().optional(),
+  token_limit: z.number().optional(),
+  concurrency_limit: z.number().optional(),
+  grant_reason: z.string().optional(),
+  grant_source_user_id: z.number().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>

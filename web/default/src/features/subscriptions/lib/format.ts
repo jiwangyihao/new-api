@@ -16,13 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { TFunction } from 'i18next'
 import dayjs from '@/lib/dayjs'
 import type { SubscriptionPlan } from '../types'
 
+type TranslationFn = (key: string, options?: Record<string, unknown>) => string
+
 export function formatDuration(
   plan: Partial<SubscriptionPlan>,
-  t: TFunction
+  t: TranslationFn
 ): string {
   const unit = plan?.duration_unit || 'month'
   const value = plan?.duration_value || 1
@@ -44,7 +45,7 @@ export function formatDuration(
 
 export function formatResetPeriod(
   plan: Partial<SubscriptionPlan>,
-  t: TFunction
+  t: TranslationFn
 ): string {
   const period = plan?.quota_reset_period || 'never'
   if (period === 'daily') return t('Daily')
@@ -58,6 +59,39 @@ export function formatResetPeriod(
     return `${seconds} ${t('seconds')}`
   }
   return t('No Reset')
+}
+
+export function formatTokenLimit(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const tokens = Number(value || 0)
+  if (tokens <= 0) return t('Unlimited tokens')
+
+  if (tokens >= 1_000_000_000) {
+    return `${formatCompactNumber(tokens / 1_000_000_000)}B ${t('tokens')}`
+  }
+  if (tokens >= 1_000_000) {
+    return `${formatCompactNumber(tokens / 1_000_000)}M ${t('tokens')}`
+  }
+  if (tokens >= 1_000) {
+    return `${formatCompactNumber(tokens / 1_000)}K ${t('tokens')}`
+  }
+  return `${tokens} ${t('tokens')}`
+}
+
+export function formatConcurrencyLimit(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const limit = Number(value || 0)
+  if (limit <= 0) return t('Unlimited concurrency')
+  return t('{{count}} concurrent requests', { count: limit })
+}
+
+function formatCompactNumber(value: number): string {
+  if (Number.isInteger(value)) return String(value)
+  return value.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
 }
 
 export function formatTimestamp(ts: number): string {

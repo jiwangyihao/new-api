@@ -22,7 +22,12 @@ import { useTranslation } from 'react-i18next'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
-import { formatDuration, formatResetPeriod } from '../lib'
+import {
+  formatConcurrencyLimit,
+  formatDuration,
+  formatResetPeriod,
+  formatTokenLimit,
+} from '../lib'
 import type { PlanRecord } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -168,20 +173,94 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         size: 140,
       },
       {
-        id: 'total_amount',
-        meta: { label: t('Total Quota'), mobileHidden: true },
+        id: 'monthly_token_limit',
+        meta: { label: t('Monthly Token Limit'), mobileHidden: true },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Total Quota')} />
+          <DataTableColumnHeader
+            column={column}
+            title={t('Monthly Token Limit')}
+          />
+        ),
+        cell: ({ row }) => (
+          <span className='text-muted-foreground'>
+            {formatTokenLimit(row.original.plan.monthly_token_limit, t)}
+          </span>
+        ),
+        size: 140,
+      },
+      {
+        id: 'concurrency_limit',
+        meta: { label: t('Concurrency Limit'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader
+            column={column}
+            title={t('Concurrency Limit')}
+          />
+        ),
+        cell: ({ row }) => (
+          <span className='text-muted-foreground'>
+            {formatConcurrencyLimit(row.original.plan.concurrency_limit, t)}
+          </span>
+        ),
+        size: 140,
+      },
+      {
+        id: 'business_code',
+        meta: { label: t('Business Code'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Business Code')} />
+        ),
+        cell: ({ row }) => (
+          <span className='text-muted-foreground'>
+            {row.original.plan.business_code || '-'}
+          </span>
+        ),
+        size: 120,
+      },
+      {
+        id: 'plan_flags',
+        meta: { label: t('Plan Flags'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Plan Flags')} />
         ),
         cell: ({ row }) => {
-          const total = Number(row.original.plan.total_amount || 0)
+          const plan = row.original.plan
           return (
-            <span className='text-muted-foreground'>
-              {total > 0 ? total : t('Unlimited')}
-            </span>
+            <div className='flex flex-wrap gap-1'>
+              {plan.is_trial && (
+                <StatusBadge
+                  label={t('Trial Plan')}
+                  variant='info'
+                  copyable={false}
+                />
+              )}
+              {plan.public_visible === false && (
+                <StatusBadge
+                  label={t('Hidden')}
+                  variant='neutral'
+                  copyable={false}
+                />
+              )}
+              {plan.reward_eligible === false && (
+                <StatusBadge
+                  label={t('No Invitation Reward')}
+                  variant='neutral'
+                  copyable={false}
+                />
+              )}
+              {plan.trial_duration_hours ? (
+                <StatusBadge
+                  label={t('{{count}} trial hours', {
+                    count: plan.trial_duration_hours,
+                  })}
+                  variant='neutral'
+                  copyable={false}
+                />
+              ) : null}
+            </div>
           )
         },
-        size: 100,
+        size: 180,
       },
       {
         id: 'upgrade_group',

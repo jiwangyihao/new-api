@@ -43,6 +43,13 @@ export function getPlanFormSchema(t: TFunction) {
     upgrade_group: z.string().optional(),
     stripe_price_id: z.string().optional(),
     creem_product_id: z.string().optional(),
+    monthly_token_limit: z.coerce.number().min(0),
+    concurrency_limit: z.coerce.number().min(0),
+    is_trial: z.boolean(),
+    public_visible: z.boolean(),
+    trial_duration_hours: z.coerce.number().min(0),
+    reward_eligible: z.boolean(),
+    business_code: z.string().optional(),
   })
 }
 
@@ -64,6 +71,13 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   upgrade_group: '',
   stripe_price_id: '',
   creem_product_id: '',
+  monthly_token_limit: 0,
+  concurrency_limit: 0,
+  is_trial: false,
+  public_visible: true,
+  trial_duration_hours: 0,
+  reward_eligible: true,
+  business_code: '',
 }
 
 export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
@@ -83,6 +97,13 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     upgrade_group: plan.upgrade_group || '',
     stripe_price_id: plan.stripe_price_id || '',
     creem_product_id: plan.creem_product_id || '',
+    monthly_token_limit: Number(plan.monthly_token_limit || 0),
+    concurrency_limit: Number(plan.concurrency_limit || 0),
+    is_trial: plan.is_trial === true,
+    public_visible: plan.public_visible !== false,
+    trial_duration_hours: Number(plan.trial_duration_hours || 0),
+    reward_eligible: plan.reward_eligible !== false,
+    business_code: plan.business_code || '',
   }
 }
 
@@ -103,6 +124,13 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       max_purchase_per_user: Number(values.max_purchase_per_user || 0),
       total_amount: Number(values.total_amount || 0),
       upgrade_group: values.upgrade_group || '',
+      monthly_token_limit: Number(values.monthly_token_limit || 0),
+      concurrency_limit: Number(values.concurrency_limit || 0),
+      is_trial: values.is_trial,
+      public_visible: values.public_visible,
+      trial_duration_hours: Number(values.trial_duration_hours || 0),
+      reward_eligible: values.reward_eligible,
+      business_code: values.business_code?.trim() || undefined,
     },
   }
 }

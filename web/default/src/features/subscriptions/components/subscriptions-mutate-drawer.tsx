@@ -225,22 +225,22 @@ export function SubscriptionsMutateDrawer({
 
                 <FormField
                   control={form.control}
-                  name='total_amount'
+                  name='monthly_token_limit'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t('Total Quota')}</FormLabel>
+                      <FormLabel>{t('Monthly Token Limit')}</FormLabel>
                       <FormControl>
                         <Input
                           {...field}
                           type='number'
                           min={0}
                           onChange={(e) =>
-                            field.onChange(parseFloat(e.target.value) || 0)
+                            field.onChange(parseInt(e.target.value, 10) || 0)
                           }
                         />
                       </FormControl>
                       <FormDescription>
-                        {t('0 means unlimited')}
+                        {t('0 means unlimited tokens')}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -352,6 +352,122 @@ export function SubscriptionsMutateDrawer({
                   )}
                 />
               </div>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='concurrency_limit'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Concurrency Limit')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min={0}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('0 means unlimited concurrency')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='business_code'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Business Code')}</FormLabel>
+                      <FormControl>
+                        <Input {...field} placeholder='basic_monthly' />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='is_trial'
+                  render={({ field }) => (
+                    <FormItem className='flex flex-row items-center gap-2 rounded-md border p-3'>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <FormLabel className='!mt-0'>{t('Trial Plan')}</FormLabel>
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='public_visible'
+                  render={({ field }) => (
+                    <FormItem className='flex flex-row items-center gap-2 rounded-md border p-3'>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <FormLabel className='!mt-0'>{t('Public Visible')}</FormLabel>
+                    </FormItem>
+                  )}
+                />
+
+              </div>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='trial_duration_hours'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Trial Duration Hours')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min={0}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <FormField
+                control={form.control}
+                name='reward_eligible'
+                render={({ field }) => (
+                  <FormItem className='flex flex-row items-center gap-2 rounded-md border p-3'>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <FormLabel className='!mt-0'>
+                      {t('Invitation Reward Eligible')}
+                    </FormLabel>
+                  </FormItem>
+                )}
+              />
             </div>
 
             {/* Duration Settings */}

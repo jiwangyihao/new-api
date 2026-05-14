@@ -84,9 +84,23 @@ func taskIsSubscription(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceSubscription && task.PrivateData.SubscriptionId > 0
 }
 
+func taskUsesDistributorSubscription(task *model.Task) bool {
+	if !taskIsSubscription(task) {
+		return false
+	}
+	var sub model.UserSubscription
+	if err := model.DB.Select("token_limit", "concurrency_limit", "grant_reason").Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
+		return false
+	}
+	return sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 || sub.GrantReason == "trial_code" || sub.GrantReason == "invite_trial" || sub.GrantReason == "monthly_invite_entitlement"
+}
+
 // taskAdjustFunding 调整任务的资金来源（钱包或订阅），delta > 0 表示扣费，delta < 0 表示退还。
 func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
+		if taskUsesDistributorSubscription(task) {
+			return fmt.Errorf("非文本异步任务不支持分销订阅扣费")
+		}
 		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
 	}
 	if delta > 0 {

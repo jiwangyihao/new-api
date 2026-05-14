@@ -423,12 +423,37 @@ func TestPostTextConsumeQuotaSkipsDistributorTokensForNonTextRelay(t *testing.T)
 	relayInfo.ChannelId = 8095
 	relayInfo.RelayMode = relayconstant.RelayModeEmbeddings
 	relayInfo.SetEstimatePromptTokens(6)
-	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
+	require.NotNil(t, apiErr)
 
 	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 6}, nil)
 
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000-6, getTokenRemainQuota(t, tokenID), "token key quota still uses wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "token key quota must be refunded when distributor subscription is rejected")
+}
+
+func TestPostAudioConsumeQuotaDoesNotConsumeDistributorSubscription(t *testing.T) {
+	truncate(t)
+	const userID = 8121
+	const tokenID = 8122
+	const planID = 8123
+	const subID = 8124
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-audio", 10_000)
+	seedChannel(t, 8125)
+	seedDistributorPlan(t, planID, "plan-audio", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-audio", "req-audio", "subscription_only")
+	relayInfo.ChannelId = 8125
+	relayInfo.RelayMode = relayconstant.RelayModeAudioSpeech
+	relayInfo.SetEstimatePromptTokens(6)
+	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
+	require.NotNil(t, apiErr)
+
+	PostAudioConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 6}, "")
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 }
 
 func TestWalletBillingStillUsesQuota(t *testing.T) {

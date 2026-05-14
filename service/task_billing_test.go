@@ -250,6 +250,51 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 }
 
+func seedDistributorTaskSubscription(t *testing.T, id int, userId int, tokenLimit int64, tokenUsed int64) {
+	t.Helper()
+	sub := &model.UserSubscription{
+		Id:               id,
+		UserId:           userId,
+		TokenLimit:       tokenLimit,
+		TokenUsed:        tokenUsed,
+		ConcurrencyLimit: 1,
+		Status:           "active",
+		StartTime:        time.Now().Unix(),
+		EndTime:          time.Now().Add(30 * 24 * time.Hour).Unix(),
+	}
+	require.NoError(t, model.DB.Create(sub).Error)
+}
+
+func TestTaskBillingDoesNotAdjustDistributorSubscription(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID, subID = 80, 80, 80, 80
+	const preConsumed = 2000
+	const tokenRemain = 8000
+	const tokenUsed int64 = 50
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-dist-task", tokenRemain)
+	seedChannel(t, channelID)
+	seedDistributorTaskSubscription(t, subID, userID, 100, tokenUsed)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+
+	RefundTaskQuota(ctx, task, "distributor task failed")
+	assert.Equal(t, tokenUsed, getSubscriptionTokenUsedForTaskTest(t, subID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID), "token key quota must not be refunded when distributor task funding is rejected")
+
+	RecalculateTaskQuota(ctx, task, 3000, "distributor task settle")
+	assert.Equal(t, tokenUsed, getSubscriptionTokenUsedForTaskTest(t, subID))
+}
+
+func getSubscriptionTokenUsedForTaskTest(t *testing.T, id int) int64 {
+	t.Helper()
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Select("token_used").Where("id = ?", id).First(&sub).Error)
+	return sub.TokenUsed
+}
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

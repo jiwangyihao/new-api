@@ -382,6 +382,17 @@ func (s *BillingSession) syncRelayInfo() {
 	}
 }
 
+func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {
+	return distributorTokenBillingEligibleForText(relayInfo)
+}
+
+func distributorSubscriptionRelayError(relayInfo *relaycommon.RelayInfo) error {
+	if relayInfo != nil && relayInfo.RelayFormat == types.RelayFormatTask {
+		return fmt.Errorf("非文本异步任务不支持分销订阅扣费")
+	}
+	return fmt.Errorf("该接口不支持分销订阅扣费")
+}
+
 // ---------------------------------------------------------------------------
 // NewBillingSession 工厂 — 根据计费偏好创建会话并处理回退
 // ---------------------------------------------------------------------------
@@ -450,16 +461,37 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return session, nil
 	}
 
+	trySubscriptionForCurrentRelay := func(allowWalletFallback bool) (*BillingSession, *types.NewAPIError) {
+		session, apiErr := trySubscription()
+		if apiErr != nil {
+			if allowWalletFallback && apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
+				return tryWallet()
+			}
+			return nil, apiErr
+		}
+		if session.IsDistributorTokenBilling() && !distributorSubscriptionEligibleForBilling(relayInfo) {
+			session.Refund(c)
+			relayInfo.Billing = nil
+			relayInfo.BillingSource = ""
+			relayInfo.SubscriptionId = 0
+			if allowWalletFallback {
+				return tryWallet()
+			}
+			return nil, types.NewErrorWithStatusCode(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeInvalidRequest, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		}
+		return session, nil
+	}
+
 	switch pref {
 	case "subscription_only":
-		return trySubscription()
+		return trySubscriptionForCurrentRelay(false)
 	case "wallet_only":
 		return tryWallet()
 	case "wallet_first":
 		session, err := tryWallet()
 		if err != nil {
 			if err.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
-				return trySubscription()
+				return trySubscriptionForCurrentRelay(false)
 			}
 			return nil, err
 		}
@@ -474,13 +506,6 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if !hasSub {
 			return tryWallet()
 		}
-		session, apiErr := trySubscription()
-		if apiErr != nil {
-			if apiErr.GetErrorCode() == types.ErrorCodeInsufficientUserQuota {
-				return tryWallet()
-			}
-			return nil, apiErr
-		}
-		return session, nil
+		return trySubscriptionForCurrentRelay(true)
 	}
 }

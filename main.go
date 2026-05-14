@@ -283,6 +283,11 @@ func InitResources() error {
 		common.FatalLog("failed to initialize database: " + err.Error())
 		return err
 	}
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DISTRIBUTOR_DEFAULT_PLANS_ENABLED")), "true") {
+		if err := model.EnsureDistributorDefaultPlans(); err != nil {
+			common.SysError("failed to ensure distributor default subscription plans: " + err.Error())
+		}
+	}
 
 	model.CheckSetup()
 

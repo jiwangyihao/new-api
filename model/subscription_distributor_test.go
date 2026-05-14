@@ -208,3 +208,30 @@ func TestPreConsumeUserSubscription_TokenLimitZeroOnlyTrialIsUnlimited(t *testin
 	require.NoError(t, DB.First(&sub, 7443).Error)
 	assert.Equal(t, int64(6), sub.TokenUsed)
 }
+
+func TestEnsureDistributorDefaultPlans(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, EnsureDistributorDefaultPlans())
+
+	assertDefaultDistributorPlan(t, "trial_24h", "Trial", 0, "CNY", 0, 1, true, false, 24, false, SubscriptionResetNever)
+	assertDefaultDistributorPlan(t, "basic_monthly", "Basic", 40, "CNY", 1_000_000_000, 1, false, true, 0, true, SubscriptionResetMonthly)
+	assertDefaultDistributorPlan(t, "standard_monthly", "Standard", 80, "CNY", 2_000_000_000, 5, false, true, 0, true, SubscriptionResetMonthly)
+	assertDefaultDistributorPlan(t, "pro_monthly", "Pro", 160, "CNY", 5_000_000_000, 10, false, true, 0, true, SubscriptionResetMonthly)
+	assertDefaultDistributorPlan(t, "max_monthly", "Max", 660, "CNY", 10_000_000_000, 50, false, true, 0, true, SubscriptionResetMonthly)
+}
+
+func assertDefaultDistributorPlan(t *testing.T, businessCode string, title string, price float64, currency string, tokenLimit int64, concurrency int, isTrial bool, publicVisible bool, trialHours int, rewardEligible bool, resetPeriod string) {
+	t.Helper()
+	var plan SubscriptionPlan
+	require.NoError(t, DB.Where("business_code = ?", businessCode).First(&plan).Error)
+	assert.Equal(t, title, plan.Title)
+	assert.Equal(t, price, plan.PriceAmount)
+	assert.Equal(t, currency, plan.Currency)
+	assert.Equal(t, tokenLimit, plan.MonthlyTokenLimit)
+	assert.Equal(t, concurrency, plan.ConcurrencyLimit)
+	assert.Equal(t, isTrial, plan.IsTrial)
+	assert.Equal(t, publicVisible, plan.PublicVisible)
+	assert.Equal(t, trialHours, plan.TrialDurationHours)
+	assert.Equal(t, rewardEligible, plan.RewardEligible)
+	assert.Equal(t, resetPeriod, plan.QuotaResetPeriod)
+}

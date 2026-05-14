@@ -37,6 +37,21 @@ type gitHubUser struct {
 	Email string `json:"email"`
 }
 
+type gitHubEmail struct {
+	Email    string `json:"email"`
+	Primary  bool   `json:"primary"`
+	Verified bool   `json:"verified"`
+}
+
+func firstVerifiedPrimaryGitHubEmail(emails []gitHubEmail) string {
+	for _, item := range emails {
+		if item.Primary && item.Verified && item.Email != "" {
+			return item.Email
+		}
+	}
+	return ""
+}
+
 func (p *GitHubProvider) GetName() string {
 	return "GitHub"
 }
@@ -145,6 +160,9 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 		logger.LogError(ctx, "[OAuth-GitHub] GetUserInfo failed: empty id or login field")
 		return nil, NewOAuthError(i18n.MsgOAuthUserInfoEmpty, map[string]any{"Provider": "GitHub"})
 	}
+	if githubUser.Email == "" {
+		githubUser.Email = fetchGitHubVerifiedPrimaryEmail(ctx, &client, token.AccessToken)
+	}
 
 	logger.LogDebug(ctx, "[OAuth-GitHub] GetUserInfo success: id=%d, login=%s, name=%s, email=%s",
 		githubUser.Id, githubUser.Login, githubUser.Name, githubUser.Email)
@@ -158,6 +176,28 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 			"legacy_id": githubUser.Login, // Store login for migration from old accounts
 		},
 	}, nil
+}
+func fetchGitHubVerifiedPrimaryEmail(ctx context.Context, client *http.Client, accessToken string) string {
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/user/emails", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", accessToken))
+	res, err := client.Do(req)
+	if err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] GetUserEmails error: %s", err.Error()))
+		return ""
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return ""
+	}
+	var emails []gitHubEmail
+	if err := json.NewDecoder(res.Body).Decode(&emails); err != nil {
+		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] GetUserEmails decode error: %s", err.Error()))
+		return ""
+	}
+	return firstVerifiedPrimaryGitHubEmail(emails)
 }
 
 func (p *GitHubProvider) IsUserIDTaken(providerUserID string) bool {

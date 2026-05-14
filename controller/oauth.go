@@ -103,20 +103,31 @@ func HandleOAuth(c *gin.Context) {
 		return
 	}
 
-	// 7. Find or create user
-	user, err := findOrCreateOAuthUser(c, provider, oauthUser, session)
+	// 7. Find existing user or create onboarding session
+	user, err := findExistingOAuthUser(provider, oauthUser)
 	if err != nil {
 		switch err.(type) {
 		case *OAuthUserDeletedError:
 			common.ApiErrorI18n(c, i18n.MsgOAuthUserDeleted)
-		case *OAuthRegistrationDisabledError:
-			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 		default:
 			common.ApiError(c, err)
 		}
 		return
 	}
-
+	if user == nil {
+		if !common.RegisterEnabled {
+			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
+			return
+		}
+		inviterId := oauthInviterIdFromSession(session)
+		pending, err := CreateOAuthOnboardingPending(providerName, provider, oauthUser, inviterId)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		respondOAuthOnboardingRequired(c, pending)
+		return
+	}
 	// 8. Check user status
 	if user.Status != common.UserStatusEnabled {
 		common.ApiErrorI18n(c, i18n.MsgOAuthUserBanned)
@@ -193,6 +204,45 @@ func handleOAuthBind(c *gin.Context, provider oauth.Provider) {
 	common.ApiSuccessI18n(c, i18n.MsgOAuthBindSuccess, gin.H{
 		"action": "bind",
 	})
+}
+
+func oauthInviterIdFromSession(session sessions.Session) int {
+	affCode := session.Get("aff")
+	if affCode == nil {
+		return 0
+	}
+	inviterId, _ := model.GetUserIdByAffCode(affCode.(string))
+	return inviterId
+}
+
+func findExistingOAuthUser(provider oauth.Provider, oauthUser *oauth.OAuthUser) (*model.User, error) {
+	user := &model.User{}
+	if provider.IsUserIDTaken(oauthUser.ProviderUserID) {
+		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
+		if err != nil {
+			return nil, err
+		}
+		if user.Id == 0 {
+			return nil, &OAuthUserDeletedError{}
+		}
+		return user, nil
+	}
+	if legacyID, ok := oauthUser.Extra["legacy_id"].(string); ok && legacyID != "" {
+		if provider.IsUserIDTaken(legacyID) {
+			err := provider.FillUserByProviderID(user, legacyID)
+			if err != nil {
+				return nil, err
+			}
+			if user.Id != 0 {
+				common.SysLog(fmt.Sprintf("[OAuth] Migrating user %d from legacy_id=%s to new_id=%s", user.Id, legacyID, oauthUser.ProviderUserID))
+				if err := user.UpdateGitHubId(oauthUser.ProviderUserID); err != nil {
+					common.SysError(fmt.Sprintf("[OAuth] Failed to migrate user %d: %s", user.Id, err.Error()))
+				}
+				return user, nil
+			}
+		}
+	}
+	return nil, nil
 }
 
 // findOrCreateOAuthUser finds existing user or creates new user

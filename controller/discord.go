@@ -141,6 +141,9 @@ func DiscordOAuth(c *gin.Context) {
 		}
 	} else {
 		if common.RegisterEnabled {
+			if rejectNonGitHubOAuthSignup(c) {
+				return
+			}
 			if discordUser.ID != "" {
 				user.Username = discordUser.ID
 			} else {

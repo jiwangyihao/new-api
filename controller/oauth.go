@@ -119,6 +119,9 @@ func HandleOAuth(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 			return
 		}
+		if providerName != "github" && rejectNonGitHubOAuthSignup(c) {
+			return
+		}
 		inviterId := oauthInviterIdFromSession(session)
 		pending, err := CreateOAuthOnboardingPending(providerName, provider, oauthUser, inviterId)
 		if err != nil {

@@ -39,6 +39,7 @@ func InitOptionMap() {
 	common.OptionMap["PasswordRegisterEnabled"] = strconv.FormatBool(common.PasswordRegisterEnabled)
 	common.OptionMap["EmailVerificationEnabled"] = strconv.FormatBool(common.EmailVerificationEnabled)
 	common.OptionMap["GitHubOAuthEnabled"] = strconv.FormatBool(common.GitHubOAuthEnabled)
+	common.OptionMap["GitHubOnlySignupEnabled"] = strconv.FormatBool(common.GitHubOnlySignupEnabled)
 	common.OptionMap["LinuxDOOAuthEnabled"] = strconv.FormatBool(common.LinuxDOOAuthEnabled)
 	common.OptionMap["TelegramOAuthEnabled"] = strconv.FormatBool(common.TelegramOAuthEnabled)
 	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
@@ -260,6 +261,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.EmailVerificationEnabled = boolValue
 		case "GitHubOAuthEnabled":
 			common.GitHubOAuthEnabled = boolValue
+		case "GitHubOnlySignupEnabled":
+			common.GitHubOnlySignupEnabled = boolValue
 		case "LinuxDOOAuthEnabled":
 			common.LinuxDOOAuthEnabled = boolValue
 		case "WeChatAuthEnabled":

@@ -141,6 +141,14 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "GitHubOnlySignupEnabled":
+		if option.Value == "true" && (!common.GitHubOAuthEnabled || common.GitHubClientId == "") {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": "无法启用仅 GitHub 创建新用户，请先启用并配置 GitHub OAuth！",
+			})
+			return
+		}
 	case "discord.enabled":
 		if option.Value == "true" && system_setting.GetDiscordSettings().ClientId == "" {
 			c.JSON(http.StatusOK, gin.H{

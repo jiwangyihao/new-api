@@ -144,6 +144,9 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
+	if rejectGitHubOnlySignup(c) {
+		return
+	}
 	type registerRequest struct {
 		model.User
 		TrialCode string `json:"trial_code"`

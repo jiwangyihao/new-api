@@ -196,6 +196,10 @@ func CompleteOAuthOnboarding(c *gin.Context) {
 		common.ApiErrorMsg(c, "OAuth 建号会话无效或已过期")
 		return
 	}
+	if common.GitHubOnlySignupEnabled && pending.Provider != "github" {
+		common.ApiErrorMsg(c, "当前仅允许通过 GitHub OAuth 创建新账号")
+		return
+	}
 	user, err := completeOAuthOnboarding(c.Request.Context(), pending, req)
 	if err != nil {
 		common.ApiError(c, err)

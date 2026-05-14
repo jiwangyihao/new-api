@@ -74,6 +74,9 @@ func WeChatAuth(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "管理员关闭了新用户注册"})
 			return
 		}
+		if rejectNonGitHubOAuthSignup(c) {
+			return
+		}
 		pending, err := createOAuthOnboardingPending(OAuthOnboardingPendingInput{Provider: "wechat", ProviderUserID: wechatId, Login: "wechat_" + common.GetRandomString(8)})
 		if err != nil {
 			common.ApiError(c, err)

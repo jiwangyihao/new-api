@@ -221,6 +221,9 @@ func LinuxdoOAuth(c *gin.Context) {
 		}
 	} else {
 		if common.RegisterEnabled {
+			if rejectNonGitHubOAuthSignup(c) {
+				return
+			}
 			if linuxdoUser.TrustLevel >= common.LinuxDOMinimumTrustLevel {
 				user.Username = "linuxdo_" + strconv.Itoa(model.GetMaxUserId()+1)
 				user.DisplayName = linuxdoUser.Name

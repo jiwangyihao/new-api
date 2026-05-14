@@ -9,6 +9,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,14 +26,17 @@ func setupPasswordRegisterTrialTest(t *testing.T) *gorm.DB {
 	originalPasswordRegisterEnabled := common.PasswordRegisterEnabled
 	originalEmailVerificationEnabled := common.EmailVerificationEnabled
 	originalGenerateDefaultToken := constant.GenerateDefaultToken
+	originalGitHubOnlySignupEnabled := common.GitHubOnlySignupEnabled
 	common.RegisterEnabled = true
 	common.PasswordRegisterEnabled = true
 	common.EmailVerificationEnabled = false
+	common.GitHubOnlySignupEnabled = false
 	constant.GenerateDefaultToken = false
 	t.Cleanup(func() {
 		common.RegisterEnabled = originalRegisterEnabled
 		common.PasswordRegisterEnabled = originalPasswordRegisterEnabled
 		common.EmailVerificationEnabled = originalEmailVerificationEnabled
+		common.GitHubOnlySignupEnabled = originalGitHubOnlySignupEnabled
 		constant.GenerateDefaultToken = originalGenerateDefaultToken
 	})
 	return db
@@ -88,4 +93,50 @@ func TestPasswordRegister_GrantsInviteTrialWithoutTrialCode(t *testing.T) {
 	assert.Equal(t, "invite_trial", sub.GrantReason)
 	assert.Equal(t, plan.Id, sub.PlanId)
 	assert.Equal(t, 7812, sub.GrantSourceUserId)
+}
+
+func TestGitHubOnlySignupRejectsPasswordRegister(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	common.GitHubOnlySignupEnabled = true
+
+	recorder := performPasswordRegister(t, `{"username":"githubonly","password":"Passw0rd!"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "GitHub")
+	var count int64
+	require.NoError(t, model.DB.Model(&model.User{}).Where("username = ?", "githubonly").Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+func TestGitHubOnlySignupKeepsPasswordLogin(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	common.GitHubOnlySignupEnabled = true
+	hashed, err := common.Password2Hash("Passw0rd!")
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Create(&model.User{Id: 7901, Username: "github-created", Password: hashed, Status: common.UserStatusEnabled}).Error)
+
+	router := gin.New()
+	router.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
+	router.POST("/api/user/login", Login)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/user/login", bytes.NewBufferString(`{"username":"github-created","password":"Passw0rd!"}`))
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+}
+
+func TestStatusIncludesGitHubOnlySignup(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	common.GitHubOnlySignupEnabled = true
+	common.GitHubOAuthEnabled = true
+	common.GitHubClientId = "github-client"
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	GetStatus(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"github_only_signup_enabled":true`)
 }

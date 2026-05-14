@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -169,11 +170,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	lease, concurrencyErr := service.AcquireSubscriptionConcurrency(c.Request.Context(), relayInfo)
 	if concurrencyErr != nil {
 		newAPIError = concurrencyErr
+		if relayInfo.Billing != nil {
+			relayInfo.Billing.Refund(c)
+		}
 		return
 	}
 	defer func() {
 		if lease != nil {
-			_ = lease.Release(c.Request.Context())
+			_ = lease.Release(context.Background())
 		}
 	}()
 

@@ -18,7 +18,7 @@ func isStripeWebhookConfigured() bool {
 }
 
 func isStripeWebhookEnabled() bool {
-	return isStripeTopUpEnabled()
+	return strings.TrimSpace(setting.StripeApiSecret) != "" && isStripeWebhookConfigured()
 }
 
 func isCreemTopUpEnabled() bool {
@@ -33,7 +33,7 @@ func isCreemWebhookConfigured() bool {
 }
 
 func isCreemWebhookEnabled() bool {
-	return isCreemTopUpEnabled() && isCreemWebhookConfigured()
+	return strings.TrimSpace(setting.CreemApiKey) != "" && isCreemWebhookConfigured()
 }
 
 func isWaffoTopUpEnabled() bool {

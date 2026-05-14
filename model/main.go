@@ -282,6 +282,7 @@ func migrateDB() error {
 		&TrialRedemption{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
+		&OAuthProviderLock{},
 		&PerfMetric{},
 	)
 	if err != nil {
@@ -333,6 +334,7 @@ func migrateDBFast() error {
 		{&TrialRedemption{}, "TrialRedemption"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
+		{&OAuthProviderLock{}, "OAuthProviderLock"},
 		{&PerfMetric{}, "PerfMetric"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大

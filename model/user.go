@@ -29,11 +29,11 @@ type User struct {
 	Role             int            `json:"role" gorm:"type:int;default:1"`   // admin, common
 	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
 	Email            string         `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId         string         `json:"github_id" gorm:"column:github_id;uniqueIndex:idx_users_github_id,where:github_id <> ''"`
-	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;uniqueIndex:idx_users_discord_id,where:discord_id <> ''"`
-	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;uniqueIndex:idx_users_oidc_id,where:oidc_id <> ''"`
-	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;uniqueIndex:idx_users_wechat_id,where:wechat_id <> ''"`
-	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;uniqueIndex:idx_users_telegram_id,where:telegram_id <> ''"`
+	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
 	VerificationCode string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
 	AccessToken      *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
 	Quota            int            `json:"quota" gorm:"type:int;default:0"`

@@ -51,7 +51,7 @@ func setupOAuthOnboardingControllerTest(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TrialCode{}, &model.TrialRedemption{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TrialCode{}, &model.TrialRedemption{}, &model.OAuthProviderLock{}, &model.UserOAuthBinding{}))
 	originalRegisterEnabled := common.RegisterEnabled
 	originalTurnstileCheckEnabled := common.TurnstileCheckEnabled
 	originalGitHubOAuthEnabled := common.GitHubOAuthEnabled
@@ -169,6 +169,20 @@ func TestOAuthOnboardingRejectsReusedPendingToken(t *testing.T) {
 	assert.Contains(t, second.Body.String(), `"success":false`)
 }
 
+func TestOAuthOnboardingKeepsPendingTokenAfterValidationError(t *testing.T) {
+	router := setupOAuthOnboardingControllerTest(t)
+	token, err := CreateOAuthOnboardingPendingForTest(OAuthOnboardingPendingInput{Provider: "github", ProviderUserID: "gh-keep-pending", Login: "keeppending"})
+	require.NoError(t, err)
+
+	missingEmail := performOAuthOnboardingRequest(t, router, http.MethodPost, "/api/oauth/onboarding", `{"pending_token":"`+token+`","terms_accepted":true,"turnstile_token":"valid-turnstile"}`)
+	require.Equal(t, http.StatusOK, missingEmail.Code)
+	assert.Contains(t, missingEmail.Body.String(), `"success":false`)
+
+	retry := performOAuthOnboardingRequest(t, router, http.MethodGet, "/api/oauth/onboarding?pending_token="+token, "")
+	require.Equal(t, http.StatusOK, retry.Code)
+	assert.Contains(t, retry.Body.String(), `"success":true`)
+}
+
 func TestOAuthOnboardingRequiredForNewOAuthUser(t *testing.T) {
 	router := setupOAuthOnboardingControllerTest(t)
 	oauth.Register("mockgithub", &onboardingMockProvider{name: "GitHub", prefix: "github_", enabled: true, user: &oauth.OAuthUser{ProviderUserID: "gh-required", Username: "required", Email: "required@example.com"}})
@@ -179,6 +193,9 @@ func TestOAuthOnboardingRequiredForNewOAuthUser(t *testing.T) {
 
 func TestOAuthOnboardingRequiresEmailWhenProviderEmailMissing(t *testing.T) {
 	router := setupOAuthOnboardingControllerTest(t)
+	originalEmailVerificationEnabled := common.EmailVerificationEnabled
+	common.EmailVerificationEnabled = true
+	t.Cleanup(func() { common.EmailVerificationEnabled = originalEmailVerificationEnabled })
 	token, err := CreateOAuthOnboardingPendingForTest(OAuthOnboardingPendingInput{Provider: "github", ProviderUserID: "gh-no-email", Login: "noemail"})
 	require.NoError(t, err)
 
@@ -186,10 +203,12 @@ func TestOAuthOnboardingRequiresEmailWhenProviderEmailMissing(t *testing.T) {
 	require.Equal(t, http.StatusOK, missingEmail.Code)
 	assert.Contains(t, missingEmail.Body.String(), `"success":false`)
 
-	token, err = CreateOAuthOnboardingPendingForTest(OAuthOnboardingPendingInput{Provider: "github", ProviderUserID: "gh-no-email-2", Login: "noemail2"})
-	require.NoError(t, err)
+	withUnverifiedEmail := performOAuthOnboardingRequest(t, router, http.MethodPost, "/api/oauth/onboarding", `{"pending_token":"`+token+`","email":"provided@example.com","terms_accepted":true,"turnstile_token":"valid-turnstile"}`)
+	require.Equal(t, http.StatusOK, withUnverifiedEmail.Code)
+	assert.Contains(t, withUnverifiedEmail.Body.String(), `"success":false`)
 
-	withEmail := performOAuthOnboardingRequest(t, router, http.MethodPost, "/api/oauth/onboarding", `{"pending_token":"`+token+`","email":"provided@example.com","terms_accepted":true,"turnstile_token":"valid-turnstile"}`)
+	common.RegisterVerificationCodeWithKey("provided@example.com", "123456", common.EmailVerificationPurpose)
+	withEmail := performOAuthOnboardingRequest(t, router, http.MethodPost, "/api/oauth/onboarding", `{"pending_token":"`+token+`","email":"provided@example.com","verification_code":"123456","terms_accepted":true,"turnstile_token":"valid-turnstile"}`)
 	require.Equal(t, http.StatusOK, withEmail.Code)
 	assert.Contains(t, withEmail.Body.String(), `"success":true`)
 }

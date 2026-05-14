@@ -94,23 +94,14 @@ func (s *oauthOnboardingStore) get(token string) (OAuthOnboardingPendingSession,
 	return pending, true
 }
 
-func (s *oauthOnboardingStore) consume(token string) (OAuthOnboardingPendingSession, bool) {
+func (s *oauthOnboardingStore) delete(token string) {
 	token = strings.TrimSpace(token)
 	if token == "" {
-		return OAuthOnboardingPendingSession{}, false
+		return
 	}
-	now := common.GetTimestamp()
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	pending, ok := s.sessions[token]
-	if !ok {
-		return OAuthOnboardingPendingSession{}, false
-	}
 	delete(s.sessions, token)
-	if pending.ExpiresAt > 0 && pending.ExpiresAt <= now {
-		return OAuthOnboardingPendingSession{}, false
-	}
-	return pending, true
+	s.mu.Unlock()
 }
 
 func CreateOAuthOnboardingPendingForTest(input OAuthOnboardingPendingInput) (string, error) {
@@ -172,12 +163,13 @@ func GetOAuthOnboarding(c *gin.Context) {
 }
 
 type completeOAuthOnboardingRequest struct {
-	PendingToken   string `json:"pending_token"`
-	Email          string `json:"email"`
-	TrialCode      string `json:"trial_code"`
-	Password       string `json:"password"`
-	TermsAccepted  bool   `json:"terms_accepted"`
-	TurnstileToken string `json:"turnstile_token"`
+	PendingToken     string `json:"pending_token"`
+	Email            string `json:"email"`
+	VerificationCode string `json:"verification_code"`
+	TrialCode        string `json:"trial_code"`
+	Password         string `json:"password"`
+	TermsAccepted    bool   `json:"terms_accepted"`
+	TurnstileToken   string `json:"turnstile_token"`
 }
 
 func CompleteOAuthOnboarding(c *gin.Context) {
@@ -199,7 +191,7 @@ func CompleteOAuthOnboarding(c *gin.Context) {
 		common.ApiErrorMsg(c, "Turnstile 校验失败，请刷新重试！")
 		return
 	}
-	pending, ok := defaultOAuthOnboardingStore.consume(req.PendingToken)
+	pending, ok := defaultOAuthOnboardingStore.get(req.PendingToken)
 	if !ok {
 		common.ApiErrorMsg(c, "OAuth 建号会话无效或已过期")
 		return
@@ -209,6 +201,7 @@ func CompleteOAuthOnboarding(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	defaultOAuthOnboardingStore.delete(req.PendingToken)
 	setupLogin(user, c)
 }
 
@@ -217,15 +210,16 @@ func completeOAuthOnboarding(ctx context.Context, pending OAuthOnboardingPending
 	if provider == nil {
 		return nil, errors.New("OAuth provider not found")
 	}
-	email := strings.TrimSpace(pending.Email)
+	providerEmail := strings.TrimSpace(pending.Email)
+	email := providerEmail
 	if email == "" {
 		email = strings.TrimSpace(req.Email)
 	}
 	if email == "" {
 		return nil, errors.New("email is required")
 	}
-	if model.IsEmailAlreadyTaken(email) {
-		return nil, errors.New("email already taken")
+	if err := validateOAuthOnboardingEmail(email, req.VerificationCode, providerEmail == ""); err != nil {
+		return nil, err
 	}
 	if req.Password != "" && (len(req.Password) < 8 || len(req.Password) > 20) {
 		return nil, errors.New("password length must be between 8 and 20")
@@ -240,10 +234,17 @@ func completeOAuthOnboarding(ctx context.Context, pending OAuthOnboardingPending
 		Status:      common.UserStatusEnabled,
 	}
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		providerLock, err := model.CreateOAuthProviderLockTx(tx, pending.Provider, pending.ProviderUserID)
+		if err != nil {
+			return errors.New("OAuth provider user already bound")
+		}
 		if err := ensureOAuthProviderAvailableForOnboardingTx(tx, pending.Provider, pending.ProviderUserID); err != nil {
 			return err
 		}
 		if err := user.InsertWithTx(tx, pending.InviterId); err != nil {
+			return err
+		}
+		if err := model.BindOAuthProviderLockTx(tx, providerLock.Id, user.Id); err != nil {
 			return err
 		}
 		if err := bindOAuthProviderForOnboardingTx(tx, provider, pending.Provider, user, pending.ProviderUserID); err != nil {
@@ -259,6 +260,40 @@ func completeOAuthOnboarding(ctx context.Context, pending OAuthOnboardingPending
 	}
 	_ = ctx
 	return user, nil
+}
+
+func validateOAuthOnboardingEmail(email string, verificationCode string, requireVerification bool) error {
+	if err := common.Validate.Var(email, "required,email"); err != nil {
+		return errors.New("invalid email")
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 {
+		return errors.New("invalid email")
+	}
+	localPart := parts[0]
+	domainPart := parts[1]
+	if common.EmailDomainRestrictionEnabled {
+		allowed := false
+		for _, domain := range common.EmailDomainWhitelist {
+			if domainPart == domain {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return errors.New("email domain is not allowed")
+		}
+	}
+	if common.EmailAliasRestrictionEnabled && (strings.Contains(localPart, "+") || strings.Contains(localPart, ".")) {
+		return errors.New("email alias is not allowed")
+	}
+	if model.IsEmailAlreadyTaken(email) {
+		return errors.New("email already taken")
+	}
+	if requireVerification && common.EmailVerificationEnabled && !common.VerifyCodeWithKey(email, verificationCode, common.EmailVerificationPurpose) {
+		return errors.New("email verification code error")
+	}
+	return nil
 }
 
 func oauthOnboardingUsername(provider oauth.Provider, login string) string {

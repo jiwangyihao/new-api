@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 		&model.SubscriptionPlan{},
 		&model.TrialCode{},
 		&model.TrialRedemption{},
+		&model.OAuthProviderLock{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
 	}
@@ -73,6 +74,7 @@ func truncate(t *testing.T) {
 		model.DB.Exec("DELETE FROM subscription_plans")
 		model.DB.Exec("DELETE FROM trial_codes")
 		model.DB.Exec("DELETE FROM trial_redemptions")
+		model.DB.Exec("DELETE FROM oauth_provider_locks")
 	})
 }
 

@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/go-redis/redis/v8"
 )
 
@@ -34,6 +37,8 @@ func (r redisClientEvaler) Eval(ctx context.Context, script string, keys []strin
 type ConcurrencyLease interface {
 	Release(ctx context.Context) error
 }
+
+type SubscriptionConcurrencyLease = ConcurrencyLease
 
 type noopConcurrencyLease struct{}
 
@@ -203,4 +208,36 @@ func (l *redisSubscriptionConcurrencyLease) Release(ctx context.Context) error {
 	}
 	_, err := l.evaler.Eval(ctx, subscriptionConcurrencyReleaseScript, []string{l.key}, l.requestId).Result()
 	return err
+}
+
+func SubscriptionConcurrencyAPIError(limit int) *types.NewAPIError {
+	return types.NewErrorWithStatusCode(
+		fmt.Errorf("subscription concurrency exceeded, limit=%d", limit),
+		"subscription_concurrency_exceeded",
+		http.StatusTooManyRequests,
+		types.ErrOptionWithSkipRetry(),
+		types.ErrOptionWithNoRecordErrorLog(),
+	)
+}
+
+func AcquireSubscriptionConcurrency(ctx context.Context, relayInfo *relaycommon.RelayInfo) (SubscriptionConcurrencyLease, *types.NewAPIError) {
+	if relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription {
+		return noopConcurrencyLease{}, nil
+	}
+	session, ok := relayInfo.Billing.(*BillingSession)
+	if !ok || !session.IsDistributorTokenBilling() || !distributorSubscriptionEligibleForBilling(relayInfo) {
+		return noopConcurrencyLease{}, nil
+	}
+	limit := session.SubscriptionConcurrencyLimit()
+	if limit <= 0 {
+		return noopConcurrencyLease{}, nil
+	}
+	lease, err := AcquireUserConcurrency(ctx, relayInfo.UserId, relayInfo.RequestId, limit)
+	if err == nil {
+		return lease, nil
+	}
+	if errors.Is(err, ErrSubscriptionConcurrencyExceeded) {
+		return nil, SubscriptionConcurrencyAPIError(limit)
+	}
+	return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 }

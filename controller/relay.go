@@ -166,6 +166,16 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			return
 		}
 	}
+	lease, concurrencyErr := service.AcquireSubscriptionConcurrency(c.Request.Context(), relayInfo)
+	if concurrencyErr != nil {
+		newAPIError = concurrencyErr
+		return
+	}
+	defer func() {
+		if lease != nil {
+			_ = lease.Release(c.Request.Context())
+		}
+	}()
 
 	defer func() {
 		// Only return quota if downstream failed and quota was actually pre-consumed

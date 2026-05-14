@@ -205,6 +205,16 @@ func (s *BillingSession) IsDistributorTokenBilling() bool {
 	return ok && sub.DistributorTokenBilling
 }
 
+func (s *BillingSession) SubscriptionConcurrencyLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.funding.(*SubscriptionFunding)
+	if !ok || !sub.DistributorTokenBilling {
+		return 0
+	}
+	return sub.ConcurrencyLimit()
+}
+
 func (s *BillingSession) Reserve(targetQuota int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

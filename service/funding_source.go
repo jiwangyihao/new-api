@@ -84,6 +84,17 @@ type SubscriptionFunding struct {
 	DistributorTokenBilling bool
 	PlanId                  int
 	PlanTitle               string
+	concurrencyLimit        int
+}
+
+func (s *SubscriptionFunding) ConcurrencyLimit() int {
+	if s == nil {
+		return 0
+	}
+	if s.DistributorTokenBilling {
+		return s.concurrencyLimit
+	}
+	return 0
 }
 
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
@@ -101,6 +112,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.TokenLimit = res.TokenLimit
 	s.TokenUsedAfter = res.TokenUsedAfter
 	s.DistributorTokenBilling = res.DistributorTokenBilling
+	s.concurrencyLimit = res.ConcurrencyLimit
 	s.TokenRemaining = res.TokenRemaining
 	// 获取订阅计划信息
 	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {

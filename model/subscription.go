@@ -840,6 +840,7 @@ type SubscriptionPreConsumeResult struct {
 	TokenUsedAfter          int64
 	TokenRemaining          int64
 	DistributorTokenBilling bool
+	ConcurrencyLimit        int
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -1007,6 +1008,7 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.AmountUsedBefore = amountBefore
 	result.AmountUsedAfter = sub.AmountUsed
 	result.TokenLimit = sub.TokenLimit
+	result.ConcurrencyLimit = sub.ConcurrencyLimit
 	result.TokenUsedBefore = tokenBefore
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor

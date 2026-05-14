@@ -1756,7 +1756,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Принудительно возвращать синтаксически корректный JSON",
@@ -4423,6 +4423,18 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Account created successfully": "Аккаунт успешно создан",
+    "Complete account setup": "Завершение настройки аккаунта",
+    "Confirm your {{provider}} account before creating a platform account.": "Подтвердите аккаунт {{provider}} перед созданием аккаунта платформы.",
+    "Email verification code": "Код подтверждения e-mail",
+    "Enter trial code if you have one": "Введите пробный код, если он у вас есть",
+    "I have read and agree to the terms and privacy policy": "Я прочитал(а) и принимаю условия и политику конфиденциальности",
+    "OAuth account": "Аккаунт OAuth",
+    "OAuth login": "Логин OAuth",
+    "OAuth onboarding session is invalid or expired": "Сессия создания аккаунта OAuth недействительна или истекла",
+    "Please complete the Turnstile verification": "Пройдите проверку Turnstile",
+    "Set a password for later sign-in": "Задайте пароль для последующего входа",
+    "Trial code": "Пробный код"
   }
 }

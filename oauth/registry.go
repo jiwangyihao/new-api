@@ -12,7 +12,8 @@ var (
 	providers = make(map[string]Provider)
 	mu        sync.RWMutex
 	// customProviderSlugs tracks which providers are custom (can be unregistered)
-	customProviderSlugs = make(map[string]bool)
+	customProviderSlugs  = make(map[string]bool)
+	builtInProviderSlugs = make(map[string]bool)
 )
 
 // Register registers an OAuth provider with the given name
@@ -20,12 +21,18 @@ func Register(name string, provider Provider) {
 	mu.Lock()
 	defer mu.Unlock()
 	providers[name] = provider
+	builtInProviderSlugs[name] = true
+	delete(customProviderSlugs, name)
 }
 
 // RegisterCustom registers a custom OAuth provider (can be unregistered later)
 func RegisterCustom(name string, provider Provider) {
 	mu.Lock()
 	defer mu.Unlock()
+	if builtInProviderSlugs[name] {
+		common.SysError("Custom OAuth provider slug conflicts with built-in provider: " + name)
+		return
+	}
 	providers[name] = provider
 	customProviderSlugs[name] = true
 }
@@ -36,6 +43,7 @@ func Unregister(name string) {
 	defer mu.Unlock()
 	delete(providers, name)
 	delete(customProviderSlugs, name)
+	delete(builtInProviderSlugs, name)
 }
 
 // GetProvider returns the OAuth provider for the given name
@@ -124,11 +132,21 @@ func RegisterOrUpdateCustomProvider(config *model.CustomOAuthProvider) {
 	provider := NewGenericOAuthProvider(config)
 	mu.Lock()
 	defer mu.Unlock()
+	if builtInProviderSlugs[config.Slug] {
+		common.SysError("Custom OAuth provider slug conflicts with built-in provider: " + config.Slug)
+		return
+	}
 	providers[config.Slug] = provider
 	customProviderSlugs[config.Slug] = true
 }
 
 // UnregisterCustomProvider unregisters a custom provider by slug
 func UnregisterCustomProvider(slug string) {
-	Unregister(slug)
+	mu.Lock()
+	defer mu.Unlock()
+	if !customProviderSlugs[slug] {
+		return
+	}
+	delete(providers, slug)
+	delete(customProviderSlugs, slug)
 }

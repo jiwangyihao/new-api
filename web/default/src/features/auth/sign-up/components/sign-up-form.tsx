@@ -53,6 +53,10 @@ import { registerFormSchema } from '@/features/auth/constants'
 import { useAuthRedirect } from '@/features/auth/hooks/use-auth-redirect'
 import { useEmailVerification } from '@/features/auth/hooks/use-email-verification'
 import { useTurnstile } from '@/features/auth/hooks/use-turnstile'
+import {
+  buildOAuthOnboardingUrl,
+  isOAuthOnboardingRequiredResponse,
+} from '@/features/auth/lib/oauth-onboarding'
 import { getAffiliateCode } from '@/features/auth/lib/storage'
 
 export function SignUpForm({
@@ -201,6 +205,12 @@ export function SignUpForm({
     try {
       const res = await wechatLoginByCode(wechatCode)
       if (res?.success) {
+        if (isOAuthOnboardingRequiredResponse(res)) {
+          window.location.href = buildOAuthOnboardingUrl(
+            res.data?.pending_token ?? ''
+          )
+          return
+        }
         await handleLoginSuccess(res.data as { id?: number } | null)
         toast.success(t('Signed in via WeChat'))
         handleWeChatDialogChange(false)

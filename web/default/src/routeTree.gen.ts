@@ -31,6 +31,7 @@ import { Route as authSignUpRouteImport } from './routes/(auth)/sign-up'
 import { Route as authSignInRouteImport } from './routes/(auth)/sign-in'
 import { Route as authResetRouteImport } from './routes/(auth)/reset'
 import { Route as authOtpRouteImport } from './routes/(auth)/otp'
+import { Route as authOauthOnboardingRouteImport } from './routes/(auth)/oauth-onboarding'
 import { Route as authOauthRouteImport } from './routes/(auth)/oauth'
 import { Route as authForgotPasswordRouteImport } from './routes/(auth)/forgot-password'
 import { Route as AuthenticatedSystemSettingsRouteRouteImport } from './routes/_authenticated/system-settings/route'
@@ -174,6 +175,11 @@ const authResetRoute = authResetRouteImport.update({
 const authOtpRoute = authOtpRouteImport.update({
   id: '/otp',
   path: '/otp',
+  getParentRoute: () => authRouteRoute,
+} as any)
+const authOauthOnboardingRoute = authOauthOnboardingRouteImport.update({
+  id: '/oauth-onboarding',
+  path: '/oauth-onboarding',
   getParentRoute: () => authRouteRoute,
 } as any)
 const authOauthRoute = authOauthRouteImport.update({
@@ -393,6 +399,7 @@ export interface FileRoutesByFullPath {
   '/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/forgot-password': typeof authForgotPasswordRoute
   '/oauth': typeof authOauthRoute
+  '/oauth-onboarding': typeof authOauthOnboardingRoute
   '/otp': typeof authOtpRoute
   '/reset': typeof authResetRoute
   '/sign-in': typeof authSignInRoute
@@ -450,6 +457,7 @@ export interface FileRoutesByTo {
   '/user-agreement': typeof UserAgreementRoute
   '/forgot-password': typeof authForgotPasswordRoute
   '/oauth': typeof authOauthRoute
+  '/oauth-onboarding': typeof authOauthOnboardingRoute
   '/otp': typeof authOtpRoute
   '/reset': typeof authResetRoute
   '/sign-in': typeof authSignInRoute
@@ -511,6 +519,7 @@ export interface FileRoutesById {
   '/_authenticated/system-settings': typeof AuthenticatedSystemSettingsRouteRouteWithChildren
   '/(auth)/forgot-password': typeof authForgotPasswordRoute
   '/(auth)/oauth': typeof authOauthRoute
+  '/(auth)/oauth-onboarding': typeof authOauthOnboardingRoute
   '/(auth)/otp': typeof authOtpRoute
   '/(auth)/reset': typeof authResetRoute
   '/(auth)/sign-in': typeof authSignInRoute
@@ -571,6 +580,7 @@ export interface FileRouteTypes {
     | '/system-settings'
     | '/forgot-password'
     | '/oauth'
+    | '/oauth-onboarding'
     | '/otp'
     | '/reset'
     | '/sign-in'
@@ -628,6 +638,7 @@ export interface FileRouteTypes {
     | '/user-agreement'
     | '/forgot-password'
     | '/oauth'
+    | '/oauth-onboarding'
     | '/otp'
     | '/reset'
     | '/sign-in'
@@ -688,6 +699,7 @@ export interface FileRouteTypes {
     | '/_authenticated/system-settings'
     | '/(auth)/forgot-password'
     | '/(auth)/oauth'
+    | '/(auth)/oauth-onboarding'
     | '/(auth)/otp'
     | '/(auth)/reset'
     | '/(auth)/sign-in'
@@ -915,6 +927,13 @@ declare module '@tanstack/react-router' {
       path: '/otp'
       fullPath: '/otp'
       preLoaderRoute: typeof authOtpRouteImport
+      parentRoute: typeof authRouteRoute
+    }
+    '/(auth)/oauth-onboarding': {
+      id: '/(auth)/oauth-onboarding'
+      path: '/oauth-onboarding'
+      fullPath: '/oauth-onboarding'
+      preLoaderRoute: typeof authOauthOnboardingRouteImport
       parentRoute: typeof authRouteRoute
     }
     '/(auth)/oauth': {
@@ -1175,6 +1194,7 @@ declare module '@tanstack/react-router' {
 interface authRouteRouteChildren {
   authForgotPasswordRoute: typeof authForgotPasswordRoute
   authOauthRoute: typeof authOauthRoute
+  authOauthOnboardingRoute: typeof authOauthOnboardingRoute
   authOtpRoute: typeof authOtpRoute
   authResetRoute: typeof authResetRoute
   authSignInRoute: typeof authSignInRoute
@@ -1185,6 +1205,7 @@ interface authRouteRouteChildren {
 const authRouteRouteChildren: authRouteRouteChildren = {
   authForgotPasswordRoute: authForgotPasswordRoute,
   authOauthRoute: authOauthRoute,
+  authOauthOnboardingRoute: authOauthOnboardingRoute,
   authOtpRoute: authOtpRoute,
   authResetRoute: authResetRoute,
   authSignInRoute: authSignInRoute,

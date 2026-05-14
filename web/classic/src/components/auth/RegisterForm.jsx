@@ -64,6 +64,10 @@ import { UserContext } from '../../context/User';
 import { StatusContext } from '../../context/Status';
 import { useTranslation } from 'react-i18next';
 import { SiDiscord } from 'react-icons/si';
+import {
+  buildOAuthOnboardingUrl,
+  isOAuthOnboardingRequiredResponse,
+} from '../../helpers/oauth-onboarding';
 
 const RegisterForm = () => {
   let navigate = useNavigate();
@@ -133,12 +137,12 @@ const RegisterForm = () => {
     (status.custom_oauth_providers || []).length > 0;
   const hasOAuthRegisterOptions = Boolean(
     status.github_oauth ||
-      status.discord_oauth ||
-      status.oidc_enabled ||
-      status.wechat_login ||
-      status.linuxdo_oauth ||
-      status.telegram_oauth ||
-      hasCustomOAuthProviders,
+    status.discord_oauth ||
+    status.oidc_enabled ||
+    status.wechat_login ||
+    status.linuxdo_oauth ||
+    status.telegram_oauth ||
+    hasCustomOAuthProviders,
   );
 
   const [showEmailVerification, setShowEmailVerification] = useState(false);
@@ -193,6 +197,10 @@ const RegisterForm = () => {
         `/api/oauth/wechat?code=${inputs.wechat_verification_code}`,
       );
       const { success, message, data } = res.data;
+      if (isOAuthOnboardingRequiredResponse(res.data)) {
+        navigate(buildOAuthOnboardingUrl(data.pending_token));
+        return;
+      }
       if (success) {
         userDispatch({ type: 'login', payload: data });
         localStorage.setItem('user', JSON.stringify(data));
@@ -781,8 +789,7 @@ const RegisterForm = () => {
         style={{ top: '50%', left: '-120px' }}
       />
       <div className='w-full max-w-sm mt-[60px]'>
-        {showEmailRegister ||
-        !hasOAuthRegisterOptions
+        {showEmailRegister || !hasOAuthRegisterOptions
           ? renderEmailRegisterForm()
           : renderOAuthOptions()}
         {renderWeChatLoginModal()}

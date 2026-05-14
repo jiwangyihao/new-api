@@ -30,6 +30,10 @@ import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import { api, getSelf } from '@/lib/api'
 import { OAuthCallbackScreen } from '@/features/auth/components/oauth-callback-screen'
 import { OAUTH_BIND_STORAGE_KEY } from '@/features/auth/constants'
+import {
+  buildOAuthOnboardingUrl,
+  isOAuthOnboardingRequiredResponse,
+} from '@/features/auth/lib/oauth-onboarding'
 
 type OAuthRequestConfig = AxiosRequestConfig & {
   skipBusinessError?: boolean
@@ -169,6 +173,15 @@ function OAuthCallback() {
         }
         const res = await api.get(`/api/oauth/${provider}`, config)
         if (res?.data?.success) {
+          if (isOAuthOnboardingRequiredResponse(res.data)) {
+            safeNavigate(
+              buildOAuthOnboardingUrl(
+                res.data.data?.pending_token ?? '',
+                search?.redirect
+              )
+            )
+            return
+          }
           const { message } = res.data
           const loginUser = (res.data?.data ?? null) as AuthUser | null
           // Check if this is a bind operation

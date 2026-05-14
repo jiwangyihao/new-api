@@ -1756,7 +1756,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4423,6 +4423,18 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Account created successfully": "账号创建成功",
+    "Complete account setup": "完成账号设置",
+    "Confirm your {{provider}} account before creating a platform account.": "创建平台账号前，请确认你的 {{provider}} 账号。",
+    "Email verification code": "邮箱验证码",
+    "Enter trial code if you have one": "如有试用码，请输入",
+    "I have read and agree to the terms and privacy policy": "我已阅读并同意用户协议和隐私政策",
+    "OAuth account": "OAuth 账号",
+    "OAuth login": "OAuth 登录名",
+    "OAuth onboarding session is invalid or expired": "OAuth 建号会话无效或已过期",
+    "Please complete the Turnstile verification": "请完成人机验证",
+    "Set a password for later sign-in": "设置密码，之后可用于登录",
+    "Trial code": "试用码"
   }
 }

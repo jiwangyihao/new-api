@@ -1756,7 +1756,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Buộc phản hồi JSON hợp lệ về cú pháp",
@@ -4423,6 +4423,18 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Account created successfully": "Tạo tài khoản thành công",
+    "Complete account setup": "Hoàn tất thiết lập tài khoản",
+    "Confirm your {{provider}} account before creating a platform account.": "Xác nhận tài khoản {{provider}} của bạn trước khi tạo tài khoản nền tảng.",
+    "Email verification code": "Mã xác minh email",
+    "Enter trial code if you have one": "Nhập mã dùng thử nếu bạn có",
+    "I have read and agree to the terms and privacy policy": "Tôi đã đọc và đồng ý với điều khoản và chính sách quyền riêng tư",
+    "OAuth account": "Tài khoản OAuth",
+    "OAuth login": "Tên đăng nhập OAuth",
+    "OAuth onboarding session is invalid or expired": "Phiên tạo tài khoản OAuth không hợp lệ hoặc đã hết hạn",
+    "Please complete the Turnstile verification": "Vui lòng hoàn tất xác minh Turnstile",
+    "Set a password for later sign-in": "Đặt mật khẩu để đăng nhập sau này",
+    "Trial code": "Mã dùng thử"
   }
 }

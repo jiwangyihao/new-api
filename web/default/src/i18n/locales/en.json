@@ -1756,7 +1756,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4423,6 +4423,18 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Account created successfully": "Account created successfully",
+    "Complete account setup": "Complete account setup",
+    "Confirm your {{provider}} account before creating a platform account.": "Confirm your {{provider}} account before creating a platform account.",
+    "Email verification code": "Email verification code",
+    "Enter trial code if you have one": "Enter trial code if you have one",
+    "I have read and agree to the terms and privacy policy": "I have read and agree to the terms and privacy policy",
+    "OAuth account": "OAuth account",
+    "OAuth login": "OAuth login",
+    "OAuth onboarding session is invalid or expired": "OAuth onboarding session is invalid or expired",
+    "Please complete the Turnstile verification": "Please complete the Turnstile verification",
+    "Set a password for later sign-in": "Set a password for later sign-in",
+    "Trial code": "Trial code"
   }
 }

@@ -223,3 +223,18 @@ func TestOAuthOnboardingRejectsProviderAlreadyBoundDuringCompletion(t *testing.T
 	require.Equal(t, http.StatusOK, complete.Code)
 	assert.Contains(t, complete.Body.String(), `"success":false`)
 }
+
+func TestOAuthOnboardingCompletesWeChatPending(t *testing.T) {
+	router := setupOAuthOnboardingControllerTest(t)
+	token, err := CreateOAuthOnboardingPendingForTest(OAuthOnboardingPendingInput{Provider: "wechat", ProviderUserID: "wechat-openid", Login: "wechat_user", Email: "wechat@example.com"})
+	require.NoError(t, err)
+
+	complete := performOAuthOnboardingRequest(t, router, http.MethodPost, "/api/oauth/onboarding", `{"pending_token":"`+token+`","terms_accepted":true,"turnstile_token":"valid-turnstile"}`)
+	require.Equal(t, http.StatusOK, complete.Code)
+	assert.Contains(t, complete.Body.String(), `"success":true`)
+
+	var user model.User
+	require.NoError(t, model.DB.Where("wechat_id = ?", "wechat-openid").First(&user).Error)
+	assert.Equal(t, "wechat@example.com", user.Email)
+	assert.NotEmpty(t, user.Username)
+}

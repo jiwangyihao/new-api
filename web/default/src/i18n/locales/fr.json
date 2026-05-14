@@ -1756,7 +1756,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -4423,6 +4423,18 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Account created successfully": "Compte créé avec succès",
+    "Complete account setup": "Terminer la configuration du compte",
+    "Confirm your {{provider}} account before creating a platform account.": "Confirmez votre compte {{provider}} avant de créer un compte sur la plateforme.",
+    "Email verification code": "Code de vérification e-mail",
+    "Enter trial code if you have one": "Saisissez votre code d’essai si vous en avez un",
+    "I have read and agree to the terms and privacy policy": "J’ai lu et j’accepte les conditions et la politique de confidentialité",
+    "OAuth account": "Compte OAuth",
+    "OAuth login": "Identifiant OAuth",
+    "OAuth onboarding session is invalid or expired": "La session de création de compte OAuth est invalide ou expirée",
+    "Please complete the Turnstile verification": "Veuillez effectuer la vérification Turnstile",
+    "Set a password for later sign-in": "Définissez un mot de passe pour vous connecter ensuite",
+    "Trial code": "Code d’essai"
   }
 }

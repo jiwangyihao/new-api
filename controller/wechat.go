@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -36,7 +35,7 @@ func getWeChatIdByCode(code string) (string, error) {
 	}
 	defer httpResponse.Body.Close()
 	var res wechatLoginResponse
-	if err := json.NewDecoder(httpResponse.Body).Decode(&res); err != nil {
+	if err := common.DecodeJson(httpResponse.Body, &res); err != nil {
 		return "", err
 	}
 	if !res.Success {

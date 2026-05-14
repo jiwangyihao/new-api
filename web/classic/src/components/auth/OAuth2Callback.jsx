@@ -28,6 +28,10 @@ import {
   setUserData,
 } from '../../helpers';
 import { UserContext } from '../../context/User';
+import {
+  buildOAuthOnboardingUrl,
+  isOAuthOnboardingRequiredResponse,
+} from '../../helpers/oauth-onboarding';
 import Loading from '../common/ui/Loading';
 
 const OAuth2Callback = (props) => {
@@ -35,7 +39,7 @@ const OAuth2Callback = (props) => {
   const [searchParams] = useSearchParams();
   const [, userDispatch] = useContext(UserContext);
   const navigate = useNavigate();
-  
+
   // 防止 React 18 Strict Mode 下重复执行
   const hasExecuted = useRef(false);
 
@@ -49,6 +53,10 @@ const OAuth2Callback = (props) => {
       );
 
       const { success, message, data } = resData;
+      if (isOAuthOnboardingRequiredResponse(resData)) {
+        navigate(buildOAuthOnboardingUrl(data.pending_token));
+        return;
+      }
 
       if (!success) {
         // 业务错误不重试，直接显示错误

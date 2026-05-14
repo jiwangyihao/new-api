@@ -23,6 +23,10 @@ import { toast } from 'sonner'
 import { useAuthStore, type AuthUser } from '@/stores/auth-store'
 import { getSelf } from '@/lib/api'
 import { wechatLoginByCode } from '@/features/auth/api'
+import {
+  buildOAuthOnboardingUrl,
+  isOAuthOnboardingRequiredResponse,
+} from '@/features/auth/lib/oauth-onboarding'
 
 function OAuthComponent() {
   const navigate = useNavigate()
@@ -37,7 +41,17 @@ function OAuthComponent() {
     ;(async () => {
       try {
         if (search?.provider === 'wechat' && search.code) {
-          await wechatLoginByCode(search.code)
+          const loginRes = await wechatLoginByCode(search.code)
+          if (isOAuthOnboardingRequiredResponse(loginRes)) {
+            navigate({
+              to: buildOAuthOnboardingUrl(
+                loginRes.data?.pending_token ?? '',
+                search?.redirect
+              ) as never,
+              replace: true,
+            })
+            return
+          }
         }
         const res = await getSelf()
         if (res?.success) {

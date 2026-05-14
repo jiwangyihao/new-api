@@ -307,6 +307,8 @@ func TestTaskBillingDoesNotAdjustBusinessCodedDistributorSubscription(t *testing
 	seedUser(t, userID, 0)
 	seedToken(t, tokenID, userID, "sk-business-task", tokenRemain)
 	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Migrator().DropTable(&model.SubscriptionPlan{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.SubscriptionPlan{}))
 	code := "business-task"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Business Task", Enabled: true, BusinessCode: &code}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, TokenUsed: tokenUsed, Status: "active", StartTime: time.Now().Unix(), EndTime: time.Now().Add(30 * 24 * time.Hour).Unix()}).Error)

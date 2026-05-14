@@ -68,12 +68,13 @@ func (w *WalletFunding) Refund() error {
 // ---------------------------------------------------------------------------
 
 type SubscriptionFunding struct {
-	requestId      string
-	userId         int
-	modelName      string
-	amount         int64 // 预扣的订阅 token 或 legacy quota 数
-	subscriptionId int
-	preConsumed    int64
+	requestId         string
+	userId            int
+	modelName         string
+	amount            int64 // 预扣的订阅 token 或 legacy quota 数
+	distributorAmount int64
+	subscriptionId    int
+	preConsumed       int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal             int64
 	AmountUsedAfter         int64
@@ -88,8 +89,8 @@ type SubscriptionFunding struct {
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
 
 func (s *SubscriptionFunding) PreConsume(_ int) error {
-	// amount 参数被忽略，使用内部 s.amount（已在构造时按订阅类型计算）。
-	res, err := model.PreConsumeUserSubscription(s.requestId, s.userId, s.modelName, 0, s.amount)
+	// amount 参数被忽略，使用构造时设置的 legacy/distributor 双口径预扣值。
+	res, err := model.PreConsumeUserSubscriptionByUnits(s.requestId, s.userId, s.modelName, 0, s.amount, s.distributorAmount)
 	if err != nil {
 		return err
 	}

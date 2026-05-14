@@ -107,6 +107,53 @@ func TestPreConsumeUserSubscription_IgnoresAmountTotalForDistributorLimit(t *tes
 	assert.Equal(t, int64(6), sub.TokenUsed)
 }
 
+func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedDistributor(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7461, Username: "mixed_dist", Status: common.UserStatusEnabled, AffCode: "aff7461"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7462, Title: "Legacy", Enabled: true, TotalAmount: 1}).Error)
+	seedUserSubscriptionForDistributorTest(t, 7463, 7461, 7462, 0, 0, 20, "order")
+	seedDistributorSubscriptionPlanForTest(t, 7464, "mixed-dist", 100)
+	seedUserSubscriptionForDistributorTest(t, 7465, 7461, 7464, 100, 40, 1, "order")
+
+	pre, err := PreConsumeUserSubscriptionByUnits("mixed-dist-ok", 7461, "gpt-4o", 0, 1000, 10)
+	require.NoError(t, err)
+	assert.True(t, pre.DistributorTokenBilling)
+	assert.Equal(t, int64(10), pre.PreConsumed)
+
+	var legacy UserSubscription
+	require.NoError(t, DB.First(&legacy, 7463).Error)
+	assert.Equal(t, int64(0), legacy.AmountUsed)
+	var distributor UserSubscription
+	require.NoError(t, DB.First(&distributor, 7465).Error)
+	assert.Equal(t, int64(50), distributor.TokenUsed)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", "mixed-dist-ok").First(&record).Error)
+	assert.Equal(t, int64(10), record.PreConsumed)
+}
+
+func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedLegacy(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7471, Username: "mixed_legacy", Status: common.UserStatusEnabled, AffCode: "aff7471"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7472, "mixed-legacy", 5)
+	seedUserSubscriptionForDistributorTest(t, 7473, 7471, 7472, 5, 0, 1, "order")
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7474, Title: "Legacy", Enabled: true, TotalAmount: 1}).Error)
+	seedUserSubscriptionForDistributorTest(t, 7475, 7471, 7474, 0, 0, 1000, "order")
+
+	pre, err := PreConsumeUserSubscriptionByUnits("mixed-legacy-ok", 7471, "gpt-4o", 0, 100, 10)
+	require.NoError(t, err)
+	assert.False(t, pre.DistributorTokenBilling)
+	assert.Equal(t, int64(100), pre.PreConsumed)
+
+	var distributor UserSubscription
+	require.NoError(t, DB.First(&distributor, 7473).Error)
+	assert.Equal(t, int64(0), distributor.TokenUsed)
+	var legacy UserSubscription
+	require.NoError(t, DB.First(&legacy, 7475).Error)
+	assert.Equal(t, int64(100), legacy.AmountUsed)
+}
+
 func TestSettleUserSubscription_UsesTokenUsedForDistributor(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7411, Username: "settle_user", Status: common.UserStatusEnabled, AffCode: "aff7411"}).Error)

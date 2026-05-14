@@ -974,30 +974,6 @@ func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
 	return reason == "trial_code" || reason == "invite_trial"
 }
 
-func GetActiveSubscriptionDistributorBilling(userId int) (bool, error) {
-	if userId <= 0 {
-		return false, errors.New("invalid userId")
-	}
-	now := GetDBTimestamp()
-	var subs []UserSubscription
-	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-		Order("end_time asc, id asc").
-		Find(&subs).Error; err != nil {
-		return false, err
-	}
-	if len(subs) == 0 {
-		return false, errors.New("no active subscription")
-	}
-	for _, sub := range subs {
-		plan, err := getSubscriptionPlanByIdTx(DB, sub.PlanId)
-		if err != nil {
-			return false, err
-		}
-		return isDistributorSubscription(&sub, plan), nil
-	}
-	return false, errors.New("no active subscription")
-}
-
 func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64, distributor bool) {
 	if result == nil || sub == nil {
 		return
@@ -1058,14 +1034,25 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 
 // PreConsumeUserSubscription pre-consumes from any active subscription total quota.
 func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64) (*SubscriptionPreConsumeResult, error) {
+	return PreConsumeUserSubscriptionByUnits(requestId, userId, modelName, quotaType, amount, amount)
+}
+
+// PreConsumeUserSubscriptionByUnits pre-consumes from the selected active subscription using the unit that matches that subscription type.
+func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName string, quotaType int, legacyAmount int64, distributorAmount int64) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
 	if strings.TrimSpace(requestId) == "" {
 		return nil, errors.New("requestId is empty")
 	}
-	if amount <= 0 {
+	if legacyAmount <= 0 && distributorAmount <= 0 {
 		return nil, errors.New("amount must be > 0")
+	}
+	if distributorAmount <= 0 && legacyAmount > 0 {
+		distributorAmount = legacyAmount
+	}
+	if legacyAmount <= 0 && distributorAmount > 0 {
+		legacyAmount = distributorAmount
 	}
 	now := GetDBTimestamp()
 
@@ -1114,7 +1101,7 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 			if distributor {
 				if sub.TokenLimit > 0 {
 					remain := sub.TokenLimit - tokenUsedBefore
-					if remain < amount {
+					if remain < distributorAmount {
 						continue
 					}
 				} else if !isUnlimitedTrialSubscription(&sub) {
@@ -1122,15 +1109,22 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				}
 			} else if sub.AmountTotal > 0 {
 				remain := sub.AmountTotal - amountUsedBefore
-				if remain < amount {
+				if remain < legacyAmount {
 					continue
 				}
+			}
+			consumeAmount := legacyAmount
+			if distributor {
+				consumeAmount = distributorAmount
+			}
+			if consumeAmount <= 0 {
+				continue
 			}
 			record := &SubscriptionPreConsumeRecord{
 				RequestId:          requestId,
 				UserId:             userId,
 				UserSubscriptionId: sub.Id,
-				PreConsumed:        amount,
+				PreConsumed:        consumeAmount,
 				Status:             "consumed",
 			}
 			if err := tx.Create(record).Error; err != nil {
@@ -1145,17 +1139,17 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 				return err
 			}
 			if distributor {
-				sub.TokenUsed += amount
+				sub.TokenUsed += consumeAmount
 			} else {
-				sub.AmountUsed += amount
+				sub.AmountUsed += consumeAmount
 			}
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, amount, amountUsedBefore, tokenUsedBefore, distributor)
+			fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", amount)
+		return fmt.Errorf("subscription quota insufficient, need=%d", legacyAmount)
 	})
 	if err != nil {
 		return nil, err

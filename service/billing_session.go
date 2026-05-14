@@ -425,23 +425,22 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
-		subConsume := int64(preConsumedQuota)
-		if distributor, err := model.GetActiveSubscriptionDistributorBilling(relayInfo.UserId); err == nil && distributor {
-			subConsume = int64(relayInfo.GetEstimatePromptTokens())
-			if subConsume <= 0 {
-				subConsume = int64(preConsumedQuota)
-			}
-			if subConsume <= 0 {
-				subConsume = 1
-			}
+		distributorConsume := int64(relayInfo.GetEstimatePromptTokens())
+		if distributorConsume <= 0 {
+			distributorConsume = int64(preConsumedQuota)
 		}
+		if distributorConsume <= 0 {
+			distributorConsume = 1
+		}
+		legacyConsume := int64(preConsumedQuota)
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &SubscriptionFunding{
-				requestId: relayInfo.RequestId,
-				userId:    relayInfo.UserId,
-				modelName: relayInfo.OriginModelName,
-				amount:    subConsume,
+				requestId:         relayInfo.RequestId,
+				userId:            relayInfo.UserId,
+				modelName:         relayInfo.OriginModelName,
+				amount:            legacyConsume,
+				distributorAmount: distributorConsume,
 			},
 		}
 		// SubscriptionFunding.amount 使用 estimated token；preConsume 入参仍是 wallet quota，保证 token key 预扣/校验不被 token 口径替代。

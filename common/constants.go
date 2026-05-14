@@ -114,6 +114,9 @@ var MemoryCacheEnabled bool
 
 var LogConsumeEnabled = true
 
+var SubscriptionConcurrencyTTLSeconds = 600
+var SubscriptionConcurrencyFailOpen = false
+var SubscriptionConcurrencyRequireRedis = false
 var TLSInsecureSkipVerify bool
 var InsecureTLSConfig = &tls.Config{InsecureSkipVerify: true}
 

@@ -332,13 +332,13 @@ func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bo
 	}
 }
 
-func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens int64) int64 {
+func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
 	if relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription {
 		return tokens
 	}
 	session, ok := relayInfo.Billing.(*BillingSession)
 	if !ok || !session.IsDistributorTokenBilling() {
-		return tokens
+		return int64(walletQuota)
 	}
 	if !distributorTokenBillingEligibleForText(relayInfo) {
 		return 0
@@ -362,7 +362,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	if usageEstimated && subscriptionTokens == 0 {
 		subscriptionTokens = int64(summary.PromptTokens + summary.CompletionTokens)
 	}
-	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens)
+	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens, summary.Quota)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false

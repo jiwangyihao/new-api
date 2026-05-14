@@ -262,6 +262,31 @@ func TestLegacySubscriptionPreConsumeUsesQuotaUnits(t *testing.T) {
 	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID))
 }
 
+func TestPostTextConsumeQuotaPreservesLegacySubscriptionQuota(t *testing.T) {
+	truncate(t)
+	const userID = 8111
+	const tokenID = 8112
+	const planID = 8113
+	const subID = 8114
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-legacy-text", 10_000)
+	seedChannel(t, 8115)
+	seedLegacySubscriptionPlan(t, planID, "legacy-text")
+	seedLegacySubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-legacy-text", "req-legacy-text", "subscription_only")
+	relayInfo.ChannelId = 8115
+	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
+	relayInfo.PriceData.ModelRatio = 2
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil)
+
+	assert.Equal(t, int64(20), getSubscriptionUsed(t, subID))
+	assert.Equal(t, 10_000-20, getTokenRemainQuota(t, tokenID), "token key quota still uses wallet quota")
+}
+
 func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		BillingSource:                         BillingSourceSubscription,

@@ -33,12 +33,8 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if !plan.Enabled {
-		common.ApiErrorMsg(c, "套餐未启用")
-		return
-	}
-	if plan.PriceAmount < 0.01 {
-		common.ApiErrorMsg(c, "套餐金额过低")
+	if msg := validatePurchasableSubscriptionPlan(plan); msg != "" {
+		common.ApiErrorMsg(c, msg)
 		return
 	}
 	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {

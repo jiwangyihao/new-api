@@ -174,6 +174,16 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 		}
 
+		trialCodeAdminRoute := apiRouter.Group("/trial-codes/admin")
+		trialCodeAdminRoute.Use(middleware.AdminAuth())
+		{
+			trialCodeAdminRoute.GET("/", controller.AdminListTrialCodes)
+			trialCodeAdminRoute.POST("/", controller.AdminCreateTrialCode)
+			trialCodeAdminRoute.PUT("/:id", controller.AdminUpdateTrialCode)
+			trialCodeAdminRoute.PATCH("/:id", controller.AdminUpdateTrialCodeStatus)
+			trialCodeAdminRoute.DELETE("/:id", controller.AdminDeleteTrialCode)
+		}
+
 		// Subscription payment callbacks (no auth)
 		apiRouter.POST("/subscription/epay/notify", controller.SubscriptionEpayNotify)
 		apiRouter.GET("/subscription/epay/notify", controller.SubscriptionEpayNotify)

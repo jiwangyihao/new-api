@@ -341,6 +341,17 @@ func inviteUser(inviterId int) (err error) {
 	return DB.Save(user).Error
 }
 
+func inviteUserTx(tx *gorm.DB, inviterId int) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	return tx.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
+		"aff_count":   gorm.Expr("aff_count + ?", 1),
+		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
+		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+	}).Error
+}
+
 func (user *User) TransferAffQuotaToQuota(quota int) error {
 	// 检查quota是否小于最小额度
 	if float64(quota) < common.QuotaPerUnit {
@@ -460,6 +471,41 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	}
 
 	return nil
+}
+
+func (user *User) FinalizeCreationTx(tx *gorm.DB, inviterId int) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	var createdUser User
+	if err := tx.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
+		defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
+		if defaultSidebarConfig != "" {
+			currentSetting := createdUser.GetSetting()
+			currentSetting.SidebarModules = defaultSidebarConfig
+			createdUser.SetSetting(currentSetting)
+			if err := tx.Save(&createdUser).Error; err != nil {
+				return err
+			}
+			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+		}
+	}
+	if inviterId != 0 {
+		if common.QuotaForInvitee > 0 {
+			if err := increaseUserQuotaTx(tx, user.Id, common.QuotaForInvitee); err != nil {
+				return err
+			}
+			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+		}
+		if common.QuotaForInviter > 0 {
+			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+			if err := inviteUserTx(tx, inviterId); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
@@ -905,6 +951,13 @@ func increaseUserQuota(id int, quota int) (err error) {
 		return err
 	}
 	return err
+}
+
+func increaseUserQuotaTx(tx *gorm.DB, id int, quota int) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	return tx.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota)).Error
 }
 
 func DecreaseUserQuota(id int, quota int, db bool) (err error) {

@@ -59,3 +59,41 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 	require.NotNil(t, plan.BusinessCode)
 	assert.Equal(t, "basic_monthly_updated", *plan.BusinessCode)
 }
+
+func TestAdminUpdateSubscriptionPlanPersistsCNYCurrency(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	code := "standard_monthly"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id:             8902,
+		Title:          "Standard",
+		Enabled:        true,
+		DurationUnit:   model.SubscriptionDurationMonth,
+		DurationValue:  1,
+		BusinessCode:   &code,
+		PublicVisible:  true,
+		RewardEligible: true,
+		Currency:       "USD",
+	}).Error)
+
+	recorder := performAdminSubscriptionPlanUpdate(t, 8902, `{"plan":{"title":"Standard Updated","price_amount":80,"currency":"CNY","duration_unit":"month","duration_value":1,"enabled":true,"sort_order":8,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":2000000000,"concurrency_limit":5,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"standard_monthly"}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var plan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&plan, 8902).Error)
+	assert.Equal(t, "CNY", plan.Currency)
+}
+
+func TestAdminCreateSubscriptionPlanDefaultsCurrencyToCNY(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Basic","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":1,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"basic_monthly"}}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	AdminCreateSubscriptionPlan(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var plan model.SubscriptionPlan
+	require.NoError(t, model.DB.Where("business_code = ?", "basic_monthly").First(&plan).Error)
+	assert.Equal(t, "CNY", plan.Currency)
+}

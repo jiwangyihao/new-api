@@ -160,12 +160,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
 
 	if priceData.FreeModel {
-		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，跳过预扣费", relayInfo.OriginModelName))
-	} else {
-		newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
-		if newAPIError != nil {
-			return
-		}
+		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，仍执行订阅校验", relayInfo.OriginModelName))
+	}
+	newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
+	if newAPIError != nil {
+		return
 	}
 	lease, concurrencyErr := service.AcquireSubscriptionConcurrency(c.Request.Context(), relayInfo)
 	if concurrencyErr != nil {

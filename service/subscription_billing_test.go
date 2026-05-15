@@ -287,7 +287,7 @@ func TestSubscriptionBillingSettlesNativeClaudeTextRelay(t *testing.T) {
 	relayInfo.SetEstimatePromptTokens(5)
 
 	preConsumeForBillingTest(t, ctx, relayInfo, 5)
-	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, TotalTokens: 9}, nil)
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, TotalTokens: 9}, nil))
 
 	assert.Equal(t, int64(9), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
@@ -312,7 +312,7 @@ func TestSubscriptionBillingSettlesNativeGeminiTextRelay(t *testing.T) {
 	relayInfo.SetEstimatePromptTokens(5)
 
 	preConsumeForBillingTest(t, ctx, relayInfo, 5)
-	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{UsageSemantic: "gemini", PromptTokens: 5, TotalTokens: 9}, nil)
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{UsageSemantic: "gemini", PromptTokens: 5, TotalTokens: 9}, nil))
 
 	assert.Equal(t, int64(9), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
@@ -382,9 +382,10 @@ func TestPostTextConsumeQuotaRejectsLegacySubscriptionQuota(t *testing.T) {
 	relayInfo.PriceData.ModelRatio = 2
 	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
 	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
 
 	if relayInfo.Billing != nil {
-		PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil)
+		require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil))
 	}
 
 	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID))
@@ -499,7 +500,7 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 	relayInfo.SetEstimatePromptTokens(6)
 	preConsumeForBillingTest(t, ctx, relayInfo, 6)
 
-	PostTextConsumeQuota(ctx, relayInfo, nil, nil)
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, nil, nil))
 
 	assert.Equal(t, int64(6), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not use token key quota")
@@ -508,6 +509,66 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, true, other["usage_estimated"])
+}
+
+func TestPostTextConsumeQuotaReturnsSettleErrorWhenSubscriptionTokensExhausted(t *testing.T) {
+	truncate(t)
+	const userID = 8016
+	const tokenID = 8017
+	const planID = 8018
+	const subID = 8019
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-settle-exhausted", 10_000)
+	seedChannel(t, 8020)
+	seedDistributorPlan(t, planID, "plan-settle-exhausted", 10)
+	seedDistributorSubscription(t, subID, userID, planID, 10, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-settle-exhausted", "req-settle-exhausted", "subscription_only")
+	relayInfo.ChannelId = 8020
+	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	err := PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 11}, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, int64(6), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not use token key quota")
+}
+
+func TestPreWssConsumeQuotaUsesSubscriptionTokensOnly(t *testing.T) {
+	truncate(t)
+	const userID = 8021
+	const tokenID = 8022
+	const planID = 8023
+	const subID = 8024
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-realtime-sub", 10_000)
+	seedDistributorPlan(t, planID, "plan-realtime-sub", 100)
+	seedDistributorSubscription(t, subID, userID, planID, 100, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-realtime-sub", "req-realtime-sub", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatOpenAIRealtime
+	relayInfo.RelayMode = relayconstant.RelayModeRealtime
+	relayInfo.SetEstimatePromptTokens(1)
+	preConsumeForBillingTest(t, ctx, relayInfo, 1)
+
+	require.NoError(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 4, InputTokens: 2, OutputTokens: 2}))
+
+	assert.Equal(t, int64(4), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "realtime subscription billing must not consume token key quota")
+	assert.Equal(t, 10_000, getUserQuota(t, userID), "realtime subscription billing must not consume wallet quota")
+}
+
+func TestPreWssConsumeQuotaRequiresSubscriptionBilling(t *testing.T) {
+	truncate(t)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(8025, 8026, "sk-realtime-missing", "req-realtime-missing", "wallet_only")
+
+	err := PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 4})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "subscription")
 }
 
 func TestPostTextConsumeQuotaSkipsDistributorTokensForNonTextRelay(t *testing.T) {
@@ -530,7 +591,9 @@ func TestPostTextConsumeQuotaSkipsDistributorTokensForNonTextRelay(t *testing.T)
 	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
 	require.NotNil(t, apiErr)
 
-	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 6}, nil)
+	if relayInfo.Billing != nil {
+		require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, TotalTokens: 6}, nil))
+	}
 
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "token key quota must be refunded when distributor subscription is rejected")

@@ -211,9 +211,9 @@ func (l *redisSubscriptionConcurrencyLease) Release(ctx context.Context) error {
 }
 
 func SubscriptionConcurrencyAPIError(limit int) *types.NewAPIError {
-	return types.NewErrorWithStatusCode(
+	return types.NewOpenAIError(
 		fmt.Errorf("subscription concurrency exceeded, limit=%d", limit),
-		"subscription_concurrency_exceeded",
+		types.ErrorCodeSubscriptionConcurrencyExceeded,
 		http.StatusTooManyRequests,
 		types.ErrOptionWithSkipRetry(),
 		types.ErrOptionWithNoRecordErrorLog(),

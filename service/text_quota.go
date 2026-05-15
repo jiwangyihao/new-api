@@ -333,7 +333,7 @@ func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bo
 		return false
 	}
 	switch relayInfo.RelayMode {
-	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact, relayconstant.RelayModeRealtime:
 		return true
 	case relayconstant.RelayModeGemini:
 		return relayInfo.RelayFormat == types.RelayFormatGemini && !nativeGeminiEmbeddingRequest(relayInfo)
@@ -356,7 +356,7 @@ func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens in
 	return tokens
 }
 
-func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) {
+func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
 	originUsage := usage
 	if usage == nil {
 		extraContent = append(extraContent, "上游无计费信息")
@@ -413,8 +413,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	if err := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated}); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated})
+	if settleErr != nil {
+		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}
 
 	logModel := summary.ModelName
@@ -522,4 +523,5 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	gopool.Go(func() {
 		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
 	})
+	return settleErr
 }

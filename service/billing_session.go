@@ -406,6 +406,10 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	if !distributorSubscriptionEligibleForBilling(relayInfo) {
+		clearRelayBillingState(relayInfo)
+		return nil, types.NewOpenAIError(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
 		distributorConsume := int64(relayInfo.GetEstimatePromptTokens())
@@ -437,10 +441,6 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	if apiErr != nil {
 		return nil, apiErr
 	}
-	if session.IsDistributorTokenBilling() && !distributorSubscriptionEligibleForBilling(relayInfo) {
-		session.refundSync()
-		clearRelayBillingState(relayInfo)
-		return nil, types.NewErrorWithStatusCode(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeInvalidRequest, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
-	}
+
 	return session, nil
 }

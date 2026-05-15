@@ -1093,7 +1093,11 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			if err := tx.Where("id = ?", existing.UserSubscriptionId).First(&sub).Error; err != nil {
 				return err
 			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, nil))
+			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+			if err != nil {
+				return err
+			}
+			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
 			return nil
 		}
 
@@ -1107,6 +1111,7 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		if len(subs) == 0 {
 			return errors.New("no active subscription")
 		}
+		sawDistributorSubscription := false
 		for _, candidate := range subs {
 			sub := candidate
 			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
@@ -1122,6 +1127,7 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			if !distributor {
 				continue
 			}
+			sawDistributorSubscription = true
 			if sub.TokenLimit > 0 {
 				remain := sub.TokenLimit - tokenUsedBefore
 				if remain < distributorAmount {
@@ -1155,6 +1161,9 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 			return nil
+		}
+		if !sawDistributorSubscription {
+			return errors.New("no active subscription")
 		}
 		return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
 	})

@@ -24,16 +24,17 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	relayInfo               *relaycommon.RelayInfo
-	funding                 FundingSource
-	preConsumedQuota        int   // 实际预扣额度（信任用户可能为 0）
-	preConsumedSubscription int64 // 订阅资金来源预扣 token 数；钱包路径不用
-	extraReserved           int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	trusted                 bool  // 是否命中信任额度旁路
-	fundingSettled          bool  // funding.Settle 已成功，资金来源已提交
-	settled                 bool  // Settle 全部完成
-	refunded                bool  // Refund 已调用
-	mu                      sync.Mutex
+	relayInfo                  *relaycommon.RelayInfo
+	funding                    FundingSource
+	preConsumedQuota           int   // 实际预扣额度（信任用户可能为 0）
+	preConsumedSubscription    int64 // 订阅资金来源预扣 token 数；钱包路径不用
+	extraReserved              int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	realtimeSubscriptionTokens int64
+	trusted                    bool // 是否命中信任额度旁路
+	fundingSettled             bool // funding.Settle 已成功，资金来源已提交
+	settled                    bool // Settle 全部完成
+	refunded                   bool // Refund 已调用
+	mu                        sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -101,9 +102,15 @@ func (s *BillingSession) SettleSubscriptionIncrement(deltaTokens int64) error {
 	if err := s.funding.Settle(int(deltaTokens)); err != nil {
 		return err
 	}
+	s.realtimeSubscriptionTokens += deltaTokens
 	s.relayInfo.SubscriptionPostDelta += deltaTokens
-	s.fundingSettled = true
 	return nil
+}
+
+func (s *BillingSession) RealtimeSubscriptionTokens() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.realtimeSubscriptionTokens
 }
 
 // Refund 退还所有预扣费，幂等安全，异步执行。

@@ -110,7 +110,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 }
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
-	usage *dto.RealtimeUsage, extraContent string) {
+	usage *dto.RealtimeUsage, extraContent string) error {
 
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
@@ -181,8 +181,16 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	if err := SettleBilling(ctx, relayInfo, quota); err != nil {
-		logger.LogError(ctx, "error settling billing: "+err.Error())
+	subscriptionTokens := int64(totalTokens)
+	if session, ok := relayInfo.Billing.(*BillingSession); ok && relayInfo.BillingSource == BillingSourceSubscription {
+		subscriptionTokens = session.RealtimeSubscriptionTokens()
+		if subscriptionTokens > 0 {
+			subscriptionTokens -= relayInfo.SubscriptionPostDelta
+		}
+	}
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens})
+	if settleErr != nil {
+		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}
 
 	logModel := modelName
@@ -208,6 +216,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		Group:            relayInfo.UsingGroup,
 		Other:            other,
 	})
+	return settleErr
 }
 
 func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData) int {

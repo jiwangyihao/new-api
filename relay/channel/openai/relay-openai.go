@@ -522,7 +522,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	case <-targetClosed:
 	case err := <-errChan:
 		logger.LogError(c, "realtime error: "+err.Error())
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry()), sumUsage
+		return realtimeErrorFromErrChan(err, sumUsage)
 	case <-c.Done():
 	}
 
@@ -541,6 +541,10 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	// check usage total tokens, if 0, use local usage
 
 	return nil, sumUsage
+}
+
+func realtimeErrorFromErrChan(err error, sumUsage *dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {
+	return types.NewError(err, types.ErrorCodeDoRequestFailed), sumUsage
 }
 
 func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {

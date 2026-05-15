@@ -484,10 +484,8 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
 
 	modelName := service.CovertMjpActionToModelName(midjRequest.Action)
-	if consumeQuota {
-		if billingErr := EnsureMidjourneySubscriptionBilling(c, relayInfo, 1); billingErr != nil {
-			return billingErr
-		}
+	if billingErr := EnsureMidjourneySubscriptionBilling(c, relayInfo, 1); billingErr != nil {
+		return billingErr
 	}
 
 	priceData, err := helper.ModelPriceHelperPerCall(c, relayInfo)

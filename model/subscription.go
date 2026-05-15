@@ -714,6 +714,39 @@ func HasActiveUserSubscription(userId int) (bool, error) {
 	return count > 0, nil
 }
 
+type ActiveSubscriptionUsage struct {
+	TokenLimit int64
+	TokenUsed  int64
+	EndTime    int64
+	Unlimited  bool
+}
+
+func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid userId")
+	}
+	now := common.GetTimestamp()
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		Order("CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 ELSE 0 END asc, end_time desc, id desc").
+		Find(&subs).Error; err != nil {
+		return nil, err
+	}
+	for _, sub := range subs {
+		plan, err := GetSubscriptionPlanById(sub.PlanId)
+		if err != nil {
+			return nil, err
+		}
+		if isDistributorSubscription(&sub, plan) {
+			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime}, nil
+		}
+		if isUnlimitedTrialSubscription(&sub) {
+			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime, Unlimited: true}, nil
+		}
+	}
+	return &ActiveSubscriptionUsage{}, nil
+}
+
 // GetAllUserSubscriptions returns all subscriptions (active and expired) for a user.
 func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if userId <= 0 {

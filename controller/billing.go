@@ -8,22 +8,34 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func subscriptionTokensToBillingAmount(tokens int64) float64 {
+	if tokens <= 0 {
+		return 0
+	}
+	amount := float64(tokens)
+	// OpenAI 兼容接口字段名保留 *_usd，但这里映射的是订阅套餐 token 语义。
+	switch operation_setting.GetQuotaDisplayType() {
+	case operation_setting.QuotaDisplayTypeCNY:
+		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
+	case operation_setting.QuotaDisplayTypeTokens:
+		// amount 保持 token 数值，避免暴露钱包余额语义。
+	default:
+		amount = amount / common.QuotaPerUnit
+	}
+	return amount
+}
+
 func GetSubscription(c *gin.Context) {
-	var remainQuota int
-	var usedQuota int
-	var err error
-	var token *model.Token
-	var expiredTime int64
-	if common.DisplayTokenStatEnabled {
-		tokenId := c.GetInt("token_id")
-		token, err = model.GetTokenById(tokenId)
-		expiredTime = token.ExpiredTime
-		remainQuota = token.RemainQuota
-		usedQuota = token.UsedQuota
-	} else {
-		userId := c.GetInt("id")
-		remainQuota, err = model.GetUserQuota(userId, false)
-		usedQuota, err = model.GetUserUsedQuota(userId)
+	userId := c.GetInt("id")
+	usage, err := model.GetActiveDistributorSubscriptionUsage(userId)
+	expiredTime := int64(0)
+	limitTokens := int64(0)
+	if usage != nil {
+		limitTokens = usage.TokenLimit
+		expiredTime = usage.EndTime
+		if usage.Unlimited {
+			limitTokens = 100000000
+		}
 	}
 	if expiredTime <= 0 {
 		expiredTime = 0
@@ -38,24 +50,7 @@ func GetSubscription(c *gin.Context) {
 		})
 		return
 	}
-	quota := remainQuota + usedQuota
-	amount := float64(quota)
-	// OpenAI 兼容接口中的 *_USD 字段含义保持“额度单位”对应值：
-	// 我们将其解释为以“站点展示类型”为准：
-	// - USD: 直接除以 QuotaPerUnit
-	// - CNY: 先转 USD 再乘汇率
-	// - TOKENS: 直接使用 tokens 数量
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
-	case operation_setting.QuotaDisplayTypeTokens:
-		// amount 保持 tokens 数值
-	default:
-		amount = amount / common.QuotaPerUnit
-	}
-	if token != nil && token.UnlimitedQuota {
-		amount = 100000000
-	}
+	amount := subscriptionTokensToBillingAmount(limitTokens)
 	subscription := OpenAISubscriptionResponse{
 		Object:             "billing_subscription",
 		HasPaymentMethod:   true,
@@ -69,16 +64,11 @@ func GetSubscription(c *gin.Context) {
 }
 
 func GetUsage(c *gin.Context) {
-	var quota int
-	var err error
-	var token *model.Token
-	if common.DisplayTokenStatEnabled {
-		tokenId := c.GetInt("token_id")
-		token, err = model.GetTokenById(tokenId)
-		quota = token.UsedQuota
-	} else {
-		userId := c.GetInt("id")
-		quota, err = model.GetUserUsedQuota(userId)
+	userId := c.GetInt("id")
+	usageInfo, err := model.GetActiveDistributorSubscriptionUsage(userId)
+	usedTokens := int64(0)
+	if usageInfo != nil {
+		usedTokens = usageInfo.TokenUsed
 	}
 	if err != nil {
 		openAIError := types.OpenAIError{
@@ -90,15 +80,7 @@ func GetUsage(c *gin.Context) {
 		})
 		return
 	}
-	amount := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
-	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
-	case operation_setting.QuotaDisplayTypeTokens:
-		// tokens 保持原值
-	default:
-		amount = amount / common.QuotaPerUnit
-	}
+	amount := subscriptionTokensToBillingAmount(usedTokens)
 	usage := OpenAIUsageResponse{
 		Object:     "list",
 		TotalUsage: amount * 100,

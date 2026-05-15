@@ -238,7 +238,7 @@ func TestSettleBillingWrapperRejectsLegacySubscriptionQuota(t *testing.T) {
 
 	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
 	require.NotNil(t, apiErr)
-	assert.Contains(t, apiErr.Error(), "active subscription")
+	assert.Contains(t, apiErr.Error(), "subscription")
 	require.NoError(t, SettleBilling(ctx, relayInfo, 0))
 
 	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID), "legacy amount subscription must not participate in request billing")
@@ -267,6 +267,79 @@ func TestSubscriptionBillingAllowsCompletionsTextRelay(t *testing.T) {
 	require.NoError(t, session.SettleWithInput(BillingSettleInput{SubscriptionTokens: 11}))
 
 	assert.Equal(t, int64(11), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
+}
+
+func TestSubscriptionBillingSettlesNativeClaudeTextRelay(t *testing.T) {
+	truncate(t)
+	const userID = 8089
+	const tokenID = 8090
+	const planID = 8096
+	const subID = 8097
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-claude-native", 10_000)
+	seedDistributorPlan(t, planID, "plan-claude-native", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-claude-native", "req-claude-native", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatClaude
+	relayInfo.RelayMode = relayconstant.RelayModeUnknown
+	relayInfo.SetEstimatePromptTokens(5)
+
+	preConsumeForBillingTest(t, ctx, relayInfo, 5)
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, TotalTokens: 9}, nil)
+
+	assert.Equal(t, int64(9), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
+}
+
+func TestSubscriptionBillingSettlesNativeGeminiTextRelay(t *testing.T) {
+	truncate(t)
+	const userID = 8098
+	const tokenID = 8099
+	const planID = 8100
+	const subID = 8105
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-gemini-native", 10_000)
+	seedDistributorPlan(t, planID, "plan-gemini-native", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+	ctx.Request = httptest.NewRequest("POST", "/v1beta/models/gemini-pro:generateContent", nil)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-gemini-native", "req-gemini-native", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatGemini
+	relayInfo.RelayMode = relayconstant.RelayModeGemini
+	relayInfo.RequestURLPath = "/v1beta/models/gemini-pro:generateContent"
+	relayInfo.SetEstimatePromptTokens(5)
+
+	preConsumeForBillingTest(t, ctx, relayInfo, 5)
+	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{UsageSemantic: "gemini", PromptTokens: 5, TotalTokens: 9}, nil)
+
+	assert.Equal(t, int64(9), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
+}
+
+func TestSubscriptionBillingRejectsNativeGeminiEmbeddingRelay(t *testing.T) {
+	truncate(t)
+	const userID = 8106
+	const tokenID = 8107
+	const planID = 8108
+	const subID = 8109
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-gemini-embed", 10_000)
+	seedDistributorPlan(t, planID, "plan-gemini-embed", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+	ctx.Request = httptest.NewRequest("POST", "/v1beta/models/text-embedding-004:embedContent", nil)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-gemini-embed", "req-gemini-embed", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatGemini
+	relayInfo.RelayMode = relayconstant.RelayModeGemini
+	relayInfo.RequestURLPath = "/v1beta/models/text-embedding-004:embedContent"
+	relayInfo.SetEstimatePromptTokens(5)
+
+	apiErr := PreConsumeBilling(ctx, 5, relayInfo)
+	require.NotNil(t, apiErr)
+	assert.Empty(t, relayInfo.BillingSource)
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
 }
 

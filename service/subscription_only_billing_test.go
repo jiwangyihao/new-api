@@ -66,12 +66,56 @@ func TestNewBillingSessionRequiresSubscriptionWhenWalletPreferenceSet(t *testing
 
 			require.Nil(t, session)
 			require.NotNil(t, apiErr)
-			assert.Equal(t, types.ErrorCodeInsufficientUserQuota, apiErr.GetErrorCode())
+			assert.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
 			assert.True(t, strings.Contains(apiErr.Error(), "subscription") || strings.Contains(apiErr.Error(), "active subscription is required"), apiErr.Error())
 			assert.Equal(t, 1_000_000, getUserQuota(t, userID))
 			assert.Equal(t, 1_000_000, getTokenRemainQuota(t, tokenID))
 		})
 	}
+}
+
+func TestNewBillingSessionReturnsSubscriptionRequiredCode(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9305
+	const tokenID = 9306
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "no_sub_code", Quota: 1_000_000, Status: common.UserStatusEnabled, AffCode: "aff9305"}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-no-sub-code", Status: common.TokenStatusEnabled, RemainQuota: 1_000_000}).Error)
+	ctx := subscriptionOnlyTestContext(t)
+	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, "sk-no-sub-code", "wallet_only")
+
+	session, apiErr := NewBillingSession(ctx, relayInfo, 10)
+
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
+	oaiErr := apiErr.ToOpenAIError()
+	assert.Equal(t, "insufficient_quota", oaiErr.Type)
+	assert.Equal(t, string(types.ErrorCodeSubscriptionRequired), oaiErr.Code)
+}
+
+func TestNewBillingSessionReturnsSubscriptionTokenExhaustedCode(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9307
+	const tokenID = 9308
+	const planID = 9309
+	const subID = 9310
+	planCode := "sub-exhausted-basic"
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "sub_exhausted", Quota: 1_000_000, Status: common.UserStatusEnabled, AffCode: "aff9307"}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-sub-exhausted", Status: common.TokenStatusEnabled, RemainQuota: 1_000_000}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Basic", Enabled: true, MonthlyTokenLimit: 10, ConcurrencyLimit: 1, BusinessCode: &planCode}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, TokenLimit: 10, TokenUsed: 9, ConcurrencyLimit: 1, Status: "active", StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix(), GrantReason: "order"}).Error)
+	ctx := subscriptionOnlyTestContext(t)
+	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, "sk-sub-exhausted", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(2)
+
+	session, apiErr := NewBillingSession(ctx, relayInfo, 2)
+
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeSubscriptionTokenExhausted, apiErr.GetErrorCode())
+	oaiErr := apiErr.ToOpenAIError()
+	assert.Equal(t, "insufficient_quota", oaiErr.Type)
+	assert.Equal(t, string(types.ErrorCodeSubscriptionTokenExhausted), oaiErr.Code)
 }
 
 func TestSubscriptionBillingDoesNotConsumeTokenKeyQuota(t *testing.T) {

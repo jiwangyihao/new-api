@@ -207,6 +207,27 @@ func TestPreConsumeUserSubscription_TokenLimitZeroOnlyTrialIsUnlimited(t *testin
 	assert.Equal(t, int64(6), sub.TokenUsed)
 }
 
+func TestPreConsumeUserSubscriptionPrefersPaidDistributorBeforeUnlimitedTrial(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7445, Username: "paid_before_trial", Status: common.UserStatusEnabled, AffCode: "aff7445"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7446, "trial-first", 0)
+	seedUserSubscriptionForDistributorTest(t, 7447, 7445, 7446, 0, 0, 0, "trial_code")
+	seedDistributorSubscriptionPlanForTest(t, 7448, "paid-second", 100)
+	seedUserSubscriptionForDistributorTest(t, 7449, 7445, 7448, 100, 0, 1, "order")
+
+	pre, err := PreConsumeUserSubscription("paid-before-trial", 7445, "gpt-4o", 0, 6)
+	require.NoError(t, err)
+	assert.Equal(t, 7449, pre.UserSubscriptionId)
+
+	var trial UserSubscription
+	require.NoError(t, DB.First(&trial, 7447).Error)
+	assert.Equal(t, int64(0), trial.TokenUsed)
+	var paid UserSubscription
+	require.NoError(t, DB.First(&paid, 7449).Error)
+	assert.Equal(t, int64(6), paid.TokenUsed)
+}
+
 func TestEnsureDistributorDefaultPlans(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, EnsureDistributorDefaultPlans())

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -218,6 +219,22 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	return nil
 }
 
+func newSubscriptionBillingError(errMsg string) *types.NewAPIError {
+	openAIError := types.OpenAIError{
+		Message: "active subscription is required",
+		Type:    "insufficient_quota",
+		Code:    string(types.ErrorCodeSubscriptionRequired),
+	}
+	if strings.Contains(errMsg, "subscription token quota insufficient") {
+		openAIError.Message = "subscription token exhausted"
+		openAIError.Code = string(types.ErrorCodeSubscriptionTokenExhausted)
+	}
+	if errMsg != "" {
+		openAIError.Message = openAIError.Message + ": " + errMsg
+	}
+	return types.WithOpenAIError(openAIError, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+}
+
 // ---------------------------------------------------------------------------
 // PreConsume — 统一预扣费入口（含信任额度旁路）
 // ---------------------------------------------------------------------------
@@ -240,7 +257,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") || strings.Contains(errMsg, "subscription token quota insufficient") {
-			return types.NewErrorWithStatusCode(fmt.Errorf("active subscription is required for API billing and must have sufficient quota: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return newSubscriptionBillingError(errMsg)
 		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
@@ -363,8 +380,10 @@ func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo)
 		return true
 	}
 	switch relayInfo.RelayFormat {
-	case types.RelayFormatClaude, types.RelayFormatGemini:
+	case types.RelayFormatClaude:
 		return true
+	case types.RelayFormatGemini:
+		return relayInfo.RelayMode == relayconstant.RelayModeGemini && !nativeGeminiEmbeddingRequest(relayInfo)
 	default:
 		return false
 	}

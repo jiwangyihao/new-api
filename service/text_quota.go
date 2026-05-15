@@ -320,6 +320,14 @@ func usageSemanticFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 	return "openai"
 }
 
+func nativeGeminiEmbeddingRequest(relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo == nil || relayInfo.RelayFormat != types.RelayFormatGemini {
+		return false
+	}
+	path := strings.ToLower(relayInfo.RequestURLPath)
+	return strings.Contains(path, ":embedcontent") || strings.Contains(path, ":batchembedcontents")
+}
+
 func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bool {
 	if relayInfo == nil {
 		return false
@@ -327,8 +335,10 @@ func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bo
 	switch relayInfo.RelayMode {
 	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		return true
+	case relayconstant.RelayModeGemini:
+		return relayInfo.RelayFormat == types.RelayFormatGemini && !nativeGeminiEmbeddingRequest(relayInfo)
 	default:
-		return false
+		return relayInfo.RelayFormat == types.RelayFormatClaude
 	}
 }
 

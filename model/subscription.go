@@ -737,11 +737,11 @@ func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage
 		if err != nil {
 			return nil, err
 		}
-		if isDistributorSubscription(&sub, plan) {
-			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime}, nil
-		}
 		if isUnlimitedTrialSubscription(&sub) {
 			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime, Unlimited: true}, nil
+		}
+		if isDistributorSubscription(&sub, plan) {
+			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime}, nil
 		}
 	}
 	return &ActiveSubscriptionUsage{}, nil

@@ -18,9 +18,9 @@ import (
 
 func setupBillingSubscriptionOnlyTestDB(t *testing.T) {
 	t.Helper()
-	initModelListColumnNames(t)
 	originalDB := model.DB
 	originalLogDB := model.LOG_DB
+	initModelListColumnNames(t)
 	common.UsingSQLite = true
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
@@ -93,4 +93,24 @@ func TestOpenAIUsageUsesSubscriptionTokenUsed(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), "33300")
 	assert.NotContains(t, recorder.Body.String(), "888888")
+}
+
+func TestOpenAIBillingSubscriptionShowsUnlimitedTrialAllowance(t *testing.T) {
+	setupBillingSubscriptionOnlyTestDB(t)
+	withSubscriptionBillingTokenDisplay(t)
+	const userID = 9421
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "billing_trial", Quota: 0, Status: common.UserStatusEnabled}).Error)
+	code := "trial-unlimited"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9422, Title: "Trial", Enabled: true, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, IsTrial: true, BusinessCode: &code}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 9423, UserId: userID, PlanId: 9422, TokenLimit: 0, TokenUsed: 0, ConcurrencyLimit: 1, Status: "active", StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix(), GrantReason: "trial_code"}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/dashboard/billing/subscription", nil)
+	ctx.Set("id", userID)
+
+	GetSubscription(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"hard_limit_usd":100000000`)
 }

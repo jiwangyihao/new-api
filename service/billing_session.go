@@ -239,7 +239,7 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	// 请求级计费强制走订阅，token key quota 不再作为资金来源或预扣检查。
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") {
+		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") || strings.Contains(errMsg, "subscription token quota insufficient") {
 			return types.NewErrorWithStatusCode(fmt.Errorf("active subscription is required for API billing and must have sufficient quota: %s", errMsg), types.ErrorCodeInsufficientUserQuota, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
@@ -356,7 +356,18 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 }
 
 func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {
-	return distributorTokenBillingEligibleForText(relayInfo)
+	if relayInfo == nil {
+		return false
+	}
+	if distributorTokenBillingEligibleForText(relayInfo) {
+		return true
+	}
+	switch relayInfo.RelayFormat {
+	case types.RelayFormatClaude, types.RelayFormatGemini:
+		return true
+	default:
+		return false
+	}
 }
 
 func distributorSubscriptionRelayError(relayInfo *relaycommon.RelayInfo) error {

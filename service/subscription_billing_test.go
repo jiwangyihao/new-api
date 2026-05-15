@@ -223,7 +223,7 @@ func TestSettleBillingWrapperDoesNotSynthesizeSubscriptionTokens(t *testing.T) {
 	assert.Equal(t, int64(-10), relayInfo.SubscriptionPostDelta)
 }
 
-func TestSettleBillingWrapperPreservesLegacySubscriptionQuota(t *testing.T) {
+func TestSettleBillingWrapperRejectsLegacySubscriptionQuota(t *testing.T) {
 	truncate(t)
 	const userID = 8081
 	const tokenID = 8082
@@ -235,12 +235,39 @@ func TestSettleBillingWrapperPreservesLegacySubscriptionQuota(t *testing.T) {
 	seedLegacySubscription(t, subID, userID, planID, 1_000, 0)
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-legacy-wrapper", "req-legacy-wrapper", "subscription_only")
-	preConsumeForBillingTest(t, ctx, relayInfo, 10)
-	require.NoError(t, SettleBilling(ctx, relayInfo, 999))
 
-	assert.Equal(t, int64(999), getSubscriptionUsed(t, subID), "legacy wrapper settlement must continue using quota amount")
+	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "active subscription")
+	require.NoError(t, SettleBilling(ctx, relayInfo, 0))
+
+	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID), "legacy amount subscription must not participate in request billing")
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not settle token key quota")
-	assert.Equal(t, int64(989), relayInfo.SubscriptionPostDelta)
+	assert.Empty(t, relayInfo.BillingSource)
+}
+
+func TestSubscriptionBillingAllowsCompletionsTextRelay(t *testing.T) {
+	truncate(t)
+	const userID = 8085
+	const tokenID = 8086
+	const planID = 8087
+	const subID = 8088
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-completions", 10_000)
+	seedDistributorPlan(t, planID, "plan-completions", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-completions", "req-completions", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeCompletions
+	relayInfo.SetEstimatePromptTokens(7)
+
+	preConsumeForBillingTest(t, ctx, relayInfo, 7)
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+	require.NoError(t, session.SettleWithInput(BillingSettleInput{SubscriptionTokens: 11}))
+
+	assert.Equal(t, int64(11), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
 }
 
 func TestLegacySubscriptionPreConsumeUsesQuotaUnits(t *testing.T) {
@@ -263,7 +290,7 @@ func TestLegacySubscriptionPreConsumeUsesQuotaUnits(t *testing.T) {
 	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID))
 }
 
-func TestPostTextConsumeQuotaPreservesLegacySubscriptionQuota(t *testing.T) {
+func TestPostTextConsumeQuotaRejectsLegacySubscriptionQuota(t *testing.T) {
 	truncate(t)
 	const userID = 8111
 	const tokenID = 8112
@@ -280,11 +307,14 @@ func TestPostTextConsumeQuotaPreservesLegacySubscriptionQuota(t *testing.T) {
 	relayInfo.ChannelId = 8115
 	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
 	relayInfo.PriceData.ModelRatio = 2
-	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+	require.NotNil(t, apiErr)
 
-	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil)
+	if relayInfo.Billing != nil {
+		PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil)
+	}
 
-	assert.Equal(t, int64(20), getSubscriptionUsed(t, subID))
+	assert.Equal(t, int64(0), getSubscriptionUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not update token key quota")
 }
 

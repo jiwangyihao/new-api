@@ -325,7 +325,7 @@ func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bo
 		return false
 	}
 	switch relayInfo.RelayMode {
-	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
 		return true
 	default:
 		return false

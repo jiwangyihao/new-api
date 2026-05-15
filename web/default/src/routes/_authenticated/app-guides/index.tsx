@@ -16,23 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Affiliate Functions
-// ============================================================================
+import { createFileRoute } from '@tanstack/react-router'
+import { AppGuides } from '@/features/app-guides'
 
-/**
- * Generate affiliate registration link
- */
-export function generateAffiliateLink(affCode: string): string {
-  if (typeof window === 'undefined') return ''
-  return `${window.location.origin}/register?aff=${affCode}`
-}
-
-export function formatAffiliateEntitlementEndTime(timestamp: number): string {
-  if (!timestamp) return '-'
-
-  return new Date(timestamp * 1000)
-    .toISOString()
-    .replace('T', ' ')
-    .slice(0, 19)
-}
+export const Route = createFileRoute('/_authenticated/app-guides/')({
+  component: AppGuides,
+})

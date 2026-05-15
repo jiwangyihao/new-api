@@ -118,6 +118,11 @@ export function SidebarModulesCard() {
           description: t('Balance and top-up management'),
         },
         {
+          key: 'app_guides',
+          title: t('Application Guides'),
+          description: t('Configuration guides for common AI applications.'),
+        },
+        {
           key: 'personal',
           title: t('Personal Settings'),
           description: t('Personal info settings'),

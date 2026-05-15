@@ -16,12 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { getSelf } from '@/lib/api'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
-import { getAffiliateCode, transferAffiliateQuota } from '../api'
+import { useAuthStore } from '@/stores/auth-store'
+import {
+  getAffiliateCode,
+  getInvitationEntitlement,
+  transferAffiliateQuota,
+} from '../api'
 import { generateAffiliateLink } from '../lib'
 
 // ============================================================================
@@ -34,6 +40,16 @@ export function useAffiliate() {
   const [loading, setLoading] = useState(true)
   const [transferring, setTransferring] = useState(false)
   const { copyToClipboard } = useCopyToClipboard()
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const entitlementQuery = useQuery({
+    queryKey: ['wallet', 'affiliate-entitlement', userId],
+    queryFn: async () => {
+      const response = await getInvitationEntitlement()
+      return response.success ? (response.data ?? null) : null
+    },
+    staleTime: 60 * 1000,
+    enabled: Boolean(userId),
+  })
 
   // Fetch affiliate code
   const fetchAffiliateCode = useCallback(async () => {
@@ -88,10 +104,11 @@ export function useAffiliate() {
   return {
     affiliateCode,
     affiliateLink,
-    loading,
+    loading: loading || entitlementQuery.isLoading,
     transferring,
     copyAffiliateLink,
     transferQuota,
     refetch: fetchAffiliateCode,
+    entitlement: entitlementQuery.data ?? null,
   }
 }

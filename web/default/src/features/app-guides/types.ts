@@ -16,23 +16,22 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Affiliate Functions
-// ============================================================================
+import type { LucideIcon } from 'lucide-react'
 
-/**
- * Generate affiliate registration link
- */
-export function generateAffiliateLink(affCode: string): string {
-  if (typeof window === 'undefined') return ''
-  return `${window.location.origin}/register?aff=${affCode}`
+export type AppGuideLink = {
+  label: string
+  href: string
+  requiresKey?: boolean
+  id?: string
+  disabled?: boolean
 }
 
-export function formatAffiliateEntitlementEndTime(timestamp: number): string {
-  if (!timestamp) return '-'
-
-  return new Date(timestamp * 1000)
-    .toISOString()
-    .replace('T', ' ')
-    .slice(0, 19)
+export type AppGuide = {
+  id: string
+  name: string
+  description: string
+  icon: LucideIcon
+  configTitle: string
+  configValue: string
+  importLinks?: AppGuideLink[]
 }

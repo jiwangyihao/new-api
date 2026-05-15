@@ -16,23 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// ============================================================================
-// Affiliate Functions
-// ============================================================================
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { formatAffiliateEntitlementEndTime } from './affiliate'
 
-/**
- * Generate affiliate registration link
- */
-export function generateAffiliateLink(affCode: string): string {
-  if (typeof window === 'undefined') return ''
-  return `${window.location.origin}/register?aff=${affCode}`
-}
+describe('affiliate entitlement formatting', () => {
+  test('formats missing entitlement end time as empty dash', () => {
+    assert.equal(formatAffiliateEntitlementEndTime(0), '-')
+  })
 
-export function formatAffiliateEntitlementEndTime(timestamp: number): string {
-  if (!timestamp) return '-'
-
-  return new Date(timestamp * 1000)
-    .toISOString()
-    .replace('T', ' ')
-    .slice(0, 19)
-}
+  test('formats unix seconds with date and time', () => {
+    assert.equal(
+      formatAffiliateEntitlementEndTime(1_704_067_200),
+      '2024-01-01 00:00:00'
+    )
+  })
+})

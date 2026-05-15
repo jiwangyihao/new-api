@@ -61,6 +61,33 @@ describe('sidebar config defaults', () => {
     assert.equal(filtered.length, 0)
   })
 
+  test('keeps application guides visible when saved user config omits it', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const userConfig = {
+      personal: {
+        enabled: true,
+        topup: true,
+        personal: true,
+      },
+    }
+    const groups: NavGroup[] = [
+      {
+        id: 'personal',
+        title: 'Personal',
+        items: [{ title: 'Application Guides', url: '/app-guides' }],
+      },
+    ]
+
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig
+    )
+
+    assert.equal(defaults.personal?.app_guides, true)
+    assert.equal(filtered[0]?.items[0]?.url, '/app-guides')
+  })
+
   test('hides admin navigation from non-admin command consumers', () => {
     const filtered = filterNavGroupsByRole(navGroups, 1)
 

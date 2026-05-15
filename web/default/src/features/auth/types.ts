@@ -130,6 +130,10 @@ export interface SystemStatus {
     register_enabled?: boolean
     password_register_enabled?: boolean
     custom_oauth_providers?: CustomOAuthProviderInfo[]
+    server_address?: string
+    serverAddress?: string
+    Chats?: unknown
+    chats?: unknown
     [key: string]: unknown
   }
   // Allow direct access to common properties
@@ -173,6 +177,10 @@ export interface SystemStatus {
   register_enabled?: boolean
   password_register_enabled?: boolean
   custom_oauth_providers?: CustomOAuthProviderInfo[]
+  server_address?: string
+  serverAddress?: string
+  Chats?: unknown
+  chats?: unknown
   [key: string]: unknown
 }
 

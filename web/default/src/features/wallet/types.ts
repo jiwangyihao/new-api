@@ -41,6 +41,7 @@ export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
 export type StripePaymentResponse = ApiResponse<{ pay_link: string }>
 export type AffiliateCodeResponse = ApiResponse<string>
 export type AffiliateTransferResponse = ApiResponse
+export type InvitationEntitlementResponse = ApiResponse<InvitationEntitlement>
 export type CreemPaymentResponse = ApiResponse<{ checkout_url: string }>
 export type WaffoPaymentResponse = ApiResponse<
   { payment_url?: string } | string
@@ -207,6 +208,15 @@ export interface AmountRequest {
 export interface AffiliateTransferRequest {
   /** Quota amount to transfer */
   quota: number
+}
+
+export interface InvitationEntitlement {
+  direct_invite_count: number
+  qualified_active_count: number
+  reward_month: string
+  entitled: boolean
+  entitlement_end_time: number
+  reward_subscription_id?: number
 }
 
 /**

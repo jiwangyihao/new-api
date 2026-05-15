@@ -19,3 +19,14 @@ func TestRealtimeTransportErrorKeepsTransportErrorCode(t *testing.T) {
 	assert.NotEqual(t, types.ErrorCodeSubscriptionTokenExhausted, apiErr.GetErrorCode())
 	assert.NotEqual(t, http.StatusForbidden, apiErr.StatusCode)
 }
+
+func TestRealtimeSubscriptionErrorPreservesSubscriptionCode(t *testing.T) {
+	origin := types.NewOpenAIError(errors.New("subscription token exhausted"), types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+
+	apiErr, usage := realtimeErrorFromErrChan(origin, nil)
+
+	require.NotNil(t, apiErr)
+	assert.Nil(t, usage)
+	assert.Equal(t, types.ErrorCodeSubscriptionTokenExhausted, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+}

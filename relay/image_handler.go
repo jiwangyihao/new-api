@@ -153,7 +153,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	}
 
 	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent); err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil
 }

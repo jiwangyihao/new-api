@@ -87,6 +87,31 @@ func TestPostTextConsumeQuotaSettlesAudioChatWithSubscriptionTokens(t *testing.T
 	}
 	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, usage, nil))
 
-	assert.Equal(t, int64(12), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(20), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "audio chat subscription settlement must not consume token key quota")
+}
+
+func TestPostSettleErrorToOpenAIErrorPreventsRefundAfterDeliveredResponse(t *testing.T) {
+	truncate(t)
+	const userID = 8191
+	const tokenID = 8192
+	const planID = 8193
+	const subID = 8194
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-post-settle-lock", 10_000)
+	seedDistributorPlan(t, planID, "plan-post-settle-lock", 6)
+	seedDistributorSubscription(t, subID, userID, planID, 6, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-post-settle-lock", "req-post-settle-lock", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	settleErr := PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 6, CompletionTokens: 1, TotalTokens: 7}, nil)
+	require.Error(t, settleErr)
+	apiErr := PostSettleErrorToOpenAIError(relayInfo, settleErr)
+	require.NotNil(t, apiErr)
+	relayInfo.Billing.Refund(ctx)
+	time.Sleep(20 * time.Millisecond)
+
+	assert.Equal(t, int64(6), getSubscriptionTokenUsed(t, subID))
 }

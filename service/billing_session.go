@@ -34,7 +34,7 @@ type BillingSession struct {
 	fundingSettled             bool // funding.Settle 已成功，资金来源已提交
 	settled                    bool // Settle 全部完成
 	refunded                   bool // Refund 已调用
-	mu                        sync.Mutex
+	mu                         sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -111,6 +111,15 @@ func (s *BillingSession) RealtimeSubscriptionTokens() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.realtimeSubscriptionTokens
+}
+
+func (s *BillingSession) CommitPreConsumedOnFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refunded {
+		return
+	}
+	s.settled = true
 }
 
 // Refund 退还所有预扣费，幂等安全，异步执行。

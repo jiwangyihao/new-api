@@ -71,7 +71,7 @@ func AudioHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		service.PostAudioConsumeQuota(c, info, usage.(*dto.Usage), "")
 	} else {
 		if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); err != nil {
-			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return service.PostSettleErrorToOpenAIError(info, err)
 		}
 	}
 

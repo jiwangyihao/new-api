@@ -195,7 +195,7 @@ func GeminiHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 	}
 
 	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil
 }
@@ -291,7 +291,7 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 	}
 
 	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil
 }

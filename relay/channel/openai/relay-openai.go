@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -451,7 +452,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						usage.OutputTokenDetails.TextTokens += realtimeUsage.OutputTokenDetails.TextTokens
 						err := preConsumeUsage(c, info, usage, sumUsage)
 						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
+							errChan <- err
 							return
 						}
 						// 本次计费完成，清除
@@ -472,7 +473,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						localUsage.InputTokenDetails.AudioTokens += audioToken
 						err = preConsumeUsage(c, info, localUsage, sumUsage)
 						if err != nil {
-							errChan <- fmt.Errorf("error consume usage: %v", err)
+							errChan <- err
 							return
 						}
 						// 本次计费完成，清除
@@ -544,6 +545,10 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 }
 
 func realtimeErrorFromErrChan(err error, sumUsage *dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {
+	var newAPIError *types.NewAPIError
+	if errors.As(err, &newAPIError) && newAPIError.GetErrorCode() == types.ErrorCodeSubscriptionTokenExhausted {
+		return types.NewOpenAIError(newAPIError, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry()), sumUsage
+	}
 	return types.NewError(err, types.ErrorCodeDoRequestFailed), sumUsage
 }
 

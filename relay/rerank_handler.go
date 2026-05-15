@@ -97,7 +97,7 @@ func RerankHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 		return newAPIError
 	}
 	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil
 }

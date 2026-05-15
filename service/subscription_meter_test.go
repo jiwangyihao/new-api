@@ -84,3 +84,19 @@ func TestSubscriptionMeteredTokens_GeminiCachedContentTokens(t *testing.T) {
 
 	assert.Equal(t, int64(150), SubscriptionMeteredTokens(usage))
 }
+
+func TestSubscriptionMeteredTokens_OpenAIAudioDetailsAreAdditional(t *testing.T) {
+	usage := &dto.Usage{
+		PromptTokens:     4,
+		CompletionTokens: 8,
+		TotalTokens:      12,
+		PromptTokensDetails: dto.InputTokenDetails{
+			AudioTokens: 3,
+		},
+		CompletionTokenDetails: dto.OutputTokenDetails{
+			AudioTokens: 5,
+		},
+	}
+
+	assert.Equal(t, int64(20), SubscriptionMeteredTokens(usage))
+}

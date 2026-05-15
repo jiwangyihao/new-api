@@ -148,7 +148,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		if err := service.PostTextConsumeQuota(c, info, usageDto, nil); err != nil {
 			info.OriginModelName = originModelName
 			info.PriceData = originPriceData
-			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return service.PostSettleErrorToOpenAIError(info, err)
 		}
 
 		info.OriginModelName = originModelName
@@ -160,7 +160,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
 		if err := service.PostTextConsumeQuota(c, info, usageDto, nil); err != nil {
-			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+			return service.PostSettleErrorToOpenAIError(info, err)
 		}
 	}
 	return nil

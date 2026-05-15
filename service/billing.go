@@ -45,6 +45,16 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	return SettleBillingWithInput(ctx, relayInfo, input)
 }
 
+func PostSettleErrorToOpenAIError(relayInfo *relaycommon.RelayInfo, err error) *types.NewAPIError {
+	if err == nil {
+		return nil
+	}
+	if relayInfo != nil && relayInfo.Billing != nil {
+		relayInfo.Billing.CommitPreConsumedOnFailure()
+	}
+	return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+}
+
 func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, input BillingSettleInput) error {
 	if input.SubscriptionTokens < 0 {
 		input.SubscriptionTokens = 0

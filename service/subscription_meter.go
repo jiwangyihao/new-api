@@ -7,10 +7,14 @@ func SubscriptionMeteredTokens(usage *dto.Usage) int64 {
 		return 0
 	}
 	if usage.TotalTokens > 0 && usage.UsageSemantic != "anthropic" {
-		return int64(usage.TotalTokens)
+		total := usage.TotalTokens
+		if usage.PromptTokensDetails.AudioTokens > 0 || usage.CompletionTokenDetails.AudioTokens > 0 {
+			total += usage.PromptTokensDetails.AudioTokens + usage.CompletionTokenDetails.AudioTokens
+		}
+		return int64(total)
 	}
 
-	total := usage.PromptTokens + usage.CompletionTokens
+	total := usage.PromptTokens + usage.CompletionTokens + usage.PromptTokensDetails.AudioTokens + usage.CompletionTokenDetails.AudioTokens
 	if usage.UsageSemantic == "anthropic" {
 		total += usage.PromptTokensDetails.CachedTokens
 		cacheCreation5m, cacheCreation1h := NormalizeCacheCreationSplit(

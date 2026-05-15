@@ -555,7 +555,32 @@ func TestPreWssConsumeQuotaUsesSubscriptionTokensOnly(t *testing.T) {
 
 	require.NoError(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 4, InputTokens: 2, OutputTokens: 2}))
 
-	assert.Equal(t, int64(4), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(5), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "realtime subscription billing must not consume token key quota")
+	assert.Equal(t, 10_000, getUserQuota(t, userID), "realtime subscription billing must not consume wallet quota")
+}
+
+func TestPreWssConsumeQuotaAccumulatesMultipleRealtimeChunks(t *testing.T) {
+	truncate(t)
+	const userID = 8027
+	const tokenID = 8028
+	const planID = 8029
+	const subID = 8030
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-realtime-multi", 10_000)
+	seedDistributorPlan(t, planID, "plan-realtime-multi", 100)
+	seedDistributorSubscription(t, subID, userID, planID, 100, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-realtime-multi", "req-realtime-multi", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatOpenAIRealtime
+	relayInfo.RelayMode = relayconstant.RelayModeRealtime
+	relayInfo.SetEstimatePromptTokens(1)
+	preConsumeForBillingTest(t, ctx, relayInfo, 1)
+
+	require.NoError(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 4}))
+	require.NoError(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 3}))
+
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "realtime subscription billing must not consume token key quota")
 	assert.Equal(t, 10_000, getUserQuota(t, userID), "realtime subscription billing must not consume wallet quota")
 }

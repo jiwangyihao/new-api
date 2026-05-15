@@ -98,7 +98,11 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if tokens <= 0 {
 		return nil
 	}
-	if err := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{SubscriptionTokens: int64(tokens)}); err != nil {
+	session, ok := relayInfo.Billing.(*BillingSession)
+	if !ok {
+		return errors.New("subscription billing session is missing for realtime billing")
+	}
+	if err := session.SettleSubscriptionIncrement(int64(tokens)); err != nil {
 		return err
 	}
 	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", tokens))

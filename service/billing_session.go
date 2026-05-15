@@ -83,6 +83,28 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 	s.settled = true
 	return nil
 }
+func (s *BillingSession) SettleSubscriptionIncrement(deltaTokens int64) error {
+	if deltaTokens == 0 {
+		return nil
+	}
+	if deltaTokens < 0 || deltaTokens > int64(^uint(0)>>1) {
+		return fmt.Errorf("subscription token delta out of int range: %d", deltaTokens)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refunded {
+		return nil
+	}
+	if s.funding.Source() != BillingSourceSubscription {
+		return fmt.Errorf("subscription billing source required")
+	}
+	if err := s.funding.Settle(int(deltaTokens)); err != nil {
+		return err
+	}
+	s.relayInfo.SubscriptionPostDelta += deltaTokens
+	s.fundingSettled = true
+	return nil
+}
 
 // Refund 退还所有预扣费，幂等安全，异步执行。
 func (s *BillingSession) Refund(c *gin.Context) {

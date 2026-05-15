@@ -132,7 +132,7 @@ func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedDistributor(t *te
 	assert.Equal(t, int64(10), record.PreConsumed)
 }
 
-func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedLegacy(t *testing.T) {
+func TestPreConsumeUserSubscriptionByUnitsRejectsLegacyAmountSubscriptions(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7471, Username: "mixed_legacy", Status: common.UserStatusEnabled, AffCode: "aff7471"}).Error)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
@@ -141,17 +141,15 @@ func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedLegacy(t *testing
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7474, Title: "Legacy", Enabled: true, TotalAmount: 1}).Error)
 	seedUserSubscriptionForDistributorTest(t, 7475, 7471, 7474, 0, 0, 1000, "order")
 
-	pre, err := PreConsumeUserSubscriptionByUnits("mixed-legacy-ok", 7471, "gpt-4o", 0, 100, 10)
-	require.NoError(t, err)
-	assert.False(t, pre.DistributorTokenBilling)
-	assert.Equal(t, int64(100), pre.PreConsumed)
+	_, err := PreConsumeUserSubscriptionByUnits("mixed-legacy-rejected", 7471, "gpt-4o", 0, 100, 10)
+	require.Error(t, err)
 
 	var distributor UserSubscription
 	require.NoError(t, DB.First(&distributor, 7473).Error)
 	assert.Equal(t, int64(0), distributor.TokenUsed)
 	var legacy UserSubscription
 	require.NoError(t, DB.First(&legacy, 7475).Error)
-	assert.Equal(t, int64(100), legacy.AmountUsed)
+	assert.Equal(t, int64(0), legacy.AmountUsed)
 }
 
 func TestSettleUserSubscription_UsesTokenUsedForDistributor(t *testing.T) {

@@ -1057,27 +1057,23 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	return tx.Save(sub).Error
 }
 
-// PreConsumeUserSubscription pre-consumes from any active subscription total quota.
+// PreConsumeUserSubscription pre-consumes from active subscription token quota.
 func PreConsumeUserSubscription(requestId string, userId int, modelName string, quotaType int, amount int64) (*SubscriptionPreConsumeResult, error) {
-	return PreConsumeUserSubscriptionByUnits(requestId, userId, modelName, quotaType, amount, amount)
+	return PreConsumeUserSubscriptionByUnits(requestId, userId, modelName, quotaType, 0, amount)
 }
 
-// PreConsumeUserSubscriptionByUnits pre-consumes from the selected active subscription using the unit that matches that subscription type.
+// PreConsumeUserSubscriptionByUnits pre-consumes from active subscription token quota.
+// legacyAmount is kept for compatibility with older callers, but API request billing no longer falls back to amount_total.
 func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName string, quotaType int, legacyAmount int64, distributorAmount int64) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
+	_ = legacyAmount
 	if strings.TrimSpace(requestId) == "" {
 		return nil, errors.New("requestId is empty")
 	}
-	if legacyAmount <= 0 && distributorAmount <= 0 {
+	if distributorAmount <= 0 {
 		return nil, errors.New("amount must be > 0")
-	}
-	if distributorAmount <= 0 && legacyAmount > 0 {
-		distributorAmount = legacyAmount
-	}
-	if legacyAmount <= 0 && distributorAmount > 0 {
-		legacyAmount = distributorAmount
 	}
 	now := GetDBTimestamp()
 
@@ -1123,28 +1119,18 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			amountUsedBefore := sub.AmountUsed
 			tokenUsedBefore := sub.TokenUsed
 			distributor := isDistributorSubscription(&sub, plan)
-			if distributor {
-				if sub.TokenLimit > 0 {
-					remain := sub.TokenLimit - tokenUsedBefore
-					if remain < distributorAmount {
-						continue
-					}
-				} else if !isUnlimitedTrialSubscription(&sub) {
-					continue
-				}
-			} else if sub.AmountTotal > 0 {
-				remain := sub.AmountTotal - amountUsedBefore
-				if remain < legacyAmount {
-					continue
-				}
-			}
-			consumeAmount := legacyAmount
-			if distributor {
-				consumeAmount = distributorAmount
-			}
-			if consumeAmount <= 0 {
+			if !distributor {
 				continue
 			}
+			if sub.TokenLimit > 0 {
+				remain := sub.TokenLimit - tokenUsedBefore
+				if remain < distributorAmount {
+					continue
+				}
+			} else if !isUnlimitedTrialSubscription(&sub) {
+				continue
+			}
+			consumeAmount := distributorAmount
 			record := &SubscriptionPreConsumeRecord{
 				RequestId:          requestId,
 				UserId:             userId,
@@ -1163,18 +1149,14 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 				}
 				return err
 			}
-			if distributor {
-				sub.TokenUsed += consumeAmount
-			} else {
-				sub.AmountUsed += consumeAmount
-			}
+			sub.TokenUsed += consumeAmount
 			if err := tx.Save(&sub).Error; err != nil {
 				return err
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 			return nil
 		}
-		return fmt.Errorf("subscription quota insufficient, need=%d", legacyAmount)
+		return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
 	})
 	if err != nil {
 		return nil, err

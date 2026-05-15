@@ -113,3 +113,27 @@ func TestSubscriptionBillingDoesNotConsumeTokenKeyQuota(t *testing.T) {
 	assert.Equal(t, 0, token.UsedQuota)
 	assert.Equal(t, int64(20), getSubscriptionTokenUsed(t, subID))
 }
+
+func TestPostConsumeQuotaSubscriptionDoesNotConsumeTokenKeyQuota(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9321
+	const tokenID = 9322
+	const planID = 9323
+	const subID = 9324
+	planCode := "sub-post-basic"
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "sub_post", Quota: 0, Status: common.UserStatusEnabled, AffCode: "aff9321"}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-sub-post", Status: common.TokenStatusEnabled, RemainQuota: 0}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Basic", Enabled: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &planCode}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, TokenLimit: 1000, TokenUsed: 0, ConcurrencyLimit: 1, Status: "active", StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix(), GrantReason: "order"}).Error)
+	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, "sk-sub-post", "wallet_only")
+	relayInfo.BillingSource = BillingSourceSubscription
+	relayInfo.SubscriptionId = subID
+
+	require.NoError(t, PostConsumeQuota(relayInfo, 7, 0, false))
+
+	var token model.Token
+	require.NoError(t, model.DB.First(&token, tokenID).Error)
+	assert.Equal(t, 0, token.RemainQuota)
+	assert.Equal(t, 0, token.UsedQuota)
+	assert.Equal(t, int64(7), getSubscriptionTokenUsed(t, subID))
+}

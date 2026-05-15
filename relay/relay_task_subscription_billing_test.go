@@ -116,6 +116,9 @@ func TestRelayTaskSubmitFreeModelWithSubscriptionDoesNotReachUnsupportedUpstream
 	assert.Empty(t, info.BillingSource)
 	assert.Nil(t, info.Billing)
 	assert.Equal(t, int64(0), getMidjourneySubscriptionTokenUsed(t, subID))
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Select("token_used").Where("id = ?", subID).First(&sub).Error)
+	assert.Equal(t, int64(0), sub.TokenUsed)
 }
 
 func getMidjourneySubscriptionTokenUsed(t *testing.T, id int) int64 {

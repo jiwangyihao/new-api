@@ -89,6 +89,16 @@ export function formatConcurrencyLimit(
   return t('{{count}} concurrent requests', { count: limit })
 }
 
+export function formatPlanPrice(
+  amount: number | null | undefined,
+  currency: string | null | undefined = 'CNY'
+): string {
+  const value = Number(amount || 0)
+  const code = (currency || 'CNY').trim().toUpperCase()
+  const symbol = code === 'CNY' ? '¥' : code === 'USD' ? '$' : `${code} `
+  return `${symbol}${value.toFixed(2)}`
+}
+
 function formatCompactNumber(value: number): string {
   if (Number.isInteger(value)) return String(value)
   return value.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')

@@ -24,6 +24,7 @@ import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import {
   formatConcurrencyLimit,
+  formatPlanPrice,
   formatDuration,
   formatResetPeriod,
   formatTokenLimit,
@@ -79,7 +80,10 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         ),
         cell: ({ row }) => (
           <span className='font-semibold text-emerald-600'>
-            ${Number(row.original.plan.price_amount || 0).toFixed(2)}
+            {formatPlanPrice(
+              row.original.plan.price_amount,
+              row.original.plan.currency
+            )}
           </span>
         ),
         size: 100,

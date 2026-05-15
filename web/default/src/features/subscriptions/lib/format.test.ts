@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { formatConcurrencyLimit, formatTokenLimit } from './format'
+import { formatConcurrencyLimit, formatPlanPrice, formatTokenLimit } from './format'
 
 const t = (key: string, values?: Record<string, unknown>) =>
   key.replace(/{{(\w+)}}/g, (_match, name: string) => String(values?.[name] ?? ''))
@@ -18,5 +18,12 @@ describe('subscription distributor format helpers', () => {
   test('formats concurrency limit with unlimited fallback', () => {
     assert.equal(formatConcurrencyLimit(0, t), 'Unlimited concurrency')
     assert.equal(formatConcurrencyLimit(5, t), '5 concurrent requests')
+  })
+
+  test('formats plan prices by plan currency', () => {
+    assert.equal(formatPlanPrice(40, 'CNY'), '¥40.00')
+    assert.equal(formatPlanPrice(40, 'USD'), '$40.00')
+    assert.equal(formatPlanPrice(40, 'EUR'), 'EUR 40.00')
+    assert.equal(formatPlanPrice(40, ''), '¥40.00')
   })
 })

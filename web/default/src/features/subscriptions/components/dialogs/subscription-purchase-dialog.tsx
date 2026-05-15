@@ -45,6 +45,7 @@ import {
 } from '../../api'
 import {
   formatConcurrencyLimit,
+  formatPlanPrice,
   formatDuration,
   formatTokenLimit,
 } from '../../lib'
@@ -93,7 +94,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
       ?.name ||
     selectedEpayMethod ||
     t('Select payment method')
-  const price = Number(plan.price_amount || 0).toFixed(2)
+  const price = formatPlanPrice(plan.price_amount, plan.currency)
   const limitReached =
     (props.purchaseLimit || 0) > 0 &&
     (props.purchaseCount || 0) >= (props.purchaseLimit || 0)
@@ -247,7 +248,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
             <Separator />
             <div className='flex items-center justify-between'>
               <span className='text-sm font-medium'>{t('Amount Due')}</span>
-              <span className='text-primary text-lg font-bold'>${price}</span>
+              <span className='text-primary text-lg font-bold'>{price}</span>
             </div>
           </div>
 

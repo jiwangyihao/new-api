@@ -65,6 +65,7 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(payload.plan.trial_duration_hours, 0)
     assert.equal(payload.plan.reward_eligible, true)
     assert.equal(payload.plan.business_code, 'basic_monthly')
+    assert.equal(payload.plan.currency, 'CNY')
   })
 
   test('omits blank business code instead of sending an empty unique value', () => {

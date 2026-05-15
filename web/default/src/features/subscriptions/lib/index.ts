@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export {
   formatConcurrencyLimit,
+  formatPlanPrice,
   formatDuration,
   formatResetPeriod,
   formatTimestamp,

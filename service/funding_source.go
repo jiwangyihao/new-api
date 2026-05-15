@@ -23,7 +23,8 @@ type FundingSource interface {
 }
 
 // ---------------------------------------------------------------------------
-// WalletFunding — 钱包资金来源实现
+// WalletFunding — 钱包资金来源实现。
+// 保留给余额/旧兼容路径；relay 请求计费由 NewBillingSession 强制使用 SubscriptionFunding。
 // ---------------------------------------------------------------------------
 
 type WalletFunding struct {

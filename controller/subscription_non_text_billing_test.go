@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRelayTaskDoesNotPreConsumeDistributorSubscription(t *testing.T) {
+func TestRelayTaskDistributorDoesNotFallbackToWallet(t *testing.T) {
 	originalDB := model.DB
 	db := setupModelListControllerTestDB(t)
 	model.DB = db
@@ -70,9 +70,14 @@ func TestRelayTaskDoesNotPreConsumeDistributorSubscription(t *testing.T) {
 	relayInfo.SetEstimatePromptTokens(6)
 
 	apiErr := service.PreConsumeBilling(ctx, 100, relayInfo)
-	require.Nil(t, apiErr)
-	assert.Equal(t, service.BillingSourceWallet, relayInfo.BillingSource)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "不支持分销订阅扣费")
+	assert.Empty(t, relayInfo.BillingSource)
 	assert.Zero(t, relayInfo.SubscriptionId)
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, 10_000, getControllerTestUserQuota(t, userID))
+	assert.Equal(t, 10_000, getControllerTestTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), getControllerTestSubscriptionTokenUsed(t, subID))
 
 	task := model.InitTask(constant.TaskPlatform("video"), relayInfo)
 	task.PrivateData.BillingSource = relayInfo.BillingSource
@@ -81,7 +86,7 @@ func TestRelayTaskDoesNotPreConsumeDistributorSubscription(t *testing.T) {
 	assert.Zero(t, task.PrivateData.SubscriptionId)
 }
 
-func TestRelayTaskDistributorFallbackRestoresTokenBeforeWallet(t *testing.T) {
+func TestRelayTaskDistributorDoesNotChargeWalletOrTokenKey(t *testing.T) {
 	originalDB := model.DB
 	db := setupModelListControllerTestDB(t)
 	model.DB = db
@@ -106,10 +111,37 @@ func TestRelayTaskDistributorFallbackRestoresTokenBeforeWallet(t *testing.T) {
 	relayInfo.SetEstimatePromptTokens(6)
 
 	apiErr := service.PreConsumeBilling(ctx, seedQuota, relayInfo)
-	require.Nil(t, apiErr)
-	assert.Equal(t, service.BillingSourceWallet, relayInfo.BillingSource)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "不支持分销订阅扣费")
+	assert.Empty(t, relayInfo.BillingSource)
+	assert.Zero(t, relayInfo.SubscriptionId)
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, seedQuota, getControllerTestUserQuota(t, userID))
+
 	var token model.Token
 	require.NoError(t, model.DB.First(&token, tokenID).Error)
-	assert.Equal(t, 0, token.RemainQuota)
-	assert.Equal(t, seedQuota, token.UsedQuota)
+	assert.Equal(t, seedQuota, token.RemainQuota)
+	assert.Zero(t, token.UsedQuota)
+	assert.Equal(t, int64(0), getControllerTestSubscriptionTokenUsed(t, subID))
+}
+
+func getControllerTestUserQuota(t *testing.T, id int) int {
+	t.Helper()
+	var user model.User
+	require.NoError(t, model.DB.Select("quota").Where("id = ?", id).First(&user).Error)
+	return user.Quota
+}
+
+func getControllerTestTokenRemainQuota(t *testing.T, id int) int {
+	t.Helper()
+	var token model.Token
+	require.NoError(t, model.DB.Select("remain_quota").Where("id = ?", id).First(&token).Error)
+	return token.RemainQuota
+}
+
+func getControllerTestSubscriptionTokenUsed(t *testing.T, id int) int64 {
+	t.Helper()
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Select("token_used").Where("id = ?", id).First(&sub).Error)
+	return sub.TokenUsed
 }

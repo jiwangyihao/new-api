@@ -117,7 +117,7 @@ func newBillingTestRelayInfo(userId, tokenId int, tokenKey string, requestId str
 			},
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{},
-		RelayMode:     relayconstant.RelayModeChatCompletions,
+		RelayMode:   relayconstant.RelayModeChatCompletions,
 	}
 	return info
 }
@@ -152,8 +152,8 @@ func assertSubscriptionBillingSettle(t *testing.T, name string, usage *dto.Usage
 
 	assert.Equal(t, wantTokens, getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getUserQuota(t, userID), "subscription billing must not deduct wallet quota")
-	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota must use wallet quota")
-	assert.Equal(t, 999, getTokenUsedQuota(t, tokenID), "token key used quota must use wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not deduct token key quota")
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID), "subscription billing must not update token key used quota")
 	assert.Equal(t, int64(1_000), relayInfo.SubscriptionAmountTotal, "compat field must expose token limit for distributor subscription")
 	assert.Equal(t, wantTokens, relayInfo.SubscriptionAmountUsedAfterPreConsume+relayInfo.SubscriptionPostDelta, "compat field must expose token used for distributor subscription")
 	assert.Equal(t, wantTokens, relayInfo.SubscriptionPreConsumed+relayInfo.SubscriptionPostDelta, "subscription consumed compatibility field must use token units")
@@ -176,7 +176,7 @@ func TestSubscriptionBillingPreConsumesEstimatedTokens(t *testing.T) {
 	preConsumeForBillingTest(t, ctx, relayInfo, 1000)
 
 	assert.Equal(t, int64(10), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000-1000, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
 }
 
 func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *testing.T) {
@@ -219,7 +219,7 @@ func TestSettleBillingWrapperDoesNotSynthesizeSubscriptionTokens(t *testing.T) {
 	require.NoError(t, SettleBilling(ctx, relayInfo, 999))
 
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID), "legacy/non-text settlement wrapper must not synthesize distributor token usage from wallet quota")
-	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not settle token key quota")
 	assert.Equal(t, int64(-10), relayInfo.SubscriptionPostDelta)
 }
 
@@ -239,7 +239,7 @@ func TestSettleBillingWrapperPreservesLegacySubscriptionQuota(t *testing.T) {
 	require.NoError(t, SettleBilling(ctx, relayInfo, 999))
 
 	assert.Equal(t, int64(999), getSubscriptionUsed(t, subID), "legacy wrapper settlement must continue using quota amount")
-	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID), "token key quota still settles wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not settle token key quota")
 	assert.Equal(t, int64(989), relayInfo.SubscriptionPostDelta)
 }
 
@@ -285,7 +285,7 @@ func TestPostTextConsumeQuotaPreservesLegacySubscriptionQuota(t *testing.T) {
 	PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 10, TotalTokens: 10}, nil)
 
 	assert.Equal(t, int64(20), getSubscriptionUsed(t, subID))
-	assert.Equal(t, 10_000-20, getTokenRemainQuota(t, tokenID), "token key quota still uses wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not update token key quota")
 }
 
 func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
@@ -399,7 +399,7 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 	PostTextConsumeQuota(ctx, relayInfo, nil, nil)
 
 	assert.Equal(t, int64(6), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000-6, getTokenRemainQuota(t, tokenID), "token key quota must use estimated wallet quota from summary")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not use token key quota")
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	other, err := common.StrToMap(log.Other)
@@ -509,7 +509,7 @@ func TestPostAudioConsumeQuotaRejectsExhaustedDistributorSubscriptionFirstWithou
 	assert.Equal(t, int64(5), getSubscriptionTokenUsed(t, subID))
 }
 
-func TestWalletBillingStillUsesQuota(t *testing.T) {
+func TestWalletOnlyPreferenceRequiresSubscriptionForRequestBilling(t *testing.T) {
 	truncate(t)
 	const userID = 8021
 	const tokenID = 8022
@@ -518,20 +518,17 @@ func TestWalletBillingStillUsesQuota(t *testing.T) {
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-wallet", "req-wallet", "wallet_only")
-	preConsumeForBillingTest(t, ctx, relayInfo, 6)
-
-	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{
-		WalletQuota:        999,
-		SubscriptionTokens: 8,
-		UsageEstimated:     false,
-	}))
-
-	assert.Equal(t, 10_000-999, getUserQuota(t, userID))
-	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID))
-	assert.Equal(t, 999, getTokenUsedQuota(t, tokenID))
+	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
+	require.NotNil(t, apiErr)
+	assert.Contains(t, apiErr.Error(), "active subscription is required")
+	assert.Empty(t, relayInfo.BillingSource)
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
 }
 
-func TestTokenKeyQuotaStillUsesQuotaWhenSubscriptionUsesTokens(t *testing.T) {
+func TestTokenKeyQuotaDoesNotChangeWhenSubscriptionUsesTokens(t *testing.T) {
 	truncate(t)
 	const userID = 8031
 	const tokenID = 8032
@@ -553,6 +550,6 @@ func TestTokenKeyQuotaStillUsesQuotaWhenSubscriptionUsesTokens(t *testing.T) {
 	}))
 
 	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000-999, getTokenRemainQuota(t, tokenID))
-	assert.Equal(t, 999, getTokenUsedQuota(t, tokenID))
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
 }

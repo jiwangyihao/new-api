@@ -46,6 +46,7 @@ const oauthSchema = z.object({
   GitHubOAuthEnabled: z.boolean(),
   GitHubClientId: z.string().optional(),
   GitHubClientSecret: z.string().optional(),
+  GitHubOnlySignupEnabled: z.boolean(),
   'discord.enabled': z.boolean(),
   'discord.client_id': z.string().optional(),
   'discord.client_secret': z.string().optional(),
@@ -85,6 +86,7 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
     ...defaultValues,
     GitHubClientId: defaultValues.GitHubClientId ?? '',
     GitHubClientSecret: defaultValues.GitHubClientSecret ?? '',
+    GitHubOnlySignupEnabled: defaultValues.GitHubOnlySignupEnabled ?? false,
     'discord.client_id': defaultValues['discord.client_id'] ?? '',
     'discord.client_secret': defaultValues['discord.client_secret'] ?? '',
     'oidc.client_id': defaultValues['oidc.client_id'] ?? '',
@@ -280,6 +282,31 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
                         </FormLabel>
                         <FormDescription>
                           {t('Allow users to sign in with GitHub')}
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='GitHubOnlySignupEnabled'
+                  render={({ field }) => (
+                    <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
+                      <div className='space-y-0.5'>
+                        <FormLabel className='text-base'>
+                          {t('GitHub-only signup')}
+                        </FormLabel>
+                        <FormDescription>
+                          {t(
+                            'Only allow new accounts to be created through GitHub OAuth. Password login remains available.'
+                          )}
                         </FormDescription>
                       </div>
                       <FormControl>

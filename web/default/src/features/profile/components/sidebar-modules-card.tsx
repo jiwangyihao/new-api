@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -52,6 +53,9 @@ export function SidebarModulesCard() {
   const [config, setConfig] = useState<SidebarModulesConfig>({})
   const currentUser = useAuthStore((s) => s.auth.user)
   const setUser = useAuthStore((s) => s.auth.setUser)
+  const canSeeAdminModules =
+    Boolean(currentUser?.role && currentUser.role >= ROLE.ADMIN) &&
+    currentUser?.permissions?.sidebar_modules?.admin !== false
 
   const sectionDefs: SectionDef[] = [
     {
@@ -120,7 +124,51 @@ export function SidebarModulesCard() {
         },
       ],
     },
-  ]
+    {
+      key: 'admin',
+      title: t('Admin'),
+      description: t('Manage and configure'),
+      modules: [
+        {
+          key: 'channel',
+          title: t('Channels'),
+          description: t('Manage API channels and provider configurations'),
+        },
+        {
+          key: 'models',
+          title: t('Models'),
+          description: t('Manage model metadata and configuration'),
+        },
+        {
+          key: 'redemption',
+          title: t('Redemption Codes'),
+          description: t('Manage redemption codes for quota top-up'),
+        },
+        {
+          key: 'trial_code',
+          title: t('Trial Codes'),
+          description: t(
+            'Manage manual trial codes for registration and OAuth account setup'
+          ),
+        },
+        {
+          key: 'subscription',
+          title: t('Subscription Plans'),
+          description: t('Manage subscription plan creation, pricing and status'),
+        },
+        {
+          key: 'user',
+          title: t('Users'),
+          description: t('Manage users and their permissions'),
+        },
+        {
+          key: 'setting',
+          title: t('System Settings'),
+          description: t('System settings'),
+        },
+      ],
+    },
+  ].filter((section) => section.key !== 'admin' || canSeeAdminModules)
 
   const loadConfig = useCallback(async () => {
     try {

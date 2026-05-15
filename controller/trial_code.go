@@ -21,6 +21,14 @@ func AdminListTrialCodes(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	var total int64
 	query := model.DB.Model(&model.TrialCode{})
+	filter := strings.TrimSpace(c.Query("filter"))
+	if filter != "" {
+		like := "%" + filter + "%"
+		query = query.Where("code LIKE ?", like)
+		if id, err := strconv.Atoi(filter); err == nil {
+			query = model.DB.Model(&model.TrialCode{}).Where("code LIKE ? OR id = ? OR plan_id = ?", like, id, id)
+		}
+	}
 	if err := query.Count(&total).Error; err != nil {
 		common.ApiError(c, err)
 		return

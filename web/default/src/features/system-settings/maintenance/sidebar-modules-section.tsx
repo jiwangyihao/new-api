@@ -132,6 +132,10 @@ export function SidebarModulesSection({
         title: t('Redeem codes'),
         description: t('Create and review invite or credit codes.'),
       },
+      trial_code: {
+        title: t('Trial Codes'),
+        description: t('Manage manual trial codes for new account trials.'),
+      },
       user: {
         title: t('Users'),
         description: t('Administer user accounts and roles.'),

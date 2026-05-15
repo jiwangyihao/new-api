@@ -25,6 +25,7 @@ import {
   Box,
   Users,
   Ticket,
+  Gift,
   User,
   Command,
   Radio,
@@ -139,6 +140,11 @@ export function useSidebarData(): SidebarData {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,
+          },
+          {
+            title: t('Trial Codes'),
+            url: '/trial-codes',
+            icon: Gift,
           },
           {
             title: t('Subscription Management'),

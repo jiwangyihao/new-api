@@ -35,6 +35,7 @@ type OAuthProvidersProps = {
   className?: string
   onWeChatLogin?: () => void
   isWeChatLoading?: boolean
+  signupOnlyProvider?: 'github'
 }
 
 type ProviderButton = {
@@ -51,6 +52,7 @@ export function OAuthProviders({
   className,
   onWeChatLogin,
   isWeChatLoading = false,
+  signupOnlyProvider,
 }: OAuthProvidersProps) {
   const { t } = useTranslation()
   const {
@@ -67,7 +69,7 @@ export function OAuthProviders({
 
   const providerButtons: ProviderButton[] = []
 
-  if (status?.wechat_login && onWeChatLogin) {
+  if (!signupOnlyProvider && status?.wechat_login && onWeChatLogin) {
     providerButtons.push({
       key: 'wechat',
       label: t('Continue with WeChat'),
@@ -87,7 +89,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.discord_oauth) {
+  if (!signupOnlyProvider && status?.discord_oauth) {
     providerButtons.push({
       key: 'discord',
       label: t('Continue with Discord'),
@@ -96,7 +98,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.oidc_enabled) {
+  if (!signupOnlyProvider && status?.oidc_enabled) {
     providerButtons.push({
       key: 'oidc',
       label: t('Continue with OIDC'),
@@ -104,7 +106,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.linuxdo_oauth) {
+  if (!signupOnlyProvider && status?.linuxdo_oauth) {
     providerButtons.push({
       key: 'linuxdo',
       label: t('Continue with LinuxDO'),
@@ -113,7 +115,7 @@ export function OAuthProviders({
     })
   }
 
-  if (status?.telegram_oauth) {
+  if (!signupOnlyProvider && status?.telegram_oauth) {
     providerButtons.push({
       key: 'telegram',
       label: t('Continue with Telegram'),
@@ -122,7 +124,9 @@ export function OAuthProviders({
   }
 
   // Custom OAuth providers
-  const customProviders = status?.custom_oauth_providers
+  const customProviders = signupOnlyProvider
+    ? []
+    : status?.custom_oauth_providers
   if (customProviders && customProviders.length > 0) {
     for (const provider of customProviders) {
       providerButtons.push({

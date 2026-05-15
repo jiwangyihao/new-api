@@ -103,9 +103,15 @@ export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
 // Registration
 // ----------------------------------------------------------------------------
 
+export function buildRegisterRequestBody(payload: RegisterPayload) {
+  const { turnstile: _ignoredTurnstile, ...body } = payload
+  return body
+}
+
 // User registration
 export async function register(payload: RegisterPayload): Promise<ApiResponse> {
-  const res = await api.post(`/api/user/register`, payload, {
+  const body = buildRegisterRequestBody(payload)
+  const res = await api.post('/api/user/register', body, {
     params: { turnstile: payload.turnstile ?? '' },
   })
   return res.data

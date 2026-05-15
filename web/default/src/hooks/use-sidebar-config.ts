@@ -20,17 +20,18 @@ import { useMemo } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
 import { useStatus } from '@/hooks/use-status'
 import type { NavGroup, NavItem } from '@/components/layout/types'
+import { ROLE } from '@/lib/roles'
 
-type SidebarSectionConfig = {
+export type SidebarSectionConfig = {
   enabled: boolean
   [key: string]: boolean
 }
 
-type SidebarModulesAdminConfig = Record<string, SidebarSectionConfig>
+export type SidebarModulesAdminConfig = Record<string, SidebarSectionConfig>
 
 // User-layer config is shape-identical to admin, but may be null
 // to signal "no narrowing" (empty/invalid/legacy users).
-type SidebarModulesUserConfig = SidebarModulesAdminConfig | null
+export type SidebarModulesUserConfig = SidebarModulesAdminConfig | null
 
 /**
  * Default sidebar modules configuration
@@ -59,13 +60,14 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     channel: true,
     models: true,
     redemption: true,
+    trial_code: true,
     user: true,
     setting: true,
     subscription: true,
   },
 }
 
-const mergeWithDefaultSidebarModules = (
+export const mergeWithDefaultSidebarModules = (
   config: SidebarModulesAdminConfig
 ): SidebarModulesAdminConfig => {
   const merged: SidebarModulesAdminConfig = { ...config }
@@ -112,6 +114,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/models/deployments': { section: 'admin', module: 'models' },
   '/users': { section: 'admin', module: 'user' },
   '/redemption-codes': { section: 'admin', module: 'redemption' },
+  '/trial-codes': { section: 'admin', module: 'trial_code' },
   '/subscriptions': { section: 'admin', module: 'subscription' },
   '/system-settings': { section: 'admin', module: 'setting' },
   '/system-settings/site': { section: 'admin', module: 'setting' },
@@ -152,7 +155,7 @@ function parseUserSidebarConfig(
   try {
     const parsed = JSON.parse(value) as SidebarModulesAdminConfig
     if (!parsed || typeof parsed !== 'object') return null
-    return parsed
+    return mergeWithDefaultSidebarModules(parsed)
   } catch {
     return null
   }
@@ -255,6 +258,36 @@ function filterNavItems(
     .filter((item) => isNavItemVisible(item, adminConfig, userConfig))
 }
 
+export function filterSidebarNavGroupsForConfig(
+  navGroups: NavGroup[],
+  adminConfig: SidebarModulesAdminConfig,
+  userConfig: SidebarModulesUserConfig
+): NavGroup[] {
+  return navGroups
+    .map((group) => ({
+      ...group,
+      items: filterNavItems(group.items, adminConfig, userConfig),
+    }))
+    .filter((group) => group.items.length > 0)
+}
+
+export function getDefaultSidebarModulesForTest(): SidebarModulesAdminConfig {
+  return mergeWithDefaultSidebarModules({})
+}
+
+export function filterNavGroupsByRole(
+  navGroups: NavGroup[],
+  userRole: number | undefined
+): NavGroup[] {
+  const isAdmin = Boolean(userRole && userRole >= ROLE.ADMIN)
+  return navGroups.filter((group) => {
+    if (group.id === 'admin') {
+      return isAdmin
+    }
+    return true
+  })
+}
+
 /**
  * Filter sidebar navigation groups by admin × user sidebar_modules config.
  *
@@ -296,13 +329,7 @@ export function useSidebarConfig(navGroups: NavGroup[]): NavGroup[] {
   }, [auth?.user?.permissions?.sidebar_settings, auth?.user?.sidebar_modules])
 
   const filteredNavGroups = useMemo(
-    () =>
-      navGroups
-        .map((group) => ({
-          ...group,
-          items: filterNavItems(group.items, adminConfig, userConfig),
-        }))
-        .filter((group) => group.items.length > 0), // Only show navigation groups with visible items
+    () => filterSidebarNavGroupsForConfig(navGroups, adminConfig, userConfig),
     [navGroups, adminConfig, userConfig]
   )
 

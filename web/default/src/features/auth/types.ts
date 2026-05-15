@@ -38,6 +38,7 @@ export interface RegisterPayload {
   email?: string
   verification_code?: string
   aff?: string
+  trial_code?: string
   turnstile?: string
 }
 
@@ -94,6 +95,7 @@ export interface SystemStatus {
     logo?: string
     github_oauth?: boolean
     github_client_id?: string
+    github_only_signup_enabled?: boolean
     discord_oauth?: boolean
     discord_client_id?: string
     oidc_enabled?: boolean
@@ -136,6 +138,7 @@ export interface SystemStatus {
   logo?: string
   github_oauth?: boolean
   github_client_id?: string
+  github_only_signup_enabled?: boolean
   discord_oauth?: boolean
   discord_client_id?: string
   oidc_enabled?: boolean

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   buildOAuthOnboardingUrl,
+  handleOAuthOnboardingRequired,
   isOAuthOnboardingRequiredResponse,
   type OAuthOnboardingRequiredResponse,
 } from './oauth-onboarding'
@@ -38,5 +39,36 @@ describe('OAuth onboarding response helpers', () => {
       buildOAuthOnboardingUrl('pending token', '/dashboard?tab=keys'),
       '/oauth-onboarding?pending_token=pending+token&redirect=%2Fdashboard%3Ftab%3Dkeys'
     )
+  })
+
+  test('dispatches onboarding_required responses to onboarding page', () => {
+    const visited: string[] = []
+
+    const handled = handleOAuthOnboardingRequired(
+      {
+        success: true,
+        message: 'oauth_onboarding_required',
+        data: { pending_token: 'pending token' },
+      },
+      (target) => visited.push(target),
+      '/dashboard'
+    )
+
+    assert.equal(handled, true)
+    assert.deepEqual(visited, [
+      '/oauth-onboarding?pending_token=pending+token&redirect=%2Fdashboard',
+    ])
+  })
+
+  test('does not navigate for non-onboarding responses', () => {
+    const visited: string[] = []
+
+    const handled = handleOAuthOnboardingRequired(
+      { success: true, data: { id: 1 } },
+      (target) => visited.push(target)
+    )
+
+    assert.equal(handled, false)
+    assert.deepEqual(visited, [])
   })
 })

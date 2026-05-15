@@ -77,6 +77,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     channel: true,
     models: true,
     redemption: true,
+    trial_code: true,
     user: true,
     setting: true,
     subscription: true,

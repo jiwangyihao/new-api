@@ -51,3 +51,17 @@ export function buildOAuthOnboardingUrl(
   if (redirect) params.set('redirect', redirect)
   return `/oauth-onboarding?${params.toString()}`
 }
+
+export type OAuthOnboardingNavigate = (target: string) => void
+
+export function handleOAuthOnboardingRequired(
+  response: unknown,
+  navigate: OAuthOnboardingNavigate,
+  redirect?: string
+): boolean {
+  if (!isOAuthOnboardingRequiredResponse(response)) return false
+  const pendingToken = response.data?.pending_token
+  if (!pendingToken) return false
+  navigate(buildOAuthOnboardingUrl(pendingToken, redirect))
+  return true
+}

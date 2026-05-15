@@ -103,7 +103,7 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		return errors.New("subscription billing session is missing for realtime billing")
 	}
 	if err := session.SettleSubscriptionIncrement(int64(tokens)); err != nil {
-		return err
+		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", tokens))
 	return nil

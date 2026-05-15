@@ -53,7 +53,11 @@ func TestRealtimeRefundReturnsInitialPreconsumeAfterChunkSettlementFailure(t *te
 	preConsumeForBillingTest(t, ctx, relayInfo, 1)
 
 	require.NoError(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 3}))
-	require.Error(t, PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 2}))
+	err := PreWssConsumeQuota(ctx, relayInfo, &dto.RealtimeUsage{TotalTokens: 2})
+	require.Error(t, err)
+	var apiErr *types.NewAPIError
+	require.ErrorAs(t, err, &apiErr)
+	assert.Equal(t, types.ErrorCodeSubscriptionTokenExhausted, apiErr.GetErrorCode())
 	relayInfo.Billing.Refund(ctx)
 	require.Eventually(t, func() bool {
 		var sub model.UserSubscription

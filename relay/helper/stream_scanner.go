@@ -40,8 +40,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
-	// 无条件新建 StreamStatus
-	info.StreamStatus = relaycommon.NewStreamStatus()
+	// 无条件保证 StreamStatus 存在；保留调用方提前记录的状态。
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
 
 	// 确保响应体总是被关闭
 	defer func() {
@@ -51,6 +53,12 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	}()
 
 	streamingTimeout := time.Duration(constant.StreamingTimeout) * time.Second
+	if streamingTimeout <= 0 {
+		streamingTimeout = time.Duration(common.RelayTimeout) * time.Second
+		if streamingTimeout <= 0 {
+			streamingTimeout = DefaultPingInterval
+		}
+	}
 
 	var (
 		stopChan   = make(chan bool, 3) // 增加缓冲区避免阻塞

@@ -66,19 +66,25 @@ func TestMain(m *testing.M) {
 func truncate(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		model.DB.Exec("DELETE FROM tasks")
-		model.DB.Exec("DELETE FROM users")
-		model.DB.Exec("DELETE FROM tokens")
-		model.DB.Exec("DELETE FROM logs")
-		model.DB.Exec("DELETE FROM channels")
-		model.DB.Exec("DELETE FROM top_ups")
-		model.DB.Exec("DELETE FROM subscription_orders")
-		model.DB.Exec("DELETE FROM user_subscriptions")
-		model.DB.Exec("DELETE FROM subscription_plans")
-		model.DB.Exec("DELETE FROM trial_codes")
-		model.DB.Exec("DELETE FROM trial_redemptions")
-		model.DB.Exec("DELETE FROM oauth_provider_locks")
-		model.DB.Exec("DELETE FROM invitation_monthly_entitlements")
+		for _, tableName := range []string{
+			"tasks",
+			"users",
+			"tokens",
+			"logs",
+			"channels",
+			"top_ups",
+			"subscription_orders",
+			"user_subscriptions",
+			"subscription_plans",
+			"trial_codes",
+			"trial_redemptions",
+			"oauth_provider_locks",
+			"invitation_monthly_entitlements",
+		} {
+			if model.DB.Migrator().HasTable(tableName) {
+				model.DB.Exec("DELETE FROM " + tableName)
+			}
+		}
 	})
 }
 

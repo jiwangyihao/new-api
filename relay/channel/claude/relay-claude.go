@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -392,8 +393,20 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 						}
 						if strings.HasPrefix(mimeType, "application/pdf") {
 							claudeMediaMessage.Type = "document"
-						} else {
+						} else if strings.HasPrefix(mimeType, "text/") {
+							decoded, decodeErr := base64.StdEncoding.DecodeString(base64Data)
+							if decodeErr != nil {
+								continue
+							}
+							claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+								Type: "text",
+								Text: common.GetPointer[string](string(decoded)),
+							})
+							continue
+						} else if strings.HasPrefix(mimeType, "image/") {
 							claudeMediaMessage.Type = "image"
+						} else {
+							continue
 						}
 
 						claudeMediaMessage.Source.MediaType = mimeType
@@ -417,6 +430,12 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 							Input: inputObj,
 						})
 					}
+				}
+				if len(claudeMediaMessages) == 0 {
+					claudeMediaMessages = append(claudeMediaMessages, dto.ClaudeMediaMessage{
+						Type: "text",
+						Text: common.GetPointer[string]("..."),
+					})
 				}
 				claudeMessage.Content = claudeMediaMessages
 			}

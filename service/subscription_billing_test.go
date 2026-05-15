@@ -117,6 +117,7 @@ func newBillingTestRelayInfo(userId, tokenId int, tokenKey string, requestId str
 			},
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{},
+		RelayMode:     relayconstant.RelayModeChatCompletions,
 	}
 	return info
 }

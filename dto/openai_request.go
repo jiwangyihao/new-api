@@ -3,6 +3,7 @@ package dto
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -386,7 +387,14 @@ func (m *MediaContent) ToFileSource() types.FileSource {
 		if file == nil || file.FileData == "" {
 			return nil
 		}
-		return types.NewFileSourceFromData(file.FileData, "")
+		mimeType := ""
+		if ext := strings.TrimPrefix(filepath.Ext(file.FileName), "."); ext != "" {
+			mimeType = mimeTypeByFileExtension(ext)
+			if mimeType == "application/octet-stream" {
+				mimeType = ""
+			}
+		}
+		return types.NewFileSourceFromData(file.FileData, mimeType)
 	case ContentTypeVideoUrl:
 		video := m.GetVideoUrl()
 		if video == nil || video.Url == "" {
@@ -395,6 +403,48 @@ func (m *MediaContent) ToFileSource() types.FileSource {
 		return types.NewFileSourceFromData(video.Url, "")
 	}
 	return nil
+}
+
+func mimeTypeByFileExtension(ext string) string {
+	ext = strings.ToLower(ext)
+	switch ext {
+	case "txt", "md", "markdown", "csv", "json", "xml", "html", "htm":
+		return "text/plain"
+	case "jpg", "jpeg", "jfif":
+		return "image/jpeg"
+	case "png":
+		return "image/png"
+	case "gif":
+		return "image/gif"
+	case "heic":
+		return "image/heic"
+	case "heif":
+		return "image/heif"
+	case "mp3":
+		return "audio/mp3"
+	case "wav":
+		return "audio/wav"
+	case "mpeg":
+		return "audio/mpeg"
+	case "mp4":
+		return "video/mp4"
+	case "wmv":
+		return "video/wmv"
+	case "flv":
+		return "video/flv"
+	case "mov":
+		return "video/mov"
+	case "mpg":
+		return "video/mpg"
+	case "avi":
+		return "video/avi"
+	case "mpegps":
+		return "video/mpegps"
+	case "pdf":
+		return "application/pdf"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 type MessageImageUrl struct {

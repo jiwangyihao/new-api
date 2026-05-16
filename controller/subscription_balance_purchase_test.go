@@ -60,6 +60,9 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 	assert.Equal(t, 40.0, order.Money)
 	assert.NotZero(t, order.CompleteTime)
 	assert.Equal(t, "BALSUBUSR9501NO"+common.Sha1([]byte("balance-key-1")), order.TradeNo)
+	var topUpCount int64
+	require.NoError(t, model.DB.Model(&model.TopUp{}).Where("user_id = ?", userID).Count(&topUpCount).Error)
+	assert.Equal(t, int64(0), topUpCount)
 
 	var log model.Log
 	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeTopup).First(&log).Error)

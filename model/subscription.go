@@ -554,8 +554,10 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
 		order.PaymentMethod = actualPaymentMethod
 	}
-	if err := upsertSubscriptionTopUpTx(tx, order); err != nil {
-		return nil, err
+	if order.PaymentProvider != PaymentProviderBalance {
+		if err := upsertSubscriptionTopUpTx(tx, order); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Save(order).Error; err != nil {
 		return nil, err

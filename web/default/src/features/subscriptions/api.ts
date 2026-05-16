@@ -26,6 +26,8 @@ import type {
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
+  SubscriptionBalancePayRequest,
+  SubscriptionBalancePayResponse,
 } from './types'
 
 // ============================================================================
@@ -132,6 +134,26 @@ export async function paySubscriptionEpay(
   }
 }
 
+export function buildSubscriptionBalancePayRequestBody(
+  data: SubscriptionBalancePayRequest
+): SubscriptionBalancePayRequest {
+  return {
+    plan_id: data.plan_id,
+    idempotency_key: data.idempotency_key,
+  }
+}
+
+export async function paySubscriptionBalance(
+  data: SubscriptionBalancePayRequest
+): Promise<SubscriptionBalancePayResponse> {
+  const res = await api.post(
+    '/api/subscription/balance/pay',
+    buildSubscriptionBalancePayRequestBody(data),
+    { skipBusinessError: true } as Record<string, unknown>
+  )
+  return res.data
+}
+
 // ============================================================================
 // User Self Subscriptions
 // ============================================================================
@@ -155,14 +177,6 @@ export async function getPublicPlans(): Promise<ApiResponse<PlanRecord[]>> {
   return res.data
 }
 
-export async function updateBillingPreference(
-  preference: string
-): Promise<ApiResponse<{ billing_preference?: string }>> {
-  const res = await api.put('/api/subscription/self/preference', {
-    billing_preference: preference,
-  })
-  return res.data
-}
 
 export async function getGroups(): Promise<ApiResponse<string[]>> {
   const res = await api.get('/api/group')

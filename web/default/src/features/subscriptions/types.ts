@@ -102,6 +102,27 @@ export interface SubscriptionPayRequest {
   payment_method?: string
 }
 
+export interface SubscriptionBalancePayRequest {
+  plan_id: number
+  idempotency_key: string
+}
+
+export interface SubscriptionOrderRecord {
+  id: number
+  user_id: number
+  plan_id: number
+  money: number
+  trade_no: string
+  payment_method: string
+  payment_provider: string
+  status: string
+  create_time: number
+  complete_time: number
+  provider_payload: string
+}
+
+export type SubscriptionBalancePayResponse = ApiResponse<SubscriptionOrderRecord>
+
 export interface SubscriptionPayResponse {
   success: boolean
   message?: string
@@ -121,7 +142,6 @@ export interface CreateUserSubscriptionRequest {
 // ============================================================================
 
 export interface SelfSubscriptionData {
-  billing_preference: string
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
 }

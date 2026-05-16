@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect } from 'react'
-import { Crown, CalendarClock, Package } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Crown, CalendarClock, Package, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -42,12 +42,15 @@ import {
   paySubscriptionStripe,
   paySubscriptionCreem,
   paySubscriptionEpay,
+  paySubscriptionBalance,
 } from '../../api'
 import {
   formatConcurrencyLimit,
   formatPlanPrice,
   formatDuration,
   formatTokenLimit,
+  formatAccountBalanceForPlanPurchase,
+  getAccountBalancePaymentState,
 } from '../../lib'
 import type { PlanRecord } from '../../types'
 
@@ -66,12 +69,23 @@ interface Props {
   epayMethods?: PaymentMethod[]
   purchaseLimit?: number
   purchaseCount?: number
+  accountBalance?: number
+  onPurchaseSuccess?: () => Promise<void> | void
 }
 
 export function SubscriptionPurchaseDialog(props: Props) {
   const { t } = useTranslation()
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
+  const balanceIdempotencyKeyRef = useRef('')
+
+  useEffect(() => {
+    if (props.open) {
+      balanceIdempotencyKeyRef.current = crypto.randomUUID()
+    } else {
+      balanceIdempotencyKeyRef.current = ''
+    }
+  }, [props.open])
 
   useEffect(() => {
     if (props.open && props.epayMethods && props.epayMethods.length > 0) {
@@ -88,7 +102,8 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const hasCreem = props.enableCreem && !!plan.creem_product_id
   const hasEpay =
     props.enableOnlineTopUp && (props.epayMethods || []).length > 0
-  const hasAnyPayment = hasStripe || hasCreem || hasEpay
+  const hasBalancePayment = true
+  const hasAnyPayment = hasBalancePayment || hasStripe || hasCreem || hasEpay
   const selectedEpayMethodLabel =
     (props.epayMethods || []).find((m) => m.type === selectedEpayMethod)
       ?.name ||
@@ -98,6 +113,15 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const limitReached =
     (props.purchaseLimit || 0) > 0 &&
     (props.purchaseCount || 0) >= (props.purchaseLimit || 0)
+  const accountBalanceLoaded = props.accountBalance !== undefined
+  const balancePaymentState = getAccountBalancePaymentState({
+    accountBalanceQuota: props.accountBalance ?? 0,
+    priceAmount: plan.price_amount,
+    currency: plan.currency,
+  })
+  const accountBalanceDisplay = formatAccountBalanceForPlanPurchase(
+    props.accountBalance ?? 0
+  )
 
   const handlePayStripe = async () => {
     setPaying(true)
@@ -191,6 +215,49 @@ export function SubscriptionPurchaseDialog(props: Props) {
     }
   }
 
+  const handlePayBalance = async () => {
+    if (paying) {
+      return
+    }
+    if (!accountBalanceLoaded) {
+      return
+    }
+    if (!balancePaymentState.supported) {
+      toast.error(t('Account balance supports CNY plans only.'))
+      return
+    }
+    if (!balancePaymentState.sufficient) {
+      toast.error(t('Account balance is insufficient. Please top up first.'))
+      return
+    }
+    if (!balanceIdempotencyKeyRef.current) {
+      balanceIdempotencyKeyRef.current = crypto.randomUUID()
+    }
+
+    setPaying(true)
+    try {
+      const res = await paySubscriptionBalance({
+        plan_id: plan.id,
+        idempotency_key: balanceIdempotencyKeyRef.current,
+      })
+      if (res.success || res.message === 'success') {
+        toast.success(t('Subscription purchased successfully'))
+        await props.onPurchaseSuccess?.()
+        props.onOpenChange(false)
+      } else {
+        toast.error(
+          res.message && res.message !== 'success'
+            ? res.message
+            : t('Payment request failed')
+        )
+      }
+    } catch {
+      toast.error(t('Payment request failed'))
+    } finally {
+      setPaying(false)
+    }
+  }
+
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent className='max-sm:w-[calc(100vw-1.5rem)] sm:max-w-md'>
@@ -250,6 +317,15 @@ export function SubscriptionPurchaseDialog(props: Props) {
               <span className='text-sm font-medium'>{t('Amount Due')}</span>
               <span className='text-primary text-lg font-bold'>{price}</span>
             </div>
+            <div className='flex items-center justify-between'>
+              <span className='text-muted-foreground flex items-center gap-1 text-sm'>
+                <WalletCards className='h-3.5 w-3.5' />
+                {t('Account Balance')}
+              </span>
+              <span className='text-sm font-medium'>
+                {accountBalanceDisplay}
+              </span>
+            </div>
           </div>
 
           {limitReached && (
@@ -261,11 +337,39 @@ export function SubscriptionPurchaseDialog(props: Props) {
             </Alert>
           )}
 
+
+          {hasBalancePayment && accountBalanceLoaded && balancePaymentState.disabled && (
+            <Alert>
+              <AlertDescription>
+                {balancePaymentState.disabledReason === 'unsupported_currency'
+                  ? t('Account balance supports CNY plans only.')
+                  : t('Account balance is insufficient. Please top up first.')}
+              </AlertDescription>
+            </Alert>
+          )}
           {hasAnyPayment ? (
             <div className='space-y-3'>
               <p className='text-muted-foreground text-xs'>
                 {t('Select payment method')}
               </p>
+              {hasBalancePayment && (
+                <Button
+                  variant='outline'
+                  className='w-full justify-between gap-2'
+                  onClick={handlePayBalance}
+                  disabled={
+                    paying ||
+                    limitReached ||
+                    !accountBalanceLoaded ||
+                    balancePaymentState.disabled
+                  }
+                >
+                  <span>{t('Pay with Account Balance')}</span>
+                  <span className='text-muted-foreground text-xs'>
+                    {accountBalanceDisplay}
+                  </span>
+                </Button>
+              )}
               {(hasStripe || hasCreem) && (
                 <div className='grid grid-cols-2 gap-2 sm:flex'>
                   {hasStripe && (

@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -52,6 +53,7 @@ func TestAcquireSubscriptionConcurrencySkipsNonTargetRelayModes(t *testing.T) {
 
 func TestAcquireSubscriptionConcurrencyReturns429WhenExceeded(t *testing.T) {
 	resetSubscriptionConcurrencyForTest(t)
+	common.SubscriptionConcurrencyQueueCapacity = 0
 	relayInfo := newConcurrencyRelayInfoForTest(1)
 	lease, apiErr := AcquireSubscriptionConcurrency(context.Background(), relayInfo)
 	require.Nil(t, apiErr)

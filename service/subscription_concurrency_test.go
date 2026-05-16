@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/require"
@@ -25,12 +26,14 @@ func resetSubscriptionConcurrencyForTest(t *testing.T) {
 	oldRequireRedis := common.SubscriptionConcurrencyRequireRedis
 	oldFailOpen := common.SubscriptionConcurrencyFailOpen
 	oldTTL := common.SubscriptionConcurrencyTTLSeconds
+	oldQueueCapacity := common.SubscriptionConcurrencyQueueCapacity
 	oldRedis := subscriptionConcurrencyRedis
 	oldMemory := subscriptionConcurrencyMemory
 	common.RedisEnabled = false
 	common.SubscriptionConcurrencyRequireRedis = false
 	common.SubscriptionConcurrencyFailOpen = false
 	common.SubscriptionConcurrencyTTLSeconds = 600
+	common.SubscriptionConcurrencyQueueCapacity = 10
 	subscriptionConcurrencyRedis = nil
 	subscriptionConcurrencyMemory = newMemorySubscriptionConcurrencyLimiter()
 	t.Cleanup(func() {
@@ -38,23 +41,101 @@ func resetSubscriptionConcurrencyForTest(t *testing.T) {
 		common.SubscriptionConcurrencyRequireRedis = oldRequireRedis
 		common.SubscriptionConcurrencyFailOpen = oldFailOpen
 		common.SubscriptionConcurrencyTTLSeconds = oldTTL
+		common.SubscriptionConcurrencyQueueCapacity = oldQueueCapacity
 		subscriptionConcurrencyRedis = oldRedis
 		subscriptionConcurrencyMemory = oldMemory
 	})
 }
 
-func TestMemoryConcurrencyLimiter_AcquireRelease(t *testing.T) {
+func TestMemoryConcurrencyLimiter_QueuesUntilRelease(t *testing.T) {
 	resetSubscriptionConcurrencyForTest(t)
 	limiter := newMemorySubscriptionConcurrencyLimiter()
 	ctx := context.Background()
-	lease, err := limiter.Acquire(ctx, 7501, "req-1", 1)
+	lease, err := limiter.Acquire(ctx, 7501, "req-1", 1, 1)
 	require.NoError(t, err)
-	_, err = limiter.Acquire(ctx, 7501, "req-2", 1)
+
+	queuedLease := make(chan ConcurrencyLease, 1)
+	queuedErr := make(chan error, 1)
+	go func() {
+		lease, err := limiter.Acquire(ctx, 7501, "req-2", 1, 1)
+		if err != nil {
+			queuedErr <- err
+			return
+		}
+		queuedLease <- lease
+	}()
+
+	select {
+	case lease := <-queuedLease:
+		require.NoError(t, lease.Release(ctx))
+		t.Fatal("queued request acquired before the active lease was released")
+	case err := <-queuedErr:
+		require.NoError(t, err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	require.NoError(t, lease.Release(ctx))
+	select {
+	case lease := <-queuedLease:
+		require.NoError(t, lease.Release(ctx))
+	case err := <-queuedErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("queued request was not acquired after the active lease was released")
+	}
+}
+
+func TestMemoryConcurrencyLimiter_ReturnsErrorOnlyWhenQueueFull(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	limiter := newMemorySubscriptionConcurrencyLimiter()
+	ctx := context.Background()
+	lease, err := limiter.Acquire(ctx, 7501, "req-1", 1, 1)
+	require.NoError(t, err)
+
+	queuedLease := make(chan ConcurrencyLease, 1)
+	queuedErr := make(chan error, 1)
+	go func() {
+		lease, err := limiter.Acquire(ctx, 7501, "req-2", 1, 1)
+		if err != nil {
+			queuedErr <- err
+			return
+		}
+		queuedLease <- lease
+	}()
+
+	select {
+	case lease := <-queuedLease:
+		require.NoError(t, lease.Release(ctx))
+		t.Fatal("queued request acquired before the active lease was released")
+	case err := <-queuedErr:
+		require.NoError(t, err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	_, err = limiter.Acquire(ctx, 7501, "req-3", 1, 1)
 	require.ErrorIs(t, err, ErrSubscriptionConcurrencyExceeded)
+
 	require.NoError(t, lease.Release(ctx))
-	require.NoError(t, lease.Release(ctx))
-	_, err = limiter.Acquire(ctx, 7501, "req-3", 1)
+	select {
+	case lease := <-queuedLease:
+		require.NoError(t, lease.Release(ctx))
+	case err := <-queuedErr:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("queued request was not acquired after the active lease was released")
+	}
+}
+
+func TestMemoryConcurrencyLimiter_RejectsWhenQueueCapacityZero(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	limiter := newMemorySubscriptionConcurrencyLimiter()
+	ctx := context.Background()
+	lease, err := limiter.Acquire(ctx, 7501, "req-1", 1, 0)
 	require.NoError(t, err)
+	defer lease.Release(ctx)
+
+	_, err = limiter.Acquire(ctx, 7501, "req-2", 1, 0)
+	require.ErrorIs(t, err, ErrSubscriptionConcurrencyExceeded)
 }
 
 func TestSubscriptionConcurrencyRequiresRedisWhenConfigured(t *testing.T) {

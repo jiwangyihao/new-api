@@ -141,6 +141,7 @@ func InitOptionMap() {
 	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
 	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
 	common.OptionMap["SubscriptionConcurrencyTTLSeconds"] = strconv.Itoa(common.SubscriptionConcurrencyTTLSeconds)
+	common.OptionMap["SubscriptionConcurrencyQueueCapacity"] = strconv.Itoa(common.SubscriptionConcurrencyQueueCapacity)
 	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
 	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
 	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
@@ -497,6 +498,8 @@ func updateOptionMap(key string, value string) (err error) {
 		common.PreConsumedQuota, _ = strconv.Atoi(value)
 	case "SubscriptionConcurrencyTTLSeconds":
 		common.SubscriptionConcurrencyTTLSeconds, _ = strconv.Atoi(value)
+	case "SubscriptionConcurrencyQueueCapacity":
+		common.SubscriptionConcurrencyQueueCapacity, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitCount":
 		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitDurationMinutes":

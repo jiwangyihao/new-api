@@ -116,6 +116,7 @@ var MemoryCacheEnabled bool
 var LogConsumeEnabled = true
 
 var SubscriptionConcurrencyTTLSeconds = 600
+var SubscriptionConcurrencyQueueCapacity = 10
 var SubscriptionConcurrencyFailOpen = false
 var SubscriptionConcurrencyRequireRedis = false
 var TLSInsecureSkipVerify bool

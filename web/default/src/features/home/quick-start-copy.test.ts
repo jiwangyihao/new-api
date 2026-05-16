@@ -59,5 +59,16 @@ describe('Issue #3 quick start copy', () => {
     assert.match(dashboardSource, /to: '\/keys'/)
     assert.match(dashboardSource, /to: '\/playground'/)
     assert.match(dashboardSource, /to: '\/pricing'/)
+    assert.match(dashboardSource, /getSelfSubscriptionFull/)
+    assert.doesNotMatch(
+      dashboardSource,
+      /completed: remainQuota > 0 \|\| usedQuota > 0/
+    )
+    assert.match(dashboardSource, /completed: hasActiveSubscription/)
+    assert.match(
+      dashboardSource,
+      /queryKey: \['dashboard', 'overview', 'self-subscriptions', user\?\.id\]/
+    )
+    assert.match(dashboardSource, /enabled: Boolean\(user\?\.id\)/)
   })
 })

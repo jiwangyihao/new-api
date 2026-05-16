@@ -51,6 +51,7 @@ import {
 } from '@/components/page-transition'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
+import { getSelfSubscriptionFull } from '@/features/subscriptions/api'
 import { useApiInfo } from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
@@ -427,8 +428,6 @@ export function OverviewDashboard() {
   >(() => getSavedSetupGuideExpanded())
 
   const requestCount = Number(user?.request_count ?? 0)
-  const remainQuota = Number(user?.quota ?? 0)
-  const usedQuota = Number(user?.used_quota ?? 0)
   const isAdmin = Boolean(user?.role && user.role >= ROLE.ADMIN)
 
   const apiKeysQuery = useQuery({
@@ -448,6 +447,26 @@ export function OverviewDashboard() {
     },
     staleTime: 5 * 60 * 1000,
   })
+
+  const subscriptionsQuery = useQuery({
+    queryKey: ['dashboard', 'overview', 'self-subscriptions', user?.id],
+    queryFn: async () => {
+      const result = await getSelfSubscriptionFull()
+      return result.success ? (result.data?.subscriptions ?? []) : []
+    },
+    staleTime: 60 * 1000,
+    enabled: Boolean(user?.id),
+  })
+
+  const hasActiveSubscription = useMemo(() => {
+    const now = Date.now() / 1000
+    return (subscriptionsQuery.data ?? []).some((item) => {
+      const subscription = item.subscription
+      const isExpired =
+        (subscription?.end_time ?? 0) > 0 && subscription.end_time < now
+      return subscription?.status === 'active' && !isExpired
+    })
+  }, [subscriptionsQuery.data])
 
   const preferredKey = useMemo(
     () => getPreferredKey(apiKeysQuery.data ?? []),
@@ -490,10 +509,10 @@ export function OverviewDashboard() {
         ),
         to: '/pricing',
         icon: BookOpen,
-        completed: remainQuota > 0 || usedQuota > 0,
+        completed: hasActiveSubscription,
       },
     ],
-    [preferredKey, remainQuota, requestCount, t, usedQuota]
+    [hasActiveSubscription, preferredKey, requestCount, t]
   )
 
   const quickActions = useMemo<QuickAction[]>(

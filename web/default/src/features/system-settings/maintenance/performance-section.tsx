@@ -59,6 +59,10 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { StatusBadge } from '@/components/status-badge'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -301,7 +305,19 @@ export function PerformanceSection(props: Props) {
       )}
     >
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='performance-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save Changes')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='performance-settings-form'
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='space-y-6'
+        >
           {/* Disk Cache Settings */}
           <div>
             <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>

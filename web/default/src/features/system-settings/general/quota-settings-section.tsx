@@ -35,6 +35,10 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -98,7 +102,19 @@ export function QuotaSettingsSection({
       <FormNavigationGuard when={isDirty} />
 
       <Form {...form}>
-        <form onSubmit={handleSubmit} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='quota-settings-form'
+            isSaving={updateOption.isPending || isSubmitting}
+            idleLabel={t('Save Changes')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='quota-settings-form'
+          onSubmit={handleSubmit}
+          className='space-y-6'
+        >
           <FormDirtyIndicator isDirty={isDirty} />
           <FormField
             control={form.control}

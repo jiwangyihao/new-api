@@ -43,6 +43,10 @@ import {
 } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -205,7 +209,19 @@ export function SSRFSection({ defaultValues }: SSRFSectionProps) {
       )}
     >
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='ssrf-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save SSRF settings')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='ssrf-settings-form'
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='space-y-6'
+        >
           <FormField
             control={form.control}
             name='fetch_setting.enable_ssrf_protection'

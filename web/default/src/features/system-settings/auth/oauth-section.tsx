@@ -39,6 +39,10 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -257,7 +261,19 @@ export function OAuthSection({ defaultValues }: OAuthSectionProps) {
         description={t('Configure third-party authentication providers')}
       >
         <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+          <SettingsFormActionBar>
+            <SettingsFormSaveButton
+              form='oauth-settings-form'
+              isSaving={updateOption.isPending}
+              idleLabel={t('Save Changes')}
+              savingLabel={t('Saving...')}
+            />
+          </SettingsFormActionBar>
+          <form
+            id='oauth-settings-form'
+            onSubmit={form.handleSubmit(onSubmit)}
+            className='space-y-6'
+          >
             <FormDirtyIndicator isDirty={form.formState.isDirty} />
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>

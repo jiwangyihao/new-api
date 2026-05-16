@@ -65,6 +65,10 @@ import {
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
 const createModelPricingSchema = (t: (key: string) => string) =>
@@ -758,7 +762,16 @@ export function ModelPricingEditorPanel({
       </div>
 
       <Form {...form}>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='model-pricing-editor-form'
+            isSaving={false}
+            idleLabel={isEditMode ? t('Update') : t('Add')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
         <form
+          id='model-pricing-editor-form'
           onSubmit={form.handleSubmit(handleSubmit)}
           className='flex min-h-0 flex-1 flex-col'
           autoComplete='off'

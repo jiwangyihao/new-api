@@ -43,6 +43,10 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useSettingsForm } from '../hooks/use-settings-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -144,7 +148,19 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
         description={t('Configure basic system information and branding')}
       >
         <Form {...form}>
-          <form onSubmit={handleSubmit} className='space-y-6'>
+          <SettingsFormActionBar>
+            <SettingsFormSaveButton
+              form='system-info-settings-form'
+              isSaving={isSubmitting || updateOption.isPending}
+              idleLabel={t('Save Changes')}
+              savingLabel={t('Saving...')}
+            />
+          </SettingsFormActionBar>
+          <form
+            id='system-info-settings-form'
+            onSubmit={handleSubmit}
+            className='space-y-6'
+          >
             <FormDirtyIndicator isDirty={isDirty} />
             <FormField
               control={form.control}

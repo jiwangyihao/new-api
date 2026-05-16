@@ -32,6 +32,10 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -143,7 +147,16 @@ export function EmailSettingsSection({
       description={t('Configure outgoing email server for notifications')}
     >
       <Form {...form}>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='email-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save SMTP settings')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
         <form
+          id='email-settings-form'
           onSubmit={form.handleSubmit(onSubmit)}
           className='space-y-6'
           autoComplete='off'

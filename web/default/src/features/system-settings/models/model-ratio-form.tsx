@@ -32,6 +32,10 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { ModelRatioVisualEditor } from './model-ratio-visual-editor'
 
 type ModelFormValues = {
@@ -82,7 +86,15 @@ export const ModelRatioForm = memo(function ModelRatioForm({
 
   return (
     <div className='space-y-6'>
-      <div className='flex justify-end'>
+      <SettingsFormActionBar>
+        {editMode === 'json' && (
+          <SettingsFormSaveButton
+            form='model-ratio-settings-form'
+            isSaving={isSaving}
+            idleLabel={t('Save model prices')}
+            savingLabel={t('Saving...')}
+          />
+        )}
         <Button variant='outline' size='sm' onClick={toggleEditMode}>
           {editMode === 'visual' ? (
             <>
@@ -96,7 +108,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
             </>
           )}
         </Button>
-      </div>
+      </SettingsFormActionBar>
 
       <Form {...form}>
         {editMode === 'visual' ? (
@@ -163,7 +175,11 @@ export const ModelRatioForm = memo(function ModelRatioForm({
             </div>
           </div>
         ) : (
-          <form onSubmit={form.handleSubmit(onSave)} className='space-y-6'>
+          <form
+            id='model-ratio-settings-form'
+            onSubmit={form.handleSubmit(onSave)}
+            className='space-y-6'
+          >
             <FormField
               control={form.control}
               name='ModelPrice'

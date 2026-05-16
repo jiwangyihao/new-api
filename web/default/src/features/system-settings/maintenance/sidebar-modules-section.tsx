@@ -29,6 +29,10 @@ import {
   FormLabel,
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -190,7 +194,19 @@ export function SidebarModulesSection({
       )}
     >
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='sidebar-modules-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save sidebar modules')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='sidebar-modules-settings-form'
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='space-y-6'
+        >
           {sections.map(([sectionKey, sectionConfig]) => {
             const sectionInfo = sectionMeta[sectionKey] ?? {
               title: toTitleCase(sectionKey),

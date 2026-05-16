@@ -36,6 +36,10 @@ import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import { AmountDiscountVisualEditor } from './amount-discount-visual-editor'
@@ -564,7 +568,16 @@ export function PaymentSettingsSection({
     >
       {/* eslint-disable react-hooks/refs */}
       <Form {...form}>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='payment-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save all settings')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
         <form
+          id='payment-settings-form'
           onSubmit={form.handleSubmit(onSubmit)}
           className='space-y-8'
           data-no-autosubmit='true'

@@ -35,6 +35,10 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 import {
@@ -233,7 +237,19 @@ export function GeminiSettingsCard({ defaultValues }: GeminiSettingsCardProps) {
       )}
     >
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='gemini-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save Changes')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='gemini-settings-form'
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='space-y-6'
+        >
           <FormField
             control={form.control}
             name='gemini.safety_settings'

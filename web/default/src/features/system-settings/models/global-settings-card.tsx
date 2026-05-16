@@ -38,6 +38,10 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge } from '@/components/status-badge'
+import {
+  SettingsFormActionBar,
+  SettingsFormSaveButton,
+} from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
 
@@ -193,7 +197,19 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
       )}
     >
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} className='space-y-6'>
+        <SettingsFormActionBar>
+          <SettingsFormSaveButton
+            form='global-model-settings-form'
+            isSaving={updateOption.isPending}
+            idleLabel={t('Save Changes')}
+            savingLabel={t('Saving...')}
+          />
+        </SettingsFormActionBar>
+        <form
+          id='global-model-settings-form'
+          onSubmit={form.handleSubmit(onSubmit)}
+          className='space-y-6'
+        >
           <FormField
             control={form.control}
             name='global.pass_through_request_enabled'

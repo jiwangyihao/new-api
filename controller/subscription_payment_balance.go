@@ -4,12 +4,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -51,6 +53,9 @@ func SubscriptionRequestBalance(c *gin.Context) {
 		return
 	}
 
+	planLockKey := subscriptionBalancePlanLockKey(userId, req.PlanId)
+	LockOrder(planLockKey)
+	defer UnlockOrder(planLockKey)
 	tradeNo := subscriptionBalanceTradeNo(userId, req.IdempotencyKey)
 	LockOrder(tradeNo)
 	defer UnlockOrder(tradeNo)
@@ -67,7 +72,7 @@ func SubscriptionRequestBalance(c *gin.Context) {
 	if created {
 		service.TryEnsureInvitationEntitlementForPaidUser(userId)
 	}
-	common.ApiSuccess(c, order)
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "success", "data": order})
 }
 
 func subscriptionBalancePayAmount(price float64) (int, error) {
@@ -78,7 +83,15 @@ func subscriptionBalancePayAmount(price float64) (int, error) {
 	if math.Abs(price-float64(amount)) > 0.000001 || amount <= 0 {
 		return 0, errors.New("套餐价格必须为整数")
 	}
-	return amount, nil
+	quotaAmount := decimal.NewFromInt(int64(amount)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()
+	if quotaAmount <= 0 || quotaAmount > int64(math.MaxInt) {
+		return 0, errors.New("套餐价格无效")
+	}
+	return int(quotaAmount), nil
+}
+
+func subscriptionBalancePlanLockKey(userId int, planId int) string {
+	return fmt.Sprintf("BALSUBUSR%dPLAN%d", userId, planId)
 }
 
 func subscriptionBalanceTradeNo(userId int, idempotencyKey string) string {

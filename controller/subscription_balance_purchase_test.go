@@ -37,17 +37,17 @@ func performBalancePayRequest(t *testing.T, userID int, body string) *httptest.R
 func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9501
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_buyer", Quota: 100, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_buyer", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
 	code := "balance-basic"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9502, Title: "Basic", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9502,"idempotency_key":"balance-key-1"}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
-	assert.Equal(t, 60, user.Quota)
+	assert.Equal(t, int(common.QuotaPerUnit*60), user.Quota)
 	var sub model.UserSubscription
 	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 9502).First(&sub).Error)
 	assert.Equal(t, "order", sub.GrantReason)
@@ -68,7 +68,7 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9511
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_low", Quota: 10, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_low", Quota: int(common.QuotaPerUnit * 10), Status: common.UserStatusEnabled}).Error)
 	code := "balance-pro"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9512, Title: "Pro", PriceAmount: 160, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 
@@ -78,7 +78,7 @@ func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "余额不足")
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
-	assert.Equal(t, 10, user.Quota)
+	assert.Equal(t, int(common.QuotaPerUnit*10), user.Quota)
 	var orderCount int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 9512).Count(&orderCount).Error)
 	assert.Equal(t, int64(0), orderCount)
@@ -90,7 +90,7 @@ func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 func TestSubscriptionBalancePayExistingPendingDoesNotDeduct(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9531
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_pending", Quota: 100, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_pending", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
 	code := "balance-pending"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9532, Title: "Pending", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 	tradeNo := "BALSUBUSR9531NO" + common.Sha1([]byte("pending-key"))
@@ -102,7 +102,7 @@ func TestSubscriptionBalancePayExistingPendingDoesNotDeduct(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), `"status":"pending"`)
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
-	assert.Equal(t, 100, user.Quota)
+	assert.Equal(t, int(common.QuotaPerUnit*100), user.Quota)
 	var subCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9532).Count(&subCount).Error)
 	assert.Equal(t, int64(0), subCount)
@@ -111,7 +111,7 @@ func TestSubscriptionBalancePayExistingPendingDoesNotDeduct(t *testing.T) {
 func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9521
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_idem", Quota: 100, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_idem", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
 	code := "balance-standard"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9522, Title: "Standard", PriceAmount: 80, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 
@@ -120,15 +120,37 @@ func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, first.Code)
 	require.Equal(t, http.StatusOK, second.Code)
-	assert.Contains(t, first.Body.String(), `"success":true`)
-	assert.Contains(t, second.Body.String(), `"success":true`)
+	assert.Contains(t, first.Body.String(), `"message":"success"`)
+	assert.Contains(t, second.Body.String(), `"message":"success"`)
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
-	assert.Equal(t, 20, user.Quota)
+	assert.Equal(t, int(common.QuotaPerUnit*20), user.Quota)
 	var subCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9522).Count(&subCount).Error)
 	assert.Equal(t, int64(1), subCount)
 	var orderCount int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 9522).Count(&orderCount).Error)
 	assert.Equal(t, int64(1), orderCount)
+}
+
+func TestSubscriptionBalancePaySerializesPurchaseLimitAcrossIdempotencyKeys(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9541
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_limit", Quota: int(common.QuotaPerUnit * 200), Status: common.UserStatusEnabled}).Error)
+	code := "balance-limit"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9542, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+
+	first := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-one"}`)
+	second := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-two"}`)
+
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, http.StatusOK, second.Code)
+	assert.Contains(t, first.Body.String(), `"message":"success"`)
+	assert.Contains(t, second.Body.String(), "已达到该套餐购买上限")
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, int(common.QuotaPerUnit*160), user.Quota)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
 }

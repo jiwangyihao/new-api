@@ -101,12 +101,14 @@ func subscriptionBalanceTradeNo(userId int, idempotencyKey string) string {
 
 func createBalanceSubscriptionOrder(userId int, plan *model.SubscriptionPlan, tradeNo string, amount int) (*model.SubscriptionOrder, bool, error) {
 	var order model.SubscriptionOrder
+	created := false
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		return createBalanceSubscriptionOrderTx(tx, userId, plan, tradeNo, amount, &order)
+		var err error
+		created, err = createBalanceSubscriptionOrderTx(tx, userId, plan, tradeNo, amount, &order)
+		return err
 	}); err != nil {
 		return nil, false, err
 	}
-	created := order.Status == common.TopUpStatusSuccess && order.CompleteTime > 0
 	if created {
 		_ = model.InvalidateUserCache(userId)
 		if strings.TrimSpace(plan.UpgradeGroup) != "" {
@@ -117,22 +119,22 @@ func createBalanceSubscriptionOrder(userId int, plan *model.SubscriptionPlan, tr
 	return &order, created, nil
 }
 
-func createBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan, tradeNo string, amount int, order *model.SubscriptionOrder) error {
+func createBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan, tradeNo string, amount int, order *model.SubscriptionOrder) (bool, error) {
 	if tx == nil || order == nil || plan == nil {
-		return errors.New("invalid balance subscription order")
+		return false, errors.New("invalid balance subscription order")
 	}
 	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("trade_no = ?", tradeNo).First(order).Error; err == nil {
 		if order.UserId != userId || order.PlanId != plan.Id || order.PaymentProvider != model.PaymentProviderBalance {
-			return model.ErrPaymentMethodMismatch
+			return false, model.ErrPaymentMethodMismatch
 		}
-		return nil
+		return false, nil
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		return false, err
 	}
 
 	var user model.User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", userId).First(&user).Error; err != nil {
-		return err
+		return false, err
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
@@ -140,15 +142,15 @@ func createBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.Subsc
 		if err := tx.Model(&model.UserSubscription{}).
 			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
 			Count(&count).Error; err != nil {
-			return err
+			return false, err
 		}
 		if count >= int64(plan.MaxPurchasePerUser) {
-			return errors.New("已达到该套餐购买上限")
+			return false, errors.New("已达到该套餐购买上限")
 		}
 	}
 
 	if err := model.DeductUserAccountBalanceTx(tx, userId, amount); err != nil {
-		return err
+		return false, err
 	}
 
 	now := common.GetTimestamp()
@@ -163,10 +165,11 @@ func createBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.Subsc
 		Status:          common.TopUpStatusPending,
 	}
 	if err := tx.Create(order).Error; err != nil {
-		return err
+		return false, err
 	}
 	if _, err := model.CompleteSubscriptionOrderTx(tx, order, "", model.PaymentMethodAccountBalance); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
+
 }

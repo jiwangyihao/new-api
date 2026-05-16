@@ -167,6 +167,9 @@ func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 	var orderCount int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 9522).Count(&orderCount).Error)
 	assert.Equal(t, int64(1), orderCount)
+	var logCount int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND type = ?", userID, model.LogTypeTopup).Count(&logCount).Error)
+	assert.Equal(t, int64(1), logCount)
 }
 
 func TestSubscriptionBalancePaySerializesPurchaseLimitAcrossIdempotencyKeys(t *testing.T) {
@@ -199,11 +202,15 @@ func TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck(t *testing.T) {
 	require.NoError(t, model.DB.Create(plan).Error)
 
 	var order model.SubscriptionOrder
+	created := false
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
-		return createBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", int(common.QuotaPerUnit*40), &order)
+		var err error
+		created, err = createBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", int(common.QuotaPerUnit*40), &order)
+		return err
 	})
 
 	require.NoError(t, err)
+	assert.True(t, created)
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
 	assert.Equal(t, int(common.QuotaPerUnit*60), user.Quota)

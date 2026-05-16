@@ -61,20 +61,25 @@ describe('sidebar config defaults', () => {
     assert.equal(filtered.length, 0)
   })
 
-  test('keeps application guides visible when saved user config omits it', () => {
+  test('drops obsolete application guides entries from legacy user config', () => {
     const defaults = getDefaultSidebarModulesForTest()
     const userConfig = {
       personal: {
         enabled: true,
         topup: true,
         personal: true,
+        app_guides: true,
       },
     }
     const groups: NavGroup[] = [
       {
         id: 'personal',
         title: 'Personal',
-        items: [{ title: 'Application Guides', url: '/app-guides' }],
+        items: [
+          { title: 'Wallet', url: '/wallet' },
+          { title: 'Application Guides', url: '/app-guides' },
+          { title: 'Profile', url: '/profile' },
+        ],
       },
     ]
 
@@ -84,8 +89,11 @@ describe('sidebar config defaults', () => {
       userConfig
     )
 
-    assert.equal(defaults.personal?.app_guides, true)
-    assert.equal(filtered[0]?.items[0]?.url, '/app-guides')
+    assert.equal(defaults.personal?.app_guides, undefined)
+    assert.deepEqual(
+      filtered[0]?.items.map((item) => ('url' in item ? item.url : '')),
+      ['/wallet', '/profile']
+    )
   })
 
   test('hides admin navigation from non-admin command consumers', () => {

@@ -26,7 +26,6 @@ import {
   ChevronDown,
   ChevronUp,
   Circle,
-  CreditCard,
   FileText,
   KeyRound,
   ListChecks,
@@ -469,25 +468,29 @@ export function OverviewDashboard() {
   const startSteps = useMemo<StartStep[]>(
     () => [
       {
-        title: t('Create API Key'),
-        description: t('Create a key for your app or service'),
+        title: t('Create API'),
+        description: t('Create an API key for your app, script, or client.'),
         to: '/keys',
         icon: KeyRound,
         completed: Boolean(preferredKey),
       },
       {
-        title: t('Add credits'),
-        description: t('Keep enough balance before production traffic'),
-        to: '/wallet',
-        icon: CreditCard,
-        completed: remainQuota > 0 || usedQuota > 0,
+        title: t('Try Playground'),
+        description: t(
+          'Test prompts in Playground and copy OpenCode-ready API help.'
+        ),
+        to: '/playground',
+        icon: Play,
+        completed: requestCount > 0,
       },
       {
-        title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
-        to: '/playground',
-        icon: TerminalSquare,
-        completed: requestCount > 0,
+        title: t('Choose a plan'),
+        description: t(
+          'Pick a subscription plan before scaling production traffic.'
+        ),
+        to: '/pricing',
+        icon: BookOpen,
+        completed: remainQuota > 0 || usedQuota > 0,
       },
     ],
     [preferredKey, remainQuota, requestCount, t, usedQuota]

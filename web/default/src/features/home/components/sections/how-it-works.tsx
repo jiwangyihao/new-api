@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Settings, Zap, BarChart3 } from 'lucide-react'
+import { KeyRound, Play, CreditCard } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { AnimateInView } from '@/components/animate-in-view'
 
@@ -26,25 +26,21 @@ export function HowItWorks() {
   const steps = [
     {
       num: '1',
-      title: t('Configure'),
-      desc: t(
-        'Add your API keys, set up channels and configure access permissions'
-      ),
-      icon: <Settings className='size-6' strokeWidth={1.5} />,
+      title: t('Create API'),
+      desc: t('Create an API key for your app, script, or client.'),
+      icon: <KeyRound className='size-6' strokeWidth={1.5} />,
     },
     {
       num: '2',
-      title: t('Connect'),
-      desc: t(
-        'Connect through OpenAI, Claude, Gemini, and other compatible API routes'
-      ),
-      icon: <Zap className='size-6' strokeWidth={1.5} />,
+      title: t('Try Playground'),
+      desc: t('Test prompts in Playground and copy OpenCode-ready API help.'),
+      icon: <Play className='size-6' strokeWidth={1.5} />,
     },
     {
       num: '3',
-      title: t('Monitor'),
-      desc: t('Track usage, costs and performance with real-time analytics'),
-      icon: <BarChart3 className='size-6' strokeWidth={1.5} />,
+      title: t('Choose a plan'),
+      desc: t('Pick a subscription plan before scaling production traffic.'),
+      icon: <CreditCard className='size-6' strokeWidth={1.5} />,
     },
   ]
 

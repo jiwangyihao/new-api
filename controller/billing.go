@@ -33,9 +33,6 @@ func GetSubscription(c *gin.Context) {
 	if usage != nil {
 		limitTokens = usage.TokenLimit
 		expiredTime = usage.EndTime
-		if usage.Unlimited {
-			limitTokens = 100000000
-		}
 	}
 	if expiredTime <= 0 {
 		expiredTime = 0
@@ -50,7 +47,12 @@ func GetSubscription(c *gin.Context) {
 		})
 		return
 	}
-	amount := subscriptionTokensToBillingAmount(limitTokens)
+	amount := float64(0)
+	if usage != nil && usage.Unlimited {
+		amount = 100000000
+	} else {
+		amount = subscriptionTokensToBillingAmount(limitTokens)
+	}
 	subscription := OpenAISubscriptionResponse{
 		Object:             "billing_subscription",
 		HasPaymentMethod:   true,

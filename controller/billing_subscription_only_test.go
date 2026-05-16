@@ -97,7 +97,7 @@ func TestOpenAIUsageUsesSubscriptionTokenUsed(t *testing.T) {
 
 func TestOpenAIBillingSubscriptionShowsUnlimitedTrialAllowance(t *testing.T) {
 	setupBillingSubscriptionOnlyTestDB(t)
-	withSubscriptionBillingTokenDisplay(t)
+	withSubscriptionBillingUSDDisplay(t)
 	const userID = 9421
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "billing_trial", Quota: 0, Status: common.UserStatusEnabled}).Error)
 	code := "trial-unlimited"
@@ -113,4 +113,16 @@ func TestOpenAIBillingSubscriptionShowsUnlimitedTrialAllowance(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"hard_limit_usd":100000000`)
+}
+
+func withSubscriptionBillingUSDDisplay(t *testing.T) {
+	t.Helper()
+	oldDisplayTokenStat := common.DisplayTokenStatEnabled
+	oldQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	common.DisplayTokenStatEnabled = false
+	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	t.Cleanup(func() {
+		common.DisplayTokenStatEnabled = oldDisplayTokenStat
+		operation_setting.GetGeneralSetting().QuotaDisplayType = oldQuotaDisplayType
+	})
 }

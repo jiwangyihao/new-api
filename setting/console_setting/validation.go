@@ -22,6 +22,38 @@ var (
 	slugRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
+const (
+	WelcomePopupFrequencyOncePerVersion = "once_per_version"
+	WelcomePopupFrequencyOncePerDay     = "once_per_day"
+	WelcomePopupFrequencyEverySession   = "every_session"
+	DefaultWelcomePopupFrequency        = WelcomePopupFrequencyOncePerVersion
+	MaxWelcomePopupContentRunes         = 2000
+)
+
+func NormalizeWelcomePopupFrequency(frequency string) string {
+	normalized := strings.TrimSpace(frequency)
+	switch normalized {
+	case WelcomePopupFrequencyOncePerVersion, WelcomePopupFrequencyOncePerDay, WelcomePopupFrequencyEverySession:
+		return normalized
+	default:
+		return DefaultWelcomePopupFrequency
+	}
+}
+
+func ValidateWelcomePopupContent(content string) error {
+	if len([]rune(content)) > MaxWelcomePopupContentRunes {
+		return fmt.Errorf("欢迎公告内容长度不能超过%d个字符", MaxWelcomePopupContentRunes)
+	}
+	return checkDangerousContent(content, 1, "欢迎公告")
+}
+
+func ValidateWelcomePopupFrequency(frequency string) error {
+	if frequency != NormalizeWelcomePopupFrequency(frequency) {
+		return fmt.Errorf("欢迎公告展示频率不合法")
+	}
+	return nil
+}
+
 func parseJSONArray(jsonStr string, typeName string) ([]map[string]interface{}, error) {
 	var list []map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &list); err != nil {

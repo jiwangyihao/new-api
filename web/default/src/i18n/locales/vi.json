@@ -4529,6 +4529,21 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Welcome Popup": "Cửa sổ chào mừng",
+    "Configure login welcome announcement popup": "Cấu hình cửa sổ thông báo chào mừng sau khi đăng nhập",
+    "This popup appears after users enter the authenticated system area.": "Cửa sổ này xuất hiện sau khi người dùng vào khu vực hệ thống đã xác thực.",
+    "This content is returned only to authenticated users.": "Nội dung này chỉ được trả về cho người dùng đã xác thực.",
+    "Welcome announcement content": "Nội dung thông báo chào mừng",
+    "Markdown is supported. Raw HTML is not supported.": "Hỗ trợ Markdown. Không hỗ trợ HTML thô.",
+    "Display frequency": "Tần suất hiển thị",
+    "Show once per content update": "Hiển thị một lần cho mỗi lần cập nhật nội dung",
+    "Show once per day": "Hiển thị một lần mỗi ngày",
+    "Show every system session": "Hiển thị trong mỗi phiên hệ thống",
+    "Save welcome popup": "Lưu cửa sổ chào mừng",
+    "Welcome popup content must be at most 2000 characters.": "Nội dung cửa sổ chào mừng tối đa 2000 ký tự.",
+    "Welcome announcement": "Thông báo chào mừng",
+    "Close welcome popup": "Đóng cửa sổ chào mừng",
+    "I understand": "Tôi đã hiểu"
   }
 }

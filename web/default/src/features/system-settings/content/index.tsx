@@ -31,6 +31,10 @@ const defaultContentSettings: ContentSettings = {
   'console_setting.announcements': '[]',
   'console_setting.faq': '[]',
   'console_setting.uptime_kuma_groups': '[]',
+  'console_setting.welcome_popup_content':
+    '欢迎使用赔钱GPT！\n\n欢迎邀请好友使用赔钱GPT，邀请两位好友每月付费订阅，即可免费享受“一瓶盖可乐”付费订阅！\n\n填写邀请码或试用码可享用24小时GPT5.5畅用！\n\n官方QQ群：1106020227',
+  'console_setting.welcome_popup_enabled': true,
+  'console_setting.welcome_popup_frequency': 'once_per_version',
   'console_setting.api_info_enabled': true,
   'console_setting.announcements_enabled': true,
   'console_setting.faq_enabled': true,
@@ -114,6 +118,7 @@ export function ContentSettings() {
     | 'dashboard'
     | 'announcements'
     | 'api-info'
+    | 'welcome-popup'
     | 'faq'
     | 'uptime-kuma'
     | 'chat'

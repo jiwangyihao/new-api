@@ -25,6 +25,7 @@ import { DashboardSection } from './dashboard-section'
 import { DrawingSettingsSection } from './drawing-settings-section'
 import { FAQSection } from './faq-section'
 import { UptimeKumaSection } from './uptime-kuma-section'
+import { WelcomePopupSection } from './welcome-popup-section'
 
 /**
  * Validate and coerce DataExportDefaultTime to a safe value
@@ -62,6 +63,23 @@ const CONTENT_SECTIONS = [
       <AnnouncementsSection
         enabled={settings['console_setting.announcements_enabled']}
         data={settings['console_setting.announcements']}
+      />
+    ),
+  },
+  {
+    id: 'welcome-popup',
+    titleKey: 'Welcome Popup',
+    descriptionKey: 'Configure login welcome announcement popup',
+    build: (settings: ContentSettings) => (
+      <WelcomePopupSection
+        defaultValues={{
+          'console_setting.welcome_popup_content':
+            settings['console_setting.welcome_popup_content'],
+          'console_setting.welcome_popup_enabled':
+            settings['console_setting.welcome_popup_enabled'],
+          'console_setting.welcome_popup_frequency':
+            settings['console_setting.welcome_popup_frequency'],
+        }}
       />
     ),
   },

@@ -45,6 +45,12 @@ const STATUS_RELATED_KEYS = [
   'TurnstileCheckEnabled',
 ]
 
+const WELCOME_POPUP_RELATED_KEYS = [
+  'console_setting.welcome_popup_content',
+  'console_setting.welcome_popup_enabled',
+  'console_setting.welcome_popup_frequency',
+]
+
 export function useUpdateOption() {
   const queryClient = useQueryClient()
 
@@ -58,6 +64,10 @@ export function useUpdateOption() {
         // If updating frontend-display-related config, also refresh status
         if (STATUS_RELATED_KEYS.includes(variables.key)) {
           queryClient.invalidateQueries({ queryKey: ['status'] })
+        }
+
+        if (WELCOME_POPUP_RELATED_KEYS.includes(variables.key)) {
+          queryClient.invalidateQueries({ queryKey: ['welcome-popup'] })
         }
 
         toast.success(i18next.t('Setting updated successfully'))

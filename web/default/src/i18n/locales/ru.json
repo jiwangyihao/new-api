@@ -4529,6 +4529,21 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Welcome Popup": "Приветственное окно",
+    "Configure login welcome announcement popup": "Настроить приветственное объявление после входа",
+    "This popup appears after users enter the authenticated system area.": "Это окно появляется после входа пользователя в защищённую область системы.",
+    "This content is returned only to authenticated users.": "Это содержимое возвращается только аутентифицированным пользователям.",
+    "Welcome announcement content": "Текст приветственного объявления",
+    "Markdown is supported. Raw HTML is not supported.": "Markdown поддерживается. Необработанный HTML не поддерживается.",
+    "Display frequency": "Частота показа",
+    "Show once per content update": "Показывать один раз при каждом обновлении содержимого",
+    "Show once per day": "Показывать один раз в день",
+    "Show every system session": "Показывать при каждом системном сеансе",
+    "Save welcome popup": "Сохранить приветственное окно",
+    "Welcome popup content must be at most 2000 characters.": "Содержимое приветственного окна не должно превышать 2000 символов.",
+    "Welcome announcement": "Приветственное объявление",
+    "Close welcome popup": "Закрыть приветственное окно",
+    "I understand": "Понятно"
   }
 }

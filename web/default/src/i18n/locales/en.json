@@ -4529,6 +4529,21 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Welcome Popup": "Welcome Popup",
+    "Configure login welcome announcement popup": "Configure login welcome announcement popup",
+    "This popup appears after users enter the authenticated system area.": "This popup appears after users enter the authenticated system area.",
+    "This content is returned only to authenticated users.": "This content is returned only to authenticated users.",
+    "Welcome announcement content": "Welcome announcement content",
+    "Markdown is supported. Raw HTML is not supported.": "Markdown is supported. Raw HTML is not supported.",
+    "Display frequency": "Display frequency",
+    "Show once per content update": "Show once per content update",
+    "Show once per day": "Show once per day",
+    "Show every system session": "Show every system session",
+    "Save welcome popup": "Save welcome popup",
+    "Welcome popup content must be at most 2000 characters.": "Welcome popup content must be at most 2000 characters.",
+    "Welcome announcement": "Welcome announcement",
+    "Close welcome popup": "Close welcome popup",
+    "I understand": "I understand"
   }
 }

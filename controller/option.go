@@ -322,6 +322,24 @@ func UpdateOption(c *gin.Context) {
 			})
 			return
 		}
+	case "console_setting.welcome_popup_content":
+		err = console_setting.ValidateWelcomePopupContent(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "console_setting.welcome_popup_frequency":
+		err = console_setting.ValidateWelcomePopupFrequency(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
 	}
 	err = model.UpdateOption(option.Key, option.Value.(string))
 	if err != nil {

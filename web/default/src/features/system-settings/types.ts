@@ -105,11 +105,19 @@ export type AuthSettings = {
   'passkey.attachment_preference': '' | 'platform' | 'cross-platform'
 }
 
+export type WelcomePopupFrequency =
+  | 'once_per_version'
+  | 'once_per_day'
+  | 'every_session'
+
 export type ContentSettings = {
   'console_setting.api_info': string
   'console_setting.announcements': string
   'console_setting.faq': string
   'console_setting.uptime_kuma_groups': string
+  'console_setting.welcome_popup_content': string
+  'console_setting.welcome_popup_enabled': boolean
+  'console_setting.welcome_popup_frequency': WelcomePopupFrequency
   'console_setting.api_info_enabled': boolean
   'console_setting.announcements_enabled': boolean
   'console_setting.faq_enabled': boolean

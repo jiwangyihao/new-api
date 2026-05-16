@@ -4529,6 +4529,21 @@
     "Zero retention": "Aucune rétention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "Welcome Popup": "Fenêtre de bienvenue",
+    "Configure login welcome announcement popup": "Configurer la fenêtre d’annonce de bienvenue à la connexion",
+    "This popup appears after users enter the authenticated system area.": "Cette fenêtre apparaît après l’entrée des utilisateurs dans l’espace authentifié.",
+    "This content is returned only to authenticated users.": "Ce contenu est renvoyé uniquement aux utilisateurs authentifiés.",
+    "Welcome announcement content": "Contenu de l’annonce de bienvenue",
+    "Markdown is supported. Raw HTML is not supported.": "Markdown est pris en charge. Le HTML brut ne l’est pas.",
+    "Display frequency": "Fréquence d’affichage",
+    "Show once per content update": "Afficher une fois par mise à jour du contenu",
+    "Show once per day": "Afficher une fois par jour",
+    "Show every system session": "Afficher à chaque session système",
+    "Save welcome popup": "Enregistrer la fenêtre de bienvenue",
+    "Welcome popup content must be at most 2000 characters.": "Le contenu de la fenêtre de bienvenue doit contenir au maximum 2 000 caractères.",
+    "Welcome announcement": "Annonce de bienvenue",
+    "Close welcome popup": "Fermer la fenêtre de bienvenue",
+    "I understand": "J’ai compris"
   }
 }

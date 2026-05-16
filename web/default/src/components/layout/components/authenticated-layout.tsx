@@ -23,6 +23,7 @@ import { SearchProvider } from '@/context/search-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AnimatedOutlet } from '@/components/page-transition'
 import { SkipToMain } from '@/components/skip-to-main'
+import { WelcomePopupGate } from '@/features/welcome-popup'
 import { WorkspaceProvider } from '../context/workspace-context'
 import { AppHeader } from './app-header'
 import { AppSidebar } from './app-sidebar'
@@ -41,6 +42,7 @@ export function AuthenticatedLayout(props: AuthenticatedLayoutProps) {
           <SidebarProvider defaultOpen={defaultOpen} className='flex-col'>
             <SkipToMain />
             <AppHeader />
+            <WelcomePopupGate />
             <div className='flex min-h-0 w-full flex-1'>
               <AppSidebar />
               <SidebarInset

@@ -4529,6 +4529,21 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "Welcome Popup": "ウェルカムポップアップ",
+    "Configure login welcome announcement popup": "ログイン時のウェルカム告知ポップアップを設定",
+    "This popup appears after users enter the authenticated system area.": "ユーザーが認証済みのシステム領域に入った後に、このポップアップが表示されます。",
+    "This content is returned only to authenticated users.": "この内容は認証済みユーザーにのみ返されます。",
+    "Welcome announcement content": "ウェルカム告知の内容",
+    "Markdown is supported. Raw HTML is not supported.": "Markdown に対応しています。生の HTML は対応していません。",
+    "Display frequency": "表示頻度",
+    "Show once per content update": "内容更新ごとに 1 回表示",
+    "Show once per day": "1 日 1 回表示",
+    "Show every system session": "システムセッションごとに表示",
+    "Save welcome popup": "ウェルカムポップアップを保存",
+    "Welcome popup content must be at most 2000 characters.": "ウェルカムポップアップの内容は 2000 文字以内にしてください。",
+    "Welcome announcement": "ウェルカム告知",
+    "Close welcome popup": "ウェルカムポップアップを閉じる",
+    "I understand": "了解しました"
   }
 }

@@ -4529,6 +4529,21 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "Welcome Popup": "欢迎公告弹窗",
+    "Configure login welcome announcement popup": "配置登录欢迎公告弹窗",
+    "This popup appears after users enter the authenticated system area.": "用户进入已认证系统区域后会显示此弹窗。",
+    "This content is returned only to authenticated users.": "此内容仅通过登录后的接口返回给已认证用户。",
+    "Welcome announcement content": "欢迎公告内容",
+    "Markdown is supported. Raw HTML is not supported.": "支持 Markdown，不支持原始 HTML。",
+    "Display frequency": "展示频率",
+    "Show once per content update": "每次内容更新后显示一次",
+    "Show once per day": "每天显示一次",
+    "Show every system session": "每个系统会话显示一次",
+    "Save welcome popup": "保存欢迎公告",
+    "Welcome popup content must be at most 2000 characters.": "欢迎公告内容最多 2000 个字符。",
+    "Welcome announcement": "欢迎公告",
+    "Close welcome popup": "关闭欢迎公告弹窗",
+    "I understand": "我知道了"
   }
 }

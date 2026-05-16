@@ -32,6 +32,21 @@ import {
   processIncompleteThinkTags,
 } from '../../helpers';
 
+const SYSTEM_OVERLOAD_ERROR_CODES = new Set([
+  'system_cpu_overloaded',
+  'system_memory_overloaded',
+  'system_disk_overloaded',
+]);
+
+const formatPlaygroundErrorMessage = (errorMessage, errorCode, t) => {
+  if (errorCode && SYSTEM_OVERLOAD_ERROR_CODES.has(errorCode)) {
+    return t(
+      '服务器负载较高，请稍后重试。管理员可在系统设置中调整或关闭性能监控。',
+    );
+  }
+  return errorMessage;
+};
+
 export const useApiRequest = (
   setMessage,
   setDebugData,
@@ -285,9 +300,14 @@ export const useApiRequest = (
           if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
             const autoCollapseState = applyAutoCollapseLogic(lastMessage, true);
 
+            const displayError = formatPlaygroundErrorMessage(
+              error.message,
+              error.errorCode,
+              t,
+            );
             newMessages[newMessages.length - 1] = {
               ...lastMessage,
-              content: t('请求发生错误: ') + error.message,
+              content: t('请求发生错误: ') + displayError,
               errorCode: error.errorCode || null,
               status: MESSAGE_STATUS.ERROR,
               ...autoCollapseState,
@@ -422,9 +442,14 @@ export const useApiRequest = (
             const newMessages = [...prevMessage];
             const lastMessage = newMessages[newMessages.length - 1];
             if (lastMessage && lastMessage.status !== MESSAGE_STATUS.COMPLETE && lastMessage.status !== MESSAGE_STATUS.ERROR) {
+              const displayError = formatPlaygroundErrorMessage(
+                errorMessage,
+                errorCode,
+                t,
+              );
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
-                content: (lastMessage.content || '') + errorMessage,
+                content: (lastMessage.content || '') + displayError,
                 errorCode: errorCode,
                 status: MESSAGE_STATUS.ERROR,
               };

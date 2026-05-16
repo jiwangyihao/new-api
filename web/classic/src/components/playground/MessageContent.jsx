@@ -65,6 +65,45 @@ const MessageContent = ({
       errorText = t('请求发生错误');
     }
 
+    if (message.errorCode === 'system_cpu_overloaded') {
+      return (
+        <div className={`${className}`}>
+          <div
+            className='rounded-lg p-3 space-y-2'
+            style={{
+              background: 'var(--semi-color-bg-0)',
+              border: '1px solid var(--semi-color-border)',
+            }}
+          >
+            <div className='flex items-center gap-2'>
+              <AlertTriangle size={16} className='text-orange-500 shrink-0' />
+              <Typography.Text strong className='!text-[var(--semi-color-text-0)]'>
+                {t('服务器负载较高')}
+              </Typography.Text>
+            </div>
+            <Typography.Paragraph
+              className='!text-[var(--semi-color-text-1)] !text-sm !mb-0'
+              style={{ wordBreak: 'break-word' }}
+            >
+              {t(errorText)}
+            </Typography.Paragraph>
+            {isAdmin() && (
+              <Button
+                size='small'
+                theme='light'
+                type='warning'
+                icon={<Settings size={14} />}
+                onClick={() =>
+                  window.open('/console/system-settings/operations/performance', '_blank')
+                }
+              >
+                {t('打开性能设置')}
+              </Button>
+            )}
+          </div>
+        </div>
+      );
+    }
     if (message.errorCode === 'model_price_error') {
       return (
         <div className={`${className}`}>

@@ -83,6 +83,29 @@ export function createLoadingAssistantMessage(): Message {
   }
 }
 
+const SYSTEM_OVERLOAD_ERROR_CODES = new Set([
+  'system_cpu_overloaded',
+  'system_memory_overloaded',
+  'system_disk_overloaded',
+])
+
+export const SYSTEM_OVERLOAD_ERROR_MESSAGE =
+  'Server load is high. Please try again later. Administrators can adjust or disable Performance monitoring in System settings.'
+
+export function isSystemOverloadError(errorCode?: string): boolean {
+  return !!errorCode && SYSTEM_OVERLOAD_ERROR_CODES.has(errorCode)
+}
+
+export function formatPlaygroundErrorMessage(
+  errorMessage: string,
+  errorCode?: string
+): string {
+  if (isSystemOverloadError(errorCode)) {
+    return SYSTEM_OVERLOAD_ERROR_MESSAGE
+  }
+  return errorMessage
+}
+
 /**
  * Build message content with optional images
  */
@@ -221,11 +244,13 @@ export function updateAssistantMessageWithError(
   errorMessage: string,
   errorCode?: string
 ): Message[] {
+  const displayMessage = formatPlaygroundErrorMessage(errorMessage, errorCode)
+  const content = isSystemOverloadError(errorCode)
+    ? displayMessage
+    : `${ERROR_MESSAGES.API_REQUEST_ERROR}: ${displayMessage}`
+
   return updateLastAssistantMessage(messages, (message) => {
-    const updatedMessage = updateCurrentVersionContent(
-      message,
-      `${ERROR_MESSAGES.API_REQUEST_ERROR}: ${errorMessage}`
-    )
+    const updatedMessage = updateCurrentVersionContent(message, content)
     return {
       ...updatedMessage,
       status: MESSAGE_STATUS.ERROR,

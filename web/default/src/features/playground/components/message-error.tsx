@@ -45,6 +45,33 @@ export function MessageError({ message, className = '' }: MessageErrorProps) {
   const errorContent =
     message.versions[0]?.content || 'An unknown error occurred'
 
+  if (message.errorCode === 'system_cpu_overloaded') {
+    return (
+      <Alert variant='default' className={className}>
+        <AlertTriangle className='text-orange-500' />
+        <AlertTitle>{t('Server Load Is High')}</AlertTitle>
+        <AlertDescription className='space-y-2'>
+          <p>{t(errorContent)}</p>
+          {isAdmin && (
+            <Button
+              variant='outline'
+              size='sm'
+              onClick={() =>
+                window.open(
+                  '/console/system-settings/operations/performance',
+                  '_blank'
+                )
+              }
+            >
+              <Settings className='mr-1 h-3.5 w-3.5' />
+              {t('Open Performance Settings')}
+            </Button>
+          )}
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
   if (message.errorCode === 'model_price_error') {
     return (
       <Alert variant='default' className={className}>

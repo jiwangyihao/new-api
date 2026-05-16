@@ -22,6 +22,7 @@ import { describe, test } from 'node:test'
 import {
   buildPerformanceFormDefaults,
   collectPerformanceSettingUpdates,
+  performanceSettingsFormSchema,
   type PerformanceSettingsOptionValues,
 } from './performance-settings-form'
 
@@ -97,5 +98,24 @@ describe('performance settings form updates', () => {
         value: false,
       },
     ])
+  })
+
+  test('rejects CPU monitor thresholds above 100 percent', () => {
+    const values = buildPerformanceFormDefaults({
+      'performance_setting.disk_cache_enabled': false,
+      'performance_setting.disk_cache_threshold_mb': 10,
+      'performance_setting.disk_cache_max_size_mb': 1024,
+      'performance_setting.disk_cache_path': '',
+      'performance_setting.monitor_enabled': true,
+      'performance_setting.monitor_cpu_threshold': 101,
+      'performance_setting.monitor_memory_threshold': 90,
+      'performance_setting.monitor_disk_threshold': 95,
+      'perf_metrics_setting.enabled': true,
+      'perf_metrics_setting.flush_interval': 5,
+      'perf_metrics_setting.bucket_time': 'hour',
+      'perf_metrics_setting.retention_days': 0,
+    })
+
+    assert.equal(performanceSettingsFormSchema.safeParse(values).success, false)
   })
 })

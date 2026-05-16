@@ -22,6 +22,7 @@ import { sendChatCompletion } from '../api'
 import { MESSAGE_STATUS, ERROR_MESSAGES } from '../constants'
 import {
   buildChatCompletionPayload,
+  formatPlaygroundErrorMessage,
   updateAssistantMessageWithError,
   updateLastAssistantMessage,
   processStreamingContent,
@@ -92,7 +93,7 @@ export function useChatHandler({
   // Handle stream error
   const handleStreamError = useCallback(
     (error: string, errorCode?: string) => {
-      toast.error(error)
+      toast.error(formatPlaygroundErrorMessage(error, errorCode))
       onMessageUpdate((prev) =>
         updateAssistantMessageWithError(prev, error, errorCode)
       )

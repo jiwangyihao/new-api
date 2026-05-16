@@ -29,7 +29,7 @@ export const performanceSettingsFormSchema = z.object({
     disk_cache_max_size_mb: numberInput(z.number().min(100)),
     disk_cache_path: z.string(),
     monitor_enabled: z.boolean(),
-    monitor_cpu_threshold: numberInput(z.number().min(0)),
+    monitor_cpu_threshold: numberInput(z.number().min(0).max(100)),
     monitor_memory_threshold: numberInput(z.number().min(0).max(100)),
     monitor_disk_threshold: numberInput(z.number().min(0).max(100)),
   }),

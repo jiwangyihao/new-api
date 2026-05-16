@@ -276,6 +276,13 @@ export function Wallet(props: WalletProps) {
                   : 'grid gap-4'
               }
             >
+              <SubscriptionPlansCard
+                topupInfo={topupInfo}
+                accountBalance={user?.quota}
+                onPurchaseSuccess={fetchUser}
+                onAvailabilityChange={handleSubscriptionAvailabilityChange}
+              />
+
               <div id='wallet-add-funds' className='scroll-mt-4'>
                 <RechargeFormCard
                   topupInfo={topupInfo}
@@ -309,13 +316,6 @@ export function Wallet(props: WalletProps) {
                   }
                 />
               </div>
-
-              <SubscriptionPlansCard
-                topupInfo={topupInfo}
-                accountBalance={user?.quota}
-                onPurchaseSuccess={fetchUser}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-              />
             </div>
 
             <AffiliateRewardsCard

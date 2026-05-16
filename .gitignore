@@ -24,6 +24,7 @@ tiktoken_cache
 .cache
 .claude
 .cursor
+.worktrees/
 
 electron/node_modules
 electron/dist

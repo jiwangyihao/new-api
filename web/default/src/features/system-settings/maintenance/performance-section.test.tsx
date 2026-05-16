@@ -19,103 +19,83 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
-
-const longFormSaveCases = [
-  {
-    file: 'src/features/system-settings/general/system-info-section.tsx',
-    formId: 'system-info-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/maintenance/sidebar-modules-section.tsx',
-    formId: 'sidebar-modules-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/request-limits/rate-limit-section.tsx',
-    formId: 'rate-limit-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/request-limits/ssrf-section.tsx',
-    formId: 'ssrf-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/auth/basic-auth-section.tsx',
-    formId: 'basic-auth-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/auth/oauth-section.tsx',
-    formId: 'oauth-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/auth/passkey-section.tsx',
-    formId: 'passkey-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/general/quota-settings-section.tsx',
-    formId: 'quota-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/general/pricing-section.tsx',
-    formId: 'pricing-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/integrations/monitoring-settings-section.tsx',
-    formId: 'monitoring-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/integrations/email-settings-section.tsx',
-    formId: 'email-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/integrations/payment-settings-section.tsx',
-    formId: 'payment-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/models/global-settings-card.tsx',
-    formId: 'global-model-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/models/gemini-settings-card.tsx',
-    formId: 'gemini-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/models/model-ratio-form.tsx',
-    formId: 'model-ratio-settings-form',
-  },
-  {
-    file: 'src/features/system-settings/models/model-pricing-sheet.tsx',
-    formId: 'model-pricing-editor-form',
-  },
-  {
-    file: 'src/features/system-settings/maintenance/performance-section.tsx',
-    formId: 'performance-settings-form',
-  },
-] as const
+import {
+  buildPerformanceFormDefaults,
+  collectPerformanceSettingUpdates,
+  type PerformanceSettingsOptionValues,
+} from './performance-settings-form'
 
 function readSource(file: string): string {
   return readFileSync(file, 'utf8')
 }
 
 describe('system settings long form save actions', () => {
-  test('long forms render a form-bound save action before the long form body', () => {
-    for (const item of longFormSaveCases) {
-      const source = readSource(item.file)
-      const topSaveIndex = source.indexOf(`form='${item.formId}'`)
-      const formIndex = source.indexOf(`id='${item.formId}'`)
+  test('performance page renders the top save action inside its form', () => {
+    const source = readSource(
+      'src/features/system-settings/maintenance/performance-section.tsx'
+    )
+    const formIndex = source.indexOf(`id='performance-settings-form'`)
+    const topActionIndex = source.indexOf('<SettingsFormActionBar>', formIndex)
+    const firstFieldIndex = source.indexOf('<FormField', formIndex)
 
-      assert.notEqual(
-        topSaveIndex,
-        -1,
-        `${item.file} should render a top save action bound to ${item.formId}`
-      )
-      assert.notEqual(
-        formIndex,
-        -1,
-        `${item.file} should assign ${item.formId} to the form`
-      )
-      assert.ok(
-        topSaveIndex < formIndex,
-        `${item.file} should render the form-bound save action before the long form body`
-      )
+    assert.notEqual(
+      formIndex,
+      -1,
+      'performance page should assign performance-settings-form to the form'
+    )
+    assert.notEqual(
+      topActionIndex,
+      -1,
+      'performance page should render a top save action inside the form'
+    )
+    assert.ok(
+      topActionIndex < firstFieldIndex,
+      'performance page should render the top save action before the editable fields'
+    )
+    assert.equal(
+      source.includes(`form='performance-settings-form'`),
+      false,
+      'performance page should not rely on an external submitter for its top save action'
+    )
+  })
+})
+
+describe('performance settings form updates', () => {
+  test('uses nested form values and emits flat option updates', () => {
+    const defaultValues: PerformanceSettingsOptionValues = {
+      'performance_setting.disk_cache_enabled': false,
+      'performance_setting.disk_cache_threshold_mb': 10,
+      'performance_setting.disk_cache_max_size_mb': 1024,
+      'performance_setting.disk_cache_path': '',
+      'performance_setting.monitor_enabled': false,
+      'performance_setting.monitor_cpu_threshold': 90,
+      'performance_setting.monitor_memory_threshold': 90,
+      'performance_setting.monitor_disk_threshold': 95,
+      'perf_metrics_setting.enabled': true,
+      'perf_metrics_setting.flush_interval': 5,
+      'perf_metrics_setting.bucket_time': 'hour',
+      'perf_metrics_setting.retention_days': 0,
     }
+
+    const values = buildPerformanceFormDefaults(defaultValues)
+
+    values.performance_setting.disk_cache_enabled = true
+    values.performance_setting.monitor_enabled = true
+    values.perf_metrics_setting.enabled = false
+
+    assert.deepEqual(collectPerformanceSettingUpdates(values, defaultValues), [
+      {
+        key: 'performance_setting.disk_cache_enabled',
+        value: true,
+      },
+      {
+        key: 'performance_setting.monitor_enabled',
+        value: true,
+      },
+      {
+        key: 'perf_metrics_setting.enabled',
+        value: false,
+      },
+    ])
   })
 })

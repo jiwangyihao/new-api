@@ -30,7 +30,7 @@ export function SettingsFormActionBar(props: SettingsFormActionBarProps) {
 }
 
 type SettingsFormSaveButtonProps = {
-  form: string
+  form?: string
   isSaving: boolean
   idleLabel: string
   savingLabel: string

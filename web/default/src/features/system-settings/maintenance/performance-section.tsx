@@ -16,9 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useState } from 'react'
-import * as z from 'zod'
-import { useForm } from 'react-hook-form'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -66,29 +65,13 @@ import {
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
-
-const perfSchema = z.object({
-  'performance_setting.disk_cache_enabled': z.boolean(),
-  'performance_setting.disk_cache_threshold_mb': z.coerce.number().min(1),
-  'performance_setting.disk_cache_max_size_mb': z.coerce.number().min(100),
-  'performance_setting.disk_cache_path': z.string().optional(),
-  'performance_setting.monitor_enabled': z.boolean(),
-  'performance_setting.monitor_cpu_threshold': z.coerce.number().min(0),
-  'performance_setting.monitor_memory_threshold': z.coerce
-    .number()
-    .min(0)
-    .max(100),
-  'performance_setting.monitor_disk_threshold': z.coerce
-    .number()
-    .min(0)
-    .max(100),
-  'perf_metrics_setting.enabled': z.boolean(),
-  'perf_metrics_setting.flush_interval': z.coerce.number().min(1),
-  'perf_metrics_setting.bucket_time': z.enum(['minute', '5min', 'hour']),
-  'perf_metrics_setting.retention_days': z.coerce.number().min(0),
-})
-
-type PerfFormValues = z.infer<typeof perfSchema>
+import {
+  buildPerformanceFormDefaults,
+  collectPerformanceSettingUpdates,
+  performanceSettingsFormSchema,
+  type PerformanceSettingsFormValues,
+  type PerformanceSettingsOptionValues,
+} from './performance-settings-form'
 
 function formatBytes(bytes: number, decimals = 2): string {
   if (!bytes || isNaN(bytes)) return '0 Bytes'
@@ -102,7 +85,7 @@ function formatBytes(bytes: number, decimals = 2): string {
 }
 
 interface Props {
-  defaultValues: PerfFormValues
+  defaultValues: PerformanceSettingsOptionValues
 }
 
 type LogInfo = {
@@ -156,14 +139,21 @@ export function PerformanceSection(props: Props) {
   const [logCleanupValue, setLogCleanupValue] = useState(10)
   const [logCleanupLoading, setLogCleanupLoading] = useState(false)
 
-  const form = useForm<PerfFormValues>({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(perfSchema) as any,
-    defaultValues: props.defaultValues,
+  const formDefaults = useMemo(
+    () => buildPerformanceFormDefaults(props.defaultValues),
+    [props.defaultValues]
+  )
+
+  const form = useForm<PerformanceSettingsFormValues>({
+    resolver: zodResolver(performanceSettingsFormSchema) as Resolver<
+      PerformanceSettingsFormValues,
+      unknown,
+      PerformanceSettingsFormValues
+    >,
+    defaultValues: formDefaults,
   })
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  useResetForm(form as any, props.defaultValues)
+  useResetForm(form, formDefaults)
 
   const fetchStats = useCallback(async () => {
     try {
@@ -188,22 +178,18 @@ export function PerformanceSection(props: Props) {
     fetchLogInfo()
   }, [fetchStats, fetchLogInfo])
 
-  const onSubmit = async (data: PerfFormValues) => {
-    const entries = Object.entries(data) as [string, unknown][]
-    const updates = entries.filter(
-      ([key, value]) =>
-        value !== (props.defaultValues[key as keyof PerfFormValues] as unknown)
-    )
+  const onSubmit = async (data: PerformanceSettingsFormValues) => {
+    const updates = collectPerformanceSettingUpdates(data, props.defaultValues)
+
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
       return
     }
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value: value as string | number | boolean,
-      })
+
+    for (const update of updates) {
+      await updateOption.mutateAsync(update)
     }
+
     toast.success(t('Saved successfully'))
     fetchStats()
   }
@@ -305,19 +291,18 @@ export function PerformanceSection(props: Props) {
       )}
     >
       <Form {...form}>
-        <SettingsFormActionBar>
-          <SettingsFormSaveButton
-            form='performance-settings-form'
-            isSaving={updateOption.isPending}
-            idleLabel={t('Save Changes')}
-            savingLabel={t('Saving...')}
-          />
-        </SettingsFormActionBar>
         <form
           id='performance-settings-form'
           onSubmit={form.handleSubmit(onSubmit)}
           className='space-y-6'
         >
+          <SettingsFormActionBar>
+            <SettingsFormSaveButton
+              isSaving={updateOption.isPending}
+              idleLabel={t('Save Changes')}
+              savingLabel={t('Saving...')}
+            />
+          </SettingsFormActionBar>
           {/* Disk Cache Settings */}
           <div>
             <h4 className='font-medium'>{t('Disk Cache Settings')}</h4>

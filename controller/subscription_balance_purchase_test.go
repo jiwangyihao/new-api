@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupSubscriptionBalancePurchaseTestDB(t *testing.T) {
@@ -188,4 +189,22 @@ func TestSubscriptionBalancePaySerializesPurchaseLimitAcrossIdempotencyKeys(t *t
 	var subCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&subCount).Error)
 	assert.Equal(t, int64(1), subCount)
+}
+
+func TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9551
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_lock", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
+	plan := &model.SubscriptionPlan{Id: 9552, Title: "Lock", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1}
+	require.NoError(t, model.DB.Create(plan).Error)
+
+	var order model.SubscriptionOrder
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		return createBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", int(common.QuotaPerUnit*40), &order)
+	})
+
+	require.NoError(t, err)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, int(common.QuotaPerUnit*60), user.Quota)
 }

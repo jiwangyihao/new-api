@@ -79,11 +79,7 @@ func subscriptionBalancePayAmount(price float64) (int, error) {
 	if price <= 0 {
 		return 0, errors.New("套餐不可购买")
 	}
-	amount := int(math.Round(price))
-	if math.Abs(price-float64(amount)) > 0.000001 || amount <= 0 {
-		return 0, errors.New("套餐价格必须为整数")
-	}
-	quotaAmount := decimal.NewFromInt(int64(amount)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).IntPart()
+	quotaAmount := decimal.NewFromFloat(price).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Round(0).IntPart()
 	if quotaAmount <= 0 || quotaAmount > int64(math.MaxInt) {
 		return 0, errors.New("套餐价格无效")
 	}

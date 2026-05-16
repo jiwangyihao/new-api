@@ -65,6 +65,22 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 	assert.Contains(t, log.Content, "账户余额购买订阅套餐：Basic")
 }
 
+func TestSubscriptionBalancePayAllowsDecimalPlanPrice(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9505
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_decimal", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
+	code := "balance-decimal"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9506, Title: "Decimal", PriceAmount: 39.9, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9506,"idempotency_key":"balance-decimal"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, int(common.QuotaPerUnit*60.1), user.Quota)
+}
+
 func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9511

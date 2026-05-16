@@ -38,6 +38,11 @@ var (
 )
 
 const (
+	PaymentProviderBalance      = "balance"
+	PaymentMethodAccountBalance = "account_balance"
+)
+
+const (
 	subscriptionPlanCacheNamespace     = "new-api:subscription_plan:v1"
 	subscriptionPlanInfoCacheNamespace = "new-api:subscription_plan_info:v1"
 )
@@ -523,6 +528,41 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	return sub, nil
 }
 
+func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, providerPayload string, actualPaymentMethod string) (*UserSubscription, error) {
+	if tx == nil || order == nil {
+		return nil, errors.New("invalid subscription order")
+	}
+	if order.Status == common.TopUpStatusSuccess {
+		return nil, nil
+	}
+	if order.Status != common.TopUpStatusPending {
+		return nil, ErrSubscriptionOrderStatusInvalid
+	}
+	plan, err := GetSubscriptionPlanById(order.PlanId)
+	if err != nil {
+		return nil, err
+	}
+	sub, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+	if err != nil {
+		return nil, err
+	}
+	order.Status = common.TopUpStatusSuccess
+	order.CompleteTime = common.GetTimestamp()
+	if providerPayload != "" {
+		order.ProviderPayload = providerPayload
+	}
+	if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
+		order.PaymentMethod = actualPaymentMethod
+	}
+	if err := upsertSubscriptionTopUpTx(tx, order); err != nil {
+		return nil, err
+	}
+	if err := tx.Save(order).Error; err != nil {
+		return nil, err
+	}
+	return sub, nil
+}
+
 // Complete a subscription order (idempotent). Creates a UserSubscription snapshot from the plan.
 // expectedPaymentProvider guards against cross-gateway callback attacks (empty skips the check).
 // actualPaymentMethod updates the order's PaymentMethod to reflect the real payment type used (empty skips update).
@@ -561,22 +601,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 			// still allow completion for already purchased orders
 		}
 		upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
-		_, err = CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
-		if err != nil {
-			return err
-		}
-		if err := upsertSubscriptionTopUpTx(tx, &order); err != nil {
-			return err
-		}
-		order.Status = common.TopUpStatusSuccess
-		order.CompleteTime = common.GetTimestamp()
-		if providerPayload != "" {
-			order.ProviderPayload = providerPayload
-		}
-		if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
-			order.PaymentMethod = actualPaymentMethod
-		}
-		if err := tx.Save(&order).Error; err != nil {
+		if _, err := CompleteSubscriptionOrderTx(tx, &order, providerPayload, actualPaymentMethod); err != nil {
 			return err
 		}
 		logUserId = order.UserId

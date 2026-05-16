@@ -103,6 +103,25 @@ func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 	assert.Equal(t, int64(0), subCount)
 }
 
+func TestSubscriptionBalancePayRejectsNonCNYPlanCurrency(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9513
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_usd", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
+	code := "balance-usd"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9514, Title: "USD Plan", PriceAmount: 40, Currency: "USD", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9514,"idempotency_key":"balance-usd"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "账户余额仅支持 CNY 套餐")
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, int(common.QuotaPerUnit*100), user.Quota)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9514).Count(&subCount).Error)
+	assert.Equal(t, int64(0), subCount)
+}
+
 func TestSubscriptionBalancePayExistingPendingDoesNotDeduct(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9531

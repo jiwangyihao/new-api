@@ -41,6 +41,10 @@ func SubscriptionRequestBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, msg)
 		return
 	}
+	if strings.ToUpper(strings.TrimSpace(plan.Currency)) != "CNY" {
+		common.ApiErrorMsg(c, "账户余额仅支持 CNY 套餐")
+		return
+	}
 	amount, err := subscriptionBalancePayAmount(plan.PriceAmount)
 	if err != nil {
 		common.ApiError(c, err)

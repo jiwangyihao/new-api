@@ -16,8 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import * as z from 'zod'
-import { useForm } from 'react-hook-form'
+import { useMemo } from 'react'
+import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -34,45 +34,46 @@ import { Switch } from '@/components/ui/switch'
 import { SettingsSection } from '../components/settings-section'
 import { useResetForm } from '../hooks/use-reset-form'
 import { useUpdateOption } from '../hooks/use-update-option'
+import {
+  buildGrokFormDefaults,
+  collectGrokSettingUpdates,
+  grokSettingsFormSchema,
+  type GrokSettingsFormValues,
+  type GrokSettingsOptionValues,
+} from './grok-settings-form'
 
 const XAI_VIOLATION_FEE_DOC_URL =
   'https://docs.x.ai/docs/models#usage-guidelines-violation-fee'
 
-const grokSchema = z.object({
-  'grok.violation_deduction_enabled': z.boolean(),
-  'grok.violation_deduction_amount': z.coerce.number().min(0),
-})
-
-type GrokFormValues = z.infer<typeof grokSchema>
-
 interface Props {
-  defaultValues: GrokFormValues
+  defaultValues: GrokSettingsOptionValues
 }
 
 export function GrokSettingsCard(props: Props) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
-  const form = useForm<GrokFormValues>({
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    resolver: zodResolver(grokSchema) as any,
-    defaultValues: props.defaultValues,
+  const formDefaults = useMemo(
+    () => buildGrokFormDefaults(props.defaultValues),
+    [props.defaultValues]
+  )
+
+  const form = useForm<GrokSettingsFormValues>({
+    resolver: zodResolver(grokSettingsFormSchema) as Resolver<
+      GrokSettingsFormValues,
+      unknown,
+      GrokSettingsFormValues
+    >,
+    defaultValues: formDefaults,
   })
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  useResetForm(form as any, props.defaultValues)
+  useResetForm(form, formDefaults)
 
-  const onSubmit = async (data: GrokFormValues) => {
-    const entries = Object.entries(data) as [string, unknown][]
-    const updates = entries.filter(
-      ([key, value]) =>
-        value !== (props.defaultValues[key as keyof GrokFormValues] as unknown)
-    )
-    for (const [key, value] of updates) {
-      await updateOption.mutateAsync({
-        key,
-        value: value as string | number | boolean,
-      })
+  const onSubmit = async (data: GrokSettingsFormValues) => {
+    const updates = collectGrokSettingUpdates(data, props.defaultValues)
+
+    for (const update of updates) {
+      await updateOption.mutateAsync(update)
     }
   }
 

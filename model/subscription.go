@@ -288,6 +288,7 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
+	Plan         *SubscriptionPlan `json:"plan,omitempty"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
@@ -722,7 +723,7 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildSubscriptionSummaries(subs), nil
+	return buildSubscriptionSummaries(subs)
 }
 
 // HasActiveUserSubscription returns whether the user has any active subscription.
@@ -786,21 +787,48 @@ func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildSubscriptionSummaries(subs), nil
+	return buildSubscriptionSummaries(subs)
 }
 
-func buildSubscriptionSummaries(subs []UserSubscription) []SubscriptionSummary {
+func buildSubscriptionSummaries(subs []UserSubscription) ([]SubscriptionSummary, error) {
 	if len(subs) == 0 {
-		return []SubscriptionSummary{}
+		return []SubscriptionSummary{}, nil
 	}
+	planIds := make([]int, 0, len(subs))
+	seenPlanIds := make(map[int]struct{}, len(subs))
+	for _, sub := range subs {
+		if sub.PlanId <= 0 {
+			continue
+		}
+		if _, ok := seenPlanIds[sub.PlanId]; ok {
+			continue
+		}
+		seenPlanIds[sub.PlanId] = struct{}{}
+		planIds = append(planIds, sub.PlanId)
+	}
+
+	plansById := make(map[int]SubscriptionPlan, len(planIds))
+	if len(planIds) > 0 {
+		var plans []SubscriptionPlan
+		if err := DB.Where("id IN ?", planIds).Find(&plans).Error; err != nil {
+			return nil, err
+		}
+		for _, plan := range plans {
+			plansById[plan.Id] = plan
+		}
+	}
+
 	result := make([]SubscriptionSummary, 0, len(subs))
 	for _, sub := range subs {
 		subCopy := sub
-		result = append(result, SubscriptionSummary{
-			Subscription: &subCopy,
-		})
+		summary := SubscriptionSummary{Subscription: &subCopy}
+		if plan, ok := plansById[sub.PlanId]; ok {
+			planCopy := plan
+			summary.Plan = &planCopy
+		}
+		result = append(result, summary)
 	}
-	return result
+	return result, nil
 }
 
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.

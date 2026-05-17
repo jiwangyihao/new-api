@@ -73,6 +73,21 @@ function renderStatusTag(sub, t) {
   );
 }
 
+function getNonBlank(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function getPlanDisplayTitle(record, planTitleMap) {
+  const subscription = record?.subscription || {};
+  const planId = subscription.plan_id;
+  return (
+    getNonBlank(record?.plan?.title) ||
+    getNonBlank(record?.plan_title) ||
+    getNonBlank(planTitleMap.get(planId)) ||
+    (planId ? `#${planId}` : '-')
+  );
+}
+
 const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
   const isMobile = useIsMobile();
   const [loading, setLoading] = useState(false);
@@ -259,9 +274,7 @@ const UserSubscriptionsModal = ({ visible, onCancel, user, t, onSuccess }) => {
         width: 180,
         render: (_, record) => {
           const sub = record?.subscription;
-          const planId = sub?.plan_id;
-          const title =
-            planTitleMap.get(planId) || (planId ? `#${planId}` : '-');
+          const title = getPlanDisplayTitle(record, planTitleMap);
           return (
             <div className='min-w-0'>
               <div className='font-medium truncate'>{title}</div>

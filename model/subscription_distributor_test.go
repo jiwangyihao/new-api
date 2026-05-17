@@ -232,11 +232,115 @@ func TestEnsureDistributorDefaultPlans(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, EnsureDistributorDefaultPlans())
 
-	assertDefaultDistributorPlan(t, "trial_24h", "Trial", 0, "CNY", 0, 1, true, false, 24, false, SubscriptionResetNever)
+	assertDefaultDistributorPlan(t, "trial_24h", "试用装可乐", 0, "CNY", 0, 1, true, false, 24, false, SubscriptionResetNever)
 	assertDefaultDistributorPlan(t, "basic_monthly", "Basic", 40, "CNY", 1_000_000_000, 1, false, true, 0, true, SubscriptionResetMonthly)
 	assertDefaultDistributorPlan(t, "standard_monthly", "Standard", 80, "CNY", 2_000_000_000, 5, false, true, 0, true, SubscriptionResetMonthly)
 	assertDefaultDistributorPlan(t, "pro_monthly", "Pro", 160, "CNY", 5_000_000_000, 10, false, true, 0, true, SubscriptionResetMonthly)
 	assertDefaultDistributorPlan(t, "max_monthly", "Max", 660, "CNY", 10_000_000_000, 50, false, true, 0, true, SubscriptionResetMonthly)
+}
+
+func TestMigrateLegacyTrialPlanTitleUpdatesLegacyTitles(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		title string
+	}{
+		{name: "old default", title: "Trial"},
+		{name: "empty", title: ""},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			truncateTables(t)
+			trialCode := "trial_24h"
+			require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7501, Title: testCase.title, Enabled: true, IsTrial: true, BusinessCode: &trialCode}).Error)
+
+			require.NoError(t, migrateLegacyTrialPlanTitle())
+
+			var plan SubscriptionPlan
+			require.NoError(t, DB.Where("business_code = ?", trialCode).First(&plan).Error)
+			assert.Equal(t, "试用装可乐", plan.Title)
+		})
+	}
+}
+
+func TestMigrateLegacyTrialPlanTitlePreservesCustomTrialTitle(t *testing.T) {
+	truncateTables(t)
+	trialCode := "trial_24h"
+	basicCode := "basic_monthly"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7511, Title: "自定义试用", Enabled: true, IsTrial: true, BusinessCode: &trialCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7512, Title: "自定义基础套餐", Enabled: true, BusinessCode: &basicCode}).Error)
+
+	require.NoError(t, migrateLegacyTrialPlanTitle())
+
+	var trialPlan SubscriptionPlan
+	require.NoError(t, DB.Where("business_code = ?", trialCode).First(&trialPlan).Error)
+	assert.Equal(t, "自定义试用", trialPlan.Title)
+
+	var basicPlan SubscriptionPlan
+	require.NoError(t, DB.Where("business_code = ?", basicCode).First(&basicPlan).Error)
+	assert.Equal(t, "自定义基础套餐", basicPlan.Title)
+}
+
+func TestMigrateLegacyTrialPlanTitlePreservesNonTrialPlan(t *testing.T) {
+	truncateTables(t)
+	trialCode := "trial_24h"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7513, Title: "Trial", Enabled: true, IsTrial: false, BusinessCode: &trialCode}).Error)
+
+	require.NoError(t, migrateLegacyTrialPlanTitle())
+
+	var plan SubscriptionPlan
+	require.NoError(t, DB.Where("business_code = ?", trialCode).First(&plan).Error)
+	assert.Equal(t, "Trial", plan.Title)
+}
+
+func TestGetAllUserSubscriptionsIncludesPlanTitles(t *testing.T) {
+	truncateTables(t)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&User{Id: 7521, Username: "summary_user", Status: common.UserStatusEnabled}).Error)
+	trialCode := "trial_24h"
+	paidCode := "summary_paid"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7522, Title: "试用装可乐", Enabled: true, IsTrial: true, PublicVisible: false, BusinessCode: &trialCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7523, Title: "标准可乐", Enabled: true, IsTrial: false, PublicVisible: true, BusinessCode: &paidCode}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7524, UserId: 7521, PlanId: 7522, Status: "active", StartTime: now - 60, EndTime: now + 3600, GrantReason: "trial_code"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7525, UserId: 7521, PlanId: 7523, Status: "active", StartTime: now - 60, EndTime: now + 7200, GrantReason: "order"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7526, UserId: 7521, PlanId: 7599, Status: "active", StartTime: now - 60, EndTime: now + 1800, GrantReason: "admin"}).Error)
+
+	allSubscriptions, err := GetAllUserSubscriptions(7521)
+	require.NoError(t, err)
+	require.Len(t, allSubscriptions, 3)
+	assertSummaryPlanTitleByPlanId(t, allSubscriptions, 7522, "试用装可乐")
+	assertSummaryPlanTitleByPlanId(t, allSubscriptions, 7523, "标准可乐")
+	assertSummaryPlanMissingByPlanId(t, allSubscriptions, 7599)
+
+	activeSubscriptions, err := GetAllActiveUserSubscriptions(7521)
+	require.NoError(t, err)
+	require.Len(t, activeSubscriptions, 3)
+	assertSummaryPlanTitleByPlanId(t, activeSubscriptions, 7522, "试用装可乐")
+	assertSummaryPlanTitleByPlanId(t, activeSubscriptions, 7523, "标准可乐")
+	assertSummaryPlanMissingByPlanId(t, activeSubscriptions, 7599)
+}
+
+func assertSummaryPlanTitleByPlanId(t *testing.T, summaries []SubscriptionSummary, planId int, title string) {
+	t.Helper()
+	for _, summary := range summaries {
+		if summary.Subscription == nil || summary.Subscription.PlanId != planId {
+			continue
+		}
+		require.NotNil(t, summary.Plan)
+		assert.Equal(t, title, summary.Plan.Title)
+		return
+	}
+	require.Failf(t, "subscription summary not found", "plan_id=%d", planId)
+}
+
+func assertSummaryPlanMissingByPlanId(t *testing.T, summaries []SubscriptionSummary, planId int) {
+	t.Helper()
+	for _, summary := range summaries {
+		if summary.Subscription == nil || summary.Subscription.PlanId != planId {
+			continue
+		}
+		assert.Nil(t, summary.Plan)
+		return
+	}
+	require.Failf(t, "subscription summary not found", "plan_id=%d", planId)
 }
 
 func assertDefaultDistributorPlan(t *testing.T, businessCode string, title string, price float64, currency string, tokenLimit int64, concurrency int, isTrial bool, publicVisible bool, trialHours int, rewardEligible bool, resetPeriod string) {

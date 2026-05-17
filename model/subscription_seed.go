@@ -24,13 +24,18 @@ type distributorDefaultPlan struct {
 }
 
 var distributorDefaultPlans = []distributorDefaultPlan{
-	{BusinessCode: "trial_24h", Title: "Trial", PriceAmount: 0, Currency: "CNY", DurationUnit: SubscriptionDurationHour, DurationValue: 24, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, IsTrial: true, PublicVisible: false, TrialDurationHours: 24, RewardEligible: false, SortOrder: 1000, QuotaResetPeriod: SubscriptionResetNever},
+	{BusinessCode: "trial_24h", Title: "试用装可乐", PriceAmount: 0, Currency: "CNY", DurationUnit: SubscriptionDurationHour, DurationValue: 24, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, IsTrial: true, PublicVisible: false, TrialDurationHours: 24, RewardEligible: false, SortOrder: 1000, QuotaResetPeriod: SubscriptionResetNever},
 	{BusinessCode: "basic_monthly", Title: "Basic", PriceAmount: 40, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1_000_000_000, ConcurrencyLimit: 1, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 900, QuotaResetPeriod: SubscriptionResetMonthly},
 	{BusinessCode: "standard_monthly", Title: "Standard", PriceAmount: 80, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2_000_000_000, ConcurrencyLimit: 5, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 800, QuotaResetPeriod: SubscriptionResetMonthly},
 	{BusinessCode: "pro_monthly", Title: "Pro", PriceAmount: 160, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 5_000_000_000, ConcurrencyLimit: 10, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 700, QuotaResetPeriod: SubscriptionResetMonthly},
 	{BusinessCode: "max_monthly", Title: "Max", PriceAmount: 660, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 10_000_000_000, ConcurrencyLimit: 50, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 600, QuotaResetPeriod: SubscriptionResetMonthly},
 }
 
+func migrateLegacyTrialPlanTitle() error {
+	return DB.Model(&SubscriptionPlan{}).
+		Where("business_code = ? AND is_trial = ? AND title IN ?", "trial_24h", true, []string{"", "Trial"}).
+		Update("title", "试用装可乐").Error
+}
 func EnsureDistributorDefaultPlans() error {
 	if DB == nil {
 		return errors.New("database is not initialized")

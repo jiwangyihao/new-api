@@ -48,6 +48,34 @@ function getEpayMethods(payMethods = []) {
   );
 }
 
+function getNonBlank(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function getSubscriptionDisplayLabel(record, planTitleMap, subscriptionLabel) {
+  const subscription = record?.subscription || {};
+  const fallbackLabel = `${subscriptionLabel} #${subscription.id}`;
+  const title =
+    getNonBlank(record?.plan?.title) ||
+    getNonBlank(record?.plan_title) ||
+    getNonBlank(planTitleMap.get(subscription.plan_id));
+
+  if (
+    title &&
+    (record?.plan?.is_trial ||
+      subscription.grant_reason === 'trial_code' ||
+      subscription.grant_reason === 'invite_trial')
+  ) {
+    return title;
+  }
+
+  if (!title) {
+    return fallbackLabel;
+  }
+
+  return `${title} · ${fallbackLabel}`;
+}
+
 // 提交易支付表单
 function submitEpayForm({ url, params }) {
   const form = document.createElement('form');
@@ -387,8 +415,11 @@ const SubscriptionPlansCard = ({
                       totalAmount > 0
                         ? Math.max(0, totalAmount - usedAmount)
                         : 0;
-                    const planTitle =
-                      planTitleMap.get(subscription?.plan_id) || '';
+                    const subscriptionLabel = getSubscriptionDisplayLabel(
+                      sub,
+                      planTitleMap,
+                      t('订阅'),
+                    );
                     const remainDays = getRemainingDays(sub);
                     const usagePercent = getUsagePercent(sub);
                     const now = Date.now() / 1000;
@@ -403,9 +434,7 @@ const SubscriptionPlansCard = ({
                         <div className='flex items-center justify-between text-xs mb-2'>
                           <div className='flex items-center gap-2'>
                             <span className='font-medium'>
-                              {planTitle
-                                ? `${planTitle} · ${t('订阅')} #${subscription?.id}`
-                                : `${t('订阅')} #${subscription?.id}`}
+                              {subscriptionLabel}
                             </span>
                             {isActive ? (
                               <Tag

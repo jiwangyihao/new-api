@@ -51,6 +51,7 @@ import type {
   PlanRecord,
   UserSubscriptionRecord,
 } from '@/features/subscriptions/types'
+import { getSubscriptionDisplayLabel } from '../lib/subscription-display'
 import type { PaymentMethod, TopupInfo } from '../types'
 
 interface SubscriptionPlansCardProps {
@@ -275,8 +276,11 @@ export function SubscriptionPlansCard({
                   const tokenUsed = Number(subscription?.token_used || 0)
                   const remainTokens =
                     tokenLimit > 0 ? Math.max(0, tokenLimit - tokenUsed) : 0
-                  const planTitle =
-                    planTitleMap.get(subscription?.plan_id) || ''
+                  const subscriptionLabel = getSubscriptionDisplayLabel(
+                    sub,
+                    planTitleMap,
+                    t('Subscription')
+                  )
                   const remainDays = getRemainingDays(sub)
                   const usagePercent = getUsagePercent(sub)
                   const now = Date.now() / 1000
@@ -293,9 +297,7 @@ export function SubscriptionPlansCard({
                       <div className='flex items-center justify-between'>
                         <div className='flex items-center gap-2'>
                           <span className='font-medium'>
-                            {planTitle
-                              ? `${planTitle} · ${t('Subscription')} #${subscription?.id}`
-                              : `${t('Subscription')} #${subscription?.id}`}
+                            {subscriptionLabel}
                           </span>
                           {isActive ? (
                             <StatusBadge

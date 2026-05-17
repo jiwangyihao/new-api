@@ -64,11 +64,19 @@ describe('Issue #3 quick start copy', () => {
       dashboardSource,
       /completed: remainQuota > 0 \|\| usedQuota > 0/
     )
-    assert.match(dashboardSource, /completed: hasActiveSubscription/)
+    assert.match(dashboardSource, /completed: subscriptionCompletion === 'paid'/)
+    assert.match(dashboardSource, /partial: subscriptionCompletion === 'trial'/)
     assert.match(
       dashboardSource,
       /queryKey: \['dashboard', 'overview', 'self-subscriptions', user\?\.id\]/
     )
     assert.match(dashboardSource, /enabled: Boolean\(user\?\.id\)/)
+    assert.match(dashboardSource, /subscriptionCompletion === 'paid'/)
+    assert.match(dashboardSource, /subscriptionCompletion === 'trial'/)
+    assert.match(
+      dashboardSource,
+      /completedStepCount = startSteps.reduce\(\(total, step\) =>/
+    )
+    assert.match(dashboardSource, /step\.partial \? 0\.5/)
   })
 })

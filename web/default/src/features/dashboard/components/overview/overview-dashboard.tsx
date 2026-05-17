@@ -23,9 +23,11 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Circle,
+  CircleDot,
   FileText,
   KeyRound,
   ListChecks,
@@ -52,6 +54,8 @@ import {
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
 import { getSelfSubscriptionFull } from '@/features/subscriptions/api'
+import { getSubscriptionCompletion } from '../../lib/subscription-completion'
+import type { SubscriptionCompletion } from '../../lib/subscription-completion'
 import { useApiInfo } from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
@@ -88,6 +92,7 @@ interface StartStep {
   to: DashboardActionPath
   icon: LucideIcon
   completed: boolean
+  partial?: boolean
 }
 
 interface QuickAction {
@@ -216,7 +221,11 @@ function StartStepItem(props: {
   isLast: boolean
 }) {
   const Icon = props.step.icon
-  const StatusIcon = props.step.completed ? Check : Circle
+  const StatusIcon = props.step.completed
+    ? CheckCircle2
+    : props.step.partial
+      ? CircleDot
+      : Circle
 
   return (
     <li className='relative flex gap-3 pb-2.5 last:pb-0'>
@@ -229,11 +238,16 @@ function StartStepItem(props: {
       <span
         className={cn(
           'bg-background relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs',
-          props.step.completed && 'border-success/30 bg-success/10'
+          props.step.completed && 'border-success/30 bg-success/10',
+          props.step.partial && 'border-warning/30 bg-warning/10'
         )}
       >
         <StatusIcon
-          className={props.step.completed ? 'text-success size-4' : 'size-4'}
+          className={cn(
+            'size-4',
+            props.step.completed && 'text-success',
+            props.step.partial && 'text-warning'
+          )}
           aria-hidden='true'
         />
       </span>
@@ -458,15 +472,10 @@ export function OverviewDashboard() {
     enabled: Boolean(user?.id),
   })
 
-  const hasActiveSubscription = useMemo(() => {
-    const now = Date.now() / 1000
-    return (subscriptionsQuery.data ?? []).some((item) => {
-      const subscription = item.subscription
-      const isExpired =
-        (subscription?.end_time ?? 0) > 0 && subscription.end_time < now
-      return subscription?.status === 'active' && !isExpired
-    })
-  }, [subscriptionsQuery.data])
+  const subscriptionCompletion = useMemo<SubscriptionCompletion>(
+    () => getSubscriptionCompletion(subscriptionsQuery.data),
+    [subscriptionsQuery.data]
+  )
 
   const preferredKey = useMemo(
     () => getPreferredKey(apiKeysQuery.data ?? []),
@@ -509,10 +518,11 @@ export function OverviewDashboard() {
         ),
         to: '/pricing',
         icon: BookOpen,
-        completed: hasActiveSubscription,
+        completed: subscriptionCompletion === 'paid',
+        partial: subscriptionCompletion === 'trial',
       },
     ],
-    [hasActiveSubscription, preferredKey, requestCount, t]
+    [preferredKey, requestCount, subscriptionCompletion, t]
   )
 
   const quickActions = useMemo<QuickAction[]>(
@@ -593,7 +603,10 @@ export function OverviewDashboard() {
     }
   }, [apiInfoItems, modelsQuery.data, preferredKey, realKeyQuery.data, t])
 
-  const completedStepCount = startSteps.filter((step) => step.completed).length
+  const completedStepCount = startSteps.reduce((total, step) => {
+    if (step.completed) return total + 1
+    return total + (step.partial ? 0.5 : 0)
+  }, 0)
   const setupComplete = completedStepCount === startSteps.length
   const setupGuideExpanded = manualSetupGuideExpanded ?? !setupComplete
 

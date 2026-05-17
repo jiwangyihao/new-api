@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 import type { TFunction } from 'i18next'
-import { parseQuotaFromDollars, quotaUnitsToDollars } from '@/lib/format'
+import { accountBalanceQuotaToCnyAmount } from '@/features/subscriptions/lib'
 import {
   REDEMPTION_VALIDATION,
   getRedemptionFormErrorMessages,
@@ -36,7 +36,7 @@ export function getRedemptionFormSchema(t: TFunction) {
       .string()
       .min(REDEMPTION_VALIDATION.NAME_MIN_LENGTH, msg.NAME_LENGTH_INVALID)
       .max(REDEMPTION_VALIDATION.NAME_MAX_LENGTH, msg.NAME_LENGTH_INVALID),
-    quota_dollars: z.number().min(0, t('Quota must be a positive number')),
+    quota_cny: z.number().int(t('Amount must be a whole number')).min(1, t('Amount must be greater than 0')),
     expired_time: z.date().optional(),
     count: z
       .number()
@@ -48,7 +48,7 @@ export function getRedemptionFormSchema(t: TFunction) {
 
 export type RedemptionFormValues = {
   name: string
-  quota_dollars: number
+  quota_cny: number
   expired_time?: Date
   count?: number
 }
@@ -59,7 +59,7 @@ export type RedemptionFormValues = {
 
 export const REDEMPTION_FORM_DEFAULT_VALUES: RedemptionFormValues = {
   name: '',
-  quota_dollars: 10,
+  quota_cny: 10,
   expired_time: undefined,
   count: 1,
 }
@@ -76,7 +76,7 @@ export function transformFormDataToPayload(
 ): RedemptionFormData {
   return {
     name: data.name,
-    quota: parseQuotaFromDollars(data.quota_dollars),
+    quota: data.quota_cny,
     expired_time: data.expired_time
       ? Math.floor(data.expired_time.getTime() / 1000)
       : 0,
@@ -92,7 +92,7 @@ export function transformRedemptionToFormDefaults(
 ): RedemptionFormValues {
   return {
     name: redemption.name,
-    quota_dollars: quotaUnitsToDollars(redemption.quota),
+    quota_cny: accountBalanceQuotaToCnyAmount(redemption.quota),
     expired_time:
       redemption.expired_time > 0
         ? new Date(redemption.expired_time * 1000)

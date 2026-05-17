@@ -25,12 +25,8 @@ import {
   showError,
   showSuccess,
   renderQuota,
-  getCurrencyConfig,
 } from '../../../../helpers';
-import {
-  quotaToDisplayAmount,
-  displayAmountToQuota,
-} from '../../../../helpers/quota';
+import { getQuotaPerUnit } from '../../../../helpers/quota';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
   Button,
@@ -64,10 +60,13 @@ const EditRedemptionModal = (props) => {
   const formApiRef = useRef(null);
   const [showQuotaInput, setShowQuotaInput] = useState(false);
 
+  const quotaToCNYAmount = (quota) => Number(quota || 0) / getQuotaPerUnit();
+  const cnyAmountToQuota = (amount) => Math.round(Number(amount || 0) * getQuotaPerUnit());
+
   const getInitValues = () => ({
     name: '',
-    quota: 100000,
-    amount: Number(quotaToDisplayAmount(100000).toFixed(6)),
+    quota: cnyAmountToQuota(100),
+    amount: 100,
     count: 1,
     expired_time: null,
   });
@@ -86,7 +85,7 @@ const EditRedemptionModal = (props) => {
       } else {
         data.expired_time = new Date(data.expired_time * 1000);
       }
-      data.amount = Number(quotaToDisplayAmount(data.quota || 0).toFixed(6));
+      data.amount = Number(quotaToCNYAmount(data.quota || 0).toFixed(0));
       formApiRef.current?.setValues({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -112,7 +111,7 @@ const EditRedemptionModal = (props) => {
     setLoading(true);
     let localInputs = { ...values };
     localInputs.count = parseInt(localInputs.count) || 0;
-    localInputs.quota = displayAmountToQuota(localInputs.amount);
+    localInputs.quota = localInputs.amount;
     if (localInputs.quota <= 0) {
       showError(t('请输入金额'));
       setLoading(false);
@@ -302,18 +301,18 @@ const EditRedemptionModal = (props) => {
                       <Form.InputNumber
                         field='amount'
                         label={t('金额')}
-                        prefix={getCurrencyConfig().symbol}
-                        placeholder={t('输入金额')}
-                        precision={6}
-                        min={0}
-                        step={0.000001}
+                        prefix='¥'
+                        placeholder={t('输入人民币金额')}
+                        precision={0}
+                        min={1}
+                        step={1}
                         style={{ width: '100%' }}
                         onChange={(val) => {
                           const amount = val === '' || val == null ? 0 : val;
                           formApiRef.current?.setValue('amount', amount);
                           formApiRef.current?.setValue(
                             'quota',
-                            displayAmountToQuota(amount),
+                            cnyAmountToQuota(amount),
                           );
                         }}
                         showClear
@@ -348,7 +347,7 @@ const EditRedemptionModal = (props) => {
                             formApiRef.current?.setValue('quota', quota);
                             formApiRef.current?.setValue(
                               'amount',
-                              Number(quotaToDisplayAmount(quota).toFixed(6)),
+                              Number(quotaToCNYAmount(quota).toFixed(0)),
                             );
                           }}
                           style={{ width: '100%' }}

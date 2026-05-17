@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"errors"
+	"math"
 	"net/http"
 	"strconv"
 	"unicode/utf8"
@@ -81,18 +83,14 @@ func AddRedemption(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
 	}
-	var keys []string
-	for i := 0; i < redemption.Count; i++ {
-		key := common.GetUUID()
-		cleanRedemption := model.Redemption{
-			UserId:      c.GetInt("id"),
-			Name:        redemption.Name,
-			Key:         key,
-			CreatedTime: common.GetTimestamp(),
-			Quota:       redemption.Quota,
-			ExpiredTime: redemption.ExpiredTime,
-		}
-		err = cleanRedemption.Insert()
+	redemptions, err := buildRedemptionsForCreate(c.GetInt("id"), redemption, common.GetUUID)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	keys := make([]string, 0, len(redemptions))
+	for i := range redemptions {
+		err = redemptions[i].Insert()
 		if err != nil {
 			common.SysError("failed to insert redemption: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{
@@ -102,7 +100,7 @@ func AddRedemption(c *gin.Context) {
 			})
 			return
 		}
-		keys = append(keys, key)
+		keys = append(keys, redemptions[i].Key)
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -144,10 +142,10 @@ func UpdateRedemption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 			return
 		}
-		// If you add more fields, please also update redemption.Update()
-		cleanRedemption.Name = redemption.Name
-		cleanRedemption.Quota = redemption.Quota
-		cleanRedemption.ExpiredTime = redemption.ExpiredTime
+		if err := applyRedemptionUpdate(cleanRedemption, redemption); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	if statusOnly != "" {
 		cleanRedemption.Status = redemption.Status
@@ -184,4 +182,45 @@ func validateExpiredTime(c *gin.Context, expired int64) (bool, string) {
 		return false, i18n.T(c, i18n.MsgRedemptionExpireTimeInvalid)
 	}
 	return true, ""
+}
+
+func redemptionCNYAmountToQuota(amount int) (int, error) {
+	if amount <= 0 {
+		return 0, errors.New("兑换码金额必须大于0")
+	}
+	quota := int64(amount) * int64(common.QuotaPerUnit)
+	if quota <= 0 || quota > int64(math.MaxInt) {
+		return 0, errors.New("兑换码金额无效")
+	}
+	return int(quota), nil
+}
+
+func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey func() string) ([]model.Redemption, error) {
+	quota, err := redemptionCNYAmountToQuota(redemption.Quota)
+	if err != nil {
+		return nil, err
+	}
+	redemptions := make([]model.Redemption, 0, redemption.Count)
+	for i := 0; i < redemption.Count; i++ {
+		redemptions = append(redemptions, model.Redemption{
+			UserId:      userId,
+			Name:        redemption.Name,
+			Key:         nextKey(),
+			CreatedTime: common.GetTimestamp(),
+			Quota:       quota,
+			ExpiredTime: redemption.ExpiredTime,
+		})
+	}
+	return redemptions, nil
+}
+
+func applyRedemptionUpdate(cleanRedemption *model.Redemption, redemption model.Redemption) error {
+	quota, err := redemptionCNYAmountToQuota(redemption.Quota)
+	if err != nil {
+		return err
+	}
+	cleanRedemption.Name = redemption.Name
+	cleanRedemption.Quota = quota
+	cleanRedemption.ExpiredTime = redemption.ExpiredTime
+	return nil
 }

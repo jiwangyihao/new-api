@@ -21,7 +21,6 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { addTimeToDate } from '@/lib/time'
 import { Button } from '@/components/ui/button'
 import {
@@ -133,13 +132,8 @@ export function RedemptionsMutateDrawer({
     form.setValue('expired_time', newDate)
   }
 
-  const { meta: currencyMeta } = getCurrencyDisplay()
-  const currencyLabel = getCurrencyLabel()
-  const tokensOnly = currencyMeta.kind === 'tokens'
-  const quotaLabel = t('Quota ({{currency}})', { currency: currencyLabel })
-  const quotaPlaceholder = tokensOnly
-    ? t('Enter quota in tokens')
-    : t('Enter quota in {{currency}}', { currency: currencyLabel })
+  const amountLabel = t('Amount (CNY)')
+  const amountPlaceholder = t('Enter amount in CNY')
 
   return (
     <Sheet
@@ -192,27 +186,23 @@ export function RedemptionsMutateDrawer({
 
             <FormField
               control={form.control}
-              name='quota_dollars'
+              name='quota_cny'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{quotaLabel}</FormLabel>
+                  <FormLabel>{amountLabel}</FormLabel>
                   <FormControl>
                     <Input
                       {...field}
                       type='number'
-                      step={tokensOnly ? 1 : 0.01}
-                      placeholder={quotaPlaceholder}
+                      step={1}
+                      placeholder={amountPlaceholder}
                       onChange={(e) =>
                         field.onChange(parseFloat(e.target.value) || 0)
                       }
                     />
                   </FormControl>
                   <FormDescription>
-                    {tokensOnly
-                      ? t('Enter the quota amount in tokens')
-                      : t('Enter the quota amount in {{currency}}', {
-                          currency: currencyLabel,
-                        })}
+                    {t('Enter the CNY amount credited to the user wallet')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

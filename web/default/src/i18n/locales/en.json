@@ -4574,6 +4574,8 @@
     "Successfully deleted {{count}} redemption codes": "Successfully deleted {{count}} redemption codes",
     "This will delete {{count}} selected redemption codes.": "This will delete {{count}} selected redemption codes.",
     "This will delete every redemption code, including unused, disabled, used, and expired codes.": "This will delete every redemption code, including unused, disabled, used, and expired codes.",
-    "This will permanently delete {{count}} redemption codes in this batch.": "This will permanently delete {{count}} redemption codes in this batch."
+    "This will permanently delete {{count}} redemption codes in this batch.": "This will permanently delete {{count}} redemption codes in this batch.",
+    "Invite Trial Plan": "Invite Trial Plan",
+    "Use this trial plan as the default gift for invite code registrations.": "Use this trial plan as the default gift for invite code registrations."
   }
 }

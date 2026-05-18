@@ -164,14 +164,16 @@ export function SignUpForm({
 
     setIsLoading(true)
     try {
+      const trialCode = data.trial_code?.trim() || undefined
+      const storedAff = getAffiliateCode()
       const res = await register({
         username: data.username,
         password: data.password,
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
-        aff: getAffiliateCode(),
+        aff: storedAff || undefined,
         turnstile: turnstileToken,
-        trial_code: data.trial_code?.trim() || undefined,
+        trial_code: trialCode,
       })
 
       if (res?.success) {

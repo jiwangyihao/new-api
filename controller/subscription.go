@@ -244,6 +244,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"monthly_token_limit":        req.Plan.MonthlyTokenLimit,
 			"concurrency_limit":          req.Plan.ConcurrencyLimit,
 			"is_trial":                   req.Plan.IsTrial,
+			"invite_trial":               req.Plan.InviteTrial,
 			"public_visible":             req.Plan.PublicVisible,
 			"trial_duration_hours":       req.Plan.TrialDurationHours,
 			"reward_eligible":            req.Plan.RewardEligible,

@@ -50,6 +50,25 @@ func TestGrantTrialOnRegistration_InviteTrialWithoutTrialCode(t *testing.T) {
 	assert.Equal(t, 1, sub.ConcurrencyLimit)
 }
 
+func TestGrantTrialOnRegistration_UsesInviteTrialPlanWhenConfigured(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.TrialCode{}, &model.TrialRedemption{}))
+	seedTrialGrantPlanForTest(t, 7721, "trial_early")
+	invitePlan := seedTrialGrantPlanForTest(t, 7722, "trial_invite")
+	require.NoError(t, model.DB.Model(invitePlan).Update("invite_trial", true).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 7723, Username: "invitee_configured_trial", Status: common.UserStatusEnabled, AffCode: "aff7723"}).Error)
+
+	var sub *model.UserSubscription
+	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+		created, err := GrantTrialOnRegistration(tx, TrialGrantInput{UserId: 7723, InviterId: 42})
+		sub = created
+		return err
+	}))
+	require.NotNil(t, sub)
+	assert.Equal(t, invitePlan.Id, sub.PlanId)
+	assert.Equal(t, "invite_trial", sub.GrantReason)
+	assert.Equal(t, 42, sub.GrantSourceUserId)
+}
 func TestGrantTrialOnRegistration_ConsumesTrialCode(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.TrialCode{}, &model.TrialRedemption{}))

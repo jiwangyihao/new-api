@@ -95,6 +95,39 @@ func TestPasswordRegister_GrantsInviteTrialWithoutTrialCode(t *testing.T) {
 	assert.Equal(t, 7812, sub.GrantSourceUserId)
 }
 
+func TestPasswordRegister_AcceptsAffAliasFromDefaultFrontend(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	seedControllerTrialPlan(t, 7820, "trial_aff_alias")
+	require.NoError(t, model.DB.Create(&model.User{Id: 7821, Username: "inviter_alias", Status: common.UserStatusEnabled, AffCode: "UxMF"}).Error)
+
+	recorder := performPasswordRegister(t, `{"username":"aliasinvitee","password":"Passw0rd!","aff":"UxMF"}`)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var user model.User
+	require.NoError(t, model.DB.Where("username = ?", "aliasinvitee").First(&user).Error)
+	assert.Equal(t, 7821, user.InviterId)
+}
+
+func TestPasswordRegister_TreatsTrialCodeFieldAsInviteCode(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	plan := seedControllerTrialPlan(t, 7822, "trial_invite_manual")
+	require.NoError(t, model.DB.Model(plan).Update("invite_trial", true).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 7823, Username: "inviter_manual", Status: common.UserStatusEnabled, AffCode: "Manual42"}).Error)
+
+	recorder := performPasswordRegister(t, `{"username":"manualinvitee","password":"Passw0rd!","trial_code":" Manual42 "}`)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var user model.User
+	require.NoError(t, model.DB.Where("username = ?", "manualinvitee").First(&user).Error)
+	assert.Equal(t, 7823, user.InviterId)
+
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ?", user.Id).First(&sub).Error)
+	assert.Equal(t, "invite_trial", sub.GrantReason)
+	assert.Equal(t, plan.Id, sub.PlanId)
+	assert.Equal(t, 7823, sub.GrantSourceUserId)
+}
+
 func TestGitHubOnlySignupRejectsPasswordRegister(t *testing.T) {
 	setupPasswordRegisterTrialTest(t)
 	common.GitHubOnlySignupEnabled = true

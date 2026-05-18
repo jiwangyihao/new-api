@@ -179,6 +179,7 @@ type SubscriptionPlan struct {
 	MonthlyTokenLimit  int64   `json:"monthly_token_limit" gorm:"type:bigint;not null;default:0"`
 	ConcurrencyLimit   int     `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
 	IsTrial            bool    `json:"is_trial" gorm:"default:false"`
+	InviteTrial        bool    `json:"invite_trial" gorm:"default:false"`
 	PublicVisible      bool    `json:"public_visible" gorm:"default:true"`
 	TrialDurationHours int     `json:"trial_duration_hours" gorm:"type:int;not null;default:0"`
 	RewardEligible     bool    `json:"reward_eligible" gorm:"default:true"`

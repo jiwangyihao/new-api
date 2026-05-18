@@ -412,6 +412,34 @@ export function SubscriptionsMutateDrawer({
 
                 <FormField
                   control={form.control}
+                  name='invite_trial'
+                  render={({ field }) => (
+                    <FormItem className='flex flex-col gap-2 rounded-md border p-3'>
+                      <div className='flex flex-row items-center gap-2'>
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                          />
+                        </FormControl>
+                        <FormLabel className='!mt-0'>
+                          {t('Invite Trial Plan')}
+                        </FormLabel>
+                      </div>
+                      <FormDescription>
+                        {t(
+                          'Use this trial plan as the default gift for invite code registrations.'
+                        )}
+                      </FormDescription>
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+
+                <FormField
+                  control={form.control}
                   name='public_visible'
                   render={({ field }) => (
                     <FormItem className='flex flex-row items-center gap-2 rounded-md border p-3'>

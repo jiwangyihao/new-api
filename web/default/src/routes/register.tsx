@@ -17,14 +17,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
-import { createFileRoute } from '@tanstack/react-router'
-import { SignUp } from '@/features/auth/sign-up'
+import { createFileRoute, redirect } from '@tanstack/react-router'
+import { saveAffiliateCode } from '@/features/auth/lib/storage'
 
 const searchSchema = z.object({
   aff: z.string().optional(),
 })
 
-export const Route = createFileRoute('/(auth)/sign-up')({
-  component: SignUp,
+export const Route = createFileRoute('/register')({
   validateSearch: searchSchema,
+  beforeLoad: ({ search }) => {
+    const aff = search.aff?.trim()
+    if (aff) {
+      saveAffiliateCode(aff)
+    }
+
+    throw redirect({
+      to: '/sign-up',
+      search: aff ? { aff } : undefined,
+      replace: true,
+    })
+  },
 })

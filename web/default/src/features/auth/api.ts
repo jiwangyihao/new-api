@@ -104,8 +104,20 @@ export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
 // ----------------------------------------------------------------------------
 
 export function buildRegisterRequestBody(payload: RegisterPayload) {
-  const { turnstile: _ignoredTurnstile, ...body } = payload
-  return body
+  const { aff, trial_code, turnstile: _ignoredTurnstile, ...body } = payload
+  const trimmedAff = aff?.trim()
+  const trimmedTrialCode = trial_code?.trim()
+  const trialCodeMatchesAff =
+    trimmedTrialCode !== undefined &&
+    trimmedTrialCode.toLowerCase() === trimmedAff?.toLowerCase()
+
+  return {
+    ...body,
+    ...(trimmedAff ? { aff_code: trimmedAff } : {}),
+    ...(trimmedTrialCode && !trialCodeMatchesAff
+      ? { trial_code: trimmedTrialCode }
+      : {}),
+  }
 }
 
 // User registration

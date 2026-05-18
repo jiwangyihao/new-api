@@ -150,6 +150,7 @@ func Register(c *gin.Context) {
 	type registerRequest struct {
 		model.User
 		TrialCode string `json:"trial_code"`
+		Aff       string `json:"aff"`
 	}
 	var req registerRequest
 	err := common.DecodeJson(c.Request.Body, &req)
@@ -182,8 +183,20 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserExists)
 		return
 	}
-	affCode := user.AffCode // this code is the inviter's code, not the user's own code
+	affCode := strings.TrimSpace(user.AffCode) // this code is the inviter's code, not the user's own code
+	if affCode == "" {
+		affCode = strings.TrimSpace(req.Aff)
+	}
 	inviterId, _ := model.GetUserIdByAffCode(affCode)
+	trialCode := strings.TrimSpace(req.TrialCode)
+	if trialCode != "" && affCode == "" {
+		trialInviterId, err := model.GetUserIdByAffCode(trialCode)
+		if err == nil && trialInviterId > 0 {
+			inviterId = trialInviterId
+			affCode = trialCode
+			trialCode = ""
+		}
+	}
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
@@ -198,7 +211,7 @@ func Register(c *gin.Context) {
 		if err := cleanUser.InsertWithTx(tx, inviterId); err != nil {
 			return err
 		}
-		if _, err := service.GrantTrialOnRegistration(tx, service.TrialGrantInput{UserId: cleanUser.Id, TrialCode: req.TrialCode, InviterId: inviterId}); err != nil {
+		if _, err := service.GrantTrialOnRegistration(tx, service.TrialGrantInput{UserId: cleanUser.Id, TrialCode: trialCode, InviterId: inviterId}); err != nil {
 			return err
 		}
 		return cleanUser.FinalizeCreationTx(tx, inviterId)

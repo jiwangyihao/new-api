@@ -43,6 +43,7 @@ export const subscriptionPlanSchema = z.object({
   monthly_token_limit: z.number().optional(),
   concurrency_limit: z.number().optional(),
   is_trial: z.boolean().optional(),
+  invite_trial: z.boolean().optional(),
   public_visible: z.boolean().optional(),
   trial_duration_hours: z.number().optional(),
   reward_eligible: z.boolean().optional(),

@@ -29,6 +29,7 @@ describe('subscription plan distributor form mapping', () => {
       trial_duration_hours: 24,
       reward_eligible: false,
       business_code: 'trial_24h',
+      invite_trial: true,
     } satisfies SubscriptionPlan
 
     const values = planToFormValues(plan)
@@ -40,6 +41,7 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(values.trial_duration_hours, 24)
     assert.equal(values.reward_eligible, false)
     assert.equal(values.business_code, 'trial_24h')
+    assert.equal(values.invite_trial, true)
   })
 
   test('includes token, concurrency, and visibility fields in submit payload', () => {
@@ -54,6 +56,7 @@ describe('subscription plan distributor form mapping', () => {
       trial_duration_hours: 0,
       reward_eligible: true,
       business_code: ' basic_monthly ',
+      invite_trial: true,
     }
 
     const payload = formValuesToPlanPayload(values)
@@ -65,6 +68,7 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(payload.plan.trial_duration_hours, 0)
     assert.equal(payload.plan.reward_eligible, true)
     assert.equal(payload.plan.business_code, 'basic_monthly')
+    assert.equal(payload.plan.invite_trial, true)
     assert.equal(payload.plan.currency, 'CNY')
   })
 

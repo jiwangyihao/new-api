@@ -54,13 +54,20 @@ func GrantTrialOnRegistration(tx *gorm.DB, input TrialGrantInput) (*model.UserSu
 
 func getTrialPlanForGrant(tx *gorm.DB, planId int) (*model.SubscriptionPlan, error) {
 	var plan model.SubscriptionPlan
-	query := tx.Where("enabled = ? AND is_trial = ?", true, true)
 	if planId > 0 {
-		query = query.Where("id = ?", planId)
-	} else {
-		query = query.Order("id asc")
+		if err := tx.Where("enabled = ? AND is_trial = ? AND id = ?", true, true, planId).First(&plan).Error; err != nil {
+			return nil, err
+		}
+		return &plan, nil
 	}
-	if err := query.First(&plan).Error; err != nil {
+	err := tx.Where("enabled = ? AND is_trial = ? AND invite_trial = ?", true, true, true).Order("id asc").First(&plan).Error
+	if err == nil {
+		return &plan, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if err := tx.Where("enabled = ? AND is_trial = ?", true, true).Order("id asc").First(&plan).Error; err != nil {
 		return nil, err
 	}
 	return &plan, nil

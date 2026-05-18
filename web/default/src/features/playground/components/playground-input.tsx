@@ -31,6 +31,7 @@ import {
   NotepadTextIcon,
   CodeSquareIcon,
   GraduationCapIcon,
+  HelpCircleIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -50,6 +51,7 @@ import {
 } from '@/components/ai-elements/prompt-input'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
 import { ModelGroupSelector } from '@/components/model-group-selector'
+import { ApiUsageHelpDialog } from '@/features/api-help'
 import type { ModelOption, GroupOption } from '../types'
 
 interface PlaygroundInputProps {
@@ -180,6 +182,18 @@ export function PlaygroundInput({
               <span className='hidden sm:inline'>{t('Search')}</span>
               <span className='sr-only sm:hidden'>{t('Search')}</span>
             </PromptInputButton>
+
+            <ApiUsageHelpDialog
+              modelValue={modelValue}
+              models={models}
+              trigger={
+                <PromptInputButton className='border font-medium' variant='outline'>
+                  <HelpCircleIcon size={16} />
+                  <span className='hidden sm:inline'>{t('API Help')}</span>
+                  <span className='sr-only sm:hidden'>{t('API Help')}</span>
+                </PromptInputButton>
+              }
+            />
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>

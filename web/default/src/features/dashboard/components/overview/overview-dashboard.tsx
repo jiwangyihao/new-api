@@ -23,10 +23,11 @@ import {
   ArrowRight,
   BookOpen,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   Circle,
-  CreditCard,
+  CircleDot,
   FileText,
   KeyRound,
   ListChecks,
@@ -52,6 +53,9 @@ import {
 } from '@/components/page-transition'
 import { fetchTokenKey, getApiKeys } from '@/features/keys/api'
 import type { ApiKey } from '@/features/keys/types'
+import { getSelfSubscriptionFull } from '@/features/subscriptions/api'
+import { getSubscriptionCompletion } from '../../lib/subscription-completion'
+import type { SubscriptionCompletion } from '../../lib/subscription-completion'
 import { useApiInfo } from '../../hooks/use-status-data'
 import { AnnouncementsPanel } from './announcements-panel'
 import { ApiInfoPanel } from './api-info-panel'
@@ -88,6 +92,7 @@ interface StartStep {
   to: DashboardActionPath
   icon: LucideIcon
   completed: boolean
+  partial?: boolean
 }
 
 interface QuickAction {
@@ -216,7 +221,11 @@ function StartStepItem(props: {
   isLast: boolean
 }) {
   const Icon = props.step.icon
-  const StatusIcon = props.step.completed ? Check : Circle
+  const StatusIcon = props.step.completed
+    ? CheckCircle2
+    : props.step.partial
+      ? CircleDot
+      : Circle
 
   return (
     <li className='relative flex gap-3 pb-2.5 last:pb-0'>
@@ -229,11 +238,16 @@ function StartStepItem(props: {
       <span
         className={cn(
           'bg-background relative z-10 flex size-8 shrink-0 items-center justify-center rounded-lg border shadow-xs',
-          props.step.completed && 'border-success/30 bg-success/10'
+          props.step.completed && 'border-success/30 bg-success/10',
+          props.step.partial && 'border-warning/30 bg-warning/10'
         )}
       >
         <StatusIcon
-          className={props.step.completed ? 'text-success size-4' : 'size-4'}
+          className={cn(
+            'size-4',
+            props.step.completed && 'text-success',
+            props.step.partial && 'text-warning'
+          )}
           aria-hidden='true'
         />
       </span>
@@ -428,8 +442,6 @@ export function OverviewDashboard() {
   >(() => getSavedSetupGuideExpanded())
 
   const requestCount = Number(user?.request_count ?? 0)
-  const remainQuota = Number(user?.quota ?? 0)
-  const usedQuota = Number(user?.used_quota ?? 0)
   const isAdmin = Boolean(user?.role && user.role >= ROLE.ADMIN)
 
   const apiKeysQuery = useQuery({
@@ -450,6 +462,21 @@ export function OverviewDashboard() {
     staleTime: 5 * 60 * 1000,
   })
 
+  const subscriptionsQuery = useQuery({
+    queryKey: ['dashboard', 'overview', 'self-subscriptions', user?.id],
+    queryFn: async () => {
+      const result = await getSelfSubscriptionFull()
+      return result.success ? (result.data?.subscriptions ?? []) : []
+    },
+    staleTime: 60 * 1000,
+    enabled: Boolean(user?.id),
+  })
+
+  const subscriptionCompletion = useMemo<SubscriptionCompletion>(
+    () => getSubscriptionCompletion(subscriptionsQuery.data),
+    [subscriptionsQuery.data]
+  )
+
   const preferredKey = useMemo(
     () => getPreferredKey(apiKeysQuery.data ?? []),
     [apiKeysQuery.data]
@@ -469,28 +496,33 @@ export function OverviewDashboard() {
   const startSteps = useMemo<StartStep[]>(
     () => [
       {
-        title: t('Create API Key'),
-        description: t('Create a key for your app or service'),
+        title: t('Create API'),
+        description: t('Create an API key for your app, script, or client.'),
         to: '/keys',
         icon: KeyRound,
         completed: Boolean(preferredKey),
       },
       {
-        title: t('Add credits'),
-        description: t('Keep enough balance before production traffic'),
-        to: '/wallet',
-        icon: CreditCard,
-        completed: remainQuota > 0 || usedQuota > 0,
-      },
-      {
-        title: t('Send a request'),
-        description: t('Verify routing with Playground or your client'),
+        title: t('Try Playground'),
+        description: t(
+          'Test prompts in Playground and copy OpenCode-ready API help.'
+        ),
         to: '/playground',
-        icon: TerminalSquare,
+        icon: Play,
         completed: requestCount > 0,
       },
+      {
+        title: t('Choose a plan'),
+        description: t(
+          'Pick a subscription plan before scaling production traffic.'
+        ),
+        to: '/pricing',
+        icon: BookOpen,
+        completed: subscriptionCompletion === 'paid',
+        partial: subscriptionCompletion === 'trial',
+      },
     ],
-    [preferredKey, remainQuota, requestCount, t, usedQuota]
+    [preferredKey, requestCount, subscriptionCompletion, t]
   )
 
   const quickActions = useMemo<QuickAction[]>(
@@ -571,7 +603,10 @@ export function OverviewDashboard() {
     }
   }, [apiInfoItems, modelsQuery.data, preferredKey, realKeyQuery.data, t])
 
-  const completedStepCount = startSteps.filter((step) => step.completed).length
+  const completedStepCount = startSteps.reduce((total, step) => {
+    if (step.completed) return total + 1
+    return total + (step.partial ? 0.5 : 0)
+  }, 0)
   const setupComplete = completedStepCount === startSteps.length
   const setupGuideExpanded = manualSetupGuideExpanded ?? !setupComplete
 

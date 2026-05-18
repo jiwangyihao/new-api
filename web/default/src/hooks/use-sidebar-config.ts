@@ -54,7 +54,6 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     enabled: true,
     topup: true,
     personal: true,
-    app_guides: true,
   },
   admin: {
     enabled: true,
@@ -66,6 +65,23 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
   },
+}
+
+const REMOVED_SIDEBAR_MODULES: Record<string, readonly string[]> = {
+  personal: ['app_guides'],
+}
+
+function removeRemovedSidebarModules(
+  config: SidebarModulesAdminConfig
+): SidebarModulesAdminConfig {
+  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(([sectionKey, moduleKeys]) => {
+    const section = config[sectionKey]
+    if (!section) return
+    moduleKeys.forEach((moduleKey) => {
+      delete section[moduleKey]
+    })
+  })
+  return config
 }
 
 export const mergeWithDefaultSidebarModules = (
@@ -90,7 +106,7 @@ export const mergeWithDefaultSidebarModules = (
     }
   )
 
-  return merged
+  return removeRemovedSidebarModules(merged)
 }
 
 /**
@@ -176,7 +192,7 @@ function isModuleEnabled(
 ): boolean {
   const mapping = URL_TO_CONFIG_MAP[url]
   if (!mapping) {
-    // No mapping config, default to visible (e.g. system settings and new features)
+    // No mapping config, default to visible for unmapped sidebar additions.
     return true
   }
 

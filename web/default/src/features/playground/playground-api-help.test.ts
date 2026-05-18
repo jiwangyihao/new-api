@@ -16,9 +16,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { createFileRoute } from '@tanstack/react-router'
-import { AppGuides } from '@/features/app-guides'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { readFileSync } from 'node:fs'
 
-export const Route = createFileRoute('/_authenticated/app-guides/')({
-  component: AppGuides,
+const source = readFileSync(
+  new URL('./components/playground-input.tsx', import.meta.url),
+  'utf8'
+)
+
+describe('playground API usage help entry', () => {
+  test('keeps API usage help next to Playground input tools', () => {
+    assert.match(source, /ApiUsageHelpDialog/)
+    assert.match(source, /t\('API Help'\)/)
+    assert.match(source, /modelValue=\{modelValue\}/)
+    assert.match(source, /models=\{models\}/)
+  })
 })

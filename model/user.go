@@ -124,7 +124,6 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 		"enabled":    true,
 		"topup":      true,
 		"personal":   true,
-		"app_guides": true,
 	}
 
 	// 管理员区域 - 根据角色决定

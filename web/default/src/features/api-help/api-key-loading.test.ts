@@ -16,22 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { LucideIcon } from 'lucide-react'
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { describe, test } from 'node:test'
 
-export type AppGuideLink = {
-  label: string
-  href: string
-  requiresKey?: boolean
-  id?: string
-  disabled?: boolean
-}
+const source = readFileSync(
+  new URL('./components/api-usage-help-dialog.tsx', import.meta.url),
+  'utf8'
+)
 
-export type AppGuide = {
-  id: string
-  name: string
-  description: string
-  icon: LucideIcon
-  configTitle: string
-  configValue: string
-  importLinks?: AppGuideLink[]
-}
+describe('api help key loading', () => {
+  test('loads more than the first API key page before declaring no enabled keys', () => {
+    assert.match(source, /do\s*{[\s\S]*getApiKeys\(\{ p: page, size: API_KEY_PAGE_SIZE \}\)[\s\S]*}\s*while/)
+    assert.match(source, /activeItems\.length < API_HELP_KEY_LIMIT/)
+    assert.match(source, /page <= totalPages/)
+  })
+})

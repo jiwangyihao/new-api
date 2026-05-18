@@ -27,7 +27,6 @@ import {
   Ticket,
   Gift,
   User,
-  BookOpen,
   Command,
   Radio,
   FlaskConical,
@@ -110,11 +109,6 @@ export function useSidebarData(): SidebarData {
             title: t('Wallet'),
             url: '/wallet',
             icon: Wallet,
-          },
-          {
-            title: t('Application Guides'),
-            url: '/app-guides',
-            icon: BookOpen,
           },
           {
             title: t('Profile'),

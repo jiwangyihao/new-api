@@ -71,7 +71,6 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     enabled: true,
     topup: true,
     personal: true,
-    app_guides: true,
   },
   admin: {
     enabled: true,
@@ -83,6 +82,23 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
   },
+}
+
+const REMOVED_SIDEBAR_MODULES: Record<string, readonly string[]> = {
+  personal: ['app_guides'],
+}
+
+function removeRemovedSidebarModules(
+  config: SidebarModulesAdminConfig
+): SidebarModulesAdminConfig {
+  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(([sectionKey, moduleKeys]) => {
+    const section = config[sectionKey]
+    if (!section) return
+    moduleKeys.forEach((moduleKey) => {
+      delete section[moduleKey]
+    })
+  })
+  return config
 }
 
 const toBoolean = (value: unknown, fallback: boolean): boolean => {
@@ -127,12 +143,14 @@ const parseAccessModule = (
 }
 
 const cloneSidebarDefault = (): SidebarModulesAdminConfig =>
-  Object.entries(SIDEBAR_MODULES_DEFAULT).reduce<SidebarModulesAdminConfig>(
-    (acc, [section, config]) => {
-      acc[section] = { ...config }
-      return acc
-    },
-    {}
+  removeRemovedSidebarModules(
+    Object.entries(SIDEBAR_MODULES_DEFAULT).reduce<SidebarModulesAdminConfig>(
+      (acc, [section, config]) => {
+        acc[section] = { ...config }
+        return acc
+      },
+      {}
+    )
   )
 
 export function parseHeaderNavModules(
@@ -231,7 +249,7 @@ export function parseSidebarModulesAdmin(
       })
     })
 
-    return result
+    return removeRemovedSidebarModules(result)
   } catch {
     return defaults
   }

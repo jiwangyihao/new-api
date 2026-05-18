@@ -122,10 +122,6 @@ export function SidebarModulesSection({
         title: t('Profile'),
         description: t('Personal settings and profile management.'),
       },
-      app_guides: {
-        title: t('Application Guides'),
-        description: t('Configuration guides for common AI applications.'),
-      },
     },
     admin: {
       channel: {

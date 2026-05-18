@@ -108,3 +108,26 @@ export function getRedemptionRowDeleteIds(
   }
   return [redemption.id]
 }
+
+export function getRedemptionRowCopyItems(
+  redemption: RedemptionBatchRow
+): RedemptionBatchRow[] {
+  if (isRedemptionBatchRow(redemption) && redemption.children?.length) {
+    return redemption.children
+  }
+  return [redemption]
+}
+
+export function getRedemptionRowCopyCount(
+  redemption: RedemptionBatchRow
+): number {
+  return getRedemptionRowCopyItems(redemption).length
+}
+
+export function getRedemptionRowCopyText(
+  redemption: RedemptionBatchRow
+): string {
+  return getRedemptionRowCopyItems(redemption)
+    .map((item) => `${item.name}\t${item.key}`)
+    .join('\n')
+}

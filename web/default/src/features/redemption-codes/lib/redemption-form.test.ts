@@ -20,7 +20,12 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 import type { Redemption } from '../types'
-import { formatRedemptionWalletValue } from './redemption-batch'
+import type { RedemptionBatchRow } from './redemption-batch'
+import {
+  formatRedemptionWalletValue,
+  getRedemptionRowCopyText,
+  getRedemptionRowCopyCount,
+} from './redemption-batch'
 import {
   transformFormDataToPayload,
   transformRedemptionToFormDefaults,
@@ -143,5 +148,66 @@ describe('redemption form defaults', () => {
     assert.equal(defaults.type, 'subscription')
     assert.equal(defaults.quota_cny, 0)
     assert.equal(defaults.plan_id, 7)
+  })
+})
+
+describe('redemption batch copy', () => {
+  test('copies every code in a batch row as name and key lines', () => {
+    const batch: RedemptionBatchRow = {
+      id: 1,
+      user_id: 1,
+      name: 'summer-batch',
+      key: 'first-key',
+      status: 1,
+      type: 'wallet',
+      quota: 100,
+      plan_id: 0,
+      created_time: 0,
+      redeemed_time: 0,
+      expired_time: 0,
+      used_user_id: 0,
+      batch_id: 'batch-a',
+      is_batch_row: true,
+      children: [
+        {
+          id: 1,
+          user_id: 1,
+          name: 'summer-batch',
+          key: 'first-key',
+          status: 1,
+          type: 'wallet',
+          quota: 100,
+          plan_id: 0,
+          created_time: 0,
+          redeemed_time: 0,
+          expired_time: 0,
+          used_user_id: 0,
+          batch_id: 'batch-a',
+          is_batch_row: false,
+        },
+        {
+          id: 2,
+          user_id: 1,
+          name: 'summer-batch',
+          key: 'second-key',
+          status: 1,
+          type: 'wallet',
+          quota: 100,
+          plan_id: 0,
+          created_time: 0,
+          redeemed_time: 0,
+          expired_time: 0,
+          used_user_id: 0,
+          batch_id: 'batch-a',
+          is_batch_row: false,
+        },
+      ],
+    }
+
+    assert.equal(getRedemptionRowCopyCount(batch), 2)
+    assert.equal(
+      getRedemptionRowCopyText(batch),
+      'summer-batch\tfirst-key\nsummer-batch\tsecond-key'
+    )
   })
 })

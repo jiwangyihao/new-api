@@ -25,6 +25,9 @@ export {
   formatRedemptionWalletValue,
   getRedemptionBatchKey,
   getRedemptionRowDeleteIds,
+  getRedemptionRowCopyCount,
+  getRedemptionRowCopyItems,
+  getRedemptionRowCopyText,
   isRedemptionBatchRow,
   type RedemptionBatchRow,
 } from './redemption-batch'

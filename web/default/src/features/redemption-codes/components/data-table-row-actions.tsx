@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { type Row } from '@tanstack/react-table'
 import {
   Trash2,
+  Copy,
   Edit,
   Power,
   PowerOff,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { copyToClipboard } from '@/lib/copy-to-clipboard'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -38,6 +40,8 @@ import {
 import { updateRedemptionStatus } from '../api'
 import { REDEMPTION_STATUS, SUCCESS_MESSAGES } from '../constants'
 import {
+  getRedemptionRowCopyCount,
+  getRedemptionRowCopyText,
   isRedemptionBatchRow,
   isRedemptionExpired,
   type RedemptionBatchRow,
@@ -76,6 +80,19 @@ export function DataTableRowActions<TData>({
     }
   }
 
+  const handleCopyCodes = async () => {
+    const ok = await copyToClipboard(getRedemptionRowCopyText(redemption))
+    if (ok) {
+      toast.success(
+        t('Copied {{count}} redemption codes', {
+          count: getRedemptionRowCopyCount(redemption),
+        })
+      )
+    } else {
+      toast.error(t('Copy failed'))
+    }
+  }
+
   const isBatchRow = isRedemptionBatchRow(redemption)
   const canEdit = !isBatchRow && isEnabled && !isExpired
   const canToggle = !isBatchRow && !isUsed && !isExpired
@@ -104,6 +121,12 @@ export function DataTableRowActions<TData>({
           {t('Edit')}
           <DropdownMenuShortcut>
             <Edit size={16} />
+          </DropdownMenuShortcut>
+        </DropdownMenuItem>
+        <DropdownMenuItem onClick={handleCopyCodes}>
+          {isBatchRow ? t('Copy batch codes') : t('Copy code')}
+          <DropdownMenuShortcut>
+            <Copy size={16} />
           </DropdownMenuShortcut>
         </DropdownMenuItem>
         {canToggle && (

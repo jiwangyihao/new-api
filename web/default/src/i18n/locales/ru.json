@@ -4576,6 +4576,8 @@
     "This will delete every redemption code, including unused, disabled, used, and expired codes.": "Это удалит все коды погашения, включая неиспользованные, отключенные, использованные и истекшие.",
     "This will permanently delete {{count}} redemption codes in this batch.": "Это навсегда удалит коды погашения в этом пакете: {{count}}.",
     "Invite Trial Plan": "Пробный тариф для приглашений",
-    "Use this trial plan as the default gift for invite code registrations.": "Использовать этот пробный тариф как подарок по умолчанию при регистрации по коду приглашения."
+    "Use this trial plan as the default gift for invite code registrations.": "Использовать этот пробный тариф как подарок по умолчанию при регистрации по коду приглашения.",
+    "Copy batch codes": "Копировать коды пакета",
+    "Copied {{count}} redemption codes": "Скопировано кодов погашения: {{count}}"
   }
 }

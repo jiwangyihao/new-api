@@ -4576,6 +4576,8 @@
     "This will delete every redemption code, including unused, disabled, used, and expired codes.": "Cela supprimera tous les codes de remboursement, y compris les codes non utilisés, désactivés, utilisés et expirés.",
     "This will permanently delete {{count}} redemption codes in this batch.": "Cela supprimera définitivement {{count}} codes de remboursement dans ce lot.",
     "Invite Trial Plan": "Forfait d’essai d’invitation",
-    "Use this trial plan as the default gift for invite code registrations.": "Utiliser ce forfait d’essai comme cadeau par défaut pour les inscriptions avec code d’invitation."
+    "Use this trial plan as the default gift for invite code registrations.": "Utiliser ce forfait d’essai comme cadeau par défaut pour les inscriptions avec code d’invitation.",
+    "Copy batch codes": "Copier les codes du lot",
+    "Copied {{count}} redemption codes": "{{count}} codes de remboursement copiés"
   }
 }

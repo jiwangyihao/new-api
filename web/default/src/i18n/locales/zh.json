@@ -4576,6 +4576,8 @@
     "This will delete every redemption code, including unused, disabled, used, and expired codes.": "这将删除所有兑换码，包括未使用、已禁用、已使用和已过期的兑换码。",
     "This will permanently delete {{count}} redemption codes in this batch.": "这将永久删除此批次中的 {{count}} 个兑换码。",
     "Invite Trial Plan": "邀请默认试用套餐",
-    "Use this trial plan as the default gift for invite code registrations.": "将此试用套餐作为邀请码注册时的默认赠送套餐。"
+    "Use this trial plan as the default gift for invite code registrations.": "将此试用套餐作为邀请码注册时的默认赠送套餐。",
+    "Copy batch codes": "复制整批兑换码",
+    "Copied {{count}} redemption codes": "已复制 {{count}} 个兑换码"
   }
 }

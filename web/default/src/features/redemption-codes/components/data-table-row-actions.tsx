@@ -37,8 +37,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { updateRedemptionStatus } from '../api'
 import { REDEMPTION_STATUS, SUCCESS_MESSAGES } from '../constants'
-import { isRedemptionExpired } from '../lib'
-import { redemptionSchema } from '../types'
+import {
+  isRedemptionBatchRow,
+  isRedemptionExpired,
+  type RedemptionBatchRow,
+} from '../lib'
 import { useRedemptions } from './redemptions-provider'
 
 interface DataTableRowActionsProps<TData> {
@@ -49,7 +52,7 @@ export function DataTableRowActions<TData>({
   row,
 }: DataTableRowActionsProps<TData>) {
   const { t } = useTranslation()
-  const redemption = redemptionSchema.parse(row.original)
+  const redemption = row.original as RedemptionBatchRow
   const { setOpen, setCurrentRow, triggerRefresh } = useRedemptions()
   const isEnabled = redemption.status === REDEMPTION_STATUS.ENABLED
   const isUsed = redemption.status === REDEMPTION_STATUS.USED
@@ -73,8 +76,9 @@ export function DataTableRowActions<TData>({
     }
   }
 
-  const canEdit = isEnabled && !isExpired
-  const canToggle = !isUsed && !isExpired
+  const isBatchRow = isRedemptionBatchRow(redemption)
+  const canEdit = !isBatchRow && isEnabled && !isExpired
+  const canToggle = !isBatchRow && !isUsed && !isExpired
 
   return (
     <DropdownMenu modal={false}>
@@ -89,7 +93,7 @@ export function DataTableRowActions<TData>({
         <DotsHorizontalIcon className='h-4 w-4' />
         <span className='sr-only'>{t('Open menu')}</span>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align='end' className='w-[160px]'>
+      <DropdownMenuContent align='end' className='w-[180px]'>
         <DropdownMenuItem
           onClick={() => {
             setCurrentRow(redemption)

@@ -29,8 +29,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { deleteRedemption } from '../api'
+import { batchDeleteRedemptions, deleteRedemption } from '../api'
 import { SUCCESS_MESSAGES } from '../constants'
+import { getRedemptionRowDeleteIds } from '../lib'
 import { useRedemptions } from './redemptions-provider'
 
 export function RedemptionsDeleteDialog() {
@@ -38,12 +39,19 @@ export function RedemptionsDeleteDialog() {
   const { open, setOpen, currentRow, triggerRefresh } = useRedemptions()
   const [isDeleting, setIsDeleting] = useState(false)
 
+  const deleteCount = currentRow
+    ? getRedemptionRowDeleteIds(currentRow).length
+    : 0
   const handleDelete = async () => {
     if (!currentRow) return
 
     setIsDeleting(true)
     try {
-      const result = await deleteRedemption(currentRow.id)
+      const ids = getRedemptionRowDeleteIds(currentRow)
+      const result =
+        ids.length > 1
+          ? await batchDeleteRedemptions(ids)
+          : await deleteRedemption(currentRow.id)
       if (result.success) {
         toast.success(t(SUCCESS_MESSAGES.REDEMPTION_DELETED))
         setOpen(null)
@@ -63,9 +71,20 @@ export function RedemptionsDeleteDialog() {
         <AlertDialogHeader>
           <AlertDialogTitle>{t('Are you sure?')}</AlertDialogTitle>
           <AlertDialogDescription>
-            {t('This will permanently delete redemption code')}{' '}
-            <span className='font-semibold'>{currentRow?.name}</span>
-            {t('. This action cannot be undone.')}
+            {deleteCount > 1 ? (
+              t(
+                'This will permanently delete {{count}} redemption codes in this batch.',
+                {
+                  count: deleteCount,
+                }
+              )
+            ) : (
+              <>
+                {t('This will permanently delete redemption code')}{' '}
+                <span className='font-semibold'>{currentRow?.name}</span>
+                {t('. This action cannot be undone.')}
+              </>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

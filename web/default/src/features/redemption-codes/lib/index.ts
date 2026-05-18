@@ -20,6 +20,14 @@ For commercial licensing, please contact support@quantumnous.com
 // Utility Functions
 // ============================================================================
 export { isRedemptionExpired, isTimestampExpired } from './utils'
+export {
+  aggregateRedemptionsByBatch,
+  formatRedemptionWalletValue,
+  getRedemptionBatchKey,
+  getRedemptionRowDeleteIds,
+  isRedemptionBatchRow,
+  type RedemptionBatchRow,
+} from './redemption-batch'
 
 // ============================================================================
 // Form Utilities

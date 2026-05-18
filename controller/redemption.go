@@ -15,9 +15,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type redemptionBatchRequest struct {
+	Ids []int `json:"ids"`
+}
+
 func GetAllRedemptions(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := model.GetAllRedemptions(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	redemptions, total, err := model.ListRedemptions(redemptionListOptionsFromQuery(c, pageInfo.GetStartIdx(), pageInfo.GetPageSize()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -29,9 +33,8 @@ func GetAllRedemptions(c *gin.Context) {
 }
 
 func SearchRedemptions(c *gin.Context) {
-	keyword := c.Query("keyword")
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := model.SearchRedemptions(keyword, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	redemptions, total, err := model.ListRedemptions(redemptionListOptionsFromQuery(c, pageInfo.GetStartIdx(), pageInfo.GetPageSize()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -40,6 +43,22 @@ func SearchRedemptions(c *gin.Context) {
 	pageInfo.SetItems(redemptions)
 	common.ApiSuccess(c, pageInfo)
 	return
+}
+
+func redemptionListOptionsFromQuery(c *gin.Context, startIdx int, pageSize int) model.RedemptionListOptions {
+	status, _ := strconv.Atoi(c.Query("status"))
+	keyword := strings.TrimSpace(c.Query("keyword"))
+	if keyword == "" {
+		keyword = strings.TrimSpace(c.Query("search"))
+	}
+	return model.RedemptionListOptions{
+		Keyword:  keyword,
+		Type:     strings.TrimSpace(c.Query("type")),
+		Status:   status,
+		BatchId:  strings.TrimSpace(c.Query("batch_id")),
+		StartIdx: startIdx,
+		Num:      pageSize,
+	}
 }
 
 func GetRedemption(c *gin.Context) {
@@ -178,6 +197,37 @@ func DeleteInvalidRedemption(c *gin.Context) {
 	return
 }
 
+func DeleteAllRedemptions(c *gin.Context) {
+	rows, err := model.DeleteAllRedemptions()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    rows,
+	})
+}
+
+func BatchDeleteRedemptions(c *gin.Context) {
+	redemptionBatch := redemptionBatchRequest{}
+	if err := c.ShouldBindJSON(&redemptionBatch); err != nil || len(redemptionBatch.Ids) == 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	rows, err := model.BatchDeleteRedemptions(redemptionBatch.Ids)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    rows,
+	})
+}
+
 func validateExpiredTime(c *gin.Context, expired int64) (bool, string) {
 	if expired != 0 && expired < common.GetTimestamp() {
 		return false, i18n.T(c, i18n.MsgRedemptionExpireTimeInvalid)
@@ -233,6 +283,7 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 			return nil, err
 		}
 	}
+	batchId := common.GetUUID()
 	redemptions := make([]model.Redemption, 0, redemption.Count)
 	for i := 0; i < redemption.Count; i++ {
 		redemptions = append(redemptions, model.Redemption{
@@ -243,6 +294,7 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 			Quota:       quota,
 			Type:        redemptionType,
 			PlanId:      planId,
+			BatchId:     batchId,
 			ExpiredTime: redemption.ExpiredTime,
 		})
 	}

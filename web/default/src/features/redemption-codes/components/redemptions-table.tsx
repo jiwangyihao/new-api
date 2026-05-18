@@ -20,39 +20,62 @@ import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
+  type ExpandedState,
   type SortingState,
   type VisibilityState,
+  flexRender,
   getCoreRowModel,
-  getFacetedRowModel,
-  getFacetedUniqueValues,
-  getFilteredRowModel,
+  getExpandedRowModel,
   getPaginationRowModel,
   getSortedRowModel,
   useReactTable,
 } from '@tanstack/react-table'
 import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
+import { TableCell, TableRow } from '@/components/ui/table'
 import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
   DataTablePage,
 } from '@/components/data-table'
 import { getRedemptions, searchRedemptions } from '../api'
-import { REDEMPTION_STATUS, getRedemptionStatusOptions } from '../constants'
-import { isRedemptionExpired } from '../lib'
-import type { Redemption } from '../types'
+import {
+  REDEMPTION_STATUS,
+  getRedemptionStatusOptions,
+  getRedemptionTypeOptions,
+} from '../constants'
+import {
+  aggregateRedemptionsByBatch,
+  isRedemptionBatchRow,
+  isRedemptionExpired,
+  type RedemptionBatchRow,
+} from '../lib'
+import { type GetRedemptionsParams } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useRedemptionsColumns } from './redemptions-columns'
 import { useRedemptions } from './redemptions-provider'
 
 const route = getRouteApi('/_authenticated/redemption-codes/')
 
-function isDisabledRedemptionRow(redemption: Redemption) {
+function isDisabledRedemptionRow(redemption: RedemptionBatchRow) {
   return (
-    redemption.status !== REDEMPTION_STATUS.ENABLED ||
-    isRedemptionExpired(redemption.expired_time, redemption.status)
+    !isRedemptionBatchRow(redemption) &&
+    (redemption.status !== REDEMPTION_STATUS.ENABLED ||
+      isRedemptionExpired(redemption.expired_time, redemption.status))
   )
+}
+
+function getDisabledRowClassName(
+  redemption: RedemptionBatchRow,
+  isMobile: boolean
+): string | undefined {
+  if (!isDisabledRedemptionRow(redemption)) {
+    return undefined
+  }
+
+  return isMobile ? DISABLED_ROW_MOBILE : DISABLED_ROW_DESKTOP
 }
 
 export function RedemptionsTable() {
@@ -62,6 +85,7 @@ export function RedemptionsTable() {
   const isMobile = useMediaQuery('(max-width: 640px)')
   const [rowSelection, setRowSelection] = useState({})
   const [sorting, setSorting] = useState<SortingState>([])
+  const [expanded, setExpanded] = useState<ExpandedState>({})
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
 
   const {
@@ -77,27 +101,45 @@ export function RedemptionsTable() {
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
     globalFilter: { enabled: true, key: 'filter' },
-    columnFilters: [{ columnId: 'status', searchKey: 'status', type: 'array' }],
+    columnFilters: [
+      { columnId: 'status', searchKey: 'status', type: 'array' },
+      { columnId: 'type', searchKey: 'type', type: 'array' },
+    ],
   })
 
-  // Fetch data with React Query
+  const statusFilter =
+    (columnFilters.find((filter) => filter.id === 'status')?.value as
+      | string[]
+      | undefined) || []
+  const typeFilter =
+    (columnFilters.find((filter) => filter.id === 'type')?.value as
+      | string[]
+      | undefined) || []
+
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'redemptions',
       pagination.pageIndex + 1,
       pagination.pageSize,
       globalFilter,
+      statusFilter[0] || '',
+      typeFilter[0] || '',
       refreshTrigger,
     ],
     queryFn: async () => {
-      const hasFilter = globalFilter?.trim()
-      const params = {
+      const selectedType =
+        typeFilter[0] === 'wallet' || typeFilter[0] === 'subscription'
+          ? typeFilter[0]
+          : undefined
+      const params: GetRedemptionsParams = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
+        status: statusFilter[0] ? Number(statusFilter[0]) : undefined,
+        type: selectedType,
       }
-
-      const result = hasFilter
-        ? await searchRedemptions({ ...params, keyword: globalFilter })
+      const keyword = globalFilter?.trim()
+      const result = keyword
+        ? await searchRedemptions({ ...params, keyword })
         : await getRedemptions(params)
 
       return {
@@ -108,7 +150,10 @@ export function RedemptionsTable() {
     placeholderData: (previousData) => previousData,
   })
 
-  const redemptions = data?.items || []
+  const redemptions = useMemo(
+    () => aggregateRedemptionsByBatch(data?.items || []),
+    [data]
+  )
 
   const table = useReactTable({
     data: redemptions,
@@ -120,28 +165,23 @@ export function RedemptionsTable() {
       columnFilters,
       globalFilter,
       pagination,
+      expanded,
     },
-    enableRowSelection: true,
+    enableRowSelection: (row) => !isRedemptionBatchRow(row.original),
     onRowSelectionChange: setRowSelection,
     onSortingChange: setSorting,
     onColumnVisibilityChange: setColumnVisibility,
-    globalFilterFn: (row, _columnId, filterValue) => {
-      const name = String(row.getValue('name')).toLowerCase()
-      const id = String(row.getValue('id'))
-      const searchValue = String(filterValue).toLowerCase()
-
-      return name.includes(searchValue) || id.includes(searchValue)
-    },
+    onExpandedChange: setExpanded,
+    getSubRows: (row) => row.children,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
+    getExpandedRowModel: getExpandedRowModel(),
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
-    manualPagination: !globalFilter,
+    manualPagination: true,
+    manualFiltering: true,
     pageCount: Math.ceil((data?.total || 0) / pagination.pageSize),
   })
 
@@ -154,6 +194,7 @@ export function RedemptionsTable() {
     () => getRedemptionStatusOptions(t),
     [t]
   )
+  const redemptionTypeOptions = useMemo(() => getRedemptionTypeOptions(t), [t])
 
   return (
     <DataTablePage
@@ -167,22 +208,42 @@ export function RedemptionsTable() {
       )}
       skeletonKeyPrefix='redemptions-skeleton'
       toolbarProps={{
-        searchPlaceholder: t('Filter by name or ID...'),
+        searchPlaceholder: t('Filter by name, ID, code, or batch...'),
         filters: [
           {
             columnId: 'status',
             title: t('Status'),
             options: redemptionStatusOptions,
+            singleSelect: true,
+          },
+          {
+            columnId: 'type',
+            title: t('Type'),
+            options: redemptionTypeOptions,
+            singleSelect: true,
           },
         ],
       }}
       getRowClassName={(row, { isMobile }) =>
-        isDisabledRedemptionRow(row.original)
-          ? isMobile
-            ? DISABLED_ROW_MOBILE
-            : DISABLED_ROW_DESKTOP
-          : undefined
+        getDisabledRowClassName(row.original, isMobile)
       }
+      renderRow={(row) => (
+        <TableRow
+          key={row.id}
+          aria-expanded={row.getIsExpanded() || undefined}
+          className={cn(
+            row.getIsSelected() && 'bg-muted',
+            row.depth > 0 && 'bg-muted/30',
+            getDisabledRowClassName(row.original, false)
+          )}
+        >
+          {row.getVisibleCells().map((cell) => (
+            <TableCell key={cell.id}>
+              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+            </TableCell>
+          ))}
+        </TableRow>
+      )}
       bulkActions={<DataTableBulkActions table={table} />}
     />
   )

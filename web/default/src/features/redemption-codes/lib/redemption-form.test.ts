@@ -19,11 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import { useSystemConfigStore } from '@/stores/system-config-store'
+import type { Redemption } from '../types'
+import { formatRedemptionWalletValue } from './redemption-batch'
 import {
   transformFormDataToPayload,
   transformRedemptionToFormDefaults,
 } from './redemption-form'
-import type { Redemption } from '../types'
 
 function setCurrencyConfig() {
   useSystemConfigStore.setState((state) => ({
@@ -38,6 +39,14 @@ function setCurrencyConfig() {
     },
   }))
 }
+
+describe('redemption wallet display', () => {
+  test('formats stored wallet quota as one-to-one CNY balance without exchange-rate conversion', () => {
+    setCurrencyConfig()
+
+    assert.equal(formatRedemptionWalletValue(100 * 500000), '¥100.00')
+  })
+})
 
 describe('redemption form payloads', () => {
   test('sends CNY wallet amount directly to backend instead of USD-converted quota', () => {
@@ -93,6 +102,7 @@ describe('redemption form defaults', () => {
       redeemed_time: 0,
       expired_time: 0,
       used_user_id: 0,
+      batch_id: 'batch-wallet',
     } satisfies Redemption)
 
     assert.equal(defaults.type, 'wallet')
@@ -127,6 +137,7 @@ describe('redemption form defaults', () => {
       redeemed_time: 0,
       expired_time: 0,
       used_user_id: 0,
+      batch_id: 'batch-subscription',
     } satisfies Redemption)
 
     assert.equal(defaults.type, 'subscription')

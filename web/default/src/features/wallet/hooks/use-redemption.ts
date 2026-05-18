@@ -20,7 +20,7 @@ import { useState, useCallback } from 'react'
 import i18next from 'i18next'
 import { toast } from 'sonner'
 import { getSelf } from '@/lib/api'
-import { formatQuota } from '@/lib/format'
+import { formatRedemptionWalletValue } from '@/features/redemption-codes/lib'
 import { redeemTopupCode } from '../api'
 
 // ============================================================================
@@ -44,9 +44,12 @@ export function useRedemption() {
         const result = response.result
         if (result?.type === 'subscription') {
           toast.success(
-            i18next.t('Redemption successful! Subscription activated: {{plan}}', {
-              plan: result.plan?.title || i18next.t('Subscription plan'),
-            })
+            i18next.t(
+              'Redemption successful! Subscription activated: {{plan}}',
+              {
+                plan: result.plan?.title || i18next.t('Subscription plan'),
+              }
+            )
           )
           await getSelf()
           return true
@@ -55,7 +58,7 @@ export function useRedemption() {
         if (quotaAdded) {
           toast.success(
             i18next.t('Redemption successful! Added: {{quota}}', {
-              quota: formatQuota(quotaAdded),
+              quota: formatRedemptionWalletValue(quotaAdded),
             })
           )
           await getSelf()

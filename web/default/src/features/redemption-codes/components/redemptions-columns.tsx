@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota, formatTimestampToDate } from '@/lib/format'
+import { formatTimestampToDate } from '@/lib/format'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Tooltip,
@@ -29,16 +30,26 @@ import { DataTableColumnHeader } from '@/components/data-table'
 import { MaskedValueDisplay } from '@/components/masked-value-display'
 import { StatusBadge } from '@/components/status-badge'
 import { REDEMPTION_FILTER_EXPIRED, REDEMPTION_STATUSES } from '../constants'
-import { isRedemptionExpired, isTimestampExpired } from '../lib'
-import { type Redemption } from '../types'
+import {
+  formatRedemptionWalletValue,
+  isRedemptionBatchRow,
+  isRedemptionExpired,
+  isTimestampExpired,
+  type RedemptionBatchRow,
+} from '../lib'
 import { DataTableRowActions } from './data-table-row-actions'
 
 function getRedemptionValueLabel(
-  redemption: Redemption,
-  planLabel: string
+  redemption: RedemptionBatchRow,
+  planLabel: string,
+  codesLabel: string
 ): string {
+  if (isRedemptionBatchRow(redemption) && redemption.children?.length) {
+    return `${getRedemptionValueLabel(redemption.children[0], planLabel, codesLabel)} · ${redemption.children.length} ${codesLabel}`
+  }
+
   if (redemption.type !== 'subscription') {
-    return formatQuota(redemption.quota)
+    return formatRedemptionWalletValue(redemption.quota)
   }
 
   if (redemption.plan?.title) {
@@ -48,7 +59,7 @@ function getRedemptionValueLabel(
   return `${planLabel} #${redemption.plan_id}`
 }
 
-export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
+export function useRedemptionsColumns(): ColumnDef<RedemptionBatchRow>[] {
   const { t } = useTranslation()
   return [
     {
@@ -63,14 +74,34 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
           className='translate-y-[2px]'
         />
       ),
-      cell: ({ row }) => (
-        <Checkbox
-          checked={row.getIsSelected()}
-          onCheckedChange={(value) => row.toggleSelected(!!value)}
-          aria-label={t('Select row')}
-          className='translate-y-[2px]'
-        />
-      ),
+      cell: ({ row }) => {
+        if (isRedemptionBatchRow(row.original)) {
+          return (
+            <button
+              type='button'
+              onClick={row.getToggleExpandedHandler()}
+              className='hover:bg-muted flex h-6 w-6 items-center justify-center rounded-sm'
+              aria-label={
+                row.getIsExpanded() ? t('Collapse batch') : t('Expand batch')
+              }
+            >
+              {row.getIsExpanded() ? (
+                <ChevronDown className='h-4 w-4' />
+              ) : (
+                <ChevronRight className='h-4 w-4' />
+              )}
+            </button>
+          )
+        }
+        return (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(value) => row.toggleSelected(!!value)}
+            aria-label={t('Select row')}
+            className='translate-y-[2px]'
+          />
+        )
+      },
       enableSorting: false,
       enableHiding: false,
     },
@@ -92,8 +123,11 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
       ),
       cell: ({ row }) => {
         return (
-          <div className='max-w-[150px] truncate font-medium'>
+          <div className='max-w-[180px] truncate font-medium'>
             {row.getValue('name')}
+            {isRedemptionBatchRow(row.original) && row.original.children?.length
+              ? ` (${t('{{count}} codes', { count: row.original.children.length })})`
+              : null}
           </div>
         )
       },
@@ -151,6 +185,44 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
       },
     },
     {
+      accessorKey: 'type',
+      meta: { label: t('Type'), mobileHidden: true },
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Type')} />
+      ),
+      cell: ({ row }) => {
+        const redemption = row.original
+        const label =
+          redemption.type === 'subscription'
+            ? t('Subscription Plan')
+            : t('Wallet Balance')
+        return <StatusBadge label={label} variant='neutral' copyable={false} />
+      },
+      filterFn: (row, id, value) => value.includes(row.getValue(id)),
+    },
+    {
+      accessorKey: 'batch_id',
+      meta: { label: t('Batch'), mobileHidden: true },
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Batch')} />
+      ),
+      cell: ({ row }) => {
+        const redemption = row.original
+        const batchId = redemption.batch_id || String(redemption.id)
+        const label = isRedemptionBatchRow(redemption)
+          ? t('Batch {{id}}', { id: batchId.slice(0, 8) })
+          : t('Single Code')
+        return (
+          <StatusBadge
+            label={label}
+            variant={isRedemptionBatchRow(redemption) ? 'blue' : 'neutral'}
+            copyText={batchId}
+            copyable={Boolean(redemption.batch_id)}
+          />
+        )
+      },
+    },
+    {
       id: 'code',
       accessorKey: 'key',
       meta: { label: t('Code') },
@@ -183,7 +255,7 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
       cell: ({ row }) => {
         return (
           <StatusBadge
-            label={getRedemptionValueLabel(row.original, t('Plan'))}
+            label={getRedemptionValueLabel(row.original, t('Plan'), t('codes'))}
             variant='neutral'
             copyable={false}
           />
@@ -227,6 +299,21 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
             className={`min-w-[140px] font-mono text-sm ${isExpired ? 'text-destructive' : ''}`}
           >
             {formatTimestampToDate(expiredTime)}
+          </div>
+        )
+      },
+    },
+    {
+      accessorKey: 'redeemed_time',
+      meta: { label: t('Redeemed'), mobileHidden: true },
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Redeemed')} />
+      ),
+      cell: ({ row }) => {
+        const redeemedTime = row.getValue('redeemed_time') as number
+        return (
+          <div className='min-w-[140px] font-mono text-sm'>
+            {formatTimestampToDate(redeemedTime)}
           </div>
         )
       },

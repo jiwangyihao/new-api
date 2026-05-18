@@ -4555,6 +4555,25 @@
     "Welcome popup content must be at most 2000 characters.": "Nội dung cửa sổ chào mừng tối đa 2000 ký tự.",
     "Welcome announcement": "Thông báo chào mừng",
     "Close welcome popup": "Đóng cửa sổ chào mừng",
-    "I understand": "Tôi đã hiểu"
+    "I understand": "Tôi đã hiểu",
+    "{{count}} codes": "{{count}} mã",
+    "Batch": "Lô",
+    "Batch {{id}}": "Lô {{id}}",
+    "codes": "mã",
+    "Collapse batch": "Thu gọn lô",
+    "Delete All": "Xóa tất cả",
+    "Delete All Redemption Codes?": "Xóa tất cả mã quy đổi?",
+    "Delete Selected": "Xóa mục đã chọn",
+    "Delete selected codes": "Xóa mã đã chọn",
+    "Delete selected redemption codes": "Xóa các mã quy đổi đã chọn",
+    "Delete Selected Redemption Codes?": "Xóa các mã quy đổi đã chọn?",
+    "Expand batch": "Mở rộng lô",
+    "Filter by name, ID, code, or batch...": "Lọc theo tên, ID, mã hoặc lô...",
+    "Redeemed": "Đã quy đổi",
+    "Single Code": "Mã đơn",
+    "Successfully deleted {{count}} redemption codes": "Đã xóa thành công {{count}} mã quy đổi",
+    "This will delete {{count}} selected redemption codes.": "Thao tác này sẽ xóa {{count}} mã quy đổi đã chọn.",
+    "This will delete every redemption code, including unused, disabled, used, and expired codes.": "Thao tác này sẽ xóa mọi mã quy đổi, bao gồm mã chưa dùng, đã tắt, đã dùng và đã hết hạn.",
+    "This will permanently delete {{count}} redemption codes in this batch.": "Thao tác này sẽ xóa vĩnh viễn {{count}} mã quy đổi trong lô này."
   }
 }

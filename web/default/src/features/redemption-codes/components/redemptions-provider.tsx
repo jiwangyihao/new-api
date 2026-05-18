@@ -18,13 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import React, { useState } from 'react'
 import useDialogState from '@/hooks/use-dialog'
-import { type Redemption, type RedemptionsDialogType } from '../types'
+import type { RedemptionBatchRow } from '../lib'
+import { type RedemptionsDialogType } from '../types'
 
 type RedemptionsContextType = {
   open: RedemptionsDialogType | null
   setOpen: (str: RedemptionsDialogType | null) => void
-  currentRow: Redemption | null
-  setCurrentRow: React.Dispatch<React.SetStateAction<Redemption | null>>
+  currentRow: RedemptionBatchRow | null
+  setCurrentRow: React.Dispatch<React.SetStateAction<RedemptionBatchRow | null>>
   refreshTrigger: number
   triggerRefresh: () => void
 }
@@ -39,7 +40,7 @@ export function RedemptionsProvider({
   children: React.ReactNode
 }) {
   const [open, setOpen] = useDialogState<RedemptionsDialogType>(null)
-  const [currentRow, setCurrentRow] = useState<Redemption | null>(null)
+  const [currentRow, setCurrentRow] = useState<RedemptionBatchRow | null>(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
 
   const triggerRefresh = () => setRefreshTrigger((prev) => prev + 1)

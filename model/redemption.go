@@ -17,6 +17,15 @@ const (
 	RedemptionTypeSubscription = "subscription"
 )
 
+type RedemptionListOptions struct {
+	Keyword  string
+	Type     string
+	Status   int
+	BatchId  string
+	StartIdx int
+	Num      int
+}
+
 type RedemptionResult struct {
 	Type  string            `json:"type"`
 	Quota int               `json:"quota"`
@@ -32,6 +41,7 @@ type Redemption struct {
 	Quota        int               `json:"quota" gorm:"default:100"`
 	Type         string            `json:"type" gorm:"type:varchar(32);not null;default:'wallet';index"`
 	PlanId       int               `json:"plan_id" gorm:"type:int;not null;default:0;index"`
+	BatchId      string            `json:"batch_id" gorm:"type:varchar(36);index"`
 	Plan         *SubscriptionPlan `json:"plan,omitempty" gorm:"-"`
 	CreatedTime  int64             `json:"created_time" gorm:"bigint"`
 	RedeemedTime int64             `json:"redeemed_time" gorm:"bigint"`
@@ -42,41 +52,14 @@ type Redemption struct {
 }
 
 func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
-	// 开始事务
-	tx := DB.Begin()
-	if tx.Error != nil {
-		return nil, 0, tx.Error
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
-
-	// 获取总数
-	err = tx.Model(&Redemption{}).Count(&total).Error
-	if err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-
-	// 获取分页数据
-	err = tx.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
-	if err != nil {
-		tx.Rollback()
-		return nil, 0, err
-	}
-	attachRedemptionPlans(tx, redemptions)
-
-	// 提交事务
-	if err = tx.Commit().Error; err != nil {
-		return nil, 0, err
-	}
-
-	return redemptions, total, nil
+	return ListRedemptions(RedemptionListOptions{StartIdx: startIdx, Num: num})
 }
 
 func SearchRedemptions(keyword string, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+	return ListRedemptions(RedemptionListOptions{Keyword: keyword, StartIdx: startIdx, Num: num})
+}
+
+func ListRedemptions(options RedemptionListOptions) (redemptions []*Redemption, total int64, err error) {
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
@@ -87,26 +70,16 @@ func SearchRedemptions(keyword string, startIdx int, num int) (redemptions []*Re
 		}
 	}()
 
-	// Build query based on keyword type
-	query := tx.Model(&Redemption{})
-
-	// Only try to convert to ID if the string represents a valid integer
-	if id, err := strconv.Atoi(keyword); err == nil {
-		query = query.Where("id = ? OR name LIKE ?", id, keyword+"%")
-	} else {
-		query = query.Where("name LIKE ?", keyword+"%")
-	}
-
-	// Get total count
-	err = query.Count(&total).Error
-	if err != nil {
+	query := applyRedemptionListFilters(tx.Model(&Redemption{}), options)
+	if err = query.Count(&total).Error; err != nil {
 		tx.Rollback()
 		return nil, 0, err
 	}
 
-	// Get paginated data
-	err = query.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
-	if err != nil {
+	if options.Num > 0 {
+		query = query.Limit(options.Num).Offset(options.StartIdx)
+	}
+	if err = query.Order("id desc").Find(&redemptions).Error; err != nil {
 		tx.Rollback()
 		return nil, 0, err
 	}
@@ -115,8 +88,39 @@ func SearchRedemptions(keyword string, startIdx int, num int) (redemptions []*Re
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
 	}
-
 	return redemptions, total, nil
+}
+
+func applyRedemptionListFilters(query *gorm.DB, options RedemptionListOptions) *gorm.DB {
+	keyword := strings.TrimSpace(options.Keyword)
+	if keyword != "" {
+		likeKeyword := keyword + "%"
+		if id, err := strconv.Atoi(keyword); err == nil {
+			query = query.Where("id = ? OR name LIKE ? OR "+commonKeyCol+" = ? OR batch_id = ?", id, likeKeyword, keyword, keyword)
+		} else {
+			query = query.Where("name LIKE ? OR "+commonKeyCol+" = ? OR batch_id = ?", likeKeyword, keyword, keyword)
+		}
+	}
+
+	if redemptionType := normalizeRedemptionTypeFilter(options.Type); redemptionType != "" {
+		query = query.Where("type = ?", redemptionType)
+	}
+	if options.Status > 0 {
+		query = query.Where("status = ?", options.Status)
+	}
+	if batchId := strings.TrimSpace(options.BatchId); batchId != "" {
+		query = query.Where("batch_id = ?", batchId)
+	}
+	return query
+}
+
+func normalizeRedemptionTypeFilter(redemptionType string) string {
+	switch redemptionType {
+	case RedemptionTypeWallet, RedemptionTypeSubscription:
+		return redemptionType
+	default:
+		return ""
+	}
 }
 
 func GetRedemptionById(id int) (*Redemption, error) {
@@ -260,7 +264,7 @@ func (redemption *Redemption) SelectUpdate() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
 	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "redeemed_time", "expired_time").Updates(redemption).Error
+	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "redeemed_time", "expired_time", "batch_id").Updates(redemption).Error
 	return err
 }
 
@@ -285,5 +289,18 @@ func DeleteRedemptionById(id int) (err error) {
 func DeleteInvalidRedemptions() (int64, error) {
 	now := common.GetTimestamp()
 	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
+	return result.RowsAffected, result.Error
+}
+
+func BatchDeleteRedemptions(ids []int) (int64, error) {
+	if len(ids) == 0 {
+		return 0, errors.New("ids 不能为空！")
+	}
+	result := DB.Where("id IN ?", ids).Delete(&Redemption{})
+	return result.RowsAffected, result.Error
+}
+
+func DeleteAllRedemptions() (int64, error) {
+	result := DB.Where("1 = 1").Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }

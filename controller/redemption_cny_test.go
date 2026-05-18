@@ -48,6 +48,24 @@ func TestAddRedemptionStoresCNYAmountAsWalletQuota(t *testing.T) {
 	assert.Equal(t, int(common.QuotaPerUnit*40), created[0].Quota)
 }
 
+func TestAddRedemptionAssignsOneBatchIdPerCreateRequest(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	keys := []string{"batch-key-a", "batch-key-b", "batch-key-c"}
+	next := 0
+
+	created, err := buildRedemptionsForCreate(1, model.Redemption{Name: "batch-cny", Quota: 10, Count: len(keys)}, func() string {
+		key := keys[next]
+		next++
+		return key
+	})
+
+	require.NoError(t, err)
+	require.Len(t, created, 3)
+	require.NotEmpty(t, created[0].BatchId)
+	assert.Equal(t, created[0].BatchId, created[1].BatchId)
+	assert.Equal(t, created[0].BatchId, created[2].BatchId)
+}
+
 func TestUpdateRedemptionStoresCNYAmountAsWalletQuota(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 
@@ -183,4 +201,66 @@ func TestRedeemReturnsOriginalErrorForSubscriptionLimit(t *testing.T) {
 	var redeemed model.Redemption
 	require.NoError(t, model.DB.Where("`key` = ?", "limit-key").First(&redeemed).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, redeemed.Status)
+}
+
+func TestListRedemptionsFiltersByTypeStatusAndBatch(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	batchID := "batch-filter"
+	now := common.GetTimestamp()
+	records := []model.Redemption{
+		{UserId: 1, Name: "batch-wallet", Key: "filter-wallet-a", Type: model.RedemptionTypeWallet, BatchId: batchID, Quota: int(common.QuotaPerUnit * 10), Status: common.RedemptionCodeStatusEnabled, CreatedTime: now},
+		{UserId: 1, Name: "batch-wallet", Key: "filter-wallet-b", Type: model.RedemptionTypeWallet, BatchId: batchID, Quota: int(common.QuotaPerUnit * 10), Status: common.RedemptionCodeStatusUsed, CreatedTime: now},
+		{UserId: 1, Name: "other-sub", Key: "filter-sub", Type: model.RedemptionTypeSubscription, BatchId: "other-batch", Status: common.RedemptionCodeStatusEnabled, CreatedTime: now},
+	}
+	require.NoError(t, model.DB.Create(&records).Error)
+
+	items, total, err := model.ListRedemptions(model.RedemptionListOptions{
+		Keyword:  "batch",
+		Type:     model.RedemptionTypeWallet,
+		Status:   common.RedemptionCodeStatusEnabled,
+		BatchId:  batchID,
+		StartIdx: 0,
+		Num:      10,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	require.Len(t, items, 1)
+	assert.Equal(t, "filter-wallet-a", items[0].Key)
+}
+
+func TestRedemptionListOptionsAcceptsLegacySearchQuery(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/redemption/search?search=legacy-name", nil)
+
+	options := redemptionListOptionsFromQuery(ctx, 0, 10)
+
+	assert.Equal(t, "legacy-name", options.Keyword)
+}
+
+func TestBatchAndAllDeleteRedemptions(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	now := common.GetTimestamp()
+	records := []model.Redemption{
+		{Id: 9701, UserId: 1, Name: "enabled", Key: "delete-enabled", Type: model.RedemptionTypeWallet, Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusEnabled, CreatedTime: now},
+		{Id: 9702, UserId: 1, Name: "disabled", Key: "delete-disabled", Type: model.RedemptionTypeWallet, Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusDisabled, CreatedTime: now},
+		{Id: 9703, UserId: 1, Name: "used", Key: "delete-used", Type: model.RedemptionTypeWallet, Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusUsed, CreatedTime: now},
+	}
+	require.NoError(t, model.DB.Create(&records).Error)
+
+	rows, err := model.BatchDeleteRedemptions([]int{9701, 9702})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), rows)
+	var remaining int64
+	require.NoError(t, model.DB.Model(&model.Redemption{}).Count(&remaining).Error)
+	assert.Equal(t, int64(1), remaining)
+
+	rows, err = model.DeleteAllRedemptions()
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), rows)
+	require.NoError(t, model.DB.Model(&model.Redemption{}).Count(&remaining).Error)
+	assert.Zero(t, remaining)
 }

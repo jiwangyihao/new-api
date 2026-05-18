@@ -16,20 +16,73 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Plus } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/confirm-dialog'
+import { deleteAllRedemptions } from '../api'
 import { useRedemptions } from './redemptions-provider'
 
 export function RedemptionsPrimaryButtons() {
   const { t } = useTranslation()
-  const { setOpen } = useRedemptions()
+  const { setOpen, triggerRefresh } = useRedemptions()
+  const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+
+  const handleDeleteAll = async () => {
+    setIsDeleting(true)
+    try {
+      const result = await deleteAllRedemptions()
+      if (result.success) {
+        const count = result.data || 0
+        toast.success(
+          t('Successfully deleted {{count}} redemption codes', { count })
+        )
+        triggerRefresh()
+        setShowDeleteAllConfirm(false)
+      }
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
   return (
-    <div className='flex gap-2'>
-      <Button size='sm' onClick={() => setOpen('create')}>
-        <Plus className='h-4 w-4' />
-        {t('Create Code')}
-      </Button>
-    </div>
+    <>
+      <div className='flex gap-2'>
+        <Button
+          size='sm'
+          variant='destructive'
+          onClick={() => setShowDeleteAllConfirm(true)}
+        >
+          <Trash2 className='h-4 w-4' />
+          {t('Delete All')}
+        </Button>
+        <Button size='sm' onClick={() => setOpen('create')}>
+          <Plus className='h-4 w-4' />
+          {t('Create Code')}
+        </Button>
+      </div>
+      <ConfirmDialog
+        destructive
+        open={showDeleteAllConfirm}
+        onOpenChange={setShowDeleteAllConfirm}
+        handleConfirm={handleDeleteAll}
+        isLoading={isDeleting}
+        className='max-w-md'
+        title={t('Delete All Redemption Codes?')}
+        desc={
+          <>
+            {t(
+              'This will delete every redemption code, including unused, disabled, used, and expired codes.'
+            )}
+            <br />
+            {t('This action cannot be undone.')}
+          </>
+        }
+        confirmText={t('Delete All')}
+      />
+    </>
   )
 }

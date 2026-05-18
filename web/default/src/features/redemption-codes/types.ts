@@ -32,10 +32,12 @@ export const redemptionSchema = z.object({
   quota: z.number(),
   type: z.enum(['wallet', 'subscription']).default('wallet'),
   plan_id: z.number().default(0),
+  batch_id: z.string().default(''),
   created_time: z.number(),
   redeemed_time: z.number(),
   expired_time: z.number(), // 0 for never expires
   used_user_id: z.number(),
+  count: z.number().optional(),
   plan: z.custom<SubscriptionPlan>().optional(),
 })
 
@@ -54,6 +56,10 @@ export interface ApiResponse<T = unknown> {
 export interface GetRedemptionsParams {
   p?: number
   page_size?: number
+  keyword?: string
+  type?: RedemptionType
+  status?: number
+  batch_id?: string
 }
 
 export interface GetRedemptionsResponse {
@@ -71,6 +77,9 @@ export interface SearchRedemptionsParams {
   keyword?: string
   p?: number
   page_size?: number
+  type?: RedemptionType
+  status?: number
+  batch_id?: string
 }
 
 export type RedemptionType = 'wallet' | 'subscription'

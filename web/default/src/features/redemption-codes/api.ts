@@ -26,6 +26,21 @@ import type {
   RedemptionFormData,
 } from './types'
 
+function buildRedemptionsQuery(
+  params: GetRedemptionsParams | SearchRedemptionsParams
+): string {
+  const searchParams = new URLSearchParams()
+  searchParams.set('p', String(params.p ?? 1))
+  searchParams.set('page_size', String(params.page_size ?? 10))
+  if (params.keyword?.trim()) searchParams.set('keyword', params.keyword.trim())
+  if (params.type) searchParams.set('type', params.type)
+  if (params.status !== undefined)
+    searchParams.set('status', String(params.status))
+  if (params.batch_id?.trim())
+    searchParams.set('batch_id', params.batch_id.trim())
+  return searchParams.toString()
+}
+
 // ============================================================================
 // Redemption Code Management
 // ============================================================================
@@ -34,8 +49,7 @@ import type {
 export async function getRedemptions(
   params: GetRedemptionsParams = {}
 ): Promise<GetRedemptionsResponse> {
-  const { p = 1, page_size = 10 } = params
-  const res = await api.get(`/api/redemption/?p=${p}&page_size=${page_size}`)
+  const res = await api.get(`/api/redemption/?${buildRedemptionsQuery(params)}`)
   return res.data
 }
 
@@ -43,9 +57,8 @@ export async function getRedemptions(
 export async function searchRedemptions(
   params: SearchRedemptionsParams
 ): Promise<GetRedemptionsResponse> {
-  const { keyword = '', p = 1, page_size = 10 } = params
   const res = await api.get(
-    `/api/redemption/search?keyword=${keyword}&p=${p}&page_size=${page_size}`
+    `/api/redemption/search?${buildRedemptionsQuery(params)}`
   )
   return res.data
 }
@@ -92,5 +105,19 @@ export async function deleteRedemption(id: number): Promise<ApiResponse> {
 // Delete invalid redemption codes (used, disabled, expired)
 export async function deleteInvalidRedemptions(): Promise<ApiResponse<number>> {
   const res = await api.delete('/api/redemption/invalid')
+  return res.data
+}
+
+// Delete selected redemption codes in any status
+export async function batchDeleteRedemptions(
+  ids: number[]
+): Promise<ApiResponse<number>> {
+  const res = await api.post('/api/redemption/batch', { ids })
+  return res.data
+}
+
+// Delete all redemption codes in any status
+export async function deleteAllRedemptions(): Promise<ApiResponse<number>> {
+  const res = await api.delete('/api/redemption/all')
   return res.data
 }

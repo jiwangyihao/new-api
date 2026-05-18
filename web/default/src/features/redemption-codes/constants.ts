@@ -78,6 +78,20 @@ export function getRedemptionStatusOptions(t: TFunction) {
   ]
 }
 
+export const REDEMPTION_TYPES = {
+  WALLET: 'wallet',
+  SUBSCRIPTION: 'subscription',
+} as const
+
+export const REDEMPTION_TYPE_VALUES = Object.values(REDEMPTION_TYPES)
+
+export function getRedemptionTypeOptions(t: TFunction) {
+  return [
+    { label: t('Wallet Balance'), value: REDEMPTION_TYPES.WALLET },
+    { label: t('Subscription Plan'), value: REDEMPTION_TYPES.SUBSCRIPTION },
+  ]
+}
+
 // ============================================================================
 // Validation Constants
 // ============================================================================

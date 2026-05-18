@@ -4555,6 +4555,25 @@
     "Welcome popup content must be at most 2000 characters.": "ウェルカムポップアップの内容は 2000 文字以内にしてください。",
     "Welcome announcement": "ウェルカム告知",
     "Close welcome popup": "ウェルカムポップアップを閉じる",
-    "I understand": "了解しました"
+    "I understand": "了解しました",
+    "{{count}} codes": "{{count}} 個のコード",
+    "Batch": "バッチ",
+    "Batch {{id}}": "バッチ {{id}}",
+    "codes": "コード",
+    "Collapse batch": "バッチを折りたたむ",
+    "Delete All": "すべて削除",
+    "Delete All Redemption Codes?": "すべての引き換えコードを削除しますか？",
+    "Delete Selected": "選択項目を削除",
+    "Delete selected codes": "選択したコードを削除",
+    "Delete selected redemption codes": "選択した引き換えコードを削除",
+    "Delete Selected Redemption Codes?": "選択した引き換えコードを削除しますか？",
+    "Expand batch": "バッチを展開",
+    "Filter by name, ID, code, or batch...": "名前、ID、コード、またはバッチで絞り込み...",
+    "Redeemed": "引き換え日時",
+    "Single Code": "単一コード",
+    "Successfully deleted {{count}} redemption codes": "{{count}} 個の引き換えコードを削除しました",
+    "This will delete {{count}} selected redemption codes.": "選択した {{count}} 個の引き換えコードを削除します。",
+    "This will delete every redemption code, including unused, disabled, used, and expired codes.": "未使用、無効、使用済み、期限切れを含むすべての引き換えコードを削除します。",
+    "This will permanently delete {{count}} redemption codes in this batch.": "このバッチ内の {{count}} 個の引き換えコードを完全に削除します。"
   }
 }

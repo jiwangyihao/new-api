@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { isRedemptionBatchRow } from '../lib'
 import { RedemptionsDeleteDialog } from './redemptions-delete-dialog'
 import { RedemptionsMutateDrawer } from './redemptions-mutate-drawer'
 import { useRedemptions } from './redemptions-provider'
@@ -23,13 +24,15 @@ import { useRedemptions } from './redemptions-provider'
 export function RedemptionsDialogs() {
   const { open, setOpen, currentRow } = useRedemptions()
   const isUpdate = open === 'update'
+  const editableRow =
+    currentRow && !isRedemptionBatchRow(currentRow) ? currentRow : undefined
 
   return (
     <>
       <RedemptionsMutateDrawer
         open={open === 'create' || isUpdate}
         onOpenChange={(isOpen) => !isOpen && setOpen(null)}
-        currentRow={isUpdate ? currentRow || undefined : undefined}
+        currentRow={isUpdate ? editableRow : undefined}
       />
       <RedemptionsDeleteDialog />
     </>

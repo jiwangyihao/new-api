@@ -4555,6 +4555,25 @@
     "Welcome popup content must be at most 2000 characters.": "Welcome popup content must be at most 2000 characters.",
     "Welcome announcement": "Welcome announcement",
     "Close welcome popup": "Close welcome popup",
-    "I understand": "I understand"
+    "I understand": "I understand",
+    "{{count}} codes": "{{count}} codes",
+    "Batch": "Batch",
+    "Batch {{id}}": "Batch {{id}}",
+    "codes": "codes",
+    "Collapse batch": "Collapse batch",
+    "Delete All": "Delete All",
+    "Delete All Redemption Codes?": "Delete All Redemption Codes?",
+    "Delete Selected": "Delete Selected",
+    "Delete selected codes": "Delete selected codes",
+    "Delete selected redemption codes": "Delete selected redemption codes",
+    "Delete Selected Redemption Codes?": "Delete Selected Redemption Codes?",
+    "Expand batch": "Expand batch",
+    "Filter by name, ID, code, or batch...": "Filter by name, ID, code, or batch...",
+    "Redeemed": "Redeemed",
+    "Single Code": "Single Code",
+    "Successfully deleted {{count}} redemption codes": "Successfully deleted {{count}} redemption codes",
+    "This will delete {{count}} selected redemption codes.": "This will delete {{count}} selected redemption codes.",
+    "This will delete every redemption code, including unused, disabled, used, and expired codes.": "This will delete every redemption code, including unused, disabled, used, and expired codes.",
+    "This will permanently delete {{count}} redemption codes in this batch.": "This will permanently delete {{count}} redemption codes in this batch."
   }
 }

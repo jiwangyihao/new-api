@@ -4555,6 +4555,25 @@
     "Welcome popup content must be at most 2000 characters.": "欢迎公告内容最多 2000 个字符。",
     "Welcome announcement": "欢迎公告",
     "Close welcome popup": "关闭欢迎公告弹窗",
-    "I understand": "我知道了"
+    "I understand": "我知道了",
+    "{{count}} codes": "{{count}} 个兑换码",
+    "Batch": "批次",
+    "Batch {{id}}": "批次 {{id}}",
+    "codes": "兑换码",
+    "Collapse batch": "收起批次",
+    "Delete All": "删除全部",
+    "Delete All Redemption Codes?": "删除全部兑换码？",
+    "Delete Selected": "删除选中项",
+    "Delete selected codes": "删除选中兑换码",
+    "Delete selected redemption codes": "删除选中的兑换码",
+    "Delete Selected Redemption Codes?": "删除选中的兑换码？",
+    "Expand batch": "展开批次",
+    "Filter by name, ID, code, or batch...": "按名称、ID、兑换码或批次筛选...",
+    "Redeemed": "兑换时间",
+    "Single Code": "单个兑换码",
+    "Successfully deleted {{count}} redemption codes": "已成功删除 {{count}} 个兑换码",
+    "This will delete {{count}} selected redemption codes.": "这将删除选中的 {{count}} 个兑换码。",
+    "This will delete every redemption code, including unused, disabled, used, and expired codes.": "这将删除所有兑换码，包括未使用、已禁用、已使用和已过期的兑换码。",
+    "This will permanently delete {{count}} redemption codes in this batch.": "这将永久删除此批次中的 {{count}} 个兑换码。"
   }
 }

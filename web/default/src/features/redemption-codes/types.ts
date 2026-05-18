@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
+import type { SubscriptionPlan } from '@/features/subscriptions/types'
 
 // ============================================================================
 // Redemption Schema & Types
@@ -29,10 +30,13 @@ export const redemptionSchema = z.object({
   key: z.string(),
   status: z.number(), // 1: enabled, 2: disabled, 3: used
   quota: z.number(),
+  type: z.enum(['wallet', 'subscription']).default('wallet'),
+  plan_id: z.number().default(0),
   created_time: z.number(),
   redeemed_time: z.number(),
   expired_time: z.number(), // 0 for never expires
   used_user_id: z.number(),
+  plan: z.custom<SubscriptionPlan>().optional(),
 })
 
 export type Redemption = z.infer<typeof redemptionSchema>
@@ -69,11 +73,15 @@ export interface SearchRedemptionsParams {
   page_size?: number
 }
 
+export type RedemptionType = 'wallet' | 'subscription'
+
 export interface RedemptionFormData {
   id?: number
   name: string
   quota: number
+  type: RedemptionType
   expired_time: number
+  plan_id: number
   count?: number // Only for create
   status?: number // Only for status update
 }

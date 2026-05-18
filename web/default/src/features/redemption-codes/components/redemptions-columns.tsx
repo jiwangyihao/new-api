@@ -33,6 +33,21 @@ import { isRedemptionExpired, isTimestampExpired } from '../lib'
 import { type Redemption } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
 
+function getRedemptionValueLabel(
+  redemption: Redemption,
+  planLabel: string
+): string {
+  if (redemption.type !== 'subscription') {
+    return formatQuota(redemption.quota)
+  }
+
+  if (redemption.plan?.title) {
+    return redemption.plan.title
+  }
+
+  return `${planLabel} #${redemption.plan_id}`
+}
+
 export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
   const { t } = useTranslation()
   return [
@@ -161,15 +176,14 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
     },
     {
       accessorKey: 'quota',
-      meta: { label: t('Quota') },
+      meta: { label: t('Value') },
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Quota')} />
+        <DataTableColumnHeader column={column} title={t('Value')} />
       ),
       cell: ({ row }) => {
-        const quota = row.getValue('quota') as number
         return (
           <StatusBadge
-            label={formatQuota(quota)}
+            label={getRedemptionValueLabel(row.original, t('Plan'))}
             variant='neutral'
             copyable={false}
           />

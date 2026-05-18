@@ -23,7 +23,11 @@ import {
   REDEMPTION_VALIDATION,
   getRedemptionFormErrorMessages,
 } from '../constants'
-import { type RedemptionFormData, type Redemption } from '../types'
+import {
+  type Redemption,
+  type RedemptionFormData,
+  type RedemptionType,
+} from '../types'
 
 // ============================================================================
 // Form Schema (use getRedemptionFormSchema(t) in components for i18n messages)
@@ -31,24 +35,56 @@ import { type RedemptionFormData, type Redemption } from '../types'
 
 export function getRedemptionFormSchema(t: TFunction) {
   const msg = getRedemptionFormErrorMessages(t)
-  return z.object({
-    name: z
-      .string()
-      .min(REDEMPTION_VALIDATION.NAME_MIN_LENGTH, msg.NAME_LENGTH_INVALID)
-      .max(REDEMPTION_VALIDATION.NAME_MAX_LENGTH, msg.NAME_LENGTH_INVALID),
-    quota_cny: z.number().int(t('Amount must be a whole number')).min(1, t('Amount must be greater than 0')),
-    expired_time: z.date().optional(),
-    count: z
-      .number()
-      .min(REDEMPTION_VALIDATION.COUNT_MIN, msg.COUNT_INVALID)
-      .max(REDEMPTION_VALIDATION.COUNT_MAX, msg.COUNT_INVALID)
-      .optional(),
-  })
+  return z
+    .object({
+      name: z
+        .string()
+        .min(REDEMPTION_VALIDATION.NAME_MIN_LENGTH, msg.NAME_LENGTH_INVALID)
+        .max(REDEMPTION_VALIDATION.NAME_MAX_LENGTH, msg.NAME_LENGTH_INVALID),
+      type: z.enum(['wallet', 'subscription']),
+      quota_cny: z.number(),
+      plan_id: z.number().int(),
+      expired_time: z.date().optional(),
+      count: z
+        .number()
+        .min(REDEMPTION_VALIDATION.COUNT_MIN, msg.COUNT_INVALID)
+        .max(REDEMPTION_VALIDATION.COUNT_MAX, msg.COUNT_INVALID)
+        .optional(),
+    })
+    .superRefine((data, ctx) => {
+      if (data.type === 'wallet') {
+        if (!Number.isInteger(data.quota_cny)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: t('Amount must be a whole number'),
+            path: ['quota_cny'],
+          })
+        }
+
+        if (data.quota_cny < 1) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: t('Amount must be greater than 0'),
+            path: ['quota_cny'],
+          })
+        }
+      }
+
+      if (data.type === 'subscription' && data.plan_id <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: t('Please select a subscription plan'),
+          path: ['plan_id'],
+        })
+      }
+    })
 }
 
 export type RedemptionFormValues = {
+  type: RedemptionType
   name: string
   quota_cny: number
+  plan_id: number
   expired_time?: Date
   count?: number
 }
@@ -58,8 +94,10 @@ export type RedemptionFormValues = {
 // ============================================================================
 
 export const REDEMPTION_FORM_DEFAULT_VALUES: RedemptionFormValues = {
+  type: 'wallet',
   name: '',
   quota_cny: 10,
+  plan_id: 0,
   expired_time: undefined,
   count: 1,
 }
@@ -76,7 +114,9 @@ export function transformFormDataToPayload(
 ): RedemptionFormData {
   return {
     name: data.name,
-    quota: data.quota_cny,
+    quota: data.type === 'wallet' ? data.quota_cny : 0,
+    type: data.type,
+    plan_id: data.type === 'subscription' ? data.plan_id : 0,
     expired_time: data.expired_time
       ? Math.floor(data.expired_time.getTime() / 1000)
       : 0,
@@ -90,9 +130,16 @@ export function transformFormDataToPayload(
 export function transformRedemptionToFormDefaults(
   redemption: Redemption
 ): RedemptionFormValues {
+  const type = redemption.type ?? 'wallet'
+
   return {
     name: redemption.name,
-    quota_cny: accountBalanceQuotaToCnyAmount(redemption.quota),
+    type,
+    quota_cny:
+      type === 'wallet'
+        ? accountBalanceQuotaToCnyAmount(redemption.quota)
+        : 0,
+    plan_id: type === 'subscription' ? redemption.plan_id : 0,
     expired_time:
       redemption.expired_time > 0
         ? new Date(redemption.expired_time * 1000)

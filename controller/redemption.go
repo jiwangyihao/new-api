@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -195,10 +196,42 @@ func redemptionCNYAmountToQuota(amount int) (int, error) {
 	return int(quota), nil
 }
 
-func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey func() string) ([]model.Redemption, error) {
-	quota, err := redemptionCNYAmountToQuota(redemption.Quota)
+func normalizeRedemptionCreateType(redemptionType string) string {
+	if redemptionType == model.RedemptionTypeSubscription {
+		return model.RedemptionTypeSubscription
+	}
+	return model.RedemptionTypeWallet
+}
+
+func validateRedemptionSubscriptionPlan(planId int) error {
+	if planId <= 0 {
+		return errors.New("套餐不存在")
+	}
+	plan, err := model.GetSubscriptionPlanById(planId)
 	if err != nil {
-		return nil, err
+		return errors.New("套餐不存在")
+	}
+	if strings.TrimSpace(plan.Title) == "" {
+		return errors.New("套餐不存在")
+	}
+	return nil
+}
+
+func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey func() string) ([]model.Redemption, error) {
+	redemptionType := normalizeRedemptionCreateType(redemption.Type)
+	quota := 0
+	planId := 0
+	if redemptionType == model.RedemptionTypeSubscription {
+		if err := validateRedemptionSubscriptionPlan(redemption.PlanId); err != nil {
+			return nil, err
+		}
+		planId = redemption.PlanId
+	} else {
+		var err error
+		quota, err = redemptionCNYAmountToQuota(redemption.Quota)
+		if err != nil {
+			return nil, err
+		}
 	}
 	redemptions := make([]model.Redemption, 0, redemption.Count)
 	for i := 0; i < redemption.Count; i++ {
@@ -208,6 +241,8 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 			Key:         nextKey(),
 			CreatedTime: common.GetTimestamp(),
 			Quota:       quota,
+			Type:        redemptionType,
+			PlanId:      planId,
 			ExpiredTime: redemption.ExpiredTime,
 		})
 	}
@@ -215,12 +250,25 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 }
 
 func applyRedemptionUpdate(cleanRedemption *model.Redemption, redemption model.Redemption) error {
-	quota, err := redemptionCNYAmountToQuota(redemption.Quota)
-	if err != nil {
-		return err
+	redemptionType := normalizeRedemptionCreateType(redemption.Type)
+	quota := 0
+	planId := 0
+	if redemptionType == model.RedemptionTypeSubscription {
+		if err := validateRedemptionSubscriptionPlan(redemption.PlanId); err != nil {
+			return err
+		}
+		planId = redemption.PlanId
+	} else {
+		var err error
+		quota, err = redemptionCNYAmountToQuota(redemption.Quota)
+		if err != nil {
+			return err
+		}
 	}
 	cleanRedemption.Name = redemption.Name
 	cleanRedemption.Quota = quota
+	cleanRedemption.Type = redemptionType
+	cleanRedemption.PlanId = planId
 	cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	return nil
 }

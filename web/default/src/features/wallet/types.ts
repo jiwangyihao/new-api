@@ -33,7 +33,9 @@ export interface ApiResponse<T = unknown> {
  * Standard API response types
  */
 export type TopupInfoResponse = ApiResponse<TopupInfo>
-export type RedemptionResponse = ApiResponse<number>
+export type RedemptionResponse = ApiResponse<number> & {
+  result?: RedemptionResult
+}
 export type AmountResponse = ApiResponse<string>
 export type PaymentResponse = ApiResponse<Record<string, unknown>> & {
   url?: string
@@ -164,6 +166,15 @@ export interface PresetAmount {
 export interface RedemptionRequest {
   /** Redemption code key */
   key: string
+}
+
+export interface RedemptionResult {
+  type: 'wallet' | 'subscription'
+  quota: number
+  plan?: {
+    id: number
+    title: string
+  }
 }
 
 /**

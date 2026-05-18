@@ -497,26 +497,26 @@ func generateDefaultSidebarConfig(userRole int) string {
 	if userRole == common.RoleAdminUser {
 		// 管理员可以访问管理员区域，但不能访问系统设置
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":    true,
-			"channel":    true,
-			"models":     true,
-			"redemption": true,
+			"enabled":      true,
+			"channel":      true,
+			"models":       true,
+			"redemption":   true,
 			"trial_code":   true,
 			"subscription": true,
-			"user":       true,
-			"setting":    false, // 管理员不能访问系统设置
+			"user":         true,
+			"setting":      false, // 管理员不能访问系统设置
 		}
 	} else if userRole == common.RoleRootUser {
 		// 超级管理员可以访问所有功能
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":    true,
-			"channel":    true,
-			"models":     true,
-			"redemption": true,
+			"enabled":      true,
+			"channel":      true,
+			"models":       true,
+			"redemption":   true,
 			"trial_code":   true,
 			"subscription": true,
-			"user":       true,
-			"setting":    true,
+			"user":         true,
+			"setting":      true,
 		}
 	}
 	// 普通用户不包含admin区域
@@ -1110,7 +1110,7 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	redemption, err := model.Redeem(req.Key, id)
 	if err != nil {
 		if errors.Is(err, model.ErrRedeemFailed) {
 			common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
@@ -1119,10 +1119,19 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	response := gin.H{
+		"type":  redemption.Type,
+		"quota": redemption.Quota,
+		"data":  redemption.Quota,
+	}
+	if redemption.Plan != nil {
+		response["plan"] = redemption.Plan
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    quota,
+		"data":    redemption.Quota,
+		"result":  response,
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
@@ -11,19 +12,33 @@ import (
 	"gorm.io/gorm"
 )
 
+const (
+	RedemptionTypeWallet       = "wallet"
+	RedemptionTypeSubscription = "subscription"
+)
+
+type RedemptionResult struct {
+	Type  string            `json:"type"`
+	Quota int               `json:"quota"`
+	Plan  *SubscriptionPlan `json:"plan,omitempty"`
+}
+
 type Redemption struct {
-	Id           int            `json:"id"`
-	UserId       int            `json:"user_id"`
-	Key          string         `json:"key" gorm:"type:char(32);uniqueIndex"`
-	Status       int            `json:"status" gorm:"default:1"`
-	Name         string         `json:"name" gorm:"index"`
-	Quota        int            `json:"quota" gorm:"default:100"`
-	CreatedTime  int64          `json:"created_time" gorm:"bigint"`
-	RedeemedTime int64          `json:"redeemed_time" gorm:"bigint"`
-	Count        int            `json:"count" gorm:"-:all"` // only for api request
-	UsedUserId   int            `json:"used_user_id"`
-	DeletedAt    gorm.DeletedAt `gorm:"index"`
-	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
+	Id           int               `json:"id"`
+	UserId       int               `json:"user_id"`
+	Key          string            `json:"key" gorm:"type:char(32);uniqueIndex"`
+	Status       int               `json:"status" gorm:"default:1"`
+	Name         string            `json:"name" gorm:"index"`
+	Quota        int               `json:"quota" gorm:"default:100"`
+	Type         string            `json:"type" gorm:"type:varchar(32);not null;default:'wallet';index"`
+	PlanId       int               `json:"plan_id" gorm:"type:int;not null;default:0;index"`
+	Plan         *SubscriptionPlan `json:"plan,omitempty" gorm:"-"`
+	CreatedTime  int64             `json:"created_time" gorm:"bigint"`
+	RedeemedTime int64             `json:"redeemed_time" gorm:"bigint"`
+	Count        int               `json:"count" gorm:"-:all"` // only for api request
+	UsedUserId   int               `json:"used_user_id"`
+	DeletedAt    gorm.DeletedAt    `gorm:"index"`
+	ExpiredTime  int64             `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
 }
 
 func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
@@ -51,6 +66,7 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 		tx.Rollback()
 		return nil, 0, err
 	}
+	attachRedemptionPlans(tx, redemptions)
 
 	// 提交事务
 	if err = tx.Commit().Error; err != nil {
@@ -94,6 +110,7 @@ func SearchRedemptions(keyword string, startIdx int, num int) (redemptions []*Re
 		tx.Rollback()
 		return nil, 0, err
 	}
+	attachRedemptionPlans(tx, redemptions)
 
 	if err = tx.Commit().Error; err != nil {
 		return nil, 0, err
@@ -109,24 +126,71 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	redemption := Redemption{Id: id}
 	var err error = nil
 	err = DB.First(&redemption, "id = ?", id).Error
+	if err == nil {
+		attachRedemptionPlans(DB, []*Redemption{&redemption})
+	}
 	return &redemption, err
 }
 
-func Redeem(key string, userId int) (quota int, err error) {
+func attachRedemptionPlans(tx *gorm.DB, redemptions []*Redemption) {
+	if tx == nil || len(redemptions) == 0 {
+		return
+	}
+	planIDSet := make(map[int]struct{})
+	planIDs := make([]int, 0)
+	for _, redemption := range redemptions {
+		if redemption == nil || normalizeRedemptionType(redemption.Type) != RedemptionTypeSubscription || redemption.PlanId <= 0 {
+			continue
+		}
+		if _, ok := planIDSet[redemption.PlanId]; ok {
+			continue
+		}
+		planIDSet[redemption.PlanId] = struct{}{}
+		planIDs = append(planIDs, redemption.PlanId)
+	}
+	if len(planIDs) == 0 {
+		return
+	}
+	var plans []SubscriptionPlan
+	if err := tx.Where("id IN ?", planIDs).Find(&plans).Error; err != nil {
+		return
+	}
+	plansByID := make(map[int]*SubscriptionPlan, len(plans))
+	for i := range plans {
+		plansByID[plans[i].Id] = &plans[i]
+	}
+	for _, redemption := range redemptions {
+		if redemption == nil {
+			continue
+		}
+		redemption.Plan = plansByID[redemption.PlanId]
+	}
+}
+
+func normalizeRedemptionType(redemptionType string) string {
+	if redemptionType == RedemptionTypeSubscription {
+		return RedemptionTypeSubscription
+	}
+	return RedemptionTypeWallet
+}
+
+func Redeem(key string, userId int) (*RedemptionResult, error) {
 	if key == "" {
-		return 0, errors.New("未提供兑换码")
+		return nil, errors.New("未提供兑换码")
 	}
 	if userId == 0 {
-		return 0, errors.New("无效的 user id")
+		return nil, errors.New("无效的 user id")
 	}
 	redemption := &Redemption{}
+	result := &RedemptionResult{}
+	upgradeGroup := ""
 
 	keyCol := "`key`"
 	if common.UsingPostgreSQL {
 		keyCol = `"key"`
 	}
 	common.RandomSleep()
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
@@ -137,22 +201,49 @@ func Redeem(key string, userId int) (quota int, err error) {
 		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < common.GetTimestamp() {
 			return errors.New("该兑换码已过期")
 		}
-		err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
-		if err != nil {
-			return err
+
+		redemptionType := normalizeRedemptionType(redemption.Type)
+		result.Type = redemptionType
+		if redemptionType == RedemptionTypeSubscription {
+			plan, err := getSubscriptionPlanByIdTx(tx, redemption.PlanId)
+			if err != nil {
+				return err
+			}
+			if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "redemption"); err != nil {
+				return err
+			}
+			result.Plan = plan
+			upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
+		} else {
+			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
+			if err != nil {
+				return err
+			}
+			result.Quota = redemption.Quota
 		}
+
 		redemption.RedeemedTime = common.GetTimestamp()
 		redemption.Status = common.RedemptionCodeStatusUsed
 		redemption.UsedUserId = userId
-		err = tx.Save(redemption).Error
-		return err
+		return tx.Save(redemption).Error
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
-		return 0, ErrRedeemFailed
+		return nil, ErrRedeemFailed
 	}
-	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
-	return redemption.Quota, nil
+	if upgradeGroup != "" {
+		_ = UpdateUserGroupCache(userId, upgradeGroup)
+	}
+	if result.Type == RedemptionTypeSubscription {
+		planTitle := ""
+		if result.Plan != nil {
+			planTitle = result.Plan.Title
+		}
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码兑换订阅套餐 %s，兑换码ID %d", planTitle, redemption.Id))
+	} else {
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
+	}
+	return result, nil
 }
 
 func (redemption *Redemption) Insert() error {
@@ -169,7 +260,7 @@ func (redemption *Redemption) SelectUpdate() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
 	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "redeemed_time", "expired_time").Updates(redemption).Error
+	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "redeemed_time", "expired_time").Updates(redemption).Error
 	return err
 }
 

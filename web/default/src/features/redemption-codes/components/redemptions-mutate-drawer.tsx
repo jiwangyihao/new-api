@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { addTimeToDate } from '@/lib/time'
@@ -34,6 +35,14 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Sheet,
   SheetClose,
   SheetContent,
@@ -43,6 +52,8 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { DateTimePicker } from '@/components/datetime-picker'
+import { getAdminPlans } from '@/features/subscriptions/api'
+import type { PlanRecord } from '@/features/subscriptions/types'
 import { createRedemption, updateRedemption, getRedemption } from '../api'
 import { SUCCESS_MESSAGES } from '../constants'
 import {
@@ -61,6 +72,10 @@ type RedemptionsMutateDrawerProps = {
   currentRow?: Redemption
 }
 
+function formatPlanOption(record: PlanRecord): string {
+  return `${record.plan.title} (${record.plan.price_amount} ${record.plan.currency})`
+}
+
 export function RedemptionsMutateDrawer({
   open,
   onOpenChange,
@@ -72,9 +87,21 @@ export function RedemptionsMutateDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false)
 
   const form = useForm<RedemptionFormValues>({
-    resolver: zodResolver(getRedemptionFormSchema(t)),
+    resolver: zodResolver(getRedemptionFormSchema(t)) as unknown as Resolver<
+      RedemptionFormValues
+    >,
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
   })
+
+  const redemptionType = form.watch('type')
+  const shouldLoadPlans = open && redemptionType === 'subscription'
+  const plansQuery = useQuery({
+    queryKey: ['redemption-codes', 'subscription-plans'],
+    queryFn: getAdminPlans,
+    enabled: shouldLoadPlans,
+    throwOnError: false,
+  })
+  const plans = plansQuery.data?.data || []
 
   // Load existing data when updating
   useEffect(() => {
@@ -90,6 +117,12 @@ export function RedemptionsMutateDrawer({
       form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
     }
   }, [open, isUpdate, currentRow, form])
+
+  useEffect(() => {
+    if (shouldLoadPlans && plansQuery.isError && plans.length === 0) {
+      toast.error(t('Failed to load subscription plans'))
+    }
+  }, [plans.length, plansQuery.isError, shouldLoadPlans, t])
 
   const onSubmit = async (data: RedemptionFormValues) => {
     setIsSubmitting(true)
@@ -186,28 +219,120 @@ export function RedemptionsMutateDrawer({
 
             <FormField
               control={form.control}
-              name='quota_cny'
+              name='type'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{amountLabel}</FormLabel>
-                  <FormControl>
-                    <Input
-                      {...field}
-                      type='number'
-                      step={1}
-                      placeholder={amountPlaceholder}
-                      onChange={(e) =>
-                        field.onChange(parseFloat(e.target.value) || 0)
+                  <FormLabel>{t('Redemption Type')}</FormLabel>
+                  <Select
+                    value={field.value}
+                    onValueChange={(value) => {
+                      if (value !== 'wallet' && value !== 'subscription') return
+                      field.onChange(value)
+                      if (value === 'wallet') {
+                        form.setValue('plan_id', 0)
+                        if (form.getValues('quota_cny') < 1) {
+                          form.setValue(
+                            'quota_cny',
+                            REDEMPTION_FORM_DEFAULT_VALUES.quota_cny
+                          )
+                        }
                       }
-                    />
-                  </FormControl>
-                  <FormDescription>
-                    {t('Enter the CNY amount credited to the user wallet')}
-                  </FormDescription>
+                    }}
+                  >
+                    <FormControl>
+                      <SelectTrigger className='w-full'>
+                        <SelectValue placeholder={t('Select redemption type')} />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent alignItemWithTrigger={false}>
+                      <SelectGroup>
+                        <SelectItem value='wallet'>{t('Wallet Balance')}</SelectItem>
+                        <SelectItem value='subscription'>
+                          {t('Subscription Plan')}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
                   <FormMessage />
                 </FormItem>
               )}
             />
+
+            {redemptionType === 'wallet' && (
+              <FormField
+                control={form.control}
+                name='quota_cny'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{amountLabel}</FormLabel>
+                    <FormControl>
+                      <Input
+                        {...field}
+                        type='number'
+                        step={1}
+                        placeholder={amountPlaceholder}
+                        onChange={(e) =>
+                          field.onChange(parseFloat(e.target.value) || 0)
+                        }
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Enter the CNY amount credited to the user wallet')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
+
+            {redemptionType === 'subscription' && (
+              <FormField
+                control={form.control}
+                name='plan_id'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Subscription Plan')}</FormLabel>
+                    <Select
+                      value={field.value > 0 ? String(field.value) : ''}
+                      onValueChange={(value) => field.onChange(Number(value))}
+                    >
+                      <FormControl>
+                        <SelectTrigger
+                          className='w-full'
+                          disabled={plansQuery.isLoading}
+                        >
+                          <SelectValue
+                            placeholder={
+                              plansQuery.isLoading
+                                ? t('Loading...')
+                                : t('Select subscription plan')
+                            }
+                          />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {plans.map((record) => (
+                            <SelectItem
+                              key={record.plan.id}
+                              value={String(record.plan.id)}
+                            >
+                              {formatPlanOption(record)}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FormDescription>
+                      {t(
+                        'Select the subscription plan granted by this redemption code'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <FormField
               control={form.control}

@@ -239,6 +239,36 @@ func TestRedemptionListOptionsAcceptsLegacySearchQuery(t *testing.T) {
 	assert.Equal(t, "legacy-name", options.Keyword)
 }
 
+func TestGetRedemptionsByBatchReturnsAllRowsForBatch(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	batchID := "batch-full-fetch"
+	now := common.GetTimestamp()
+	records := []model.Redemption{
+		{UserId: 1, Name: "full-batch", Key: "full-batch-a", Type: model.RedemptionTypeWallet, BatchId: batchID, Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusEnabled, CreatedTime: now},
+		{UserId: 1, Name: "full-batch", Key: "full-batch-b", Type: model.RedemptionTypeWallet, BatchId: batchID, Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusDisabled, CreatedTime: now},
+		{UserId: 1, Name: "other-batch", Key: "full-batch-other", Type: model.RedemptionTypeWallet, BatchId: "other-batch", Quota: int(common.QuotaPerUnit), Status: common.RedemptionCodeStatusEnabled, CreatedTime: now},
+	}
+	require.NoError(t, model.DB.Create(&records).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/redemption/batch/"+batchID, nil)
+	ctx.Params = gin.Params{{Key: "batch_id", Value: batchID}}
+
+	GetRedemptionsByBatch(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool               `json:"success"`
+		Data    []model.Redemption `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Len(t, response.Data, 2)
+	assert.Equal(t, "full-batch-b", response.Data[0].Key)
+	assert.Equal(t, "full-batch-a", response.Data[1].Key)
+}
+
 func TestBatchAndAllDeleteRedemptions(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 	now := common.GetTimestamp()

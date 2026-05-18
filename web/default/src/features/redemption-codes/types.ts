@@ -62,6 +62,8 @@ export interface GetRedemptionsParams {
   batch_id?: string
 }
 
+export type GetRedemptionsByBatchResponse = ApiResponse<Redemption[]>
+
 export interface GetRedemptionsResponse {
   success: boolean
   message?: string

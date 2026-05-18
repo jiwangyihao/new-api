@@ -22,6 +22,7 @@ import type {
   ApiResponse,
   GetRedemptionsParams,
   GetRedemptionsResponse,
+  GetRedemptionsByBatchResponse,
   SearchRedemptionsParams,
   RedemptionFormData,
 } from './types'
@@ -68,6 +69,16 @@ export async function getRedemption(
   id: number
 ): Promise<ApiResponse<Redemption>> {
   const res = await api.get(`/api/redemption/${id}`)
+  return res.data
+}
+
+// Get all redemption codes in one batch, without list pagination
+export async function getRedemptionsByBatch(
+  batchId: string
+): Promise<GetRedemptionsByBatchResponse> {
+  const res = await api.get(
+    `/api/redemption/batch/${encodeURIComponent(batchId)}`
+  )
   return res.data
 }
 

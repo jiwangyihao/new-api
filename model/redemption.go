@@ -123,6 +123,17 @@ func normalizeRedemptionTypeFilter(redemptionType string) string {
 	}
 }
 
+func GetRedemptionsByBatchId(batchId string) (redemptions []*Redemption, err error) {
+	batchId = strings.TrimSpace(batchId)
+	if batchId == "" {
+		return nil, errors.New("batch_id 为空！")
+	}
+	if err = DB.Where("batch_id = ?", batchId).Order("id desc").Find(&redemptions).Error; err != nil {
+		return nil, err
+	}
+	attachRedemptionPlans(DB, redemptions)
+	return redemptions, nil
+}
 func GetRedemptionById(id int) (*Redemption, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空！")

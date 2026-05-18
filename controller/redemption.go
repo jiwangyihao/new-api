@@ -61,6 +61,16 @@ func redemptionListOptionsFromQuery(c *gin.Context, startIdx int, pageSize int) 
 	}
 }
 
+func GetRedemptionsByBatch(c *gin.Context) {
+	batchId := strings.TrimSpace(c.Param("batch_id"))
+	redemptions, err := model.GetRedemptionsByBatchId(batchId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, redemptions)
+}
+
 func GetRedemption(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {

@@ -22,6 +22,7 @@ For commercial licensing, please contact support@quantumnous.com
 export { isRedemptionExpired, isTimestampExpired } from './utils'
 export {
   aggregateRedemptionsByBatch,
+  createFullRedemptionBatchRow,
   formatRedemptionWalletValue,
   getRedemptionBatchKey,
   getRedemptionRowDeleteIds,

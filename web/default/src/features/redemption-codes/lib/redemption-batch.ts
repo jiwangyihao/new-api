@@ -109,6 +109,23 @@ export function getRedemptionRowDeleteIds(
   return [redemption.id]
 }
 
+export function createFullRedemptionBatchRow(
+  batchRow: RedemptionBatchRow,
+  redemptions: Redemption[]
+): RedemptionBatchRow {
+  if (!isRedemptionBatchRow(batchRow)) {
+    return batchRow
+  }
+  const children = redemptions.map((redemption) => ({
+    ...redemption,
+    is_batch_row: false,
+  }))
+  return createBatchRow(
+    batchRow.batch_id || getRedemptionBatchKey(batchRow),
+    children
+  )
+}
+
 export function getRedemptionRowCopyItems(
   redemption: RedemptionBatchRow
 ): RedemptionBatchRow[] {

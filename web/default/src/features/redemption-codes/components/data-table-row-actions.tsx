@@ -37,9 +37,10 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { updateRedemptionStatus } from '../api'
+import { getRedemptionsByBatch, updateRedemptionStatus } from '../api'
 import { REDEMPTION_STATUS, SUCCESS_MESSAGES } from '../constants'
 import {
+  createFullRedemptionBatchRow,
   getRedemptionRowCopyCount,
   getRedemptionRowCopyText,
   isRedemptionBatchRow,
@@ -80,20 +81,38 @@ export function DataTableRowActions<TData>({
     }
   }
 
+  const isBatchRow = isRedemptionBatchRow(redemption)
+
+  const getActionRedemption = async (): Promise<RedemptionBatchRow> => {
+    if (!isBatchRow || !redemption.batch_id) {
+      return redemption
+    }
+    const result = await getRedemptionsByBatch(redemption.batch_id)
+    if (!result.success || !result.data) {
+      throw new Error(result.message || t('Failed to load redemption codes'))
+    }
+    return createFullRedemptionBatchRow(redemption, result.data)
+  }
+
   const handleCopyCodes = async () => {
-    const ok = await copyToClipboard(getRedemptionRowCopyText(redemption))
+    let actionRedemption: RedemptionBatchRow
+    try {
+      actionRedemption = await getActionRedemption()
+    } catch (_error) {
+      toast.error(t('Failed to load redemption codes'))
+      return
+    }
+    const ok = await copyToClipboard(getRedemptionRowCopyText(actionRedemption))
     if (ok) {
       toast.success(
         t('Copied {{count}} redemption codes', {
-          count: getRedemptionRowCopyCount(redemption),
+          count: getRedemptionRowCopyCount(actionRedemption),
         })
       )
     } else {
       toast.error(t('Copy failed'))
     }
   }
-
-  const isBatchRow = isRedemptionBatchRow(redemption)
   const canEdit = !isBatchRow && isEnabled && !isExpired
   const canToggle = !isBatchRow && !isUsed && !isExpired
 
@@ -150,9 +169,14 @@ export function DataTableRowActions<TData>({
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={() => {
-            setCurrentRow(redemption)
-            setOpen('delete')
+          onClick={async () => {
+            try {
+              const actionRedemption = await getActionRedemption()
+              setCurrentRow(actionRedemption)
+              setOpen('delete')
+            } catch (_error) {
+              toast.error(t('Failed to load redemption codes'))
+            }
           }}
           className='text-destructive focus:text-destructive'
         >

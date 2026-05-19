@@ -94,6 +94,10 @@ export const userSubscriptionSchema = z.object({
   concurrency_limit: z.number().optional(),
   grant_reason: z.string().optional(),
   grant_source_user_id: z.number().optional(),
+  effective_end_time: z.number().optional(),
+  is_active_selected: z.boolean().optional(),
+  can_reset_quota: z.boolean().optional(),
+  source_label: z.string().optional(),
 })
 
 export type UserSubscription = z.infer<typeof userSubscriptionSchema>
@@ -163,6 +167,7 @@ export interface CreateUserSubscriptionRequest {
 // ============================================================================
 
 export interface SelfSubscriptionSummary {
+  active_subscription_id?: number
   active_count: number
   subscription_id?: number
   plan_id?: number
@@ -181,6 +186,7 @@ export interface SelfSubscriptionData {
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
   summary: SelfSubscriptionSummary
+  active_subscription_id?: number
 }
 
 // ============================================================================

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -29,13 +30,13 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		assert.Equal(t, 2, status.DirectInviteCount)
 		assert.Equal(t, "2026-05", status.RewardMonth)
 		assert.NotZero(t, status.RewardSubscriptionId)
-		assert.Equal(t, monthEndUnix(at), status.EntitlementEndTime)
+		assert.Equal(t, at.Add(24*time.Hour).Unix(), status.EntitlementEndTime)
 		var sub model.UserSubscription
 		require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
 		assert.Equal(t, basicPlan.Id, sub.PlanId)
 		assert.Equal(t, "monthly_invite_entitlement", sub.GrantReason)
 		assert.Equal(t, 1001, sub.GrantSourceUserId)
-		assert.Equal(t, int64(monthEndUnix(at)), sub.EndTime)
+		assert.Equal(t, at.Add(24*time.Hour).Unix(), sub.EndTime)
 	})
 
 	t.Run("is idempotent within reward month", func(t *testing.T) {
@@ -132,6 +133,39 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		assert.True(t, status.Entitled)
 		assert.Equal(t, 2, status.QualifiedActiveCount)
 	})
+}
+
+func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 1601, 1602, 1603, 1604)
+	seedInvitationRewardPlan(t, 2601, "basic_monthly", true)
+	paidPlan := seedInvitationRewardPlan(t, 2602, "standard_monthly", true)
+	seedPaidInviteeSubscriptionWithEnd(t, 1602, paidPlan.Id, at, at.Add(10*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1603, paidPlan.Id, at, at.Add(20*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1604, paidPlan.Id, at, at.Add(30*24*time.Hour).Unix())
+
+	status, err := EnsureMonthlyInvitationEntitlement(1601, at)
+
+	require.NoError(t, err)
+	require.True(t, status.Entitled)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), status.EntitlementEndTime)
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), sub.EndTime)
+	readStatus, err := GetInvitationEntitlementStatus(1601, at)
+	require.NoError(t, err)
+	require.True(t, readStatus.Entitled)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), readStatus.EntitlementEndTime)
+}
+
+func seedPaidInviteeSubscriptionWithEnd(t *testing.T, userId int, planId int, at time.Time, end int64) {
+	t.Helper()
+	start := at.Add(-24 * time.Hour).Unix()
+	tradeNo := fmt.Sprintf("paid-order-%d-%d", userId, end)
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{UserId: userId, PlanId: planId, Money: 10, TradeNo: tradeNo, PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusSuccess, CreateTime: start, CompleteTime: start}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: userId, PlanId: planId, Status: "active", StartTime: start, EndTime: end, GrantReason: "order", Source: "order"}).Error)
 }
 
 func seedInvitationRewardUsers(t *testing.T, inviterId int, inviteeIds ...int) {

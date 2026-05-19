@@ -24,6 +24,20 @@ function readWalletSource(): string {
   return readFileSync('src/features/wallet/index.tsx', 'utf8')
 }
 
+function readSubscriptionPlansSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/subscription-plans-card.tsx',
+    'utf8'
+  )
+}
+
+function readAffiliateRewardsSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/affiliate-rewards-card.tsx',
+    'utf8'
+  )
+}
+
 describe('wallet page layout', () => {
   test('places subscription plans before add-funds redemption card', () => {
     const source = readWalletSource()
@@ -46,5 +60,20 @@ describe('wallet page layout', () => {
       subscriptionIndex < addFundsIndex,
       'desktop and mobile reading order should be subscription plans before redemption'
     )
+  })
+
+  test('wallet subscriptions expose active selection and quota reset actions', () => {
+    const source = readSubscriptionPlansSource()
+    assert.match(source, /setActiveSubscription/)
+    assert.match(source, /resetSubscriptionQuota/)
+    assert.match(source, /Set as active/)
+    assert.match(source, /Reset quota/)
+  })
+
+  test('affiliate card documents invitation reward rules near referral link', () => {
+    const source = readAffiliateRewardsSource()
+    assert.match(source, /Invitation reward rules/)
+    assert.match(source, /two longest valid paid referrals/)
+    assert.match(source, /same tier/)
   })
 })

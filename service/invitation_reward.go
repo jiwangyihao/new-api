@@ -24,6 +24,11 @@ type InvitationEntitlementStatus struct {
 	RewardSubscriptionId int    `json:"reward_subscription_id"`
 }
 
+type qualifiedInviteeEndTime struct {
+	InviteeId int
+	EndTime   int64
+}
+
 func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*InvitationEntitlementStatus, error) {
 	if inviterId <= 0 {
 		return nil, errors.New("invalid inviter id")
@@ -33,7 +38,7 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 	}
 	at = at.UTC()
 	rewardMonth := rewardMonthString(at)
-	endTime := monthEndUnix(at)
+	endTime := int64(0)
 	var status InvitationEntitlementStatus
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		directCount, err := countDirectInviteesTx(tx, inviterId)
@@ -65,6 +70,14 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 			}
 			return tx.Save(&entitlement).Error
 		}
+		qualifiedEndTimes, err := listQualifiedActiveInviteeEndTimesTx(tx, inviterId, at.Unix())
+		if err != nil {
+			return err
+		}
+		if len(qualifiedEndTimes) < monthlyInviteQualifiedCount {
+			return errors.New("qualified invitee end times inconsistent with qualified count")
+		}
+		endTime = qualifiedEndTimes[monthlyInviteQualifiedCount-1].EndTime
 		plan, err := findMonthlyInvitationRewardPlanTx(tx)
 		if err != nil {
 			return err
@@ -138,8 +151,15 @@ func GetInvitationEntitlementStatus(inviterId int, at time.Time) (*InvitationEnt
 		return nil, err
 	}
 	if entitlement.Status == model.InvitationEntitlementStatusQualified && entitlement.RewardSubscriptionId > 0 {
+		var sub model.UserSubscription
+		if err := model.DB.Select("id", "end_time").First(&sub, entitlement.RewardSubscriptionId).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return status, nil
+			}
+			return nil, err
+		}
 		status.Entitled = true
-		status.EntitlementEndTime = monthEndUnix(at)
+		status.EntitlementEndTime = sub.EndTime
 		status.RewardSubscriptionId = entitlement.RewardSubscriptionId
 	}
 	return status, nil
@@ -192,6 +212,30 @@ func countQualifiedActiveInviteesTx(tx *gorm.DB, inviterId int, now int64) (int,
 		return 0, err
 	}
 	return int(count), nil
+}
+
+func listQualifiedActiveInviteeEndTimesTx(tx *gorm.DB, inviterId int, now int64) ([]qualifiedInviteeEndTime, error) {
+	var endTimes []qualifiedInviteeEndTime
+	err := tx.Table("users").
+		Select("users.id AS invitee_id, MAX(user_subscriptions.end_time) AS end_time").
+		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
+		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
+		Joins("JOIN subscription_orders ON subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id").
+		Where("users.inviter_id = ?", inviterId).
+		Where("user_subscriptions.status = ?", "active").
+		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
+		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", "order", "", "order").
+		Where("subscription_plans.reward_eligible = ?", true).
+		Where("subscription_orders.status = ?", common.TopUpStatusSuccess).
+		Where("subscription_orders.money > ?", 0).
+		Group("users.id").
+		Order("end_time DESC").
+		Limit(monthlyInviteQualifiedCount).
+		Scan(&endTimes).Error
+	if err != nil {
+		return nil, err
+	}
+	return endTimes, nil
 }
 
 func findMonthlyInvitationRewardPlanTx(tx *gorm.DB) (*model.SubscriptionPlan, error) {

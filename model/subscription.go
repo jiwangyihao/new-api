@@ -32,6 +32,11 @@ const (
 	SubscriptionResetCustom  = "custom"
 )
 
+const (
+	SubscriptionGrantOrder                    = "order"
+	SubscriptionGrantMonthlyInviteEntitlement = "monthly_invite_entitlement"
+)
+
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
@@ -294,18 +299,51 @@ type SubscriptionSummary struct {
 	Plan         *SubscriptionPlan `json:"plan,omitempty"`
 }
 
+type PublicUserSubscription struct {
+	Id                int    `json:"id"`
+	UserId            int    `json:"user_id"`
+	PlanId            int    `json:"plan_id"`
+	AmountTotal       int64  `json:"amount_total"`
+	AmountUsed        int64  `json:"amount_used"`
+	TokenLimit        int64  `json:"token_limit"`
+	TokenUsed         int64  `json:"token_used"`
+	ConcurrencyLimit  int    `json:"concurrency_limit"`
+	GrantReason       string `json:"grant_reason"`
+	GrantSourceUserId int    `json:"grant_source_user_id"`
+	StartTime         int64  `json:"start_time"`
+	EndTime           int64  `json:"end_time"`
+	EffectiveEndTime  int64  `json:"effective_end_time,omitempty"`
+	Status            string `json:"status"`
+	Source            string `json:"source"`
+	LastResetTime     int64  `json:"last_reset_time"`
+	NextResetTime     int64  `json:"next_reset_time"`
+	UpgradeGroup      string `json:"upgrade_group"`
+	PrevUserGroup     string `json:"prev_user_group"`
+	CreatedAt         int64  `json:"created_at"`
+	UpdatedAt         int64  `json:"updated_at"`
+	IsActiveSelected  bool   `json:"is_active_selected,omitempty"`
+	CanResetQuota     bool   `json:"can_reset_quota,omitempty"`
+	SourceLabel       string `json:"source_label,omitempty"`
+}
+
+type PublicSubscriptionSummary struct {
+	Subscription *PublicUserSubscription `json:"subscription"`
+	Plan         *SubscriptionPlan       `json:"plan,omitempty"`
+}
+
 type SelfSubscriptionSummary struct {
-	ActiveCount      int    `json:"active_count"`
-	SubscriptionId   int    `json:"subscription_id"`
-	PlanId           int    `json:"plan_id"`
-	PrimaryPlanTitle string `json:"primary_plan_title"`
-	TokenLimit       int64  `json:"token_limit"`
-	TokenUsed        int64  `json:"token_used"`
-	TokenRemaining   int64  `json:"token_remaining"`
-	TokenUnlimited   bool   `json:"token_unlimited"`
-	ConcurrencyLimit int    `json:"concurrency_limit"`
-	NextResetTime    int64  `json:"next_reset_time,omitempty"`
-	EndTime          int64  `json:"end_time,omitempty"`
+	ActiveSubscriptionId int    `json:"active_subscription_id,omitempty"`
+	ActiveCount          int    `json:"active_count"`
+	SubscriptionId       int    `json:"subscription_id"`
+	PlanId               int    `json:"plan_id"`
+	PrimaryPlanTitle     string `json:"primary_plan_title"`
+	TokenLimit           int64  `json:"token_limit"`
+	TokenUsed            int64  `json:"token_used"`
+	TokenRemaining       int64  `json:"token_remaining"`
+	TokenUnlimited       bool   `json:"token_unlimited"`
+	ConcurrencyLimit     int    `json:"concurrency_limit"`
+	NextResetTime        int64  `json:"next_reset_time,omitempty"`
+	EndTime              int64  `json:"end_time,omitempty"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
@@ -485,6 +523,15 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	var existing UserSubscription
+	var sameTierPaid UserSubscription
+	sameTierPaidQuery := tx.Set("gorm:query_option", "FOR UPDATE").
+		Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ? AND grant_reason = ?", userId, plan.Id, "active", nowUnix, SubscriptionGrantOrder).
+		Order("end_time desc, id desc").
+		Limit(1).
+		Find(&sameTierPaid)
+	if sameTierPaidQuery.Error != nil {
+		return nil, sameTierPaidQuery.Error
+	}
 	existingQuery := tx.Set("gorm:query_option", "FOR UPDATE").
 		Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ?", userId, plan.Id, "active", nowUnix).
 		Order("end_time desc, id desc").
@@ -503,6 +550,9 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 		if count >= int64(plan.MaxPurchasePerUser) {
 			return nil, errors.New("已达到该套餐购买上限")
 		}
+	}
+	if isInvitationRewardSource(source) && sameTierPaidQuery.RowsAffected > 0 && sameTierPaid.EndTime > nowUnix {
+		existingQuery.RowsAffected = 0
 	}
 	start := now
 	if existingQuery.RowsAffected > 0 {
@@ -616,7 +666,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if err != nil {
 		return nil, err
 	}
-	sub, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, "order")
+	sub, err := CreateUserSubscriptionFromPlanTx(tx, order.UserId, plan, SubscriptionGrantOrder)
 	if err != nil {
 		return nil, err
 	}
@@ -904,6 +954,87 @@ func buildSubscriptionSummaries(subs []UserSubscription) ([]SubscriptionSummary,
 	return result, nil
 }
 
+func BuildPublicSubscriptionSummaries(subs []SubscriptionSummary, activeSubscriptionId int) []PublicSubscriptionSummary {
+	return buildPublicSubscriptionSummaries(subs, activeSubscriptionId, GetDBTimestamp())
+}
+func buildPublicSubscriptionSummaries(subs []SubscriptionSummary, activeSubscriptionId int, now int64) []PublicSubscriptionSummary {
+	if len(subs) == 0 {
+		return []PublicSubscriptionSummary{}
+	}
+	paidRemainderByTier := make(map[string]int64)
+	for _, summary := range subs {
+		if summary.Subscription == nil || summary.Plan == nil || !isPaidSubscription(summary.Subscription) {
+			continue
+		}
+		remaining := summary.Subscription.EndTime - now
+		if remaining <= 0 {
+			continue
+		}
+		tier := subscriptionTierKey(summary.Plan)
+		if tier == "" {
+			continue
+		}
+		if remaining > paidRemainderByTier[tier] {
+			paidRemainderByTier[tier] = remaining
+		}
+	}
+	result := make([]PublicSubscriptionSummary, 0, len(subs))
+	for _, summary := range subs {
+		publicSummary := PublicSubscriptionSummary{Plan: summary.Plan}
+		publicSummary.Subscription = toPublicUserSubscription(summary.Subscription, summary.Plan, activeSubscriptionId, paidRemainderByTier)
+		result = append(result, publicSummary)
+	}
+	return result
+}
+
+func toPublicUserSubscription(sub *UserSubscription, plan *SubscriptionPlan, activeSubscriptionId int, paidRemainderByTier map[string]int64) *PublicUserSubscription {
+	if sub == nil {
+		return nil
+	}
+	return &PublicUserSubscription{
+		Id:                sub.Id,
+		UserId:            sub.UserId,
+		PlanId:            sub.PlanId,
+		AmountTotal:       sub.AmountTotal,
+		AmountUsed:        sub.AmountUsed,
+		TokenLimit:        sub.TokenLimit,
+		TokenUsed:         sub.TokenUsed,
+		ConcurrencyLimit:  sub.ConcurrencyLimit,
+		GrantReason:       sub.GrantReason,
+		GrantSourceUserId: sub.GrantSourceUserId,
+		StartTime:         sub.StartTime,
+		EndTime:           sub.EndTime,
+		EffectiveEndTime:  effectiveSubscriptionEndTime(sub, plan, paidRemainderByTier),
+		Status:            sub.Status,
+		Source:            sub.Source,
+		LastResetTime:     sub.LastResetTime,
+		NextResetTime:     sub.NextResetTime,
+		UpgradeGroup:      sub.UpgradeGroup,
+		PrevUserGroup:     sub.PrevUserGroup,
+		CreatedAt:         sub.CreatedAt,
+		UpdatedAt:         sub.UpdatedAt,
+		IsActiveSelected:  activeSubscriptionId > 0 && sub.Id == activeSubscriptionId,
+		CanResetQuota:     canResetSubscriptionQuota(sub, plan, paidRemainderByTier),
+		SourceLabel:       subscriptionSourceLabel(sub),
+	}
+}
+
+func subscriptionSourceLabel(sub *UserSubscription) string {
+	if sub == nil {
+		return ""
+	}
+	if isPaidSubscription(sub) || (strings.TrimSpace(sub.GrantReason) == "" && strings.TrimSpace(sub.Source) == SubscriptionGrantOrder) {
+		return "paid"
+	}
+	if isInvitationRewardSubscription(sub) {
+		return "invitation_reward"
+	}
+	if strings.TrimSpace(sub.GrantReason) == "trial_code" || strings.TrimSpace(sub.GrantReason) == "invite_trial" {
+		return "trial"
+	}
+	return strings.TrimSpace(sub.GrantReason)
+}
+
 // AdminInvalidateUserSubscription marks a user subscription as cancelled and ends it immediately.
 func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 	if userSubscriptionId <= 0 {
@@ -1136,6 +1267,97 @@ func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
 	return reason == "trial_code" || reason == "invite_trial"
 }
 
+func isPaidSubscription(sub *UserSubscription) bool {
+	if sub == nil {
+		return false
+	}
+	return strings.TrimSpace(sub.GrantReason) == SubscriptionGrantOrder
+}
+
+func isInvitationRewardSubscription(sub *UserSubscription) bool {
+	if sub == nil {
+		return false
+	}
+	return strings.TrimSpace(sub.GrantReason) == SubscriptionGrantMonthlyInviteEntitlement
+}
+
+func subscriptionTierKey(plan *SubscriptionPlan) string {
+	if plan == nil {
+		return ""
+	}
+	if plan.BusinessCode != nil {
+		return strings.TrimSpace(*plan.BusinessCode)
+	}
+	return ""
+}
+
+func isInvitationRewardSource(source string) bool {
+	return strings.TrimSpace(source) == SubscriptionGrantMonthlyInviteEntitlement
+}
+
+func effectiveSubscriptionEndTime(sub *UserSubscription, plan *SubscriptionPlan, paidRemainderByTier map[string]int64) int64 {
+	if sub == nil {
+		return 0
+	}
+	endTime := sub.EndTime
+	if !isInvitationRewardSubscription(sub) || plan == nil || paidRemainderByTier == nil {
+		return endTime
+	}
+	if remainder := paidRemainderByTier[subscriptionTierKey(plan)]; remainder > 0 {
+		endTime += remainder
+	}
+	return endTime
+}
+
+func canResetSubscriptionQuota(sub *UserSubscription, plan *SubscriptionPlan, paidRemainderByTier map[string]int64) bool {
+	if sub == nil {
+		return false
+	}
+	if isPaidSubscription(sub) {
+		return true
+	}
+	if isInvitationRewardSubscription(sub) && plan != nil && paidRemainderByTier != nil {
+		return paidRemainderByTier[subscriptionTierKey(plan)] >= oneMonthSecondsFrom(common.GetTimestamp())
+	}
+	return false
+}
+
+func oneMonthSecondsFrom(now int64) int64 {
+	return 30 * 86400
+}
+
+func isBillableSubscriptionCandidate(sub *UserSubscription, requiredTokens int64) (bool, bool) {
+	if sub == nil {
+		return false, false
+	}
+	if sub.TokenLimit > 0 {
+		return sub.TokenLimit-sub.TokenUsed >= requiredTokens, false
+	}
+	if isUnlimitedTrialSubscription(sub) {
+		return true, true
+	}
+	return false, false
+}
+
+type billableSubscriptionCandidate struct {
+	sub         UserSubscription
+	plan        *SubscriptionPlan
+	distributor bool
+	unlimited   bool
+	index       int
+}
+
+func buildPrimaryBillableSubscription(candidate billableSubscriptionCandidate) *primaryBillableSubscription {
+	return &primaryBillableSubscription{
+		Subscription:     candidate.sub,
+		Plan:             candidate.plan,
+		Distributor:      candidate.distributor,
+		TokenUnlimited:   candidate.unlimited,
+		AmountUsedBefore: candidate.sub.AmountUsed,
+		TokenUsedBefore:  candidate.sub.TokenUsed,
+	}
+}
+
 type primaryBillableSubscription struct {
 	Subscription     UserSubscription
 	Plan             *SubscriptionPlan
@@ -1149,6 +1371,11 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	if tx == nil {
 		tx = DB
 	}
+	var user User
+	if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
+		return nil, false, err
+	}
+	activeSubscriptionId := user.GetSetting().ActiveSubscriptionId
 	var subs []UserSubscription
 	query := tx
 	if forUpdate {
@@ -1160,7 +1387,8 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		return nil, false, err
 	}
 	sawDistributorSubscription := false
-	for _, candidate := range subs {
+	candidates := make([]billableSubscriptionCandidate, 0, len(subs))
+	for i, candidate := range subs {
 		sub := candidate
 		plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 		if err != nil {
@@ -1176,25 +1404,29 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 			continue
 		}
 		sawDistributorSubscription = true
-		unlimited := false
-		if sub.TokenLimit > 0 {
-			remaining := sub.TokenLimit - sub.TokenUsed
-			if remaining < requiredTokens {
-				continue
-			}
-		} else if isUnlimitedTrialSubscription(&sub) {
-			unlimited = true
-		} else {
+		ok, unlimited := isBillableSubscriptionCandidate(&sub, requiredTokens)
+		if !ok {
 			continue
 		}
-		return &primaryBillableSubscription{
-			Subscription:     sub,
-			Plan:             plan,
-			Distributor:      distributor,
-			TokenUnlimited:   unlimited,
-			AmountUsedBefore: sub.AmountUsed,
-			TokenUsedBefore:  sub.TokenUsed,
-		}, sawDistributorSubscription, nil
+		entry := billableSubscriptionCandidate{sub: sub, plan: plan, distributor: distributor, unlimited: unlimited, index: i}
+		if activeSubscriptionId > 0 && sub.Id == activeSubscriptionId {
+			return buildPrimaryBillableSubscription(entry), sawDistributorSubscription, nil
+		}
+		candidates = append(candidates, entry)
+	}
+	if len(candidates) > 0 && isPaidSubscription(&candidates[0].sub) {
+		tier := subscriptionTierKey(candidates[0].plan)
+		if tier != "" {
+			for i := 1; i < len(candidates); i++ {
+				candidate := candidates[i]
+				if isInvitationRewardSubscription(&candidate.sub) && subscriptionTierKey(candidate.plan) == tier {
+					return buildPrimaryBillableSubscription(candidate), sawDistributorSubscription, nil
+				}
+			}
+		}
+	}
+	if len(candidates) > 0 {
+		return buildPrimaryBillableSubscription(candidates[0]), sawDistributorSubscription, nil
 	}
 	return nil, sawDistributorSubscription, nil
 }
@@ -1204,8 +1436,12 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 		return SelfSubscriptionSummary{}, errors.New("invalid userId")
 	}
 	now := GetDBTimestamp()
-	summary := SelfSubscriptionSummary{}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	setting, err := GetUserSetting(userId, true)
+	if err != nil {
+		return SelfSubscriptionSummary{}, err
+	}
+	summary := SelfSubscriptionSummary{ActiveSubscriptionId: setting.ActiveSubscriptionId}
+	err = DB.Transaction(func(tx *gorm.DB) error {
 		selection, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
 		if err != nil {
 			return err
@@ -1315,6 +1551,135 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
 	return tx.Save(sub).Error
+}
+
+type SubscriptionResetResult struct {
+	SubscriptionId int   `json:"subscription_id"`
+	EndTime        int64 `json:"end_time"`
+	NextResetTime  int64 `json:"next_reset_time,omitempty"`
+}
+
+func SetUserActiveSubscription(userId int, subscriptionId int) error {
+	if userId <= 0 || subscriptionId <= 0 {
+		return errors.New("invalid userId or subscriptionId")
+	}
+	now := GetDBTimestamp()
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var sub UserSubscription
+		if err := tx.Where("id = ? AND user_id = ? AND status = ? AND end_time > ?", subscriptionId, userId, "active", now).First(&sub).Error; err != nil {
+			return err
+		}
+		var user User
+		if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
+		setting := user.GetSetting()
+		setting.ActiveSubscriptionId = subscriptionId
+		settingBytes, err := common.Marshal(setting)
+		if err != nil {
+			return err
+		}
+		settingJSON := string(settingBytes)
+		if err := tx.Model(&User{}).Where("id = ?", userId).Update("setting", settingJSON).Error; err != nil {
+			return err
+		}
+		return updateUserSettingCache(userId, settingJSON)
+	})
+}
+
+func ResetUserSubscriptionQuota(userId int, subscriptionId int) (*SubscriptionResetResult, error) {
+	if userId <= 0 || subscriptionId <= 0 {
+		return nil, errors.New("invalid userId or subscriptionId")
+	}
+	now := GetDBTimestamp()
+	var result *SubscriptionResetResult
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		target, targetPlan, err := lockActiveUserSubscriptionWithPlanTx(tx, userId, subscriptionId, now)
+		if err != nil {
+			return err
+		}
+		payer := target
+		if !isPaidSubscription(target) {
+			if !isInvitationRewardSubscription(target) {
+				return errors.New("subscription quota reset requires paid subscription")
+			}
+			payer, err = findResetQuotaPaidSubscriptionTx(tx, userId, target.Id, subscriptionTierKey(targetPlan), now)
+			if err != nil {
+				return err
+			}
+		}
+		monthSeconds := oneMonthSecondsFrom(now)
+		if payer.EndTime-now < monthSeconds {
+			return errors.New("paid subscription remaining time is less than one month")
+		}
+		target.TokenUsed = 0
+		target.AmountUsed = 0
+		target.LastResetTime = now
+		target.NextResetTime = calcNextResetTime(time.Unix(now, 0), targetPlan, target.EndTime)
+		if target.Id == payer.Id {
+			target.EndTime -= monthSeconds
+			payer = target
+			if err := tx.Save(target).Error; err != nil {
+				return err
+			}
+		} else {
+			payer.EndTime -= monthSeconds
+			if err := tx.Save(payer).Error; err != nil {
+				return err
+			}
+			if err := tx.Save(target).Error; err != nil {
+				return err
+			}
+		}
+		result = &SubscriptionResetResult{SubscriptionId: target.Id, EndTime: target.EndTime, NextResetTime: target.NextResetTime}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func lockActiveUserSubscriptionWithPlanTx(tx *gorm.DB, userId int, subscriptionId int, now int64) (*UserSubscription, *SubscriptionPlan, error) {
+	if tx == nil {
+		return nil, nil, errors.New("tx is nil")
+	}
+	var sub UserSubscription
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ? AND user_id = ? AND status = ? AND end_time > ?", subscriptionId, userId, "active", now).First(&sub).Error; err != nil {
+		return nil, nil, err
+	}
+	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &sub, plan, nil
+}
+
+func findResetQuotaPaidSubscriptionTx(tx *gorm.DB, userId int, excludeSubscriptionId int, tier string, now int64) (*UserSubscription, error) {
+	if tx == nil {
+		return nil, errors.New("tx is nil")
+	}
+	if tier == "" {
+		return nil, errors.New("subscription tier is empty")
+	}
+	var subs []UserSubscription
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("user_id = ? AND status = ? AND end_time > ? AND id <> ?", userId, "active", now, excludeSubscriptionId).Order("end_time desc, id desc").Find(&subs).Error; err != nil {
+		return nil, err
+	}
+	for i := range subs {
+		sub := &subs[i]
+		if !isPaidSubscription(sub) {
+			continue
+		}
+		plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+		if err != nil {
+			return nil, err
+		}
+		if subscriptionTierKey(plan) == tier {
+			return sub, nil
+		}
+	}
+	return nil, errors.New("same tier paid subscription not found")
 }
 
 // PreConsumeUserSubscription pre-consumes from active subscription token quota.

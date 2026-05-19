@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -36,9 +37,12 @@ import {
   dotColorMap,
   textColorMap,
 } from '@/components/status-badge'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   getPublicPlans,
   getSelfSubscriptionFull,
+  resetSubscriptionQuota,
+  setActiveSubscription,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
@@ -54,6 +58,8 @@ import type {
 import { getSubscriptionDisplayLabel } from '../lib/subscription-display'
 import type { PaymentMethod, TopupInfo } from '../types'
 
+type TranslationFn = ReturnType<typeof useTranslation>['t']
+
 interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
   accountBalance?: number
@@ -65,6 +71,32 @@ function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
   return payMethods.filter(
     (m) => m?.type && m.type !== 'stripe' && m.type !== 'creem'
   )
+}
+
+function getSubscriptionEndTime(
+  subscription: UserSubscriptionRecord['subscription'] | null | undefined
+): number {
+  return Number(subscription?.effective_end_time || subscription?.end_time || 0)
+}
+
+function getSubscriptionSourceLabel(
+  subscription: UserSubscriptionRecord['subscription'] | null | undefined,
+  t: TranslationFn
+): string {
+  const grantReason = subscription?.grant_reason || ''
+  if (
+    grantReason === 'order' ||
+    (!grantReason && subscription?.source === 'order')
+  ) {
+    return t('Paid plan')
+  }
+  if (grantReason === 'monthly_invite_entitlement') {
+    return t('Invitation reward')
+  }
+  if (grantReason === 'trial_code' || grantReason === 'invite_trial') {
+    return t('Trial')
+  }
+  return t('Unknown')
 }
 
 
@@ -85,6 +117,14 @@ export function SubscriptionPlansCard({
   >([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [activeSubscriptionId, setActiveSubscriptionId] = useState<
+    number | null
+  >(null)
+  const [pendingActiveSubscriptionId, setPendingActiveSubscriptionId] =
+    useState<number | null>(null)
+  const [resetTarget, setResetTarget] =
+    useState<UserSubscriptionRecord | null>(null)
+  const [resettingQuotaId, setResettingQuotaId] = useState<number | null>(null)
 
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
@@ -114,6 +154,13 @@ export function SubscriptionPlansCard({
       if (res.success && res.data) {
         setActiveSubscriptions(res.data.subscriptions || [])
         setAllSubscriptions(res.data.all_subscriptions || [])
+        const activeId = Number(
+          res.data.active_subscription_id ||
+            res.data.summary?.active_subscription_id ||
+            res.data.summary?.subscription_id ||
+            0
+        )
+        setActiveSubscriptionId(activeId > 0 ? activeId : null)
       }
     } catch {
       // ignore
@@ -137,6 +184,46 @@ export function SubscriptionPlansCard({
       setRefreshing(false)
     }
   }
+
+  const handleSetActiveSubscription = async (subscriptionId: number) => {
+    setPendingActiveSubscriptionId(subscriptionId)
+    try {
+      const res = await setActiveSubscription({ subscription_id: subscriptionId })
+      if (res.success) {
+        const activeId = Number(res.data?.active_subscription_id || subscriptionId)
+        setActiveSubscriptionId(activeId)
+        toast.success(t('Active subscription updated'))
+        await fetchSelfSubscription()
+        return
+      }
+      toast.error(res.message || t('Request failed'))
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setPendingActiveSubscriptionId(null)
+    }
+  }
+
+  const handleConfirmResetQuota = async () => {
+    const subscriptionId = resetTarget?.subscription?.id
+    if (!subscriptionId) return
+    setResettingQuotaId(subscriptionId)
+    try {
+      const res = await resetSubscriptionQuota(subscriptionId)
+      if (res.success) {
+        toast.success(t('Quota reset successfully'))
+        setResetTarget(null)
+        await fetchSelfSubscription()
+        return
+      }
+      toast.error(res.message || t('Request failed'))
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setResettingQuotaId(null)
+    }
+  }
+
 
 
   const hasActive = activeSubscriptions.length > 0
@@ -168,7 +255,7 @@ export function SubscriptionPlansCard({
   }, [plans])
 
   const getRemainingDays = (sub: UserSubscriptionRecord) => {
-    const endTime = sub?.subscription?.end_time || 0
+    const endTime = getSubscriptionEndTime(sub?.subscription)
     if (!endTime) return 0
     const now = Date.now() / 1000
     return Math.max(0, Math.ceil((endTime - now) / 86400))
@@ -284,21 +371,33 @@ export function SubscriptionPlansCard({
                   const remainDays = getRemainingDays(sub)
                   const usagePercent = getUsagePercent(sub)
                   const now = Date.now() / 1000
-                  const isExpired = (subscription?.end_time || 0) < now
+                  const endTime = getSubscriptionEndTime(subscription)
+                  const subscriptionId = subscription?.id || 0
+                  const sourceLabel = getSubscriptionSourceLabel(subscription, t)
+                  const isExpired = endTime < now
                   const isCancelled = subscription?.status === 'cancelled'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
+                  const isSelected =
+                    !!subscription?.is_active_selected ||
+                    (!!activeSubscriptionId && subscriptionId === activeSubscriptionId)
+                  const canResetQuota =
+                    (subscription?.can_reset_quota ??
+                      subscription?.grant_reason === 'order') &&
+                    isActive &&
+                    !isCancelled
+                  const isSettingActive =
+                    pendingActiveSubscriptionId === subscriptionId
+                  const isResetting = resettingQuotaId === subscriptionId
 
                   return (
                     <div
                       key={subscription?.id}
                       className='bg-background rounded-md border p-3 text-xs'
                     >
-                      <div className='flex items-center justify-between'>
-                        <div className='flex items-center gap-2'>
-                          <span className='font-medium'>
-                            {subscriptionLabel}
-                          </span>
+                      <div className='flex flex-wrap items-start justify-between gap-2'>
+                        <div className='flex min-w-0 flex-wrap items-center gap-2'>
+                          <span className='font-medium'>{subscriptionLabel}</span>
                           {isActive ? (
                             <StatusBadge
                               label={t('Active')}
@@ -318,14 +417,48 @@ export function SubscriptionPlansCard({
                               copyable={false}
                             />
                           )}
+                          {isActive && isSelected && (
+                            <StatusBadge
+                              label={t('Current active')}
+                              variant='info'
+                              copyable={false}
+                            />
+                          )}
                         </div>
                         {isActive && (
-                          <span className='text-muted-foreground'>
-                            {t('{{count}} days remaining', {
-                              count: remainDays,
-                            })}
-                          </span>
+                          <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
+                            <span className='text-muted-foreground'>
+                              {t('{{count}} days remaining', {
+                                count: remainDays,
+                              })}
+                            </span>
+                            {!isSelected && subscriptionId > 0 && (
+                              <Button
+                                variant='outline'
+                                size='xs'
+                                onClick={() =>
+                                  handleSetActiveSubscription(subscriptionId)
+                                }
+                                disabled={isSettingActive}
+                              >
+                                {t('Set as active')}
+                              </Button>
+                            )}
+                            {canResetQuota && (
+                              <Button
+                                variant='secondary'
+                                size='xs'
+                                onClick={() => setResetTarget(sub)}
+                                disabled={isResetting}
+                              >
+                                {t('Reset quota')}
+                              </Button>
+                            )}
+                          </div>
                         )}
+                      </div>
+                      <div className='text-muted-foreground mt-1.5'>
+                        {t('Source')}: {sourceLabel}
                       </div>
                       <div className='text-muted-foreground mt-1.5'>
                         {isActive
@@ -333,9 +466,7 @@ export function SubscriptionPlansCard({
                           : isCancelled
                             ? t('Cancelled at')
                             : t('Expired at')}{' '}
-                        {new Date(
-                          (subscription?.end_time || 0) * 1000
-                        ).toLocaleString()}
+                        {new Date(endTime * 1000).toLocaleString()}
                       </div>
                       {isActive && (subscription?.next_reset_time ?? 0) > 0 && (
                         <div className='text-muted-foreground mt-1'>
@@ -531,6 +662,20 @@ export function SubscriptionPlansCard({
         }
         accountBalance={accountBalance}
         onPurchaseSuccess={onPurchaseSuccess}
+      />
+
+      <ConfirmDialog
+        open={!!resetTarget}
+        onOpenChange={(open) => {
+          if (!open) setResetTarget(null)
+        }}
+        title={t('Reset subscription quota')}
+        desc={t(
+          'Quota reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
+        )}
+        confirmText={t('Reset quota')}
+        isLoading={resettingQuotaId === resetTarget?.subscription?.id}
+        handleConfirm={handleConfirmResetQuota}
       />
     </>
   )

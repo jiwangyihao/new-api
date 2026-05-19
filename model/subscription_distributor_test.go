@@ -183,6 +183,72 @@ func seedUserSubscriptionForDistributorTest(t *testing.T, id int, userId int, pl
 	require.NoError(t, DB.Create(sub).Error)
 }
 
+func TestPreConsumeUserSubscriptionPrioritizesSameTierInviteRewardOverPaid(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7601, Username: "same_tier", Status: common.UserStatusEnabled, AffCode: "aff7601"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7602, "basic_monthly", 100)
+	paidEnd := common.GetTimestamp() + 30*86400
+	rewardEnd := common.GetTimestamp() + 3*86400
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7603, UserId: 7601, PlanId: 7602, Status: "active", TokenLimit: 100, TokenUsed: 0, EndTime: paidEnd, GrantReason: "order", Source: "order"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7604, UserId: 7601, PlanId: 7602, Status: "active", TokenLimit: 100, TokenUsed: 0, EndTime: rewardEnd, GrantReason: "monthly_invite_entitlement", Source: "monthly_invite_entitlement"}).Error)
+
+	pre, err := PreConsumeUserSubscription("same-tier-reward", 7601, "gpt-4o", 0, 6)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7604, pre.UserSubscriptionId)
+	var paid UserSubscription
+	require.NoError(t, DB.First(&paid, 7603).Error)
+	assert.Equal(t, int64(0), paid.TokenUsed)
+	var reward UserSubscription
+	require.NoError(t, DB.First(&reward, 7604).Error)
+	assert.Equal(t, int64(6), reward.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionUsesSelectedDifferentTierSubscription(t *testing.T) {
+	truncateTables(t)
+	user := User{Id: 7611, Username: "selected_tier", Status: common.UserStatusEnabled, AffCode: "aff7611"}
+	require.NoError(t, DB.Create(&user).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7612, "basic_monthly", 100)
+	seedDistributorSubscriptionPlanForTest(t, 7613, "pro_monthly", 100)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7614, UserId: 7611, PlanId: 7612, Status: "active", TokenLimit: 100, TokenUsed: 0, EndTime: now + 3*86400, GrantReason: "monthly_invite_entitlement", Source: "monthly_invite_entitlement"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7615, UserId: 7611, PlanId: 7613, Status: "active", TokenLimit: 100, TokenUsed: 0, EndTime: now + 30*86400, GrantReason: "order", Source: "order"}).Error)
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = 7615
+	user.SetSetting(setting)
+	require.NoError(t, DB.Save(&user).Error)
+
+	pre, err := PreConsumeUserSubscription("selected-paid", 7611, "gpt-4o", 0, 5)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7615, pre.UserSubscriptionId)
+	var reward UserSubscription
+	require.NoError(t, DB.First(&reward, 7614).Error)
+	assert.Equal(t, int64(0), reward.TokenUsed)
+}
+
+func TestResetUserSubscriptionQuotaConsumesOneMonthFromPaidSubscription(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7621, Username: "reset_quota", Status: common.UserStatusEnabled, AffCode: "aff7621"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7622, "basic_monthly", 100)
+	now := common.GetTimestamp()
+	paidEnd := now + 70*86400
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7623, UserId: 7621, PlanId: 7622, Status: "active", TokenLimit: 100, TokenUsed: 88, AmountUsed: 12, StartTime: now - 86400, EndTime: paidEnd, GrantReason: "order", Source: "order"}).Error)
+
+	result, err := ResetUserSubscriptionQuota(7621, 7623)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	var sub UserSubscription
+	require.NoError(t, DB.First(&sub, 7623).Error)
+	assert.Equal(t, int64(0), sub.TokenUsed)
+	assert.Equal(t, int64(0), sub.AmountUsed)
+	assert.InDelta(t, paidEnd-30*86400, sub.EndTime, 2)
+	assert.NotZero(t, sub.LastResetTime)
+}
+
 func TestPreConsumeUserSubscription_IgnoresAmountTotalForDistributorLimit(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7401, Username: "token_user", Status: common.UserStatusEnabled, AffCode: "aff7401"}).Error)

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useStatus } from '@/hooks/use-status'
+import signUpAnimeGirlBackground from '../assets/sign-up-anime-girl.svg'
 import { AuthLayout } from '../auth-layout'
 import { TermsFooter } from '../components/terms-footer'
 import { SignUpForm } from './components/sign-up-form'
@@ -28,7 +29,7 @@ export function SignUp() {
   const { status } = useStatus()
 
   return (
-    <AuthLayout>
+    <AuthLayout backgroundImageSrc={signUpAnimeGirlBackground}>
       <div className='w-full space-y-8'>
         <div className='space-y-2'>
           <h2 className='text-center text-2xl font-semibold tracking-tight sm:text-left'>

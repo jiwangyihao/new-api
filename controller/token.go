@@ -32,17 +32,43 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 }
 
 func GetOpenCodeOpenAIModels(c *gin.Context) {
-	metadataService := getOpenCodeMetadataProvider()
-	models, err := metadataService.GetOpenAIModels(c.Request.Context())
-	if err != nil || len(models) == 0 {
-		common.ApiErrorMsg(c, "OpenCode OpenAI model metadata unavailable")
+	if _, ok := c.GetQuery("api_key"); ok {
+		writeConfigGuideError(c, http.StatusBadRequest, "token_id is required")
+		return
+	}
+	tokenIDRaw := strings.TrimSpace(c.Query("token_id"))
+	if tokenIDRaw == "" {
+		writeConfigGuideError(c, http.StatusBadRequest, "token_id is required")
+		return
+	}
+	tokenID, err := strconv.Atoi(tokenIDRaw)
+	if err != nil || tokenID <= 0 {
+		writeConfigGuideError(c, http.StatusBadRequest, "token_id is required")
 		return
 	}
 
-	common.ApiSuccess(c, gin.H{
-		"models":                    models,
-		"omp_openai_provider_tools": metadataService.GetOMPProviderToolsMetadata(c.Request.Context()),
+	token, ok := loadConfigGuideTokenByID(c, tokenID, c.GetInt("id"))
+	if !ok {
+		return
+	}
+	user, usingGroup, ok := validateConfigGuideTokenUsability(c, token)
+	if !ok {
+		return
+	}
+	metadata, ok := requireConfigGuideOpenAIModels(c)
+	if !ok {
+		return
+	}
+	effective, err := buildConfigGuideEffectiveModels(configGuideEffectiveModelsInput{
+		Client:          configGuideClientOpenCode,
+		Metadata:        metadata,
+		AvailableModels: availableConfigGuideModelsForToken(token, user, usingGroup),
 	})
+	if err != nil {
+		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")
+		return
+	}
+	common.ApiSuccess(c, gin.H{"models": effective})
 }
 
 func GetAllTokens(c *gin.Context) {

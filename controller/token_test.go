@@ -14,7 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
+	"github.com/stretchr/testify/require"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
@@ -541,22 +541,89 @@ func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
 	}
 }
 
-func TestGetOpenCodeOpenAIModelsReturnsMetadata(t *testing.T) {
-	SetOpenCodeMetadataProviderForTest(t, stubOpenCodeMetadataProvider{
-		models: configGuideTestModels(),
-		plugin: service.OMPProviderToolsMetadata{Package: "omp-openai-provider-tools", LatestVersion: "9.9.9", Status: "ok"},
-	})
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/opencode/openai-models", nil, 1)
-	GetOpenCodeOpenAIModels(ctx)
+func TestGetOpenCodeOpenAIModels(t *testing.T) {
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 1, "default", common.UserStatusEnabled)
+	seedConfigGuideUser(t, db, 2, "default", common.UserStatusEnabled)
+	owned := seedConfigGuideToken(t, db, 1, "ownedtoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	foreign := seedConfigGuideToken(t, db, 2, "foreigntoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	seedConfigGuideAbility(t, db, "default", "gpt-5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-Sys")
+	seedConfigGuideAbility(t, db, "default", "not-in-metadata")
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", owned.Id), nil, 1)
+	GetOpenCodeOpenAIModels(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected OpenCode metadata response to succeed, got message: %s", response.Message)
+	require.True(t, response.Success)
+	data := string(response.Data)
+	require.Contains(t, data, "gpt-5")
+	require.Contains(t, data, "gpt-5-mini")
+	require.Contains(t, data, "gpt-5-fast")
+	require.NotContains(t, data, "not-in-metadata")
+	require.NotContains(t, data, "-Sys")
+	require.NotContains(t, data, "omp_openai_provider_tools")
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", foreign.Id), nil, 1)
+	GetOpenCodeOpenAIModels(ctx)
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "foreigntoken")
+}
+
+func TestGetOpenCodeOpenAIModelsRejectsAPIKeyQueryCompatibility(t *testing.T) {
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/opencode/openai-models?api_key=sk-anything", nil, 1)
+	GetOpenCodeOpenAIModels(ctx)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "sk-anything")
+}
+
+func TestGetOpenCodeOpenAIModelsReusesPublicTokenStatusCodes(t *testing.T) {
+	cases := []struct {
+		name        string
+		tokenStatus int
+		userStatus  int
+		expiredTime int64
+		group       string
+		allowIps    *string
+		wantStatus  int
+	}{
+		{name: "disabled", tokenStatus: common.TokenStatusDisabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
+		{name: "expired status", tokenStatus: common.TokenStatusExpired, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
+		{name: "expired time", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: 1, group: "default", wantStatus: http.StatusForbidden},
+		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusTooManyRequests},
+		{name: "user disabled", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusDisabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
+		{name: "deprecated group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", wantStatus: http.StatusForbidden},
+		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), wantStatus: http.StatusForbidden},
 	}
-	if !strings.Contains(string(response.Data), "\"models\"") {
-		t.Fatalf("expected response data to contain models metadata, got %s", string(response.Data))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupConfigGuideTestDB(t)
+			seedConfigGuideUser(t, db, 1, "default", tc.userStatus)
+			token := seedConfigGuideToken(t, db, 1, "ownedtoken", tc.tokenStatus, tc.expiredTime, tc.group, true, "", tc.allowIps)
+			seedConfigGuideAbility(t, db, "default", "gpt-5")
+			seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+			withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+
+			ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", token.Id), nil, 1)
+			GetOpenCodeOpenAIModels(ctx)
+			require.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			require.NotContains(t, recorder.Body.String(), "ownedtoken")
+		})
 	}
-	if !strings.Contains(string(response.Data), "omp_openai_provider_tools") {
-		t.Fatalf("expected response data to contain OMP provider tools metadata, got %s", string(response.Data))
-	}
+}
+
+func TestGetOpenCodeOpenAIModelsMetadataUnavailable(t *testing.T) {
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 1, "default", common.UserStatusEnabled)
+	token := seedConfigGuideToken(t, db, 1, "ownedtoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	seedConfigGuideAbility(t, db, "default", "gpt-5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{err: fmt.Errorf("metadata down")})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", token.Id), nil, 1)
+	GetOpenCodeOpenAIModels(ctx)
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), "ownedtoken")
 }

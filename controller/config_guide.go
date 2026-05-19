@@ -3,29 +3,45 @@ package controller
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 const (
-	configGuideJSONContentType     = "application/json; charset=utf-8"
-	configGuideYAMLContentType     = "application/yaml; charset=utf-8"
-	configGuideTextContentType     = "text/plain; charset=utf-8"
-	configGuideMarkdownContentType = "text/markdown; charset=utf-8"
-	configGuideProviderID          = "new-api"
-	configGuideImageProviderID     = "new-api-image"
-	configGuideProviderToolsPkg    = "omp-openai-provider-tools"
-	configGuideDefaultModelID      = "gpt-5"
-	configGuideSmallModelID        = "gpt-5-mini"
-	configGuideFastModelID         = "gpt-5-fast"
+	configGuideJSONContentType = "application/json; charset=utf-8"
+	configGuideYAMLContentType = "application/yaml; charset=utf-8"
+	configGuideProviderID      = "new-api"
+	configGuideDefaultModelID  = "gpt-5"
+	configGuideSmallModelID    = "gpt-5-mini"
 )
+
+type configGuideClient string
+
+const (
+	configGuideClientOpenCode configGuideClient = "opencode"
+	configGuideClientOMP      configGuideClient = "omp"
+)
+
+type configGuideEffectiveModelsInput struct {
+	Client          configGuideClient
+	Metadata        map[string]service.OpenCodeOpenAIModel
+	AvailableModels []string
+}
 
 type configGuideManifest struct {
 	SchemaVersion int               `json:"schema_version"`
@@ -73,17 +89,8 @@ type configGuideOMPCost struct {
 func GetOMPConfigGuideManifest(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	params, ok := configGuideQuery(c)
+	params, _, ok := requireConfigGuideEffectiveModels(c, configGuideClientOMP)
 	if !ok {
-		return
-	}
-	pluginVersion, ok := requireConfigGuideOMPProviderToolsVersion(c)
-	if !ok {
-		return
-	}
-	_ = pluginVersion
-	models, ok := requireConfigGuideOpenAIModels(c)
-	if !ok || !requireConfigGuideModels(c, models, []string{configGuideDefaultModelID, configGuideSmallModelID}) {
 		return
 	}
 
@@ -94,13 +101,6 @@ func GetOMPConfigGuideManifest(c *gin.Context) {
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 		BaseURL:       params.baseURL,
 		Items: []configGuideItem{
-			{
-				ID:          "plugin",
-				Kind:        "instructions",
-				Method:      http.MethodGet,
-				URL:         configGuideItemURL("/config-guides/omp-openai/plugin.txt", params),
-				ContentType: configGuideTextContentType,
-			},
 			{
 				ID:          "models",
 				Kind:        "file",
@@ -117,54 +117,23 @@ func GetOMPConfigGuideManifest(c *gin.Context) {
 				TargetPath:  strPtr("~/.omp/agent/config.yml"),
 				ContentType: configGuideYAMLContentType,
 			},
-			{
-				ID:          "image-generator",
-				Kind:        "file",
-				Method:      http.MethodGet,
-				URL:         configGuideItemURL("/config-guides/omp-openai/image-generator.md", params),
-				TargetPath:  strPtr("~/.omp/agent/agents/image-generator.md"),
-				ContentType: configGuideMarkdownContentType,
-			},
 		},
 		Notes: []string{
-			"Download every item to a local temporary copy before editing existing files; do not transcribe YAML or JSON from chat output.",
+			"Download every item to a local temporary copy before editing existing files; do not transcribe YAML from chat output.",
 			"If a target file is missing, copy the downloaded file to that path. If it exists, compare both files and merge the smaller side into the larger side when that is safer than replacing.",
-			"After writing files, compare them with the downloaded copies and run the listed plugin doctor/check commands before reporting completion.",
-			"Run plugin.txt commands before using provider-native web_search or image_generation.",
-			"Restart OMP after installing or upgrading plugins and writing agent files.",
+			"After writing files, compare them with the downloaded copies before reporting completion.",
 		},
 	})
-}
-
-func GetOMPConfigGuidePlugin(c *gin.Context) {
-	setConfigGuideNoStore(c)
-
-	if _, ok := configGuideQuery(c); !ok {
-		return
-	}
-	pluginVersion, ok := requireConfigGuideOMPProviderToolsVersion(c)
-	if !ok {
-		return
-	}
-	c.Data(http.StatusOK, configGuideTextContentType, []byte(renderConfigGuideOMPPlugin(pluginVersion)))
 }
 
 func GetOMPConfigGuideModels(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	params, ok := configGuideQuery(c)
+	params, models, ok := requireConfigGuideEffectiveModels(c, configGuideClientOMP)
 	if !ok {
 		return
 	}
-	pluginVersion, ok := requireConfigGuideOMPProviderToolsVersion(c)
-	if !ok {
-		return
-	}
-	models, ok := requireConfigGuideOpenAIModels(c)
-	if !ok || !requireConfigGuideModels(c, models, []string{configGuideDefaultModelID, configGuideSmallModelID}) {
-		return
-	}
-	content, err := renderConfigGuideOMPModels(params.baseURL, params.apiKey, pluginVersion, models)
+	content, err := renderConfigGuideOMPModels(params.baseURL, params.apiKey, models)
 	if err != nil {
 		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")
 		return
@@ -175,30 +144,17 @@ func GetOMPConfigGuideModels(c *gin.Context) {
 func GetOMPConfigGuideConfig(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	if _, ok := configGuideQuery(c); !ok {
+	if _, _, ok := requireConfigGuideEffectiveModels(c, configGuideClientOMP); !ok {
 		return
 	}
 	c.Data(http.StatusOK, configGuideYAMLContentType, []byte(renderConfigGuideOMPSettings()))
 }
 
-func GetOMPConfigGuideImageGenerator(c *gin.Context) {
-	setConfigGuideNoStore(c)
-
-	if _, ok := configGuideQuery(c); !ok {
-		return
-	}
-	c.Data(http.StatusOK, configGuideMarkdownContentType, []byte(renderConfigGuideOMPImageGenerator()))
-}
-
 func GetOpenCodeConfigGuideManifest(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	params, ok := configGuideQuery(c)
+	params, _, ok := requireConfigGuideEffectiveModels(c, configGuideClientOpenCode)
 	if !ok {
-		return
-	}
-	models, ok := requireConfigGuideOpenAIModels(c)
-	if !ok || !requireConfigGuideModels(c, models, []string{configGuideDefaultModelID}) {
 		return
 	}
 
@@ -230,12 +186,8 @@ func GetOpenCodeConfigGuideManifest(c *gin.Context) {
 func GetOpenCodeConfigGuideJSON(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	params, ok := configGuideQuery(c)
+	params, models, ok := requireConfigGuideEffectiveModels(c, configGuideClientOpenCode)
 	if !ok {
-		return
-	}
-	models, ok := requireConfigGuideOpenAIModels(c)
-	if !ok || !requireConfigGuideModels(c, models, []string{configGuideDefaultModelID}) {
 		return
 	}
 	content, err := renderConfigGuideOpenCode(params.baseURL, params.apiKey, models)
@@ -252,8 +204,13 @@ func setConfigGuideNoStore(c *gin.Context) {
 }
 
 func configGuideQuery(c *gin.Context) (configGuideQueryParams, bool) {
-	apiKey := strings.TrimSpace(c.Query("api_key"))
-	if apiKey == "" || containsControlCharacter(apiKey) {
+	rawAPIKey := c.Query("api_key")
+	if rawAPIKey == "" || containsControlCharacter(rawAPIKey) {
+		writeConfigGuideError(c, http.StatusBadRequest, "api_key is required")
+		return configGuideQueryParams{}, false
+	}
+	apiKey := strings.TrimSpace(rawAPIKey)
+	if apiKey == "" {
 		writeConfigGuideError(c, http.StatusBadRequest, "api_key is required")
 		return configGuideQueryParams{}, false
 	}
@@ -272,14 +229,277 @@ func configGuideQuery(c *gin.Context) (configGuideQueryParams, bool) {
 }
 
 func normalizeConfigGuideAPIKey(apiKey string) string {
-	apiKey = strings.TrimSpace(apiKey)
-	for strings.HasPrefix(apiKey, "sk-sk-") {
-		apiKey = strings.TrimPrefix(apiKey, "sk-")
+	key, err := parseConfigGuideTokenKey(apiKey)
+	if err != nil {
+		return ""
 	}
-	if apiKey == "" || strings.HasPrefix(apiKey, "sk-") {
-		return apiKey
+	return "sk-" + key
+}
+
+func parseConfigGuideTokenKey(raw string) (string, error) {
+	if raw == "" || containsControlCharacter(raw) {
+		return "", errors.New("invalid api_key")
 	}
-	return "sk-" + apiKey
+	key := strings.TrimSpace(raw)
+	if key == "" {
+		return "", errors.New("invalid api_key")
+	}
+	if len(key) >= len("Bearer ") && strings.EqualFold(key[:len("Bearer ")], "Bearer ") {
+		key = strings.TrimSpace(key[len("Bearer "):])
+		if key == "" || containsControlCharacter(key) {
+			return "", errors.New("invalid api_key")
+		}
+	}
+	for strings.HasPrefix(key, "sk-sk-") {
+		key = strings.TrimPrefix(key, "sk-")
+	}
+	key = strings.TrimPrefix(key, "sk-")
+	if idx := strings.IndexByte(key, '-'); idx >= 0 {
+		key = key[:idx]
+	}
+	if key == "" || containsControlCharacter(key) {
+		return "", errors.New("invalid api_key")
+	}
+	return key, nil
+}
+
+func loadConfigGuideTokenByPublicKey(c *gin.Context, apiKey string) (*model.Token, bool) {
+	key, err := parseConfigGuideTokenKey(apiKey)
+	if err != nil {
+		writeConfigGuideError(c, http.StatusBadRequest, "invalid api_key")
+		return nil, false
+	}
+	token, err := model.GetTokenByKey(key, false)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeConfigGuideError(c, http.StatusUnauthorized, "invalid api_key")
+		} else {
+			common.SysLog("config guide token lookup failed: " + err.Error())
+			writeConfigGuideError(c, http.StatusInternalServerError, "failed to validate api_key")
+		}
+		return nil, false
+	}
+	return token, true
+}
+
+func loadConfigGuideTokenByID(c *gin.Context, tokenID int, userID int) (*model.Token, bool) {
+	token, err := model.GetTokenByIds(tokenID, userID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) || tokenID <= 0 || userID <= 0 {
+			writeConfigGuideError(c, http.StatusUnauthorized, "token not found")
+		} else {
+			common.SysLog("config guide token id lookup failed: " + err.Error())
+			writeConfigGuideError(c, http.StatusInternalServerError, "failed to validate token")
+		}
+		return nil, false
+	}
+	return token, true
+}
+
+func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*model.UserBase, string, bool) {
+	if token == nil {
+		writeConfigGuideError(c, http.StatusUnauthorized, "invalid api_key")
+		return nil, "", false
+	}
+	if token.Status == common.TokenStatusExhausted {
+		writeConfigGuideError(c, http.StatusTooManyRequests, "token quota exhausted")
+		return nil, "", false
+	}
+	if token.Status != common.TokenStatusEnabled || token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
+		writeConfigGuideError(c, http.StatusForbidden, "token is not usable")
+		return nil, "", false
+	}
+
+	userCache, err := model.GetUserCache(token.UserId)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("config guide GetUserCache error for user %d: %v", token.UserId, err))
+		writeConfigGuideError(c, http.StatusInternalServerError, "failed to validate user")
+		return nil, "", false
+	}
+	if userCache.Status != common.UserStatusEnabled {
+		writeConfigGuideError(c, http.StatusForbidden, "user is not enabled")
+		return nil, "", false
+	}
+
+	allowIps := token.GetIpLimits()
+	if len(allowIps) > 0 {
+		clientIP := net.ParseIP(c.ClientIP())
+		if clientIP == nil || !common.IsIpInCIDRList(clientIP, allowIps) {
+			writeConfigGuideError(c, http.StatusForbidden, "client ip is not allowed")
+			return nil, "", false
+		}
+	}
+
+	usingGroup := userCache.Group
+	if token.Group != "" {
+		if _, ok := service.GetUserUsableGroups(userCache.Group)[token.Group]; !ok {
+			writeConfigGuideError(c, http.StatusForbidden, "token group is not usable")
+			return nil, "", false
+		}
+		usingGroup = token.Group
+	}
+	if usingGroup != "auto" && !ratio_setting.ContainsGroupRatio(usingGroup) {
+		writeConfigGuideError(c, http.StatusForbidden, "group is not usable")
+		return nil, "", false
+	}
+
+	c.Set("id", token.UserId)
+	c.Set("token_id", token.Id)
+	c.Set("token_key", token.Key)
+	c.Set("token_name", token.Name)
+	c.Set("token_unlimited_quota", token.UnlimitedQuota)
+	if !token.UnlimitedQuota {
+		c.Set("token_quota", token.RemainQuota)
+	}
+	if token.ModelLimitsEnabled {
+		c.Set("token_model_limit_enabled", true)
+		c.Set("token_model_limit", token.GetModelLimitsMap())
+	} else {
+		c.Set("token_model_limit_enabled", false)
+	}
+	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
+	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
+	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
+	userCache.WriteContext(c)
+	return userCache, usingGroup, true
+}
+
+func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase, usingGroup string) []string {
+	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
+	if !acceptUnsetRatioModel && user != nil && user.Id > 0 {
+		userSettings, _ := model.GetUserSetting(user.Id, false)
+		if userSettings.AcceptUnsetRatioModel {
+			acceptUnsetRatioModel = true
+		}
+	}
+
+	if token != nil && token.IsModelLimitsEnabled() {
+		limits := token.GetModelLimits()
+		models := make([]string, 0, len(limits))
+		for _, modelName := range limits {
+			models = appendConfigGuideAvailableModel(models, modelName, acceptUnsetRatioModel)
+		}
+		return models
+	}
+
+	var models []string
+	if usingGroup == "auto" && user != nil {
+		seen := make(map[string]struct{})
+		for _, autoGroup := range service.GetUserAutoGroup(user.Group) {
+			for _, modelName := range model.GetGroupEnabledModels(autoGroup) {
+				if _, ok := seen[modelName]; ok {
+					continue
+				}
+				seen[modelName] = struct{}{}
+				models = append(models, modelName)
+			}
+		}
+	} else {
+		models = model.GetGroupEnabledModels(usingGroup)
+	}
+
+	filtered := models[:0]
+	for _, modelName := range models {
+		filtered = appendConfigGuideAvailableModel(filtered, modelName, acceptUnsetRatioModel)
+	}
+	return filtered
+}
+
+func appendConfigGuideAvailableModel(models []string, modelName string, acceptUnsetRatioModel bool) []string {
+	normalized := normalizeConfigGuideAvailableModelID(modelName)
+	if normalized == "" {
+		return models
+	}
+	if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(normalized) {
+		return models
+	}
+	return append(models, normalized)
+}
+
+func buildConfigGuideEffectiveModels(input configGuideEffectiveModelsInput) (map[string]service.OpenCodeOpenAIModel, error) {
+	if len(input.Metadata) == 0 {
+		return nil, errors.New("OpenAI model metadata unavailable")
+	}
+	available := make(map[string]struct{}, len(input.AvailableModels))
+	for _, id := range input.AvailableModels {
+		id = normalizeConfigGuideAvailableModelID(id)
+		if id != "" {
+			available[id] = struct{}{}
+		}
+	}
+
+	effective := make(map[string]service.OpenCodeOpenAIModel)
+	metadataIDs := make([]string, 0, len(input.Metadata))
+	for id := range input.Metadata {
+		metadataIDs = append(metadataIDs, id)
+	}
+	sort.Strings(metadataIDs)
+	for _, metadataID := range metadataIDs {
+		normalizedID := normalizeConfigGuideAvailableModelID(metadataID)
+		if normalizedID == "" {
+			continue
+		}
+		_, directAvailable := available[normalizedID]
+		fastBase := strings.TrimSuffix(normalizedID, "-fast")
+		_, baseAvailable := available[fastBase]
+		if !directAvailable && (input.Client != configGuideClientOpenCode || normalizedID == fastBase || !baseAvailable) {
+			continue
+		}
+		if input.Client != configGuideClientOpenCode && strings.HasSuffix(normalizedID, "-fast") && !directAvailable {
+			continue
+		}
+		modelValue := input.Metadata[metadataID]
+		modelValue.ID = normalizeConfigGuideAvailableModelID(modelValue.ID)
+		if modelValue.ID == "" {
+			modelValue.ID = strings.TrimSuffix(normalizedID, "-fast")
+		}
+		if _, exists := effective[normalizedID]; !exists {
+			effective[normalizedID] = modelValue
+		}
+	}
+
+	if _, ok := effective[configGuideDefaultModelID]; !ok {
+		return nil, fmt.Errorf("required model missing: %s", configGuideDefaultModelID)
+	}
+	if _, ok := effective[configGuideSmallModelID]; !ok {
+		return nil, fmt.Errorf("required model missing: %s", configGuideSmallModelID)
+	}
+	return effective, nil
+}
+
+func normalizeConfigGuideAvailableModelID(id string) string {
+	id = strings.TrimSpace(id)
+	id = strings.TrimSuffix(id, "-Sys")
+	return id
+}
+
+func requireConfigGuideEffectiveModels(c *gin.Context, client configGuideClient) (configGuideQueryParams, map[string]service.OpenCodeOpenAIModel, bool) {
+	params, ok := configGuideQuery(c)
+	if !ok {
+		return configGuideQueryParams{}, nil, false
+	}
+	token, ok := loadConfigGuideTokenByPublicKey(c, params.apiKey)
+	if !ok {
+		return configGuideQueryParams{}, nil, false
+	}
+	user, usingGroup, ok := validateConfigGuideTokenUsability(c, token)
+	if !ok {
+		return configGuideQueryParams{}, nil, false
+	}
+	metadata, ok := requireConfigGuideOpenAIModels(c)
+	if !ok {
+		return configGuideQueryParams{}, nil, false
+	}
+	effective, err := buildConfigGuideEffectiveModels(configGuideEffectiveModelsInput{
+		Client:          client,
+		Metadata:        metadata,
+		AvailableModels: availableConfigGuideModelsForToken(token, user, usingGroup),
+	})
+	if err != nil {
+		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")
+		return configGuideQueryParams{}, nil, false
+	}
+	return params, effective, true
 }
 
 func buildConfigGuideBaseURL(c *gin.Context) (baseURL string, explicitBaseURL string, err error) {
@@ -348,17 +568,6 @@ func configGuideItemURL(path string, params configGuideQueryParams) string {
 	return path + "?" + query.Encode()
 }
 
-func requireConfigGuideOMPProviderToolsVersion(c *gin.Context) (string, bool) {
-	metadata := getOpenCodeMetadataProvider().GetOMPProviderToolsMetadata(c.Request.Context())
-	version := strings.TrimSpace(metadata.LatestVersion)
-	status := strings.ToLower(strings.TrimSpace(metadata.Status))
-	if version == "" || (status != "ok" && status != "cached") {
-		writeConfigGuideError(c, http.StatusServiceUnavailable, "OMP provider tools metadata unavailable")
-		return "", false
-	}
-	return version, true
-}
-
 func requireConfigGuideOpenAIModels(c *gin.Context) (map[string]service.OpenCodeOpenAIModel, bool) {
 	models, err := getOpenCodeMetadataProvider().GetOpenAIModels(c.Request.Context())
 	if err != nil || len(models) == 0 {
@@ -391,87 +600,37 @@ func writeConfigGuideError(c *gin.Context, status int, message string) {
 	c.JSON(status, gin.H{"success": false, "message": message})
 }
 
-func renderConfigGuideOMPPlugin(version string) string {
-	return fmt.Sprintf(`# 1. Install or upgrade provider-native tools plugin
-omp plugin install npm:%s@%s
-
-# 2. Check plugin health
-omp plugin doctor
-
-# 3. Preview the recommended image subagent template
-npx %s configure-image-agent --model %s/%s-Sys --dry-run
-
-# 4. After reviewing the preview, write ~/.omp/agent/agents/image-generator.md
-npx %s configure-image-agent --model %s/%s-Sys
-
-# If image_generator already exists, the command refuses to overwrite it.
-# Use --print to inspect and merge manually; use --force only when you intentionally replace it.
-npx %s configure-image-agent --model %s/%s-Sys --print`, configGuideProviderToolsPkg, version, configGuideProviderToolsPkg, configGuideImageProviderID, configGuideDefaultModelID, configGuideProviderToolsPkg, configGuideImageProviderID, configGuideDefaultModelID, configGuideProviderToolsPkg, configGuideImageProviderID, configGuideDefaultModelID)
-}
-
-func renderConfigGuideOMPModels(baseURL string, apiKey string, pluginVersion string, models map[string]service.OpenCodeOpenAIModel) (string, error) {
-	baseModels := make(map[string]configGuideOMPModel, len(models))
-	for id, model := range models {
-		baseModels[id] = normalizeConfigGuideOMPModel(model)
-	}
-	expanded := withConfigGuideOMPSysVariants(baseModels)
-
-	selectedIDs := []string{configGuideDefaultModelID, configGuideDefaultModelID + "-Sys", configGuideSmallModelID, configGuideSmallModelID + "-Sys"}
-	selected := make([]string, 0, len(selectedIDs))
-	for _, id := range selectedIDs {
-		model, ok := expanded[id]
-		if !ok {
-			return "", fmt.Errorf("required OMP model missing: %s", id)
+func renderConfigGuideOMPModels(baseURL string, apiKey string, models map[string]service.OpenCodeOpenAIModel) (string, error) {
+	ids := make([]string, 0, len(models))
+	for id := range models {
+		id = normalizeConfigGuideAvailableModelID(id)
+		if id == "" || strings.HasSuffix(id, "-fast") {
+			continue
 		}
-		selected = append(selected, renderConfigGuideOMPModelYAML(model, "      ", nil))
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	selected := make([]string, 0, len(ids))
+	for _, id := range ids {
+		model, ok := models[id]
+		if !ok {
+			continue
+		}
+		model.ID = id
+		selected = append(selected, renderConfigGuideOMPModelYAML(normalizeConfigGuideOMPModel(model), "      ", nil))
+	}
+	if len(selected) == 0 {
+		return "", fmt.Errorf("required OMP models missing")
 	}
 
-	imageSource, ok := expanded[configGuideDefaultModelID+"-Sys"]
-	if !ok {
-		return "", fmt.Errorf("required OMP image source missing")
-	}
-	imageSource.ID = configGuideDefaultModelID + "-Sys"
-	imageSource.Name = models[configGuideDefaultModelID].Name + " Image (Sys)"
-	imageYAML := renderConfigGuideOMPModelYAML(imageSource, "      ", []string{
-		"        compat:",
-		"          openaiProviderTools:",
-		"            imageGeneration: true",
-	})
-
-	return fmt.Sprintf(`# Image generation and provider-native web_search require this plugin:
-#   omp plugin install npm:%s@%s
-#   omp plugin doctor
-# Recommended image subagent command:
-#   npx %s configure-image-agent --model %s/%s-Sys --dry-run
-# Restart OMP after installing or upgrading the plugin.
-providers:
+	return fmt.Sprintf(`providers:
   %s:
     api: openai-responses
     baseUrl: %s
     apiKey: %s
-    compat:
-      openaiProviderTools:
-        enabled: true
     models:
-%s
-
-  %s:
-    api: openai-responses
-    baseUrl: %s
-    apiKey: %s
-    compat:
-      openaiProviderTools:
-        enabled: true
-    models:
-%s
-
-equivalence:
-  overrides:
-    %[14]s/%[16]s: %[16]s
-    %[14]s/%[16]s-Sys: %[16]s-sys
-    %[14]s/%[17]s: %[17]s
-    %[14]s/%[17]s-Sys: %[17]s-sys
-    %[15]s/%[16]s-Sys: %[16]s-image-sys`, configGuideProviderToolsPkg, pluginVersion, configGuideProviderToolsPkg, configGuideImageProviderID, configGuideDefaultModelID, configGuideProviderID, baseURL, apiKey, strings.Join(selected, "\n"), configGuideImageProviderID, baseURL, apiKey, imageYAML, configGuideProviderID, configGuideImageProviderID, configGuideDefaultModelID, configGuideSmallModelID), nil
+%s`, configGuideProviderID, configGuideYAMLDoubleQuotedScalar(baseURL), configGuideYAMLDoubleQuotedScalar(apiKey), strings.Join(selected, "\n")), nil
 }
 
 func normalizeConfigGuideOMPModel(model service.OpenCodeOpenAIModel) configGuideOMPModel {
@@ -501,34 +660,16 @@ func normalizeConfigGuideOMPModel(model service.OpenCodeOpenAIModel) configGuide
 	}
 }
 
-func withConfigGuideOMPSysVariants(models map[string]configGuideOMPModel) map[string]configGuideOMPModel {
-	expanded := make(map[string]configGuideOMPModel, len(models)*2)
-	for id, model := range models {
-		expanded[id] = cloneConfigGuideOMPModel(model)
-		sys := cloneConfigGuideOMPModel(model)
-		sys.ID = model.ID + "-Sys"
-		sys.Name = model.Name + " (Sys)"
-		expanded[id+"-Sys"] = sys
-	}
-	return expanded
-}
-
-func cloneConfigGuideOMPModel(model configGuideOMPModel) configGuideOMPModel {
-	copy := model
-	copy.Input = append([]string(nil), model.Input...)
-	return copy
-}
-
 func renderConfigGuideOMPModelYAML(model configGuideOMPModel, indent string, extraLines []string) string {
 	lines := []string{
-		fmt.Sprintf("%s- id: %s", indent, model.ID),
+		fmt.Sprintf("%s- id: %s", indent, configGuideYAMLDoubleQuotedScalar(model.ID)),
 		fmt.Sprintf("%s  name: %s", indent, configGuideYAMLDoubleQuotedScalar(model.Name)),
-		fmt.Sprintf("%s  api: %s", indent, model.API),
+		fmt.Sprintf("%s  api: %s", indent, configGuideYAMLDoubleQuotedScalar(model.API)),
 		fmt.Sprintf("%s  reasoning: %t", indent, model.Reasoning),
 		fmt.Sprintf("%s  input:", indent),
 	}
 	for _, item := range model.Input {
-		lines = append(lines, fmt.Sprintf("%s    - %s", indent, item))
+		lines = append(lines, fmt.Sprintf("%s    - %s", indent, configGuideYAMLDoubleQuotedScalar(item)))
 	}
 	if model.ContextWindow != 0 {
 		lines = append(lines, fmt.Sprintf("%s  contextWindow: %d", indent, model.ContextWindow))
@@ -573,42 +714,29 @@ func renderConfigGuideOMPSettings() string {
 serviceTier: priority
 
 modelRoles:
-  default: %s/%s-Sys
-  slow: %s/%s-Sys
-  smol: %s/%s-Sys
-  plan: %s/%s-Sys
-  task: %s/%s-Sys:xhigh
-  vision: %s/%s-Sys
-  designer: %s/%s-Sys:xhigh
-  commit: %s/%s-Sys:xhigh
+  default: %s/%s
+  slow: %s/%s
+  smol: %s/%s
+  plan: %s/%s
+  task: %s/%s:xhigh
+  vision: %s/%s
+  designer: %s/%s:xhigh
+  commit: %s/%s:xhigh
 
 task:
   agentModelOverrides:
-    explore: %s/%s-Sys:xhigh
-    librarian: %s/%s-Sys:xhigh
-    reviewer: %s/%s-Sys:xhigh
-    plan: %s/%s-Sys:xhigh`, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID)
-}
-
-func renderConfigGuideOMPImageGenerator() string {
-	return fmt.Sprintf(`---
-name: image_generator
-description: Generate or iterate images only; do not handle ordinary code modification tasks.
-model: %s/%s-Sys:xhigh
----
-
-You are a specialized image generation subagent.
-
-Use the provider-native image generation capability to create or refine images when the user explicitly asks for visual output. Do not take over normal coding, refactoring, debugging, or documentation tasks. Return concise status and generated image references to the caller.`, configGuideImageProviderID, configGuideDefaultModelID)
+    explore: %s/%s:xhigh
+    librarian: %s/%s:xhigh
+    reviewer: %s/%s:xhigh
+    plan: %s/%s:xhigh`, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID)
 }
 
 func renderConfigGuideOpenCode(baseURL string, apiKey string, models map[string]service.OpenCodeOpenAIModel) ([]byte, error) {
-	if _, ok := models[configGuideDefaultModelID]; !ok {
+	if !isConfigGuideOpenCodeTextModel(models[configGuideDefaultModelID]) {
 		return nil, fmt.Errorf("%s missing", configGuideDefaultModelID)
 	}
-	smallModelID := configGuideSmallModelID
 	if !isConfigGuideOpenCodeTextModel(models[configGuideSmallModelID]) {
-		smallModelID = configGuideDefaultModelID
+		return nil, fmt.Errorf("%s missing", configGuideSmallModelID)
 	}
 
 	openAIModels := buildConfigGuideOpenCodeBaseModels(models)
@@ -626,7 +754,7 @@ func renderConfigGuideOpenCode(baseURL string, apiKey string, models map[string]
 			},
 		},
 		"model":       configGuideProviderID + "/" + configGuideDefaultModelID,
-		"small_model": configGuideProviderID + "/" + smallModelID,
+		"small_model": configGuideProviderID + "/" + configGuideSmallModelID,
 		"agent": map[string]any{
 			"build": map[string]any{
 				"options": map[string]any{"store": false},
@@ -761,9 +889,43 @@ func configGuideReasoningLevels(id string, model service.OpenCodeOpenAIModel) []
 }
 
 func mergeConfigGuideOpenCodeModelOptions(options map[string]any) map[string]any {
-	out := deepCloneStringAnyMap(options)
+	out := sanitizeConfigGuideOpenCodeOptions(deepCloneStringAnyMap(options))
 	out["store"] = false
 	return out
+}
+
+func sanitizeConfigGuideOpenCodeOptions(options map[string]any) map[string]any {
+	for key, value := range options {
+		if configGuideOpenCodeOptionForbidden(key) {
+			delete(options, key)
+			continue
+		}
+		options[key] = sanitizeConfigGuideOpenCodeValue(value)
+	}
+	return options
+}
+
+func sanitizeConfigGuideOpenCodeValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return sanitizeConfigGuideOpenCodeOptions(typed)
+	case []any:
+		for i, item := range typed {
+			typed[i] = sanitizeConfigGuideOpenCodeValue(item)
+		}
+		return typed
+	default:
+		return value
+	}
+}
+
+func configGuideOpenCodeOptionForbidden(key string) bool {
+	switch key {
+	case "metadata", "builtin_tools", "web_search", "image_generation", "imageGeneration":
+		return true
+	default:
+		return false
+	}
 }
 
 func configGuideOpenCodeCostMap(cost service.OpenCodeOpenAIModelCost) map[string]any {
@@ -859,7 +1021,7 @@ func deepCloneStringAnyMap(src map[string]any) map[string]any {
 
 func containsControlCharacter(value string) bool {
 	for _, r := range value {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return true
 		}
 	}

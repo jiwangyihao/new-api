@@ -117,11 +117,18 @@ export async function fetchTokenKeysBatch(ids: number[]): Promise<{
   return res.data
 }
 
-export async function getOpenCodeOpenAIModels(): Promise<{
+export async function getOpenCodeOpenAIModels(tokenId: number): Promise<{
   success: boolean
   message?: string
   data?: OpenCodeOpenAIModelsResponse
 }> {
-  const res = await api.get('/api/token/opencode/openai-models')
+  const params = new URLSearchParams()
+  params.set('token_id', String(tokenId))
+  const res = await api.get(`/api/token/opencode/openai-models?${params.toString()}`)
   return res.data
+}
+
+export async function fetchAgentConfigArtifact(path: string): Promise<string> {
+  const res = await api.get(path, { responseType: 'text' })
+  return typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2)
 }

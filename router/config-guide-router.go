@@ -16,10 +16,8 @@ func SetConfigGuideRouter(router *gin.Engine) {
 		ompRoute := configGuideRoute.Group("/omp-openai")
 		{
 			ompRoute.GET("/manifest.json", controller.GetOMPConfigGuideManifest)
-			ompRoute.GET("/plugin.txt", controller.GetOMPConfigGuidePlugin)
 			ompRoute.GET("/models.yml", controller.GetOMPConfigGuideModels)
 			ompRoute.GET("/config.yml", controller.GetOMPConfigGuideConfig)
-			ompRoute.GET("/image-generator.md", controller.GetOMPConfigGuideImageGenerator)
 		}
 
 		openCodeRoute := configGuideRoute.Group("/opencode-openai")

@@ -2,19 +2,26 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
+	"gorm.io/gorm"
 )
 
 type stubOpenCodeMetadataProvider struct {
-	models map[string]service.OpenCodeOpenAIModel
-	plugin service.OMPProviderToolsMetadata
-	err    error
+	models                 map[string]service.OpenCodeOpenAIModel
+	plugin                 service.OMPProviderToolsMetadata
+	err                    error
+	failOnOMPProviderTools bool
 }
 
 func (p stubOpenCodeMetadataProvider) GetOpenAIModels(context.Context) (map[string]service.OpenCodeOpenAIModel, error) {
@@ -22,6 +29,9 @@ func (p stubOpenCodeMetadataProvider) GetOpenAIModels(context.Context) (map[stri
 }
 
 func (p stubOpenCodeMetadataProvider) GetOMPProviderToolsMetadata(context.Context) service.OMPProviderToolsMetadata {
+	if p.failOnOMPProviderTools {
+		panic("OMP provider-tools metadata must not be called")
+	}
 	return p.plugin
 }
 
@@ -29,6 +39,56 @@ func withStubOpenCodeMetadataProvider(t *testing.T, provider openCodeMetadataPro
 	SetOpenCodeMetadataProviderForTest(t, provider)
 }
 
+func setupConfigGuideTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := setupTokenControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}))
+
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	originalUserUsableGroups := setting.UserUsableGroups2JSONString()
+	originalAutoGroups := setting.AutoGroups2JsonString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUserUsableGroups))
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"paid":1}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5":1,"gpt-5-mini":1,"gpt-5-fast":1}`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","paid":"Paid"}`))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["default","paid"]`))
+	return db
+}
+
+func seedConfigGuideUser(t *testing.T, db *gorm.DB, id int, group string, status int) *model.User {
+	t.Helper()
+	user := &model.User{Id: id, Username: fmt.Sprintf("cg-user-%d", id), Password: "password123", Group: group, Status: status, AffCode: fmt.Sprintf("cg-aff-%d", id)}
+	require.NoError(t, db.Create(user).Error)
+	return user
+}
+
+func seedConfigGuideToken(t *testing.T, db *gorm.DB, userID int, rawKey string, status int, expiredTime int64, group string, unlimited bool, modelLimits string, allowIps *string) *model.Token {
+	t.Helper()
+	token := &model.Token{UserId: userID, Name: rawKey, Key: rawKey, Status: status, CreatedTime: 1, AccessedTime: 1, ExpiredTime: expiredTime, RemainQuota: 100, UnlimitedQuota: unlimited, Group: group, ModelLimits: modelLimits, ModelLimitsEnabled: modelLimits != "", AllowIps: allowIps}
+	require.NoError(t, db.Create(token).Error)
+	return token
+}
+
+func seedConfigGuideAbility(t *testing.T, db *gorm.DB, group string, modelName string) {
+	t.Helper()
+	require.NoError(t, db.Create(&model.Ability{Group: group, Model: modelName, ChannelId: len(modelName) + len(group), Enabled: true}).Error)
+}
+
+func seedValidConfigGuideFixture(t *testing.T) *gorm.DB {
+	t.Helper()
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	seedConfigGuideAbility(t, db, "default", "gpt-5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	return db
+}
 func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 	return map[string]service.OpenCodeOpenAIModel{
 		"gpt-5": {
@@ -42,6 +102,17 @@ func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 			Cost:             service.OpenCodeOpenAIModelCost{Input: 5, Output: 30, CacheRead: 0.5},
 			Limit:            service.OpenCodeOpenAIModelLimit{Context: 400000, Input: 272000, Output: 128000},
 			ReleaseDate:      "2026-01-01",
+			Options: map[string]any{
+				"metadata":        map[string]any{"builtin_tools": map[string]any{"web_search": true}},
+				"builtin_tools":   map[string]any{"image_generation": true},
+				"web_search":      true,
+				"imageGeneration": true,
+				"serviceTier":     "priority",
+				"allowedArray": []any{
+					map[string]any{"metadata": map[string]any{"builtin_tools": map[string]any{"web_search": true}}},
+					map[string]any{"serviceTier": "priority"},
+				},
+			},
 		},
 		"gpt-5-fast": {
 			ID:               "gpt-5-fast",
@@ -96,8 +167,9 @@ func TestOpenCodeConfigGuideManifestReturnsJSONNotWebFallback(t *testing.T) {
 		models: configGuideTestModels(),
 		plugin: service.OMPProviderToolsMetadata{Package: "omp-openai-provider-tools", LatestVersion: "9.9.9", Status: "ok"},
 	})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/manifest.json?api_key=sk-sk-live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOpenCodeConfigGuideManifest(ctx)
 
 	if recorder.Code != http.StatusOK {
@@ -113,15 +185,16 @@ func TestOpenCodeConfigGuideManifestReturnsJSONNotWebFallback(t *testing.T) {
 	if manifest.Client != "opencode" || manifest.BaseURL != "https://api.example.com/v1" || len(manifest.Items) != 1 {
 		t.Fatalf("unexpected manifest: %#v", manifest)
 	}
-	if manifest.Items[0].URL != "/config-guides/opencode-openai/opencode.json?api_key=sk-live&base_url=https%3A%2F%2Fapi.example.com%2Fv1" {
+	if manifest.Items[0].URL != "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https%3A%2F%2Fapi.example.com%2Fv1" {
 		t.Fatalf("expected normalized item URL, got %q", manifest.Items[0].URL)
 	}
 }
 
 func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOpenCodeConfigGuideJSON(ctx)
 
 	if recorder.Code != http.StatusOK {
@@ -136,7 +209,7 @@ func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 		t.Fatalf("OpenCode provider must use OpenAI SDK responses support, got %#v", provider["npm"])
 	}
 	options := provider["options"].(map[string]any)
-	if options["apiKey"] != "sk-live" || options["baseURL"] != "https://api.example.com/v1" {
+	if options["apiKey"] != "sk-livetoken" || options["baseURL"] != "https://api.example.com/v1" {
 		t.Fatalf("unexpected provider options: %#v", options)
 	}
 	models := provider["models"].(map[string]any)
@@ -174,35 +247,38 @@ func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 	}
 }
 
-func TestOpenCodeConfigGuideJSONFallsBackWhenSmallModelMissing(t *testing.T) {
+func TestOpenCodeConfigGuideJSONDoesNotEmitProviderNativeTools(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := recorder.Body.String()
+	for _, forbidden := range []string{"builtin_tools", "web_search", "image_generation", "imageGeneration", "metadata", "agent.image", "structured_output"} {
+		require.NotContains(t, body, forbidden)
+	}
+	require.Contains(t, body, `"store":false`)
+	require.Contains(t, body, `"serviceTier":"priority"`)
+}
+
+func TestOpenCodeConfigGuideJSONFailsWhenSmallModelMissing(t *testing.T) {
 	models := configGuideTestModels()
 	delete(models, "gpt-5-mini")
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: models})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOpenCodeConfigGuideJSON(ctx)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("expected opencode config status 200, got %d: %s", recorder.Code, recorder.Body.String())
-	}
-	var config map[string]any
-	if err := common.Unmarshal(recorder.Body.Bytes(), &config); err != nil {
-		t.Fatalf("OpenCode config should be JSON, got %q: %v", recorder.Body.String(), err)
-	}
-	provider := config["provider"].(map[string]any)["new-api"].(map[string]any)
-	generatedModels := provider["models"].(map[string]any)
-	smallModel := strings.TrimPrefix(config["small_model"].(string), "new-api/")
-	if _, ok := generatedModels[smallModel]; !ok {
-		t.Fatalf("small_model should reference a generated model, got %q with keys %#v", smallModel, generatedModels)
-	}
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
 }
 
 func TestOMPConfigGuideManifestAndFiles(t *testing.T) {
-	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{
-		models: configGuideTestModels(),
-		plugin: service.OMPProviderToolsMetadata{Package: "omp-openai-provider-tools", LatestVersion: "9.9.9", Status: "ok"},
-	})
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/manifest.json?api_key=live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/manifest.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOMPConfigGuideManifest(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected OMP manifest status 200, got %d: %s", recorder.Code, recorder.Body.String())
@@ -211,24 +287,54 @@ func TestOMPConfigGuideManifestAndFiles(t *testing.T) {
 	if err := common.Unmarshal(recorder.Body.Bytes(), &manifest); err != nil {
 		t.Fatalf("OMP manifest should be JSON: %v", err)
 	}
-	if manifest.Client != "omp" || len(manifest.Items) != 4 {
+	if manifest.Client != "omp" || len(manifest.Items) != 2 {
 		t.Fatalf("unexpected OMP manifest: %#v", manifest)
 	}
+	require.Equal(t, "models", manifest.Items[0].ID)
+	require.Equal(t, "config", manifest.Items[1].ID)
 
-	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOMPConfigGuideModels(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected OMP models status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, "omp plugin install npm:omp-openai-provider-tools@9.9.9") || !strings.Contains(body, "new-api-image:") || !strings.Contains(body, "apiKey: sk-live") {
-		t.Fatalf("unexpected OMP models.yml: %s", body)
+	for _, expected := range []string{"providers:", "new-api:", `apiKey: "sk-livetoken"`, "gpt-5", "gpt-5-mini"} {
+		require.Contains(t, body, expected)
 	}
-	if !strings.Contains(body, "    compat:\n      openaiProviderTools:\n        enabled: true") {
-		t.Fatalf("expected provider-level provider tools compat, got: %s", body)
+	for _, forbidden := range []string{"omp-openai-provider-tools", "new-api-image", "openaiProviderTools", "imageGeneration", "-Sys"} {
+		require.NotContains(t, body, forbidden)
 	}
-	if !strings.Contains(body, "        compat:\n          openaiProviderTools:\n            imageGeneration: true") {
-		t.Fatalf("expected image model to opt in to provider-native image generation, got: %s", body)
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/config.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
+	GetOMPConfigGuideConfig(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), "-Sys")
+}
+
+func TestOMPConfigGuideDoesNotRequireProviderToolsMetadata(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels(), failOnOMPProviderTools: true})
+	seedValidConfigGuideFixture(t)
+
+	targets := []string{
+		"/config-guides/omp-openai/manifest.json?api_key=sk-livetoken&base_url=https://api.example.com/v1",
+		"/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1",
+		"/config-guides/omp-openai/config.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1",
+	}
+	for _, target := range targets {
+		ctx, recorder := newAuthenticatedContext(t, http.MethodGet, target, nil, 0)
+		switch {
+		case strings.Contains(target, "manifest.json"):
+			GetOMPConfigGuideManifest(ctx)
+		case strings.Contains(target, "models.yml"):
+			GetOMPConfigGuideModels(ctx)
+		default:
+			GetOMPConfigGuideConfig(ctx)
+		}
+		require.Equal(t, http.StatusOK, recorder.Code, target+recorder.Body.String())
+		for _, forbidden := range []string{"plugin", "image-generator", "openaiProviderTools", "new-api-image", "imageGeneration", "-Sys"} {
+			require.NotContains(t, recorder.Body.String(), forbidden)
+		}
 	}
 }
 
@@ -244,8 +350,9 @@ func TestOMPConfigGuideModelsQuotesYAMLScalars(t *testing.T) {
 		models: models,
 		plugin: service.OMPProviderToolsMetadata{Package: "omp-openai-provider-tools", LatestVersion: "9.9.9", Status: "ok"},
 	})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=live&base_url=https://api.example.com/v1", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOMPConfigGuideModels(ctx)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("expected OMP models status 200, got %d: %s", recorder.Code, recorder.Body.String())
@@ -260,10 +367,26 @@ func TestOMPConfigGuideModelsQuotesYAMLScalars(t *testing.T) {
 	}
 }
 
+func TestOMPConfigGuideModelsQuotesDynamicYAMLScalars(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https%3A%2F%2Fapi.example.com%2Fv1%3A+bad", nil, 1)
+	GetOMPConfigGuideModels(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := recorder.Body.String()
+	require.Contains(t, body, `baseUrl: "https://api.example.com/v1: bad"`)
+	require.Contains(t, body, `apiKey: "sk-livetoken"`)
+
+	var parsed map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(body), &parsed), body)
+}
+
 func TestConfigGuideDerivesBaseURLFromRequest(t *testing.T) {
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
 
-	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/manifest.json?api_key=live", nil, 1)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", nil, 1)
 	ctx.Request.Host = "gateway.example.com"
 	ctx.Request.Header.Set("X-Forwarded-Proto", "https")
 	GetOpenCodeConfigGuideManifest(ctx)
@@ -288,9 +411,9 @@ func TestConfigGuideRejectsInvalidQuery(t *testing.T) {
 
 	cases := []string{
 		"/config-guides/opencode-openai/manifest.json?base_url=https://api.example.com/v1",
-		"/config-guides/opencode-openai/manifest.json?api_key=live&base_url=https://user:pass@example.com/v1",
-		"/config-guides/opencode-openai/manifest.json?api_key=live&base_url=https://api.example.com/v1?x=1",
-		"/config-guides/opencode-openai/manifest.json?api_key=live&base_url=ftp://api.example.com/v1",
+		"/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken&base_url=https://user:pass@example.com/v1",
+		"/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken&base_url=https://api.example.com/v1?x=1",
+		"/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken&base_url=ftp://api.example.com/v1",
 	}
 	for _, target := range cases {
 		ctx, recorder := newAuthenticatedContext(t, http.MethodGet, target, nil, 1)
@@ -298,5 +421,158 @@ func TestConfigGuideRejectsInvalidQuery(t *testing.T) {
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("expected 400 for %s, got %d: %s", target, recorder.Code, recorder.Body.String())
 		}
+	}
+}
+
+func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
+	cases := []struct {
+		name        string
+		tokenStatus int
+		userStatus  int
+		expiredTime int64
+		group       string
+		remainQuota int
+		allowIps    *string
+		target      string
+		wantStatus  int
+	}{
+		{name: "missing", target: "/config-guides/opencode-openai/manifest.json", wantStatus: http.StatusBadRequest},
+		{name: "unknown", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-missing", wantStatus: http.StatusUnauthorized},
+		{name: "disabled", tokenStatus: common.TokenStatusDisabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "expired status", tokenStatus: common.TokenStatusExpired, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "expired time", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: 1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "user disabled", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusDisabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "deprecated token group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "deprecated user group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusTooManyRequests},
+		{name: "enabled zero quota ok", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", remainQuota: 0, target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
+		{name: "suffix key accepted like TokenAuth", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken-extra-suffix", wantStatus: http.StatusOK},
+		{name: "control character", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-live%0A-token", wantStatus: http.StatusBadRequest},
+		{name: "control character around key", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=%0Ask-livetoken%0A", wantStatus: http.StatusBadRequest},
+		{name: "unicode control character around key", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=%C2%85sk-livetoken%C2%85", wantStatus: http.StatusBadRequest},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			db := setupConfigGuideTestDB(t)
+			if tc.tokenStatus != 0 {
+				userGroup := "default"
+				if tc.name == "deprecated user group" {
+					userGroup = "gone"
+				}
+				seedConfigGuideUser(t, db, 10, userGroup, tc.userStatus)
+				token := seedConfigGuideToken(t, db, 10, "livetoken", tc.tokenStatus, tc.expiredTime, tc.group, true, "", tc.allowIps)
+				if tc.name == "enabled zero quota ok" {
+					token.RemainQuota = tc.remainQuota
+					require.NoError(t, db.Save(token).Error)
+				}
+				seedConfigGuideAbility(t, db, "default", "gpt-5")
+				seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+			}
+			withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+			ctx, recorder := newAuthenticatedContext(t, http.MethodGet, tc.target, nil, 0)
+			GetOpenCodeConfigGuideManifest(ctx)
+			require.Equal(t, tc.wantStatus, recorder.Code, recorder.Body.String())
+			if recorder.Code != http.StatusOK {
+				require.NotContains(t, recorder.Body.String(), "livetoken")
+			}
+		})
+	}
+}
+
+func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	seedConfigGuideAbility(t, db, "default", "gpt-5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5-Sys")
+	seedConfigGuideAbility(t, db, "default", "not-in-metadata")
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "no-store", recorder.Header().Get("Cache-Control"))
+	require.Equal(t, "no-cache", recorder.Header().Get("Pragma"))
+	var cfg map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &cfg))
+	models := cfg["provider"].(map[string]any)["new-api"].(map[string]any)["models"].(map[string]any)
+	require.Contains(t, models, "gpt-5")
+	require.Contains(t, models, "gpt-5-mini")
+	require.Contains(t, models, "gpt-5-fast")
+	require.NotContains(t, models, "not-in-metadata")
+	for id := range models {
+		require.NotContains(t, id, "-Sys")
+	}
+}
+
+func TestConfigGuideTokenModelLimitsNormalizeSysBeforeBillingFilter(t *testing.T) {
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "gpt-5-Sys,gpt-5-mini", nil)
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NotContains(t, recorder.Body.String(), "-Sys")
+	require.Contains(t, recorder.Body.String(), "gpt-5")
+}
+
+func TestBuildConfigGuideEffectiveModels(t *testing.T) {
+	baseModels := configGuideTestModels()
+	cases := []struct {
+		name            string
+		client          configGuideClient
+		availableModels []string
+		metadata        map[string]service.OpenCodeOpenAIModel
+		want            []string
+		wantErr         bool
+	}{
+		{
+			name:            "token model limits normalize sys and intersect",
+			client:          configGuideClientOpenCode,
+			availableModels: []string{" gpt-5 ", "gpt-5-mini", "gpt-5-Sys", "not-in-metadata"},
+			metadata:        baseModels,
+			want:            []string{"gpt-5", "gpt-5-fast", "gpt-5-mini"},
+		},
+		{
+			name:            "auto group available list",
+			client:          configGuideClientOpenCode,
+			availableModels: []string{"gpt-5-mini", "gpt-5", "gpt-5", "not-in-metadata"},
+			metadata:        baseModels,
+			want:            []string{"gpt-5", "gpt-5-fast", "gpt-5-mini"},
+		},
+		{
+			name:            "omp does not synthesize fast",
+			client:          configGuideClientOMP,
+			availableModels: []string{"gpt-5", "gpt-5-mini"},
+			metadata:        baseModels,
+			want:            []string{"gpt-5", "gpt-5-mini"},
+		},
+		{
+			name:            "missing mini fails closed",
+			client:          configGuideClientOpenCode,
+			availableModels: []string{"gpt-5"},
+			metadata:        baseModels,
+			wantErr:         true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := buildConfigGuideEffectiveModels(configGuideEffectiveModelsInput{Client: tc.client, Metadata: tc.metadata, AvailableModels: tc.availableModels})
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			for _, id := range tc.want {
+				require.Contains(t, got, id)
+			}
+			require.Len(t, got, len(tc.want))
+		})
 	}
 }

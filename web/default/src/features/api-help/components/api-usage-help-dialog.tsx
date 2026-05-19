@@ -24,7 +24,12 @@ import { useTranslation } from 'react-i18next'
 import { useStatus } from '@/hooks/use-status'
 import { useAuthStore } from '@/stores/auth-store'
 import type { SystemStatus } from '@/features/auth/types'
-import { fetchTokenKeysBatch, getApiKeys, getOpenCodeOpenAIModels } from '@/features/keys/api'
+import {
+  fetchAgentConfigArtifact,
+  fetchTokenKeysBatch,
+  getApiKeys,
+  getOpenCodeOpenAIModels,
+} from '@/features/keys/api'
 import { API_KEY_STATUS } from '@/features/keys/constants'
 import type { ModelOption } from '@/features/playground/types'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -44,18 +49,20 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { CopyButton } from '@/components/copy-button'
 import {
+  buildAgentConfigArtifactPath,
+  buildAgentConfigArtifactQueryKey,
   buildAgentConfigGuideInstruction,
+  buildAgentConfigSections,
   buildCherryStudioConfig,
   buildContinueConfig,
   buildGenericEnvConfig,
   buildGenericJsonConfig,
-  buildOmpModelsConfig,
-  buildOmpSettingsConfig,
-  buildOmpImageGeneratorConfig,
-  buildOmpPluginInstructions,
   buildOpenAIBaseUrl,
-  buildOpenCodeConfig,
+  buildOpenCodeMetadataQueryKey,
+  canFetchAgentConfigArtifacts,
+  type AgentConfigArtifactFile,
   type AgentConfigGuideClient,
+  type ConfigFile,
   type OpenCodeOpenAIModel,
 } from '../lib/usage-config'
 
@@ -65,16 +72,15 @@ type ApiHelpKey = {
   key: string
 }
 
-type ConfigFile = {
-  path: string
-  content: string
-  hint?: string
-}
-
 const REQUIRED_OPENCODE_MODEL_IDS = ['gpt-5'] as const
 const REQUIRED_OMP_MODEL_IDS = ['gpt-5', 'gpt-5-mini'] as const
 
 type MetadataState = 'loading' | 'ready' | 'unavailable'
+
+type ArtifactQueryResult = {
+  selectedKeyId: string
+  content: string
+}
 
 function metadataNoticeText(
   state: MetadataState,
@@ -97,6 +103,7 @@ function missingModelIds(
   if (!models) return [...requiredIds]
   return requiredIds.filter((id) => !models[id])
 }
+
 type ApiUsageHelpDialogProps = {
   modelValue: string
   models: ModelOption[]
@@ -230,31 +237,32 @@ function AutoConfigCard(props: {
   missingIds?: string[]
 }) {
   const { t } = useTranslation()
-  const ready = props.state === 'ready'
-  const instruction = buildAgentConfigGuideInstruction(
-    props.serverAddress,
-    props.client,
-    props.apiKey
-  )
+  const ready = props.state === 'ready' && Boolean(props.apiKey)
+  const instruction = ready
+    ? buildAgentConfigGuideInstruction(props.serverAddress, props.client, props.apiKey)
+    : ''
   const label = props.client === 'omp' ? 'OMP' : 'OpenCode'
 
   return (
     <div className='rounded-xl border bg-muted/30 p-3'>
-      <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
-        <div className='min-w-0 space-y-1'>
+      <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
+        <div className='min-w-0 space-y-2'>
           <div className='flex items-center gap-2 text-sm font-medium'>
             <WandSparkles className='size-4 text-primary' />
             {t('AI auto-configuration')}
           </div>
           <p className='text-muted-foreground text-xs'>
             {ready
-              ? t('Copy a manifest URL that another AI agent can fetch to configure {{client}} automatically.', {
-                  client: label,
-                })
+              ? t(
+                  'Copy this visible instruction into your AI agent; it will fetch the manifest and configuration files directly from this gateway.'
+                )
               : metadataNoticeText(props.state, props.missingIds, t)}
           </p>
+          {ready ? (
+            <p className='break-all font-mono text-xs'>{instruction}</p>
+          ) : null}
         </div>
-        {ready && props.apiKey ? (
+        {ready ? (
           <CopyButton
             value={instruction}
             variant='outline'
@@ -278,6 +286,13 @@ function AutoConfigCard(props: {
           </Button>
         )}
       </div>
+      {ready ? (
+        <p className='text-muted-foreground mt-2 text-xs'>
+          {t('Configuration is loaded from the backend after the selected API key is verified.', {
+            client: label,
+          })}
+        </p>
+      ) : null}
     </div>
   )
 }
@@ -303,7 +318,7 @@ function KeySelector(props: {
   }
 
   return (
-    <div className='min-w-56 space-y-1.5'>
+    <div className='w-full space-y-1.5 md:w-64'>
       <div className='text-muted-foreground text-xs font-medium'>
         {t('API Key')}
       </div>
@@ -321,6 +336,29 @@ function KeySelector(props: {
   )
 }
 
+function useAgentConfigArtifact(
+  input: {
+    client: AgentConfigGuideClient
+    file: AgentConfigArtifactFile
+    selectedKeyId: string
+    apiKey: string
+    serverAddress: string
+    enabled: boolean
+  }
+) {
+  return useQuery({
+    queryKey: buildAgentConfigArtifactQueryKey(input),
+    queryFn: async (): Promise<ArtifactQueryResult> => {
+      const content = await fetchAgentConfigArtifact(
+        buildAgentConfigArtifactPath(input.client, input.file, input.apiKey, input.serverAddress)
+      )
+      return { selectedKeyId: input.selectedKeyId, content }
+    },
+    enabled: input.enabled,
+    staleTime: 15 * 60 * 1000,
+  })
+}
+
 export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
@@ -334,134 +372,148 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
     enabled: open && Boolean(userId),
     staleTime: 5 * 60 * 1000,
   })
+
+  const apiKeys = apiKeysQuery.data ?? []
+  const selectedApiKey = selectedKeyId ? apiKeys.find((item) => String(item.id) === selectedKeyId) : undefined
+  const currentSelectedKeyId = selectedApiKey ? String(selectedApiKey.id) : ''
+  const apiKey = selectedApiKey?.key ?? ''
+  const selectedModel = props.modelValue || props.models[0]?.value || 'gpt-4o-mini'
+  const baseUrl = buildOpenAIBaseUrl(serverAddress)
+
   const metadataQuery = useQuery({
-    queryKey: ['api-help', 'opencode-openai-models', userId],
+    queryKey: buildOpenCodeMetadataQueryKey(selectedKeyId),
     queryFn: async () => {
-      const result = await getOpenCodeOpenAIModels()
-      return result.success ? result.data : undefined
+      if (!selectedApiKey) return undefined
+      const result = await getOpenCodeOpenAIModels(selectedApiKey.id)
+      return result.success
+        ? { selectedKeyId: String(selectedApiKey.id), data: result.data }
+        : undefined
     },
-    enabled: open && Boolean(userId),
+    enabled: open && Boolean(selectedKeyId) && Boolean(selectedApiKey),
     staleTime: 15 * 60 * 1000,
   })
 
-  const apiKeys = apiKeysQuery.data ?? []
-  const selectedApiKey =
-    apiKeys.find((item) => String(item.id) === selectedKeyId) ?? apiKeys[0]
-  const apiKey = selectedApiKey?.key ?? ''
-  const selectedModel =
-    props.modelValue || props.models[0]?.value || 'gpt-4o-mini'
-  const baseUrl = buildOpenAIBaseUrl(serverAddress)
-  const metadata = metadataQuery.data
+  const metadata = metadataQuery.data?.selectedKeyId === currentSelectedKeyId ? metadataQuery.data.data : undefined
   const openCodeModels = metadata?.models
-  const ompPluginVersion = metadata?.omp_openai_provider_tools?.latest_version ?? ''
   const opencodeMissingIds = missingModelIds(openCodeModels, REQUIRED_OPENCODE_MODEL_IDS)
   const ompMissingIds = missingModelIds(openCodeModels, REQUIRED_OMP_MODEL_IDS)
-  const pluginStatus = metadata?.omp_openai_provider_tools?.status
-  const opencodeMetadataState: MetadataState = metadataQuery.isLoading
+  const metadataLoading = Boolean(selectedKeyId) && metadataQuery.isLoading
+  const opencodeMetadataState: MetadataState = metadataLoading
     ? 'loading'
     : openCodeModels && opencodeMissingIds.length === 0
       ? 'ready'
       : 'unavailable'
-  const ompMetadataState: MetadataState = metadataQuery.isLoading
+  const ompMetadataState: MetadataState = metadataLoading
     ? 'loading'
-    : openCodeModels &&
-        ompMissingIds.length === 0 &&
-        Boolean(ompPluginVersion) &&
-        (pluginStatus === 'ok' || pluginStatus === 'cached')
+    : openCodeModels && ompMissingIds.length === 0
       ? 'ready'
       : 'unavailable'
 
+  const canFetchOpenCodeArtifacts = canFetchAgentConfigArtifacts({
+    selectedKeyId: currentSelectedKeyId,
+    metadataReady: opencodeMetadataState === 'ready',
+    apiKey,
+  })
+  const canFetchOMPArtifacts = canFetchAgentConfigArtifacts({
+    selectedKeyId: currentSelectedKeyId,
+    metadataReady: ompMetadataState === 'ready',
+    apiKey,
+  })
+
+  const opencodeArtifactQuery = useAgentConfigArtifact({
+    client: 'opencode',
+    file: 'opencode.json',
+    selectedKeyId: currentSelectedKeyId,
+    apiKey,
+    serverAddress,
+    enabled: canFetchOpenCodeArtifacts,
+  })
+  const ompModelsArtifactQuery = useAgentConfigArtifact({
+    client: 'omp',
+    file: 'models.yml',
+    selectedKeyId: currentSelectedKeyId,
+    apiKey,
+    serverAddress,
+    enabled: canFetchOMPArtifacts,
+  })
+  const ompConfigArtifactQuery = useAgentConfigArtifact({
+    client: 'omp',
+    file: 'config.yml',
+    selectedKeyId: currentSelectedKeyId,
+    apiKey,
+    serverAddress,
+    enabled: canFetchOMPArtifacts,
+  })
+
+  const opencodeContent = opencodeArtifactQuery.data?.selectedKeyId === currentSelectedKeyId
+    ? opencodeArtifactQuery.data.content
+    : undefined
+  const ompModelsContent = ompModelsArtifactQuery.data?.selectedKeyId === currentSelectedKeyId
+    ? ompModelsArtifactQuery.data.content
+    : undefined
+  const ompConfigContent = ompConfigArtifactQuery.data?.selectedKeyId === currentSelectedKeyId
+    ? ompConfigArtifactQuery.data.content
+    : undefined
+
+  const hasSelectedApiKey = Boolean(currentSelectedKeyId) && Boolean(apiKey)
+  const opencodeArtifactReady = canFetchOpenCodeArtifacts && Boolean(opencodeContent) && !opencodeArtifactQuery.isError
+  const ompArtifactsReady = canFetchOMPArtifacts && Boolean(ompModelsContent) && Boolean(ompConfigContent) && !ompModelsArtifactQuery.isError && !ompConfigArtifactQuery.isError
+
   const opencodeFiles = useMemo<ConfigFile[]>(
-    () => [
-      {
-        path: 'opencode.json',
-        content: buildOpenCodeConfig(
-          serverAddress,
-          apiKey,
-          selectedModel,
-          opencodeMetadataState === 'ready' ? openCodeModels : undefined
-        ),
-        hint: t('Place this file in ~/.config/opencode/opencode.json, then run opencode.'),
+    () => buildAgentConfigSections({
+      client: 'opencode',
+      ready: opencodeArtifactReady,
+      artifacts: {
+        'opencode.json': opencodeContent,
       },
-    ],
-    [apiKey, openCodeModels, opencodeMetadataState, selectedModel, serverAddress, t]
+    }),
+    [opencodeArtifactReady, opencodeContent]
   )
 
   const ompFiles = useMemo<ConfigFile[]>(
-    () => {
-      if (ompMetadataState === 'ready') {
-        return [
-          {
-            path: t('1. Install OMP provider tools plugin'),
-            content: buildOmpPluginInstructions(ompPluginVersion),
-            hint: t('Run these commands before using provider-native web search or image generation.'),
-          },
-          {
-            path: '~/.omp/agent/models.yml',
-            content: buildOmpModelsConfig(
-              serverAddress,
-              apiKey,
-              selectedModel,
-              openCodeModels,
-              ompPluginVersion
-            ),
-            hint: t('Register this gateway as an OMP OpenAI Responses provider.'),
-          },
-          {
-            path: '~/.omp/agent/config.yml',
-            content: buildOmpSettingsConfig(selectedModel, openCodeModels),
-            hint: t('Point OMP model roles at the gateway model.'),
-          },
-          {
-            path: '~/.omp/agent/agents/image-generator.md',
-            content: buildOmpImageGeneratorConfig(),
-            hint: t('Optional image-generation subagent template for OMP.'),
-          },
-        ]
-      }
-
-      return [
-        {
-          path: '~/.omp/agent/models.yml',
-          content: buildOmpModelsConfig(serverAddress, apiKey, selectedModel),
-          hint: t('Register this gateway as an OMP OpenAI Responses provider.'),
-        },
-        {
-          path: '~/.omp/agent/config.yml',
-          content: buildOmpSettingsConfig(selectedModel),
-          hint: t('Point OMP model roles at the gateway model.'),
-        },
-      ]
-    },
-    [apiKey, ompMetadataState, ompPluginVersion, openCodeModels, selectedModel, serverAddress, t]
+    () => buildAgentConfigSections({
+      client: 'omp',
+      ready: ompArtifactsReady,
+      artifacts: {
+        'models.yml': ompModelsContent,
+        'config.yml': ompConfigContent,
+      },
+    }),
+    [ompArtifactsReady, ompConfigContent, ompModelsContent]
   )
 
   const genericFiles = useMemo<ConfigFile[]>(
-    () => [
-      {
-        path: '.env',
-        content: buildGenericEnvConfig(serverAddress, apiKey),
-      },
-      {
-        path: t('OpenAI-compatible JSON'),
-        content: buildGenericJsonConfig(serverAddress, apiKey),
-      },
-    ],
-    [apiKey, serverAddress, t]
+    () => {
+      if (!hasSelectedApiKey) return []
+      return [
+        {
+          path: '.env',
+          content: buildGenericEnvConfig(serverAddress, apiKey),
+        },
+        {
+          path: t('OpenAI-compatible JSON'),
+          content: buildGenericJsonConfig(serverAddress, apiKey),
+        },
+      ]
+    },
+    [apiKey, hasSelectedApiKey, serverAddress, t]
   )
 
   const appFiles = useMemo<ConfigFile[]>(
-    () => [
-      {
-        path: t('Cherry Studio provider import payload'),
-        content: buildCherryStudioConfig(serverAddress, apiKey),
-      },
-      {
-        path: t('Continue config snippet'),
-        content: buildContinueConfig(serverAddress, apiKey, selectedModel),
-      },
-    ],
-    [apiKey, selectedModel, serverAddress, t]
+    () => {
+      if (!hasSelectedApiKey) return []
+      return [
+        {
+          path: t('Cherry Studio provider import payload'),
+          content: buildCherryStudioConfig(serverAddress, apiKey),
+        },
+        {
+          path: t('Continue config snippet'),
+          content: buildContinueConfig(serverAddress, apiKey, selectedModel),
+        },
+      ]
+    },
+    [apiKey, hasSelectedApiKey, selectedModel, serverAddress, t]
   )
 
   const defaultTrigger = (
@@ -474,8 +526,8 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger render={props.trigger ?? defaultTrigger} />
-      <DialogContent className='flex max-h-[92vh] min-h-0 max-w-[calc(100%-1rem)] grid-rows-none flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl'>
-        <DialogHeader className='p-4 pb-3 sm:p-5 sm:pb-4'>
+      <DialogContent className='flex max-h-[92vh] min-h-0 max-w-[calc(100%-1rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl'>
+        <DialogHeader className='shrink-0 p-4 pb-3 sm:p-5 sm:pb-4'>
           <DialogTitle>{t('API Usage Help')}</DialogTitle>
           <DialogDescription>
             {t(
@@ -484,7 +536,7 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
           </DialogDescription>
         </DialogHeader>
 
-        <div className='border-y px-4 py-3 sm:px-5'>
+        <div className='shrink-0 border-y px-4 py-3 sm:px-5'>
           <div className='flex flex-col gap-3 md:flex-row md:items-center md:justify-between'>
             <div className='min-w-0 space-y-1 text-sm'>
               <div className='text-muted-foreground flex items-center gap-2'>
@@ -495,93 +547,107 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
             </div>
             <KeySelector
               apiKeys={apiKeys}
-              selectedKeyId={selectedApiKey ? String(selectedApiKey.id) : ''}
+              selectedKeyId={currentSelectedKeyId}
               onSelect={setSelectedKeyId}
             />
           </div>
         </div>
 
-        <ScrollArea className='min-h-0 flex-1'>
-          <div className='p-4 sm:p-5'>
-            <Tabs defaultValue='opencode' className='gap-4'>
-              <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
-                <TabsList className='h-auto max-w-full flex-wrap justify-start'>
-                  <TabsTrigger value='opencode' className='gap-1.5'>
-                    <TerminalSquare className='size-4' />
-                    OpenCode
-                  </TabsTrigger>
-                  <TabsTrigger value='omp' className='gap-1.5'>
-                    <Settings2 className='size-4' />
-                    OMP
-                  </TabsTrigger>
-                  <TabsTrigger value='generic'>{t('Generic')}</TabsTrigger>
-                  <TabsTrigger value='apps'>{t('Common Apps')}</TabsTrigger>
-                </TabsList>
-                <div className='flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground'>
-                  <Cpu className='size-3.5' />
-                  {t('AI auto-configuration uses models.dev metadata when available.')}
+        <div className='min-h-0 flex-1 overflow-hidden'>
+          <ScrollArea className='h-full min-h-0'>
+            <div className='p-4 sm:p-5'>
+              <Tabs defaultValue='opencode' className='gap-4'>
+                <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
+                  <TabsList className='h-auto max-w-full flex-wrap justify-start'>
+                    <TabsTrigger value='opencode' className='gap-1.5'>
+                      <TerminalSquare className='size-4' />
+                      OpenCode
+                    </TabsTrigger>
+                    <TabsTrigger value='omp' className='gap-1.5'>
+                      <Settings2 className='size-4' />
+                      OMP
+                    </TabsTrigger>
+                    <TabsTrigger value='generic'>{t('Generic')}</TabsTrigger>
+                    <TabsTrigger value='apps'>{t('Common Apps')}</TabsTrigger>
+                  </TabsList>
+                  <div className='flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-1.5 text-xs text-muted-foreground'>
+                    <Cpu className='size-3.5' />
+                    {t('Configuration is loaded from the backend after the selected API key is verified.')}
+                  </div>
                 </div>
-              </div>
 
-              <TabsContent value='opencode' className='space-y-3'>
-                <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'Use the Playground-selected model in OpenCode through an OpenAI-compatible provider.'
-                  )}
-                </p>
-                <AutoConfigCard
-                  client='opencode'
-                  serverAddress={serverAddress}
-                  apiKey={apiKey}
-                  state={opencodeMetadataState}
-                  missingIds={opencodeMissingIds}
-                />
-                <MetadataNotice
-                  state={opencodeMetadataState}
-                  missingIds={opencodeMissingIds}
-                />
-                <ConfigFileList files={opencodeFiles} />
-              </TabsContent>
+                <TabsContent value='opencode' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Use the Playground-selected model in OpenCode through an OpenAI-compatible provider.'
+                    )}
+                  </p>
+                  <AutoConfigCard
+                    client='opencode'
+                    serverAddress={serverAddress}
+                    apiKey={apiKey}
+                    state={opencodeArtifactReady ? opencodeMetadataState : 'unavailable'}
+                    missingIds={opencodeMissingIds}
+                  />
+                  <MetadataNotice
+                    state={opencodeMetadataState}
+                    missingIds={opencodeMissingIds}
+                  />
+                  {canFetchOpenCodeArtifacts && opencodeArtifactQuery.isLoading ? (
+                    <Alert><AlertDescription>{t('Configuration file is loading...')}</AlertDescription></Alert>
+                  ) : null}
+                  {canFetchOpenCodeArtifacts && opencodeArtifactQuery.isError ? (
+                    <Alert><AlertDescription>{t('Configuration file is unavailable.')}</AlertDescription></Alert>
+                  ) : null}
+                  <ConfigFileList files={opencodeFiles} />
+                </TabsContent>
 
-              <TabsContent value='omp' className='space-y-3'>
-                <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'Register the same OpenAI Responses endpoint in Oh My Pi and map model roles to it.'
-                  )}
-                </p>
-                <AutoConfigCard
-                  client='omp'
-                  serverAddress={serverAddress}
-                  apiKey={apiKey}
-                  state={ompMetadataState}
-                  missingIds={ompMissingIds}
-                />
-                <MetadataNotice state={ompMetadataState} missingIds={ompMissingIds} />
-                <ConfigFileList files={ompFiles} />
-              </TabsContent>
+                <TabsContent value='omp' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Register the same OpenAI Responses endpoint in Oh My Pi and map model roles to it.'
+                    )}
+                  </p>
+                  <AutoConfigCard
+                    client='omp'
+                    serverAddress={serverAddress}
+                    apiKey={apiKey}
+                    state={ompArtifactsReady ? ompMetadataState : 'unavailable'}
+                    missingIds={ompMissingIds}
+                  />
+                  <MetadataNotice state={ompMetadataState} missingIds={ompMissingIds} />
+                  {canFetchOMPArtifacts && (ompModelsArtifactQuery.isLoading || ompConfigArtifactQuery.isLoading) ? (
+                    <Alert><AlertDescription>{t('Configuration file is loading...')}</AlertDescription></Alert>
+                  ) : null}
+                  {canFetchOMPArtifacts && (ompModelsArtifactQuery.isError || ompConfigArtifactQuery.isError) ? (
+                    <Alert><AlertDescription>{t('Configuration file is unavailable.')}</AlertDescription></Alert>
+                  ) : null}
+                  <ConfigFileList files={ompFiles} />
+                </TabsContent>
 
-              <TabsContent value='generic' className='space-y-3'>
-                <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'Use these values in SDKs, scripts, Chatbox, LobeChat, NextChat, or any OpenAI-compatible client.'
-                  )}
-                </p>
-                <ConfigFileList files={genericFiles} />
-              </TabsContent>
+                <TabsContent value='generic' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Use these values in SDKs, scripts, Chatbox, LobeChat, NextChat, or any OpenAI-compatible client.'
+                    )}
+                  </p>
+                  <ConfigFileList files={genericFiles} />
+                </TabsContent>
 
-              <TabsContent value='apps' className='space-y-3'>
-                <p className='text-muted-foreground text-sm'>
-                  {t(
-                    'These snippets replace the old standalone application guides and keep setup next to Playground testing.'
-                  )}
-                </p>
-                <ConfigFileList files={appFiles} />
-              </TabsContent>
-            </Tabs>
-          </div>
-        </ScrollArea>
+                <TabsContent value='apps' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'These snippets replace the old standalone application guides and keep setup next to Playground testing.'
+                    )}
+                  </p>
+                  <ConfigFileList files={appFiles} />
+                </TabsContent>
+              </Tabs>
+            </div>
+          </ScrollArea>
+        </div>
 
-        <DialogFooter className='shrink-0 gap-2'>
+        <DialogFooter className='mx-0 mb-0 shrink-0 gap-2 p-4 pt-3 sm:p-5 sm:pt-4'>
           <Button variant='outline' render={<Link to='/keys' />}>
             <KeyRound data-icon='inline-start' />
             {t('Create API Key')}

@@ -31,4 +31,38 @@ describe('api help key loading', () => {
     assert.match(source, /activeItems\.length < API_HELP_KEY_LIMIT/)
     assert.match(source, /page <= totalPages/)
   })
+
+  test('uses backend artifacts instead of frontend OpenCode or OMP renderers', () => {
+    assert.doesNotMatch(source, /buildOpenCodeConfig/)
+    assert.doesNotMatch(source, /buildOmpModelsConfig/)
+    assert.doesNotMatch(source, /buildOmpSettingsConfig/)
+    assert.doesNotMatch(source, /buildOmpPluginInstructions/)
+    assert.doesNotMatch(source, /buildOmpImageGeneratorConfig/)
+    assert.match(source, /fetchAgentConfigArtifact/)
+    assert.match(source, /opencode\.json/)
+    assert.match(source, /models\.yml/)
+    assert.match(source, /config\.yml/)
+  })
+
+  test('metadata query is keyed by the explicitly selected API key', () => {
+    assert.match(source, /const selectedApiKey = selectedKeyId \? apiKeys\.find/)
+    assert.match(source, /buildOpenCodeMetadataQueryKey\(selectedKeyId\)/)
+    assert.match(source, /enabled:\s*open\s*&&\s*Boolean\(selectedKeyId\)/)
+    assert.match(source, /getOpenCodeOpenAIModels\(selectedApiKey\.id\)/)
+  })
+
+  test('dialog uses fixed flex shell with a bounded scroll body', () => {
+    assert.match(source, /DialogContent className='flex max-h-\[92vh\][^']*flex-col[^']*overflow-hidden/)
+    assert.match(source, /<div className='min-h-0 flex-1 overflow-hidden'>/)
+    assert.match(source, /<ScrollArea className='h-full min-h-0'>/)
+    assert.match(source, /DialogFooter className='mx-0 mb-0 shrink-0/)
+    assert.doesNotMatch(source, /grid-rows-none/)
+  })
+
+  test('hides ready config blocks until an API key and backend artifacts are available', () => {
+    assert.match(source, /const hasSelectedApiKey = Boolean\(currentSelectedKeyId\) && Boolean\(apiKey\)/)
+    assert.match(source, /if \(!hasSelectedApiKey\) return \[\]/)
+    assert.match(source, /state=\{opencodeArtifactReady \? opencodeMetadataState : 'unavailable'\}/)
+    assert.match(source, /state=\{ompArtifactsReady \? ompMetadataState : 'unavailable'\}/)
+  })
 })

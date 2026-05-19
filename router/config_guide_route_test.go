@@ -36,3 +36,18 @@ func TestConfigGuideRouteReturnsJSONBeforeWebFallback(t *testing.T) {
 		t.Fatalf("unexpected route response: %#v", response)
 	}
 }
+
+func TestOMPConfigGuidePluginAndImageGeneratorRoutesAreNotRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	SetConfigGuideRouter(engine)
+
+	for _, path := range []string{"/config-guides/omp-openai/plugin.txt", "/config-guides/omp-openai/image-generator.md"} {
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path+"?api_key=sk-livetoken", nil)
+		engine.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("expected %s to be unregistered with 404, got %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+	}
+}

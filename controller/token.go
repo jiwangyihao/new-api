@@ -31,6 +31,20 @@ func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
 	return maskedTokens
 }
 
+func GetOpenCodeOpenAIModels(c *gin.Context) {
+	metadataService := getOpenCodeMetadataProvider()
+	models, err := metadataService.GetOpenAIModels(c.Request.Context())
+	if err != nil || len(models) == 0 {
+		common.ApiErrorMsg(c, "OpenCode OpenAI model metadata unavailable")
+		return
+	}
+
+	common.ApiSuccess(c, gin.H{
+		"models":                    models,
+		"omp_openai_provider_tools": metadataService.GetOMPProviderToolsMetadata(c.Request.Context()),
+	})
+}
+
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)

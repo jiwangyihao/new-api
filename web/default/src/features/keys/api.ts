@@ -25,6 +25,7 @@ import type {
   SearchApiKeysParams,
   ApiKeyFormData,
 } from './types'
+import type { OpenCodeOpenAIModelsResponse } from '@/features/api-help/lib/usage-config'
 
 // ============================================================================
 // API Key Management
@@ -113,5 +114,14 @@ export async function fetchTokenKeysBatch(ids: number[]): Promise<{
   data?: { keys: Record<number, string> }
 }> {
   const res = await api.post('/api/token/batch/keys', { ids })
+  return res.data
+}
+
+export async function getOpenCodeOpenAIModels(): Promise<{
+  success: boolean
+  message?: string
+  data?: OpenCodeOpenAIModelsResponse
+}> {
+  const res = await api.get('/api/token/opencode/openai-models')
   return res.data
 }

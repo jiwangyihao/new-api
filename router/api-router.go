@@ -148,6 +148,12 @@ func SetApiRouter(router *gin.Engine) {
 			}
 		}
 
+		// Public subscription plan listing for the default homepage.
+		subscriptionPublicRoute := apiRouter.Group("/subscription/public")
+		{
+			subscriptionPublicRoute.GET("/plans", controller.GetPublicSubscriptionPlans)
+		}
+
 		// Subscription billing (plans, purchase, admin management)
 		subscriptionRoute := apiRouter.Group("/subscription")
 		subscriptionRoute.Use(middleware.UserAuth())

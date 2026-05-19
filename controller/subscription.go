@@ -17,6 +17,42 @@ type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+type PublicSubscriptionPlan struct {
+	Id                int     `json:"id"`
+	Title             string  `json:"title"`
+	Subtitle          string  `json:"subtitle"`
+	PriceAmount       float64 `json:"price_amount"`
+	Currency          string  `json:"currency"`
+	DurationUnit      string  `json:"duration_unit"`
+	DurationValue     int     `json:"duration_value"`
+	CustomSeconds     int64   `json:"custom_seconds"`
+	MonthlyTokenLimit int64   `json:"monthly_token_limit"`
+	ConcurrencyLimit  int     `json:"concurrency_limit"`
+	PublicVisible     bool    `json:"public_visible"`
+}
+
+type PublicSubscriptionPlanDTO struct {
+	Plan PublicSubscriptionPlan `json:"plan"`
+}
+
+func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDTO {
+	return PublicSubscriptionPlanDTO{
+		Plan: PublicSubscriptionPlan{
+			Id:                p.Id,
+			Title:             p.Title,
+			Subtitle:          p.Subtitle,
+			PriceAmount:       p.PriceAmount,
+			Currency:          p.Currency,
+			DurationUnit:      p.DurationUnit,
+			DurationValue:     p.DurationValue,
+			CustomSeconds:     p.CustomSeconds,
+			MonthlyTokenLimit: p.MonthlyTokenLimit,
+			ConcurrencyLimit:  p.ConcurrencyLimit,
+			PublicVisible:     p.PublicVisible,
+		},
+	}
+}
+
 type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
 }
@@ -42,6 +78,19 @@ func GetSubscriptionPlans(c *gin.Context) {
 		result = append(result, SubscriptionPlanDTO{
 			Plan: p,
 		})
+	}
+	common.ApiSuccess(c, result)
+}
+
+func GetPublicSubscriptionPlans(c *gin.Context) {
+	var plans []model.SubscriptionPlan
+	if err := model.DB.Where("enabled = ? AND public_visible = ? AND is_trial = ?", true, true, false).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	result := make([]PublicSubscriptionPlanDTO, 0, len(plans))
+	for _, p := range plans {
+		result = append(result, toPublicSubscriptionPlan(p))
 	}
 	common.ApiSuccess(c, result)
 }
@@ -73,7 +122,7 @@ func GetSubscriptionSelf(c *gin.Context) {
 		"billing_preference": pref,
 		"subscriptions":      activeSubscriptions, // all active subscriptions
 		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
-		"summary":           summary,
+		"summary":            summary,
 	})
 }
 

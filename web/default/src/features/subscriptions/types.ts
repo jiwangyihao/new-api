@@ -56,6 +56,24 @@ export interface PlanRecord {
   plan: SubscriptionPlan
 }
 
+export interface PublicSubscriptionPlan {
+  id: number
+  title: string
+  subtitle: string
+  price_amount: number
+  currency: string
+  duration_unit: SubscriptionPlan['duration_unit']
+  duration_value: number
+  custom_seconds: number
+  monthly_token_limit: number
+  concurrency_limit: number
+  public_visible: boolean
+}
+
+export interface PublicPlanRecord {
+  plan: PublicSubscriptionPlan
+}
+
 // ============================================================================
 // User Subscription Schema & Types
 // ============================================================================

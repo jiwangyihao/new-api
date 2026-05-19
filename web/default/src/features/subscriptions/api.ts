@@ -20,6 +20,7 @@ import { api } from '@/lib/api'
 import type {
   ApiResponse,
   PlanRecord,
+  PublicPlanRecord,
   PlanPayload,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
@@ -177,6 +178,20 @@ export async function getPublicPlans(): Promise<ApiResponse<PlanRecord[]>> {
   return res.data
 }
 
+export async function getHomePublicPlansQuiet(): Promise<
+  ApiResponse<PublicPlanRecord[]>
+> {
+  try {
+    const res = await api.get('/api/subscription/public/plans', {
+      skipErrorHandler: true,
+      skipBusinessError: true,
+      disableDuplicate: true,
+    } as Record<string, unknown>)
+    return res.data
+  } catch {
+    return { success: false, data: [] }
+  }
+}
 
 export async function getGroups(): Promise<ApiResponse<string[]>> {
   const res = await api.get('/api/group')

@@ -21,8 +21,14 @@ import type { SubscriptionPlan } from '../types'
 
 type TranslationFn = (key: string, options?: Record<string, unknown>) => string
 
+type DurationPlanLike = {
+  duration_unit?: SubscriptionPlan['duration_unit'] | string
+  duration_value?: number
+  custom_seconds?: number
+}
+
 export function formatDuration(
-  plan: Partial<SubscriptionPlan>,
+  plan: DurationPlanLike,
   t: TranslationFn
 ): string {
   const unit = plan?.duration_unit || 'month'

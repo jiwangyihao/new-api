@@ -137,16 +137,8 @@ func createBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.Subsc
 		return false, err
 	}
 
-	if plan.MaxPurchasePerUser > 0 {
-		var count int64
-		if err := tx.Model(&model.UserSubscription{}).
-			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
-			Count(&count).Error; err != nil {
-			return false, err
-		}
-		if count >= int64(plan.MaxPurchasePerUser) {
-			return false, errors.New("已达到该套餐购买上限")
-		}
+	if err := validateSubscriptionPurchaseLimitTx(tx, userId, plan); err != nil {
+		return false, err
 	}
 
 	if err := model.DeductUserAccountBalanceTx(tx, userId, amount); err != nil {

@@ -1,6 +1,11 @@
 package controller
 
-import "github.com/QuantumNous/new-api/model"
+import (
+	"errors"
+
+	"github.com/QuantumNous/new-api/model"
+	"gorm.io/gorm"
+)
 
 func validatePurchasableSubscriptionPlan(plan *model.SubscriptionPlan) string {
 	if plan == nil {
@@ -13,4 +18,36 @@ func validatePurchasableSubscriptionPlan(plan *model.SubscriptionPlan) string {
 		return "套餐不可购买"
 	}
 	return ""
+}
+
+func validateSubscriptionPurchaseLimit(userId int, plan *model.SubscriptionPlan) error {
+	if plan == nil || plan.MaxPurchasePerUser <= 0 {
+		return nil
+	}
+
+	count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+	if err != nil {
+		return err
+	}
+	if count >= int64(plan.MaxPurchasePerUser) {
+		return errors.New("已达到该套餐购买上限")
+	}
+	return nil
+}
+
+func validateSubscriptionPurchaseLimitTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan) error {
+	if tx == nil || plan == nil || plan.MaxPurchasePerUser <= 0 {
+		return nil
+	}
+
+	var count int64
+	if err := tx.Model(&model.UserSubscription{}).
+		Where("user_id = ? AND plan_id = ?", userId, plan.Id).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count >= int64(plan.MaxPurchasePerUser) {
+		return errors.New("已达到该套餐购买上限")
+	}
+	return nil
 }

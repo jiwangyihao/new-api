@@ -466,6 +466,17 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+	nowUnix := getDBTimestampTx(tx)
+	now := time.Unix(nowUnix, 0)
+	var existing UserSubscription
+	existingQuery := tx.Set("gorm:query_option", "FOR UPDATE").
+		Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ?", userId, plan.Id, "active", nowUnix).
+		Order("end_time desc, id desc").
+		Limit(1).
+		Find(&existing)
+	if existingQuery.Error != nil {
+		return nil, existingQuery.Error
+	}
 	if plan.MaxPurchasePerUser > 0 {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
@@ -477,9 +488,11 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, errors.New("已达到该套餐购买上限")
 		}
 	}
-	nowUnix := getDBTimestampTx(tx)
-	now := time.Unix(nowUnix, 0)
-	endUnix, err := calcPlanEndTime(now, plan)
+	start := now
+	if existingQuery.RowsAffected > 0 {
+		start = time.Unix(existing.EndTime, 0)
+	}
+	endUnix, err := calcPlanEndTime(start, plan)
 	if err != nil {
 		return nil, err
 	}
@@ -504,6 +517,49 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			}
 		}
 	}
+	if existingQuery.RowsAffected > 0 {
+		existing.EndTime = endUnix
+		existing.TokenLimit = plan.MonthlyTokenLimit
+		existing.ConcurrencyLimit = plan.ConcurrencyLimit
+		if strings.TrimSpace(existing.GrantReason) == "" {
+			existing.GrantReason = source
+		}
+		if strings.TrimSpace(existing.Source) == "" {
+			existing.Source = source
+		}
+		existing.NextResetTime = nextReset
+		if upgradeGroup != "" {
+			existing.UpgradeGroup = upgradeGroup
+			if prevGroup != "" && strings.TrimSpace(existing.PrevUserGroup) == "" {
+				existing.PrevUserGroup = prevGroup
+			}
+		}
+		existing.UpdatedAt = common.GetTimestamp()
+		fields := []string{
+			"end_time",
+			"token_limit",
+			"concurrency_limit",
+			"next_reset_time",
+			"updated_at",
+		}
+		if strings.TrimSpace(existing.GrantReason) == source {
+			fields = append(fields, "grant_reason")
+		}
+		if strings.TrimSpace(existing.Source) == source {
+			fields = append(fields, "source")
+		}
+		if upgradeGroup != "" {
+			fields = append(fields, "upgrade_group")
+			if prevGroup != "" && existing.PrevUserGroup == prevGroup {
+				fields = append(fields, "prev_user_group")
+			}
+		}
+		if err := tx.Model(&existing).Select(fields).Updates(existing).Error; err != nil {
+			return nil, err
+		}
+		return &existing, nil
+	}
+
 	sub := &UserSubscription{
 		UserId:           userId,
 		PlanId:           plan.Id,
@@ -540,7 +596,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if order.Status != common.TopUpStatusPending {
 		return nil, ErrSubscriptionOrderStatusInvalid
 	}
-	plan, err := GetSubscriptionPlanById(order.PlanId)
+	plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
 	if err != nil {
 		return nil, err
 	}
@@ -597,7 +653,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if order.Status != common.TopUpStatusPending {
 			return ErrSubscriptionOrderStatusInvalid
 		}
-		plan, err := GetSubscriptionPlanById(order.PlanId)
+		plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
 		if err != nil {
 			return err
 		}

@@ -61,19 +61,13 @@ describe('subscription display labels', () => {
     const record = makeRecord(2, 200)
     const planTitleMap = new Map([[200, 'Basic']])
 
-    assert.equal(
-      getSubscriptionDisplayLabel(record, planTitleMap, 'Subscription'),
-      'Basic · Subscription #2'
-    )
+    assert.equal(getSubscriptionDisplayLabel(record, planTitleMap), 'Basic')
   })
 
-  test('falls back to subscription id when no plan title is available', () => {
+  test('falls back to generic subscription label when no plan title is available', () => {
     const record = makeRecord(3, 300)
 
-    assert.equal(
-      getSubscriptionDisplayLabel(record, new Map(), 'Subscription'),
-      'Subscription #3'
-    )
+    assert.equal(getSubscriptionDisplayLabel(record, new Map()), 'Subscription')
   })
 
   test('ignores blank summary plan title and uses public plan map title', () => {
@@ -82,9 +76,6 @@ describe('subscription display labels', () => {
     } as Partial<UserSubscriptionRecord>)
     const planTitleMap = new Map([[400, 'Pro']])
 
-    assert.equal(
-      getSubscriptionDisplayLabel(record, planTitleMap, 'Subscription'),
-      'Pro · Subscription #4'
-    )
+    assert.equal(getSubscriptionDisplayLabel(record, planTitleMap), 'Pro')
   })
 })

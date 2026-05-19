@@ -39,6 +39,97 @@ func TestCreateUserSubscriptionFromPlanTx_DistributorSnapshot(t *testing.T) {
 	assert.Equal(t, "order", sub.GrantReason)
 }
 
+func TestCreateUserSubscriptionFromPlanTx_RejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7301, Username: "extend_user", Status: common.UserStatusEnabled}).Error)
+	businessCode := "extend_daily"
+	plan := &SubscriptionPlan{
+		Id:                 7302,
+		Title:              "Daily",
+		DurationUnit:       SubscriptionDurationDay,
+		DurationValue:      1,
+		Enabled:            true,
+		MonthlyTokenLimit:  1_000,
+		ConcurrencyLimit:   2,
+		PublicVisible:      true,
+		RewardEligible:     true,
+		BusinessCode:       &businessCode,
+		MaxPurchasePerUser: 1,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+
+	var first *UserSubscription
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		created, err := CreateUserSubscriptionFromPlanTx(tx, 7301, plan, "order")
+		first = created
+		return err
+	}))
+	require.NotNil(t, first)
+	firstEnd := first.EndTime
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Id).Update("token_used", int64(123)).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, err := CreateUserSubscriptionFromPlanTx(tx, 7301, plan, "order")
+		return err
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "已达到该套餐购买上限")
+	var sub UserSubscription
+	require.NoError(t, DB.First(&sub, first.Id).Error)
+	assert.Equal(t, firstEnd, sub.EndTime)
+	assert.Equal(t, int64(123), sub.TokenUsed)
+	var count int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND plan_id = ?", 7301, 7302).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestCreateUserSubscriptionFromPlanTx_ExtendsActiveSamePlanWhenUnlimited(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7303, Username: "extend_unlimited_user", Status: common.UserStatusEnabled}).Error)
+	businessCode := "extend_unlimited_daily"
+	plan := &SubscriptionPlan{
+		Id:                7304,
+		Title:             "Daily Unlimited",
+		DurationUnit:      SubscriptionDurationDay,
+		DurationValue:     1,
+		Enabled:           true,
+		MonthlyTokenLimit: 1_000,
+		ConcurrencyLimit:  2,
+		PublicVisible:     true,
+		RewardEligible:    true,
+		BusinessCode:      &businessCode,
+	}
+	require.NoError(t, DB.Create(plan).Error)
+
+	var first *UserSubscription
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		created, err := CreateUserSubscriptionFromPlanTx(tx, 7303, plan, "order")
+		first = created
+		return err
+	}))
+	require.NotNil(t, first)
+	firstEnd := first.EndTime
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Id).Update("token_used", int64(123)).Error)
+
+	var second *UserSubscription
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		created, err := CreateUserSubscriptionFromPlanTx(tx, 7303, plan, "order")
+		second = created
+		return err
+	}))
+	require.NotNil(t, second)
+
+	assert.Equal(t, first.Id, second.Id)
+	assert.Equal(t, firstEnd+86400, second.EndTime)
+	assert.Equal(t, int64(123), second.TokenUsed)
+	assert.Equal(t, "order", second.GrantReason)
+	assert.Equal(t, "order", second.Source)
+	var count int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND plan_id = ?", 7303, 7304).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
 func TestSubscriptionPlanBusinessCode_AllowsMultipleLegacyNulls(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7202, Title: "Legacy A", Enabled: true}).Error)

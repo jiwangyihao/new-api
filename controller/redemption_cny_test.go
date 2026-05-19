@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -185,19 +184,31 @@ func TestRedeemSubscriptionCodeResponseIncludesPlanResult(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), `"title":"Response Plan"`)
 }
 
-func TestRedeemReturnsOriginalErrorForSubscriptionLimit(t *testing.T) {
+func TestRedeemSubscriptionCodeRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 	userID := 9607
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_limit", Status: common.UserStatusEnabled}).Error)
 	code := "redeem-limit"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9608, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MaxPurchasePerUser: 1, BusinessCode: &code}).Error)
-	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: userID, PlanId: 9608, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: common.GetTimestamp() + 3600, GrantReason: "order"}).Error)
+	initialEnd := common.GetTimestamp() + 3600
+	existing := &model.UserSubscription{UserId: userID, PlanId: 9608, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: initialEnd, TokenLimit: 3000, TokenUsed: 250, GrantReason: "order", Source: "order"}
+	require.NoError(t, model.DB.Create(existing).Error)
 	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "limit", Key: "limit-key", Type: model.RedemptionTypeSubscription, PlanId: 9608, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
 
-	_, err := model.Redeem("limit-key", userID)
+	result, err := model.Redeem("limit-key", userID)
 
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, model.ErrRedeemFailed))
+	assert.ErrorIs(t, err, model.ErrRedeemFailed)
+	assert.Nil(t, result)
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, existing.Id).Error)
+	assert.Equal(t, initialEnd, sub.EndTime)
+	assert.Equal(t, int64(250), sub.TokenUsed)
+	assert.Equal(t, "order", sub.GrantReason)
+	assert.Equal(t, "order", sub.Source)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9608).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
 	var redeemed model.Redemption
 	require.NoError(t, model.DB.Where("`key` = ?", "limit-key").First(&redeemed).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, redeemed.Status)

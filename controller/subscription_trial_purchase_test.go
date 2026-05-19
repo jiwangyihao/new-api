@@ -19,7 +19,7 @@ func setupSubscriptionTrialPurchaseTest(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.User{}, &model.UserSubscription{}))
 	require.NoError(t, model.DB.Create(&model.User{Id: 8801, Username: "buyer", Status: common.UserStatusEnabled}).Error)
 	operation_setting.PayMethods = []map[string]string{{"type": "alipay", "name": "Alipay"}}
 	t.Cleanup(func() {
@@ -28,6 +28,9 @@ func setupSubscriptionTrialPurchaseTest(t *testing.T) {
 		setting.CreemWebhookSecret = ""
 		setting.CreemTestMode = false
 		operation_setting.PayMethods = nil
+		operation_setting.PayAddress = ""
+		operation_setting.EpayId = ""
+		operation_setting.EpayKey = ""
 	})
 }
 
@@ -106,4 +109,46 @@ func TestSubscriptionCreemRejectsTrialPlan(t *testing.T) {
 	var count int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
+}
+
+func TestSubscriptionStripeRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedSubscriptionPurchasePlan(t, 8851, false, true, 40)
+	setting.StripeApiSecret = "sk_test_123"
+	setting.StripeWebhookSecret = "whsec_test"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 8851).Update("max_purchase_per_user", 1).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: 8801, PlanId: 8851, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: common.GetTimestamp() + 3600, GrantReason: "order", Source: "order"}).Error)
+
+	recorder := performSubscriptionJSON(SubscriptionRequestStripePay, `{"plan_id":8851}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "已达到该套餐购买上限")
+}
+
+func TestSubscriptionCreemRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedSubscriptionPurchasePlan(t, 8861, false, true, 40)
+	setting.CreemWebhookSecret = "creem_secret"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 8861).Update("max_purchase_per_user", 1).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: 8801, PlanId: 8861, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: common.GetTimestamp() + 3600, GrantReason: "order", Source: "order"}).Error)
+
+	recorder := performSubscriptionJSON(SubscriptionRequestCreemPay, `{"plan_id":8861}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "已达到该套餐购买上限")
+}
+
+func TestSubscriptionEpayRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedSubscriptionPurchasePlan(t, 8871, false, true, 40)
+	operation_setting.PayAddress = "https://pay.example.com"
+	operation_setting.EpayId = "epay_id"
+	operation_setting.EpayKey = "epay_key"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 8871).Update("max_purchase_per_user", 1).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: 8801, PlanId: 8871, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: common.GetTimestamp() + 3600, GrantReason: "order", Source: "order"}).Error)
+
+	recorder := performSubscriptionJSON(SubscriptionRequestEpay, `{"plan_id":8871,"payment_method":"alipay"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "已达到该套餐购买上限")
 }

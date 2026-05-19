@@ -25,26 +25,13 @@ function getNonBlank(value: string | undefined): string {
 export function getSubscriptionDisplayLabel(
   record: UserSubscriptionRecord,
   planTitleMap: ReadonlyMap<number, string>,
-  subscriptionLabel: string
+  subscriptionLabel = 'Subscription'
 ): string {
   const subscription = record.subscription
-  const fallbackLabel = `${subscriptionLabel} #${subscription.id}`
   const title =
     getNonBlank(record.plan?.title) ||
     getNonBlank(record.plan_title) ||
     getNonBlank(planTitleMap.get(subscription.plan_id))
-  if (
-    title &&
-    (record.plan?.is_trial ||
-      subscription.grant_reason === 'trial_code' ||
-      subscription.grant_reason === 'invite_trial')
-  ) {
-    return title
-  }
 
-  if (!title) {
-    return fallbackLabel
-  }
-
-  return `${title} · ${fallbackLabel}`
+  return title || subscriptionLabel
 }

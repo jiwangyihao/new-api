@@ -175,12 +175,12 @@ func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), logCount)
 }
 
-func TestSubscriptionBalancePaySerializesPurchaseLimitAcrossIdempotencyKeys(t *testing.T) {
+func TestSubscriptionBalancePayRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9541
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_limit", Quota: int(common.QuotaPerUnit * 200), Status: common.UserStatusEnabled}).Error)
 	code := "balance-limit"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9542, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9542, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 
 	first := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-one"}`)
 	second := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-two"}`)
@@ -195,6 +195,36 @@ func TestSubscriptionBalancePaySerializesPurchaseLimitAcrossIdempotencyKeys(t *t
 	var subCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&subCount).Error)
 	assert.Equal(t, int64(1), subCount)
+	var orderCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&orderCount).Error)
+	assert.Equal(t, int64(1), orderCount)
+}
+
+func TestSubscriptionBalancePayExtendsActiveSubscriptionWithoutNewRecord(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9561
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_extend", Quota: int(common.QuotaPerUnit * 200), Status: common.UserStatusEnabled}).Error)
+	code := "balance-extend"
+	plan := &model.SubscriptionPlan{Id: 9562, Title: "Extend", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}
+	require.NoError(t, model.DB.Create(plan).Error)
+	initialEnd := common.GetTimestamp() + 3600
+	existing := &model.UserSubscription{UserId: userID, PlanId: 9562, Status: "active", StartTime: common.GetTimestamp() - 60, EndTime: initialEnd, TokenLimit: 1000, TokenUsed: 125, GrantReason: "order", Source: "order"}
+	require.NoError(t, model.DB.Create(existing).Error)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9562,"idempotency_key":"balance-extend"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, existing.Id).Error)
+	assert.Equal(t, initialEnd+86400, sub.EndTime)
+	assert.Equal(t, int64(125), sub.TokenUsed)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9562).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, int(common.QuotaPerUnit*160), user.Quota)
 }
 
 func TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck(t *testing.T) {

@@ -10,9 +10,11 @@ import (
 )
 
 const (
-	monthlyInviteEntitlementReason = "monthly_invite_entitlement"
-	basicMonthlyBusinessCode       = "basic_monthly"
-	monthlyInviteQualifiedCount    = 2
+	monthlyInviteEntitlementReason     = "monthly_invite_entitlement"
+	defaultMonthlyInviteRewardPlanCode = "basic_monthly"
+	monthlyInviteRewardPlanOptionKey   = "MonthlyInvitationRewardPlanCode"
+	monthlyInviteRewardPlanEnvKey      = "MONTHLY_INVITATION_REWARD_PLAN_CODE"
+	monthlyInviteQualifiedCount        = 2
 )
 
 type InvitationEntitlementStatus struct {
@@ -238,10 +240,21 @@ func listQualifiedActiveInviteeEndTimesTx(tx *gorm.DB, inviterId int, now int64)
 	return endTimes, nil
 }
 
+func monthlyInvitationRewardPlanCode() string {
+	common.OptionMapRWMutex.RLock()
+	code := common.OptionMap[monthlyInviteRewardPlanOptionKey]
+	common.OptionMapRWMutex.RUnlock()
+	if code != "" {
+		return code
+	}
+	return common.GetEnvOrDefaultString(monthlyInviteRewardPlanEnvKey, defaultMonthlyInviteRewardPlanCode)
+}
+
 func findMonthlyInvitationRewardPlanTx(tx *gorm.DB) (*model.SubscriptionPlan, error) {
+	code := monthlyInvitationRewardPlanCode()
 	var plan model.SubscriptionPlan
-	if err := tx.Where("business_code = ? AND enabled = ?", basicMonthlyBusinessCode, true).First(&plan).Error; err != nil {
-		return nil, err
+	if err := tx.Where("business_code = ? AND enabled = ?", code, true).First(&plan).Error; err != nil {
+		return nil, errors.New("monthly invitation reward plan not found or disabled: " + code)
 	}
 	return &plan, nil
 }

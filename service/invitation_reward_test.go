@@ -160,6 +160,71 @@ func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *test
 	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), readStatus.EntitlementEndTime)
 }
 
+func TestMonthlyInvitationEntitlementUsesConfiguredRewardPlanCode(t *testing.T) {
+	truncate(t)
+	restore := setInvitationRewardPlanCodeForTest("invite_reward_monthly")
+	t.Cleanup(restore)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 1701, 1702, 1703)
+	basicPlan := seedInvitationRewardPlan(t, 2701, "basic_monthly", true)
+	rewardPlan := seedInvitationRewardPlan(t, 2702, "invite_reward_monthly", true)
+	paidPlan := seedInvitationRewardPlan(t, 2703, "standard_monthly", true)
+	seedPaidInviteeSubscription(t, 1702, paidPlan.Id, at)
+	seedPaidInviteeSubscription(t, 1703, paidPlan.Id, at)
+
+	status, err := EnsureMonthlyInvitationEntitlement(1701, at)
+
+	require.NoError(t, err)
+	require.True(t, status.Entitled)
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
+	assert.Equal(t, rewardPlan.Id, sub.PlanId)
+	assert.NotEqual(t, basicPlan.Id, sub.PlanId)
+}
+
+func TestMonthlyInvitationEntitlementRequiresConfiguredRewardPlan(t *testing.T) {
+	truncate(t)
+	restore := setInvitationRewardPlanCodeForTest("missing_reward_monthly")
+	t.Cleanup(restore)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 1801, 1802, 1803)
+	seedInvitationRewardPlan(t, 2801, "basic_monthly", true)
+	paidPlan := seedInvitationRewardPlan(t, 2802, "standard_monthly", true)
+	seedPaidInviteeSubscription(t, 1802, paidPlan.Id, at)
+	seedPaidInviteeSubscription(t, 1803, paidPlan.Id, at)
+
+	status, err := EnsureMonthlyInvitationEntitlement(1801, at)
+
+	require.Error(t, err)
+	assert.Nil(t, status)
+	assert.Contains(t, err.Error(), "missing_reward_monthly")
+	var count int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", 1801).Count(&count).Error)
+	assert.Equal(t, int64(0), count)
+}
+
+func setInvitationRewardPlanCodeForTest(code string) func() {
+	common.OptionMapRWMutex.Lock()
+	oldMap := common.OptionMap
+	if oldMap == nil {
+		common.OptionMap = map[string]string{}
+	} else {
+		cloned := make(map[string]string, len(oldMap)+1)
+		for key, value := range oldMap {
+			cloned[key] = value
+		}
+		common.OptionMap = cloned
+	}
+	common.OptionMap["MonthlyInvitationRewardPlanCode"] = code
+	common.OptionMapRWMutex.Unlock()
+	return func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = oldMap
+		common.OptionMapRWMutex.Unlock()
+	}
+}
 func seedPaidInviteeSubscriptionWithEnd(t *testing.T, userId int, planId int, at time.Time, end int64) {
 	t.Helper()
 	start := at.Add(-24 * time.Hour).Unix()

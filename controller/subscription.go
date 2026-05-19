@@ -57,6 +57,10 @@ type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
 }
 
+type ActiveSubscriptionRequest struct {
+	SubscriptionId int `json:"subscription_id"`
+}
+
 func normalizeSubscriptionPlanCurrency(currency string) string {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if currency == "" {
@@ -119,10 +123,11 @@ func GetSubscriptionSelf(c *gin.Context) {
 	}
 
 	common.ApiSuccess(c, gin.H{
-		"billing_preference": pref,
-		"subscriptions":      activeSubscriptions, // all active subscriptions
-		"all_subscriptions":  allSubscriptions,    // all subscriptions including expired
-		"summary":            summary,
+		"active_subscription_id": settingMap.ActiveSubscriptionId,
+		"billing_preference":     pref,
+		"subscriptions":          model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId), // all active subscriptions
+		"all_subscriptions":      model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),    // all subscriptions including expired
+		"summary":                summary,
 	})
 }
 
@@ -148,6 +153,35 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{"billing_preference": pref})
+}
+
+func SetActiveSubscription(c *gin.Context) {
+	userId := c.GetInt("id")
+	var req ActiveSubscriptionRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.SubscriptionId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if err := model.SetUserActiveSubscription(userId, req.SubscriptionId); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	common.ApiSuccess(c, gin.H{"active_subscription_id": req.SubscriptionId})
+}
+
+func ResetSubscriptionQuota(c *gin.Context) {
+	userId := c.GetInt("id")
+	subscriptionId, err := strconv.Atoi(c.Param("id"))
+	if err != nil || subscriptionId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := model.ResetUserSubscriptionQuota(userId, subscriptionId)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	common.ApiSuccess(c, result)
 }
 
 // ---- Admin APIs ----

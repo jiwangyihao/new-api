@@ -31,6 +31,11 @@ import type {
   SubscriptionBalancePayResponse,
 } from './types'
 
+export interface SetActiveSubscriptionRequest {
+  subscription_id: number
+}
+
+
 // ============================================================================
 // Admin Plan Management
 // ============================================================================
@@ -170,6 +175,28 @@ export async function getSelfSubscriptionFull(): Promise<
   ApiResponse<SelfSubscriptionData>
 > {
   const res = await api.get('/api/subscription/self')
+  return res.data
+}
+
+export async function setActiveSubscription(
+  data: SetActiveSubscriptionRequest
+): Promise<ApiResponse<{ active_subscription_id: number }>> {
+  const res = await api.put('/api/subscription/self/active', data)
+  return res.data
+}
+
+export async function resetSubscriptionQuota(
+  subscriptionId: number
+): Promise<
+  ApiResponse<{
+    subscription_id: number
+    end_time: number
+    next_reset_time?: number
+  }>
+> {
+  const res = await api.post(
+    `/api/subscription/self/${subscriptionId}/reset-quota`
+  )
   return res.data
 }
 

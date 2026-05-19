@@ -158,6 +158,39 @@ export function AffiliateRewardsCard({
             </Button>
           )}
         </div>
+
+        <div className='rounded-lg border bg-background/60 p-3 text-xs lg:col-span-3'>
+          <h4 className='text-foreground font-semibold'>
+            {t('Invitation reward rules')}
+          </h4>
+          <ul className='text-muted-foreground mt-2 list-disc space-y-1 pl-4'>
+            <li>
+              {t(
+                'Invite at least two direct users with active paid subscriptions to receive a Basic reward plan.'
+              )}
+            </li>
+            <li>
+              {t(
+                'The reward is valid until the overlap end time of your two longest valid paid referrals.'
+              )}
+            </li>
+            <li>
+              {t(
+                'When the reward is the same tier as your paid plan, reward time is consumed first and paid time is preserved.'
+              )}
+            </li>
+            <li>
+              {t(
+                'When tiers differ, choose the active plan in Wallet. Reward usage does not consume paid plan time; paid plan usage lets both natural validity windows elapse.'
+              )}
+            </li>
+            <li>
+              {t(
+                'Quota reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
+              )}
+            </li>
+          </ul>
+        </div>
       </CardContent>
     </Card>
   )

@@ -21,7 +21,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { type ComponentProps, createContext, useContext } from 'react'
 import type { LanguageModelUsage } from 'ai'
 import { useTranslation } from 'react-i18next'
-import { getUsage } from 'tokenlens'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -222,20 +221,12 @@ export const ContextContentFooter = ({
   ...props
 }: ContextContentFooterProps) => {
   const { t } = useTranslation()
-  const { modelId, usage } = useContextValue()
-  const costUSD = modelId
-    ? getUsage({
-        modelId,
-        usage: {
-          input: usage?.inputTokens ?? 0,
-          output: usage?.outputTokens ?? 0,
-        },
-      }).costUSD?.totalUSD
-    : undefined
-  const totalCost = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(costUSD ?? 0)
+  const { usage } = useContextValue()
+  const totalTokens =
+    (usage?.inputTokens ?? 0) +
+    (usage?.outputTokens ?? 0) +
+    (usage?.reasoningTokens ?? 0) +
+    (usage?.cachedInputTokens ?? 0)
 
   return (
     <div
@@ -247,8 +238,8 @@ export const ContextContentFooter = ({
     >
       {children ?? (
         <>
-          <span className='text-muted-foreground'>{t('Total cost')}</span>
-          <span>{totalCost}</span>
+          <span className='text-muted-foreground'>{t('Total tokens')}</span>
+          <TokenCount tokens={totalTokens} />
         </>
       )}
     </div>
@@ -263,7 +254,7 @@ export const ContextInputUsage = ({
   ...props
 }: ContextInputUsageProps) => {
   const { t } = useTranslation()
-  const { usage, modelId } = useContextValue()
+  const { usage } = useContextValue()
   const inputTokens = usage?.inputTokens ?? 0
 
   if (children) {
@@ -274,16 +265,6 @@ export const ContextInputUsage = ({
     return null
   }
 
-  const inputCost = modelId
-    ? getUsage({
-        modelId,
-        usage: { input: inputTokens, output: 0 },
-      }).costUSD?.totalUSD
-    : undefined
-  const inputCostText = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(inputCost ?? 0)
 
   return (
     <div
@@ -291,7 +272,7 @@ export const ContextInputUsage = ({
       {...props}
     >
       <span className='text-muted-foreground'>{t('Input')}</span>
-      <TokensWithCost costText={inputCostText} tokens={inputTokens} />
+      <TokenCount tokens={inputTokens} />
     </div>
   )
 }
@@ -304,7 +285,7 @@ export const ContextOutputUsage = ({
   ...props
 }: ContextOutputUsageProps) => {
   const { t } = useTranslation()
-  const { usage, modelId } = useContextValue()
+  const { usage } = useContextValue()
   const outputTokens = usage?.outputTokens ?? 0
 
   if (children) {
@@ -315,16 +296,6 @@ export const ContextOutputUsage = ({
     return null
   }
 
-  const outputCost = modelId
-    ? getUsage({
-        modelId,
-        usage: { input: 0, output: outputTokens },
-      }).costUSD?.totalUSD
-    : undefined
-  const outputCostText = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(outputCost ?? 0)
 
   return (
     <div
@@ -332,7 +303,7 @@ export const ContextOutputUsage = ({
       {...props}
     >
       <span className='text-muted-foreground'>{t('Output')}</span>
-      <TokensWithCost costText={outputCostText} tokens={outputTokens} />
+      <TokenCount tokens={outputTokens} />
     </div>
   )
 }
@@ -345,7 +316,7 @@ export const ContextReasoningUsage = ({
   ...props
 }: ContextReasoningUsageProps) => {
   const { t } = useTranslation()
-  const { usage, modelId } = useContextValue()
+  const { usage } = useContextValue()
   const reasoningTokens = usage?.reasoningTokens ?? 0
 
   if (children) {
@@ -356,16 +327,6 @@ export const ContextReasoningUsage = ({
     return null
   }
 
-  const reasoningCost = modelId
-    ? getUsage({
-        modelId,
-        usage: { reasoningTokens },
-      }).costUSD?.totalUSD
-    : undefined
-  const reasoningCostText = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(reasoningCost ?? 0)
 
   return (
     <div
@@ -373,7 +334,7 @@ export const ContextReasoningUsage = ({
       {...props}
     >
       <span className='text-muted-foreground'>{t('Reasoning')}</span>
-      <TokensWithCost costText={reasoningCostText} tokens={reasoningTokens} />
+      <TokenCount tokens={reasoningTokens} />
     </div>
   )
 }
@@ -386,7 +347,7 @@ export const ContextCacheUsage = ({
   ...props
 }: ContextCacheUsageProps) => {
   const { t } = useTranslation()
-  const { usage, modelId } = useContextValue()
+  const { usage } = useContextValue()
   const cacheTokens = usage?.cachedInputTokens ?? 0
 
   if (children) {
@@ -397,16 +358,6 @@ export const ContextCacheUsage = ({
     return null
   }
 
-  const cacheCost = modelId
-    ? getUsage({
-        modelId,
-        usage: { cacheReads: cacheTokens, input: 0, output: 0 },
-      }).costUSD?.totalUSD
-    : undefined
-  const cacheCostText = new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-  }).format(cacheCost ?? 0)
 
   return (
     <div
@@ -414,26 +365,17 @@ export const ContextCacheUsage = ({
       {...props}
     >
       <span className='text-muted-foreground'>{t('Cache')}</span>
-      <TokensWithCost costText={cacheCostText} tokens={cacheTokens} />
+      <TokenCount tokens={cacheTokens} />
     </div>
   )
 }
 
-const TokensWithCost = ({
-  tokens,
-  costText,
-}: {
-  tokens?: number
-  costText?: string
-}) => (
+const TokenCount = ({ tokens }: { tokens?: number }) => (
   <span>
     {tokens === undefined
       ? '—'
       : new Intl.NumberFormat('en-US', {
           notation: 'compact',
         }).format(tokens)}
-    {costText ? (
-      <span className='text-muted-foreground ml-2'>• {costText}</span>
-    ) : null}
   </span>
 )

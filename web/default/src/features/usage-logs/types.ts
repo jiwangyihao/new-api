@@ -186,6 +186,11 @@ export interface LogOtherData {
   subscription_id?: string
   subscription_pre_consumed?: number
   subscription_post_delta?: number
+  subscription_token_limit?: number
+  subscription_token_used?: number
+  subscription_token_remaining?: number
+  subscription_token_unlimited?: boolean
+  subscription_tokens_consumed?: number
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
@@ -196,6 +201,7 @@ export interface LogOtherData {
  */
 export interface LogStatistics {
   quota: number
+  total_tokens: number
   rpm: number
   tpm: number
 }

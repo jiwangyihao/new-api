@@ -107,7 +107,7 @@ export function Features(_props: FeaturesProps) {
       icon: <Globe className='size-4 text-violet-400' />,
       visual: (
         <div className='mt-4 space-y-2'>
-          {[t('Load Balancing'), t('Rate Limiting'), t('Cost Tracking')].map(
+          {[t('Load Balancing'), t('Rate Limiting'), t('Token Tracking')].map(
             (step, i) => (
               <div key={step} className='flex items-center gap-2'>
                 <div

@@ -18,7 +18,6 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import {
   Hash,
-  Coins,
   Layers,
   Gauge,
   Zap,
@@ -50,16 +49,9 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
       getValue: (stat) => stat?.rpm ?? 0,
     },
     {
-      key: 'quota',
-      title: t('Total Quota'),
-      description: t('Statistical quota'),
-      icon: Coins,
-      getValue: (stat) => stat?.quota ?? 0,
-    },
-    {
       key: 'tokens',
-      title: t('Total Tokens'),
-      description: t('Statistical tokens'),
+      title: t('Total Tokens Used'),
+      description: t('Tokens used in selected range'),
       icon: Layers,
       getValue: (stat) => stat?.tpm ?? 0,
     },
@@ -83,32 +75,34 @@ export function useModelStatCardsConfig(): StatCardConfig[] {
 }
 
 export function useSummaryCardsConfig(totals: {
-  todayUsageDisplay: string
-  usedDisplay: string
+  remainingTokensDisplay: string
+  cycleTokensDisplay: string
+  recentTokensDisplay: string
   requestCountDisplay: string
-  currencyLabel: string
-  currencyEnabled: boolean
 }) {
   const { t } = useTranslation()
 
   return [
     {
-      key: 'todayUsage',
-      title: t('Last 24h usage'),
-      value: totals.todayUsageDisplay,
-      description: totals.currencyEnabled
-        ? `${t('Consumed in the last 24 hours')} (${totals.currencyLabel})`
-        : t('Consumed in the last 24 hours'),
-      icon: Flame,
+      key: 'remainingTokens',
+      title: t('Subscription tokens remaining'),
+      value: totals.remainingTokensDisplay,
+      description: t('Tokens available in the current plan cycle'),
+      icon: Zap,
     },
     {
-      key: 'usage',
-      title: t('Historical Usage'),
-      value: totals.usedDisplay,
-      description: totals.currencyEnabled
-        ? `${t('Total consumed')} (${totals.currencyLabel})`
-        : t('Total consumed quota'),
+      key: 'cycleTokens',
+      title: t('Current cycle tokens used'),
+      value: totals.cycleTokensDisplay,
+      description: t('Tokens used by the active subscription cycle'),
       icon: TrendingUp,
+    },
+    {
+      key: 'recentTokens',
+      title: t('Last 24h token usage'),
+      value: totals.recentTokensDisplay,
+      description: t('Tokens used in the last 24 hours'),
+      icon: Flame,
     },
     {
       key: 'requests',

@@ -40,6 +40,19 @@ export function getSortLabels(t: TFunction): Record<SortOption, string> {
   }
 }
 
+export function getSortLabelsForRole(
+  t: TFunction,
+  isAdmin: boolean
+): Partial<Record<SortOption, string>> {
+  const labels = getSortLabels(t)
+  if (isAdmin) {
+    return labels
+  }
+  return {
+    [SORT_OPTIONS.NAME]: labels[SORT_OPTIONS.NAME],
+  }
+}
+
 /** Filter values */
 export const FILTER_ALL = 'all'
 

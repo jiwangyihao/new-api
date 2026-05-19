@@ -547,8 +547,8 @@ export function OverviewDashboard() {
         icon: FileText,
       },
       {
-        title: t('Pricing'),
-        description: t('Review model rates before scaling traffic'),
+        title: t('Model Directory'),
+        description: t('Browse available models and capabilities'),
         to: '/pricing',
         icon: BookOpen,
       },

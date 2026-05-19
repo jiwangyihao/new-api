@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-export const DEFAULT_ENDPOINT = '/api/pricing'
+export const DEFAULT_ENDPOINT = '/api/ratio_config'
 
 // ---------------------------------------------------------------------------
 // Built-in upstream ratio presets
@@ -48,7 +48,6 @@ export const OPENROUTER_ENDPOINT = 'openrouter'
 export const OPENROUTER_CHANNEL_TYPE = 20
 
 export const ENDPOINT_OPTIONS = [
-  { label: 'pricing', value: '/api/pricing' },
   { label: 'ratio_config', value: '/api/ratio_config' },
   { label: 'OpenRouter', value: OPENROUTER_ENDPOINT },
   { label: 'custom', value: 'custom' },

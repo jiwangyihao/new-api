@@ -296,10 +296,8 @@ export function HeroTerminalDemo() {
             </span>
             <span className='bg-foreground/15 size-1 rounded-full' />
             <span className='flex items-center gap-1'>
-              <span className='tracking-wider uppercase'>cost</span>
-              <span className='font-mono'>
-                ${(demo.tokens * 0.00003).toFixed(5)}
-              </span>
+              <span className='tracking-wider uppercase'>plan</span>
+              <span className='font-mono'>included</span>
             </span>
           </div>
           <span className='text-foreground/30 font-mono text-[10px] tracking-wider uppercase'>
@@ -419,13 +417,13 @@ function renderResponseLine(line: string, demo: ApiDemoConfig): ReactNode {
     } else if (placeholder === '<in>') {
       segments.push(
         <NumberText key={`ph-${idx}`}>
-          {Math.floor(demo.tokens * 0.4)}
+          {Math.floor((demo.tokens / 10) * 4)}
         </NumberText>
       )
     } else if (placeholder === '<out>') {
       segments.push(
         <NumberText key={`ph-${idx}`}>
-          {Math.ceil(demo.tokens * 0.6)}
+          {Math.ceil((demo.tokens / 10) * 6)}
         </NumberText>
       )
     } else {

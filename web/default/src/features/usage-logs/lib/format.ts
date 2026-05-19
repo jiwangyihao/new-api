@@ -91,6 +91,72 @@ export function isViolationFeeLog(other: LogOtherData | null): boolean {
   )
 }
 
+export function shouldShowCostDetails(isAdmin: boolean): boolean {
+  return isAdmin
+}
+
+function clampTokenCount(value: number): number {
+  return value > 0 ? value : 0
+}
+
+export function getLegacyPromptCompletionTokens(log: UsageLog): number {
+  return clampTokenCount(log.prompt_tokens) + clampTokenCount(log.completion_tokens)
+}
+
+export function formatRatioCompact(ratio: number): string {
+  return ratio % 1 === 0
+    ? String(ratio)
+    : ratio.toFixed(4).replace(/\.?0+$/, '')
+}
+
+export function getTokenNameMeta(
+  other: LogOtherData | null,
+  showSensitive: boolean
+): string[] {
+  const meta: string[] = []
+  const group = other?.group?.trim()
+  if (group) meta.push(group)
+
+  if (!showSensitive || !other) return meta
+
+  const userGroupRatio = other.user_group_ratio
+  if (
+    userGroupRatio != null &&
+    userGroupRatio !== -1 &&
+    Number.isFinite(userGroupRatio)
+  ) {
+    meta.push(`${formatRatioCompact(userGroupRatio)}x`)
+    return meta
+  }
+
+  const groupRatio = other.group_ratio
+  if (groupRatio != null && groupRatio !== 1 && Number.isFinite(groupRatio)) {
+    meta.push(`${formatRatioCompact(groupRatio)}x`)
+  }
+
+  return meta
+}
+
+export function getLogTokenUsage(
+  log: UsageLog,
+  other: LogOtherData | null
+): number {
+  if (other) {
+    if (other.subscription_tokens_consumed !== undefined) {
+      return clampTokenCount(other.subscription_tokens_consumed)
+    }
+    if (other.subscription_consumed !== undefined) {
+      return clampTokenCount(other.subscription_consumed)
+    }
+  }
+
+  return getLegacyPromptCompletionTokens(log)
+}
+
+export function getLogTokenUsageColumnValue(log: UsageLog): number {
+  return getLogTokenUsage(log, parseLogOther(log.other))
+}
+
 /**
  * Parse the 'other' field from JSON string to object
  */

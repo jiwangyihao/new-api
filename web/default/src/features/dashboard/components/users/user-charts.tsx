@@ -50,12 +50,12 @@ const USER_CHARTS: {
 }[] = [
   {
     value: 'rank',
-    labelKey: 'User Consumption Ranking',
+    labelKey: 'User Token Usage Ranking',
     specKey: 'spec_user_rank',
   },
   {
     value: 'trend',
-    labelKey: 'User Consumption Trend',
+    labelKey: 'User Token Usage Trend',
     specKey: 'spec_user_trend',
   },
 ]

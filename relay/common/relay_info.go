@@ -145,6 +145,11 @@ type RelayInfo struct {
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
+	// SubscriptionToken* fields are authoritative only for distributor token billing.
+	SubscriptionTokenLimit                   int64
+	SubscriptionTokenUsedAfterPreConsume     int64
+	SubscriptionTokenUnlimited               bool
+	SubscriptionDistributorTokenBilling      bool
 	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
 	IsChannelTest                         bool // channel test request
 	RetryIndex                            int

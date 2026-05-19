@@ -74,7 +74,7 @@ export function CTA(props: CTAProps) {
             className='border-border/50 hover:border-border hover:bg-muted/50 rounded-lg'
             render={<Link to='/pricing' />}
           >
-            {t('View Pricing')}
+            {t('Model Directory')}
           </Button>
         </div>
       </AnimateInView>

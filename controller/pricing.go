@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -33,6 +34,36 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	return filtered
 }
 
+type pricingDirectoryItem struct {
+	ModelName              string                  `json:"model_name"`
+	Description            string                  `json:"description,omitempty"`
+	Icon                   string                  `json:"icon,omitempty"`
+	Tags                   string                  `json:"tags,omitempty"`
+	VendorID               int                     `json:"vendor_id,omitempty"`
+	QuotaType              int                     `json:"quota_type"`
+	EnableGroup            []string                `json:"enable_groups"`
+	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
+	PricingVersion         string                  `json:"pricing_version,omitempty"`
+}
+
+func toPricingDirectoryItems(pricing []model.Pricing) []pricingDirectoryItem {
+	items := make([]pricingDirectoryItem, 0, len(pricing))
+	for _, item := range pricing {
+		items = append(items, pricingDirectoryItem{
+			ModelName:              item.ModelName,
+			Description:            item.Description,
+			Icon:                   item.Icon,
+			Tags:                   item.Tags,
+			VendorID:               item.VendorID,
+			QuotaType:              item.QuotaType,
+			EnableGroup:            item.EnableGroup,
+			SupportedEndpointTypes: item.SupportedEndpointTypes,
+			PricingVersion:         item.PricingVersion,
+		})
+	}
+	return items
+}
+
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
 	userId, exists := c.Get("id")
@@ -42,14 +73,18 @@ func GetPricing(c *gin.Context) {
 		groupRatio[s] = f
 	}
 	var group string
+	isAdmin := false
 	if exists {
-		user, err := model.GetUserCache(userId.(int))
-		if err == nil {
-			group = user.Group
-			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-				if ok {
-					groupRatio[g] = ratio
+		if id, ok := userId.(int); ok {
+			user, err := model.GetUserById(id, false)
+			if err == nil {
+				group = user.Group
+				isAdmin = user.Role >= common.RoleAdminUser
+				for g := range groupRatio {
+					ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
+					if ok {
+						groupRatio[g] = ratio
+					}
 				}
 			}
 		}
@@ -64,16 +99,20 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	c.JSON(200, gin.H{
+	response := gin.H{
 		"success":            true,
-		"data":               pricing,
+		"data":               toPricingDirectoryItems(pricing),
 		"vendors":            model.GetVendors(),
-		"group_ratio":        groupRatio,
 		"usable_group":       usableGroup,
 		"supported_endpoint": model.GetSupportedEndpointMap(),
 		"auto_groups":        service.GetUserAutoGroup(group),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
-	})
+	}
+	if isAdmin {
+		response["data"] = pricing
+		response["group_ratio"] = groupRatio
+	}
+	c.JSON(200, response)
 }
 
 func ResetModelRatio(c *gin.Context) {

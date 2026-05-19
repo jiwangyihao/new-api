@@ -93,7 +93,7 @@ export function Hero(props: HeroProps) {
                 className='border-border/50 hover:border-border hover:bg-muted/50 rounded-lg'
                 render={<Link to='/pricing' />}
               >
-                {t('View Pricing')}
+                {t('Browse Models')}
               </Button>
             </>
           )}

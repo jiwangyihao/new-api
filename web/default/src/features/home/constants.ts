@@ -45,7 +45,7 @@ export const AI_MODELS = [
 
 // Hero section - Gateway Features
 export const GATEWAY_FEATURES = [
-  'Cost Tracking',
+  'Token Tracking',
   'Model Access',
   'Guardrails',
   'Observability',
@@ -111,9 +111,9 @@ export const DEFAULT_FEATURES = [
     iconName: 'Gauge',
   },
   {
-    title: 'Transparent Billing',
-    description: 'Pay-as-you-go with real-time usage monitoring',
-    iconName: 'DollarSign',
+    title: 'Token-Based Usage',
+    description: 'Subscription token usage with real-time monitoring',
+    iconName: 'CircleDollarSign',
   },
   {
     title: 'Team Collaboration',

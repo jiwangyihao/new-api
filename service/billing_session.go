@@ -382,9 +382,17 @@ func (s *BillingSession) syncRelayInfo() {
 		if sub.DistributorTokenBilling {
 			info.SubscriptionAmountTotal = sub.TokenLimit
 			info.SubscriptionAmountUsedAfterPreConsume = sub.TokenUsedAfter
+			info.SubscriptionTokenLimit = sub.TokenLimit
+			info.SubscriptionTokenUsedAfterPreConsume = sub.TokenUsedAfter
+			info.SubscriptionTokenUnlimited = sub.TokenLimit == 0
+			info.SubscriptionDistributorTokenBilling = true
 		} else {
 			info.SubscriptionAmountTotal = sub.AmountTotal
 			info.SubscriptionAmountUsedAfterPreConsume = sub.AmountUsedAfter
+			info.SubscriptionTokenLimit = 0
+			info.SubscriptionTokenUsedAfterPreConsume = 0
+			info.SubscriptionTokenUnlimited = false
+			info.SubscriptionDistributorTokenBilling = false
 		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
@@ -406,6 +414,10 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.SubscriptionPostDelta = 0
 	info.SubscriptionAmountTotal = 0
 	info.SubscriptionAmountUsedAfterPreConsume = 0
+	info.SubscriptionTokenLimit = 0
+	info.SubscriptionTokenUsedAfterPreConsume = 0
+	info.SubscriptionTokenUnlimited = false
+	info.SubscriptionDistributorTokenBilling = false
 	info.SubscriptionPlanId = 0
 	info.SubscriptionPlanTitle = ""
 }

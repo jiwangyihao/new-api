@@ -102,7 +102,10 @@ export function filterByEndpointType(
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number {
-  return model.quota_type === 0 ? model.model_ratio : model.model_price || 0
+  if (model.quota_type === QUOTA_TYPE_VALUES.TOKEN) {
+    return model.model_ratio ?? Number.POSITIVE_INFINITY
+  }
+  return model.model_price ?? Number.POSITIVE_INFINITY
 }
 
 /**

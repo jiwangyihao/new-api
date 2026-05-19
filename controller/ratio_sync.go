@@ -30,7 +30,7 @@ import (
 
 const (
 	defaultTimeoutSeconds       = 10
-	defaultEndpoint             = "/api/pricing"
+	defaultEndpoint             = "/api/ratio_config"
 	maxConcurrentFetches        = 8
 	maxRatioConfigBytes         = 10 << 20 // 10MB
 	floatEpsilon                = 1e-9
@@ -137,6 +137,88 @@ func getLocalPricingSyncData() map[string]any {
 	data["audio_ratio"] = ratio_setting.GetAudioRatioCopy()
 	data["audio_completion_ratio"] = ratio_setting.GetAudioCompletionRatioCopy()
 	return data
+}
+
+func parsePricingSyncPayload(bodyBytes []byte) (map[string]any, error) {
+	var body struct {
+		Success bool            `json:"success"`
+		Data    json.RawMessage `json:"data"`
+		Message string          `json:"message"`
+	}
+	if err := common.DecodeJson(bytes.NewReader(bodyBytes), &body); err != nil {
+		return nil, err
+	}
+	if !body.Success {
+		return nil, fmt.Errorf("%s", body.Message)
+	}
+
+	var type1Data map[string]any
+	if err := common.Unmarshal(body.Data, &type1Data); err == nil {
+		for _, field := range pricingSyncFields {
+			if _, ok := type1Data[field]; ok {
+				return type1Data, nil
+			}
+		}
+	}
+
+	converted, err := convertPricingPayloadToRatioData(body.Data)
+	if err != nil {
+		return nil, err
+	}
+	return converted, nil
+}
+
+func convertPricingPayloadToRatioData(data json.RawMessage) (map[string]any, error) {
+	var pricingItems []map[string]any
+	if err := common.Unmarshal(data, &pricingItems); err != nil {
+		return nil, fmt.Errorf("无法解析上游返回数据")
+	}
+
+	converted := make(map[string]any)
+	for _, item := range pricingItems {
+		modelName, ok := item["model_name"].(string)
+		if !ok || modelName == "" {
+			continue
+		}
+		if mode, ok := item[billing_setting.BillingModeField].(string); ok && mode == billing_setting.BillingModeTieredExpr {
+			if expr, ok := item[billing_setting.BillingExprField].(string); ok && strings.TrimSpace(expr) != "" {
+				ensureSyncValueMap(converted, billing_setting.BillingModeField)[modelName] = billing_setting.BillingModeTieredExpr
+				ensureSyncValueMap(converted, billing_setting.BillingExprField)[modelName] = expr
+			}
+		}
+		quotaType, hasQuotaType := asFloat64(item["quota_type"])
+		if hasQuotaType && int(quotaType) == 1 {
+			if value, ok := asFloat64(item["model_price"]); ok {
+				ensureSyncValueMap(converted, "model_price")[modelName] = value
+			}
+		} else if hasQuotaType || item["model_ratio"] != nil || item["completion_ratio"] != nil {
+			if value, ok := asFloat64(item["model_ratio"]); ok {
+				ensureSyncValueMap(converted, "model_ratio")[modelName] = value
+			}
+			if value, ok := asFloat64(item["completion_ratio"]); ok {
+				ensureSyncValueMap(converted, "completion_ratio")[modelName] = value
+			}
+		}
+		for _, field := range []string{"cache_ratio", "create_cache_ratio", "image_ratio", "audio_ratio", "audio_completion_ratio"} {
+			if value, ok := asFloat64(item[field]); ok {
+				ensureSyncValueMap(converted, field)[modelName] = value
+			}
+		}
+	}
+
+	if len(converted) == 0 {
+		return nil, fmt.Errorf("no sync fields in pricing payload")
+	}
+	return converted, nil
+}
+
+func ensureSyncValueMap(data map[string]any, field string) map[string]any {
+	if existing := valueMap(data[field]); existing != nil {
+		return existing
+	}
+	created := make(map[string]any)
+	data[field] = created
+	return created
 }
 
 func FetchUpstreamRatios(c *gin.Context) {
@@ -338,156 +420,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 				return
 			}
 
-			// 兼容两种上游接口格式：
-			//  type1: /api/ratio_config -> data 为 map[string]any，包含 model_ratio/completion_ratio/cache_ratio/model_price
-			//  type2: /api/pricing      -> data 为 []Pricing 列表，需要转换为与 type1 相同的 map 格式
-			var body struct {
-				Success bool            `json:"success"`
-				Data    json.RawMessage `json:"data"`
-				Message string          `json:"message"`
-			}
-
-			if err := common.DecodeJson(bytes.NewReader(bodyBytes), &body); err != nil {
-				logger.LogWarn(c.Request.Context(), "json decode failed from "+chItem.Name+": "+err.Error())
+			converted, err := parsePricingSyncPayload(bodyBytes)
+			if err != nil {
+				logger.LogWarn(c.Request.Context(), "ratio payload parse failed from "+chItem.Name+": "+err.Error())
 				ch <- upstreamResult{Name: uniqueName, Err: err.Error()}
 				return
 			}
-
-			if !body.Success {
-				ch <- upstreamResult{Name: uniqueName, Err: body.Message}
-				return
-			}
-
-			// 若 Data 为空，将继续按 type1 尝试解析（与多数静态 ratio_config 兼容）
-
-			// 尝试按 type1 解析
-			var type1Data map[string]any
-			if err := common.Unmarshal(body.Data, &type1Data); err == nil {
-				// 如果包含至少一个 ratioTypes 字段，则认为是 type1
-				isType1 := false
-				for _, rt := range pricingSyncFields {
-					if _, ok := type1Data[rt]; ok {
-						isType1 = true
-						break
-					}
-				}
-				if isType1 {
-					ch <- upstreamResult{Name: uniqueName, Data: type1Data}
-					return
-				}
-			}
-
-			// 如果不是 type1，则尝试按 type2 (/api/pricing) 解析
-			var pricingItems []struct {
-				ModelName            string   `json:"model_name"`
-				QuotaType            int      `json:"quota_type"`
-				ModelRatio           float64  `json:"model_ratio"`
-				ModelPrice           float64  `json:"model_price"`
-				CompletionRatio      float64  `json:"completion_ratio"`
-				CacheRatio           *float64 `json:"cache_ratio"`
-				CreateCacheRatio     *float64 `json:"create_cache_ratio"`
-				ImageRatio           *float64 `json:"image_ratio"`
-				AudioRatio           *float64 `json:"audio_ratio"`
-				AudioCompletionRatio *float64 `json:"audio_completion_ratio"`
-				BillingMode          string   `json:"billing_mode"`
-				BillingExpr          string   `json:"billing_expr"`
-			}
-			if err := common.Unmarshal(body.Data, &pricingItems); err != nil {
-				logger.LogWarn(c.Request.Context(), "unrecognized data format from "+chItem.Name+": "+err.Error())
-				ch <- upstreamResult{Name: uniqueName, Err: "无法解析上游返回数据"}
-				return
-			}
-
-			modelRatioMap := make(map[string]float64)
-			completionRatioMap := make(map[string]float64)
-			cacheRatioMap := make(map[string]float64)
-			createCacheRatioMap := make(map[string]float64)
-			imageRatioMap := make(map[string]float64)
-			audioRatioMap := make(map[string]float64)
-			audioCompletionRatioMap := make(map[string]float64)
-			modelPriceMap := make(map[string]float64)
-			billingModeMap := make(map[string]string)
-			billingExprMap := make(map[string]string)
-
-			for _, item := range pricingItems {
-				if item.ModelName == "" {
-					continue
-				}
-				if item.BillingMode == billing_setting.BillingModeTieredExpr && strings.TrimSpace(item.BillingExpr) != "" {
-					billingModeMap[item.ModelName] = billing_setting.BillingModeTieredExpr
-					billingExprMap[item.ModelName] = item.BillingExpr
-				}
-				if item.QuotaType == 1 {
-					modelPriceMap[item.ModelName] = item.ModelPrice
-				} else {
-					modelRatioMap[item.ModelName] = item.ModelRatio
-					// completionRatio 可能为 0，此时也直接赋值，保持与上游一致
-					completionRatioMap[item.ModelName] = item.CompletionRatio
-				}
-				if item.CacheRatio != nil {
-					cacheRatioMap[item.ModelName] = *item.CacheRatio
-				}
-				if item.CreateCacheRatio != nil {
-					createCacheRatioMap[item.ModelName] = *item.CreateCacheRatio
-				}
-				if item.ImageRatio != nil {
-					imageRatioMap[item.ModelName] = *item.ImageRatio
-				}
-				if item.AudioRatio != nil {
-					audioRatioMap[item.ModelName] = *item.AudioRatio
-				}
-				if item.AudioCompletionRatio != nil {
-					audioCompletionRatioMap[item.ModelName] = *item.AudioCompletionRatio
-				}
-			}
-
-			converted := make(map[string]any)
-
-			if len(modelRatioMap) > 0 {
-				ratioAny := make(map[string]any, len(modelRatioMap))
-				for k, v := range modelRatioMap {
-					ratioAny[k] = v
-				}
-				converted["model_ratio"] = ratioAny
-			}
-
-			if len(completionRatioMap) > 0 {
-				compAny := make(map[string]any, len(completionRatioMap))
-				for k, v := range completionRatioMap {
-					compAny[k] = v
-				}
-				converted["completion_ratio"] = compAny
-			}
-			if len(cacheRatioMap) > 0 {
-				converted["cache_ratio"] = valueMap(cacheRatioMap)
-			}
-			if len(createCacheRatioMap) > 0 {
-				converted["create_cache_ratio"] = valueMap(createCacheRatioMap)
-			}
-			if len(imageRatioMap) > 0 {
-				converted["image_ratio"] = valueMap(imageRatioMap)
-			}
-			if len(audioRatioMap) > 0 {
-				converted["audio_ratio"] = valueMap(audioRatioMap)
-			}
-			if len(audioCompletionRatioMap) > 0 {
-				converted["audio_completion_ratio"] = valueMap(audioCompletionRatioMap)
-			}
-
-			if len(modelPriceMap) > 0 {
-				priceAny := make(map[string]any, len(modelPriceMap))
-				for k, v := range modelPriceMap {
-					priceAny[k] = v
-				}
-				converted["model_price"] = priceAny
-			}
-			if len(billingModeMap) > 0 {
-				converted[billing_setting.BillingModeField] = valueMap(billingModeMap)
-			}
-			if len(billingExprMap) > 0 {
-				converted[billing_setting.BillingExprField] = valueMap(billingExprMap)
-			}
-
 			ch <- upstreamResult{Name: uniqueName, Data: converted}
 		}(chn)
 	}

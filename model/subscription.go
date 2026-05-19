@@ -47,6 +47,8 @@ const (
 	subscriptionPlanInfoCacheNamespace = "new-api:subscription_plan_info:v1"
 )
 
+const primaryBillableSubscriptionOrder = "CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 ELSE 0 END asc, end_time asc, id asc"
+
 var (
 	subscriptionPlanCacheOnce     sync.Once
 	subscriptionPlanInfoCacheOnce sync.Once
@@ -290,6 +292,20 @@ func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 	Plan         *SubscriptionPlan `json:"plan,omitempty"`
+}
+
+type SelfSubscriptionSummary struct {
+	ActiveCount      int    `json:"active_count"`
+	SubscriptionId   int    `json:"subscription_id"`
+	PlanId           int    `json:"plan_id"`
+	PrimaryPlanTitle string `json:"primary_plan_title"`
+	TokenLimit       int64  `json:"token_limit"`
+	TokenUsed        int64  `json:"token_used"`
+	TokenRemaining   int64  `json:"token_remaining"`
+	TokenUnlimited   bool   `json:"token_unlimited"`
+	ConcurrencyLimit int    `json:"concurrency_limit"`
+	NextResetTime    int64  `json:"next_reset_time,omitempty"`
+	EndTime          int64  `json:"end_time,omitempty"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
@@ -1120,6 +1136,105 @@ func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
 	return reason == "trial_code" || reason == "invite_trial"
 }
 
+type primaryBillableSubscription struct {
+	Subscription     UserSubscription
+	Plan             *SubscriptionPlan
+	Distributor      bool
+	TokenUnlimited   bool
+	AmountUsedBefore int64
+	TokenUsedBefore  int64
+}
+
+func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool) (*primaryBillableSubscription, bool, error) {
+	if tx == nil {
+		tx = DB
+	}
+	var subs []UserSubscription
+	query := tx
+	if forUpdate {
+		query = query.Set("gorm:query_option", "FOR UPDATE")
+	}
+	if err := query.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+		Order(primaryBillableSubscriptionOrder).
+		Find(&subs).Error; err != nil {
+		return nil, false, err
+	}
+	sawDistributorSubscription := false
+	for _, candidate := range subs {
+		sub := candidate
+		plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+		if err != nil {
+			return nil, sawDistributorSubscription, err
+		}
+		if resetDue {
+			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
+				return nil, sawDistributorSubscription, err
+			}
+		}
+		distributor := isDistributorSubscription(&sub, plan)
+		if !distributor {
+			continue
+		}
+		sawDistributorSubscription = true
+		unlimited := false
+		if sub.TokenLimit > 0 {
+			remaining := sub.TokenLimit - sub.TokenUsed
+			if remaining < requiredTokens {
+				continue
+			}
+		} else if isUnlimitedTrialSubscription(&sub) {
+			unlimited = true
+		} else {
+			continue
+		}
+		return &primaryBillableSubscription{
+			Subscription:     sub,
+			Plan:             plan,
+			Distributor:      distributor,
+			TokenUnlimited:   unlimited,
+			AmountUsedBefore: sub.AmountUsed,
+			TokenUsedBefore:  sub.TokenUsed,
+		}, sawDistributorSubscription, nil
+	}
+	return nil, sawDistributorSubscription, nil
+}
+
+func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
+	if userId <= 0 {
+		return SelfSubscriptionSummary{}, errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	summary := SelfSubscriptionSummary{}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		selection, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
+		if err != nil {
+			return err
+		}
+		if selection == nil {
+			return nil
+		}
+		sub := selection.Subscription
+		summary.ActiveCount = 1
+		summary.SubscriptionId = sub.Id
+		summary.PlanId = sub.PlanId
+		if selection.Plan != nil {
+			summary.PrimaryPlanTitle = selection.Plan.Title
+		}
+		summary.TokenLimit = sub.TokenLimit
+		summary.TokenUsed = sub.TokenUsed
+		if selection.TokenUnlimited {
+			summary.TokenUnlimited = true
+		} else if sub.TokenLimit > sub.TokenUsed {
+			summary.TokenRemaining = sub.TokenLimit - sub.TokenUsed
+		}
+		summary.ConcurrencyLimit = sub.ConcurrencyLimit
+		summary.NextResetTime = sub.NextResetTime
+		summary.EndTime = sub.EndTime
+		return nil
+	})
+	return summary, err
+}
+
 func HasActiveDistributorSubscription(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
@@ -1246,71 +1361,45 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return nil
 		}
 
-		var subs []UserSubscription
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
-			Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-			Order("CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 ELSE 0 END asc, end_time asc, id asc").
-			Find(&subs).Error; err != nil {
-			return errors.New("no active subscription")
+		selection, sawDistributorSubscription, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, distributorAmount, true, true)
+		if err != nil {
+			return err
 		}
-		if len(subs) == 0 {
-			return errors.New("no active subscription")
+		if selection == nil {
+			if !sawDistributorSubscription {
+				return errors.New("no active subscription")
+			}
+			return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
 		}
-		sawDistributorSubscription := false
-		for _, candidate := range subs {
-			sub := candidate
-			plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
-			if err != nil {
-				return err
-			}
-			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
-				return err
-			}
-			amountUsedBefore := sub.AmountUsed
-			tokenUsedBefore := sub.TokenUsed
-			distributor := isDistributorSubscription(&sub, plan)
-			if !distributor {
-				continue
-			}
-			sawDistributorSubscription = true
-			if sub.TokenLimit > 0 {
-				remain := sub.TokenLimit - tokenUsedBefore
-				if remain < distributorAmount {
-					continue
+		sub := selection.Subscription
+		amountUsedBefore := selection.AmountUsedBefore
+		tokenUsedBefore := selection.TokenUsedBefore
+		distributor := selection.Distributor
+		consumeAmount := distributorAmount
+		record := &SubscriptionPreConsumeRecord{
+			RequestId:          requestId,
+			UserId:             userId,
+			UserSubscriptionId: sub.Id,
+			PreConsumed:        consumeAmount,
+			Status:             "consumed",
+		}
+		if err := tx.Create(record).Error; err != nil {
+			var dup SubscriptionPreConsumeRecord
+			if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
+				if dup.Status == "refunded" {
+					return errors.New("subscription pre-consume already refunded")
 				}
-			} else if !isUnlimitedTrialSubscription(&sub) {
-				continue
+				fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
+				return nil
 			}
-			consumeAmount := distributorAmount
-			record := &SubscriptionPreConsumeRecord{
-				RequestId:          requestId,
-				UserId:             userId,
-				UserSubscriptionId: sub.Id,
-				PreConsumed:        consumeAmount,
-				Status:             "consumed",
-			}
-			if err := tx.Create(record).Error; err != nil {
-				var dup SubscriptionPreConsumeRecord
-				if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
-					if dup.Status == "refunded" {
-						return errors.New("subscription pre-consume already refunded")
-					}
-					fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
-					return nil
-				}
-				return err
-			}
-			sub.TokenUsed += consumeAmount
-			if err := tx.Save(&sub).Error; err != nil {
-				return err
-			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
-			return nil
+			return err
 		}
-		if !sawDistributorSubscription {
-			return errors.New("no active subscription")
+		sub.TokenUsed += consumeAmount
+		if err := tx.Save(&sub).Error; err != nil {
+			return err
 		}
-		return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+		fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
+		return nil
 	})
 	if err != nil {
 		return nil, err

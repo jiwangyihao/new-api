@@ -23,8 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
+  formatTokens,
   formatUseTime,
-  formatLogQuota,
   formatTimestampToDate,
 } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -46,6 +46,11 @@ import {
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
+  getLogTokenUsage,
+  getLogTokenUsageColumnValue,
+  getTokenNameMeta,
+  shouldShowCostDetails,
+  formatRatioCompact,
 } from '../../lib/format'
 import {
   isDisplayableLogType,
@@ -64,35 +69,12 @@ interface DetailSegment {
   danger?: boolean
 }
 
-function formatRatioCompact(ratio: number | undefined): string {
-  if (ratio == null || !Number.isFinite(ratio)) return '-'
-  return ratio % 1 === 0
-    ? String(ratio)
-    : ratio.toFixed(4).replace(/\.?0+$/, '')
-}
-
-function getGroupRatioText(other: LogOtherData | null): string | null {
-  const userGroupRatio = other?.user_group_ratio
-  if (
-    userGroupRatio != null &&
-    userGroupRatio !== -1 &&
-    Number.isFinite(userGroupRatio)
-  ) {
-    return `${formatRatioCompact(userGroupRatio)}x`
-  }
-
-  const groupRatio = other?.group_ratio
-  if (groupRatio != null && groupRatio !== 1 && Number.isFinite(groupRatio)) {
-    return `${formatRatioCompact(groupRatio)}x`
-  }
-
-  return null
-}
 
 function buildDetailSegments(
   log: UsageLog,
   other: LogOtherData | null,
-  t: (key: string, opts?: Record<string, unknown>) => string
+  t: (key: string, opts?: Record<string, unknown>) => string,
+  showCostDetails: boolean
 ): DetailSegment[] {
   if (log.type === 6) {
     return [{ text: t('Async task refund') }]
@@ -103,23 +85,37 @@ function buildDetailSegments(
   const isViolation = isViolationFeeLog(other)
   if (isViolation) {
     const segments: DetailSegment[] = []
-    segments.push({ text: t('Violation Fee'), danger: true })
+    segments.push({ text: t('Violation Deduction'), danger: true })
     if (other?.violation_fee_code) {
       segments.push({
         text: other.violation_fee_code,
         muted: true,
       })
     }
-    segments.push({
-      text: `${t('Fee')}: ${formatLogQuota(other?.fee_quota ?? log.quota)}`,
-      muted: true,
-    })
+    if (showCostDetails) {
+      segments.push({
+        text: `${t('Legacy Fee Quota')}: ${formatTokens(other?.fee_quota ?? log.quota)}`,
+        muted: true,
+      })
+    } else {
+      const tokenUsage = getLogTokenUsage(log, other)
+      segments.push({
+        text: `${t('Token Usage')}: ${formatTokens(tokenUsage)}`,
+        muted: true,
+      })
+    }
     return segments
   }
 
   if (!other) return []
 
   const segments: DetailSegment[] = []
+  if (!showCostDetails) {
+    const tokenUsage = getLogTokenUsage(log, other)
+    return tokenUsage > 0
+      ? [{ text: `${t('Token Usage')}: ${formatTokens(tokenUsage)}` }]
+      : []
+  }
 
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
   const formatPrice = (price: number) =>
@@ -456,16 +452,16 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       if (!tokenName) return null
 
       const other = parseLogOther(log.other)
+      const group = log.group || other?.group || ''
+      const otherWithGroup = group ? { ...other, group } : other
       const displayName = sensitiveVisible ? tokenName : '••••'
-      let group = log.group
-      if (!group) group = other?.group || ''
-
-      const metaParts: string[] = []
-      const groupRatioText = getGroupRatioText(other)
-      if (group) {
-        metaParts.push(sensitiveVisible ? group : '••••')
-      }
-      if (groupRatioText) metaParts.push(groupRatioText)
+      const metaParts = getTokenNameMeta(
+        otherWithGroup,
+        isAdmin && sensitiveVisible
+      )
+      const displayMetaParts = sensitiveVisible
+        ? metaParts
+        : metaParts.map(() => '••••')
 
       return (
         <div className='flex max-w-[150px] flex-col gap-0.5'>
@@ -477,9 +473,9 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
             showDot={false}
             className='border-border/60 bg-muted/30 text-foreground max-w-full overflow-hidden rounded-md border px-1.5 py-0.5 font-mono'
           />
-          {metaParts.length > 0 && (
+          {displayMetaParts.length > 0 && (
             <span className='text-muted-foreground/60 truncate text-[11px]'>
-              {metaParts.join(' · ')}
+              {displayMetaParts.join(' · ')}
             </span>
           )}
         </div>
@@ -684,15 +680,16 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
 
     {
-      accessorKey: 'quota',
+      id: 'token_usage',
+      accessorFn: getLogTokenUsageColumnValue,
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Cost')} />
+        <DataTableColumnHeader column={column} title={t('Token Usage')} />
       ),
       cell: ({ row }) => {
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
 
-        const quota = row.getValue('quota') as number
+        const tokenUsage = row.getValue('token_usage') as number
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
 
@@ -713,7 +710,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 </TooltipTrigger>
                 <TooltipContent>
                   <span>
-                    {t('Deducted by subscription')}: {formatLogQuota(quota)}
+                    {t('Deducted by subscription')}:{' '}
+                    {formatTokens(tokenUsage)}
                   </span>
                 </TooltipContent>
               </Tooltip>
@@ -721,17 +719,15 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           )
         }
 
-        const quotaStr = formatLogQuota(quota)
-
         return (
           <div className='flex flex-col gap-0.5'>
             <span className='border-border/80 bg-muted/60 inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums'>
-              {quotaStr}
+              {formatTokens(tokenUsage)}
             </span>
           </div>
         )
       },
-      meta: { label: t('Cost') },
+      meta: { label: t('Token Usage') },
     },
 
     {
@@ -742,7 +738,12 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         const log = row.original
         const other = parseLogOther(log.other)
 
-        const segments = buildDetailSegments(log, other, t)
+        const segments = buildDetailSegments(
+          log,
+          other,
+          t,
+          shouldShowCostDetails(isAdmin)
+        )
         const primary = segments[0]
         const hasMore = segments.length > 1
 

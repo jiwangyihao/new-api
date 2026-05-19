@@ -19,16 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import {
-  ArrowRight,
-  Flame,
-  ShieldCheck,
-  TrendingDown,
-} from 'lucide-react'
+import { ArrowRight, Flame, ShieldCheck, TrendingDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { getCurrencyLabel, isCurrencyDisplayEnabled } from '@/lib/currency'
-import { formatNumber, formatQuota } from '@/lib/format'
+import { formatNumber } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -36,12 +30,18 @@ import { Button } from '@/components/ui/button'
 import { StaggerContainer, StaggerItem } from '@/components/page-transition'
 import { getUserQuotaDates } from '@/features/dashboard/api'
 import { useSummaryCardsConfig } from '@/features/dashboard/hooks/use-dashboard-config'
+import {
+  buildSubscriptionSummaryView,
+  formatSubscriptionTokenAmount,
+  type SubscriptionSummaryHealthLevel,
+} from '@/features/dashboard/lib/subscription-summary'
 import type { QuotaDataItem } from '@/features/dashboard/types'
+import { getSelfSubscriptionFull } from '@/features/subscriptions/api'
 import { StatCard } from '../ui/stat-card'
 
 const SUMMARY_SPARKLINE_BUCKETS = 12
 
-type SummarySparklineKey = 'balance' | 'usage' | 'requests'
+type SummarySparklineKey = 'usage' | 'requests'
 
 function getBucketIndex(
   timestamp: number,
@@ -56,7 +56,6 @@ function getBucketIndex(
 
 function buildSummarySparklines(
   data: QuotaDataItem[],
-  currentBalance: number,
   start: number,
   end: number
 ): Record<SummarySparklineKey, number[]> {
@@ -71,23 +70,11 @@ function buildSummarySparklines(
       end,
       SUMMARY_SPARKLINE_BUCKETS
     )
-    usage[index] += Number(item.quota) || 0
+    usage[index] += Number(item.token_used) || 0
     requests[index] += Number(item.count) || 0
   }
 
-  let balance = currentBalance
-  const balanceTrend = Array.from(
-    { length: SUMMARY_SPARKLINE_BUCKETS },
-    () => 0
-  )
-
-  for (let index = SUMMARY_SPARKLINE_BUCKETS - 1; index >= 0; index--) {
-    balanceTrend[index] = Math.max(0, balance)
-    balance += usage[index]
-  }
-
   return {
-    balance: balanceTrend,
     usage,
     requests,
   }
@@ -102,40 +89,25 @@ function getSummarySparkline(
   return undefined
 }
 
-function getRunwayDays(remainQuota: number, recentUsage: number): number | null {
-  if (remainQuota <= 0 || recentUsage <= 0) return null
-  const days = remainQuota / recentUsage
-  if (!Number.isFinite(days)) return null
-  return days
-}
-
-type HealthLevel = 'healthy' | 'caution' | 'critical'
-
-function getHealthLevel(
-  remainQuota: number,
-  recentUsage: number
-): HealthLevel {
-  if (remainQuota <= 0) return 'critical'
-  const days = getRunwayDays(remainQuota, recentUsage)
-  if (days !== null && days < 3) return 'caution'
-  return 'healthy'
+function getRunwayLabel(runwayDays: number | null): string {
+  if (runwayDays === null) return ''
+  if (runwayDays < 1) return 'Less than 1 day left'
+  if (runwayDays > 999) return '999+ days'
+  return `~${formatNumber(Math.floor(runwayDays))} days`
 }
 
 const HEALTH_CONFIG: Record<
-  HealthLevel,
-  { dotClass: string; labelKey: string }
+  SubscriptionSummaryHealthLevel,
+  { dotClass: string }
 > = {
   healthy: {
     dotClass: 'bg-success',
-    labelKey: 'Healthy',
   },
   caution: {
     dotClass: 'bg-warning',
-    labelKey: 'Low balance',
   },
   critical: {
     dotClass: 'bg-destructive',
-    labelKey: 'Balance depleted',
   },
 }
 
@@ -143,12 +115,16 @@ const HEALTH_CONFIG: Record<
 export function SummaryCards() {
   const { t } = useTranslation()
   const user = useAuthStore((state) => state.auth.user)
-  const { status, loading } = useStatus()
+  const { loading } = useStatus()
 
   const summaryTimeRange = useMemo(() => computeTimeRange(1), [])
-  const remainQuota = Number(user?.quota ?? 0)
-  const usedQuota = Number(user?.used_quota ?? 0)
   const requestCount = Number(user?.request_count ?? 0)
+
+  const subscriptionSummaryQuery = useQuery({
+    queryKey: ['subscriptions', 'self', 'summary'],
+    queryFn: getSelfSubscriptionFull,
+    staleTime: 60 * 1000,
+  })
 
   const usageTrendQuery = useQuery({
     queryKey: [
@@ -167,62 +143,48 @@ export function SummaryCards() {
     staleTime: 60 * 1000,
   })
 
-  const summaryValues = useMemo(() => {
-    return {
-      usedDisplay: formatQuota(usedQuota),
-      requestCountDisplay: formatNumber(requestCount),
-    }
-  }, [requestCount, usedQuota])
+  const recentUsage = useMemo(
+    () =>
+      (usageTrendQuery.data?.data ?? []).reduce(
+        (total, item) => total + (Number(item.token_used) || 0),
+        0
+      ),
+    [usageTrendQuery.data?.data]
+  )
 
-  const currencyEnabledFromStore = isCurrencyDisplayEnabled()
-  const statusCurrencyFlag =
-    typeof status?.display_in_currency === 'boolean'
-      ? Boolean(status.display_in_currency)
-      : undefined
-  const currencyEnabled =
-    statusCurrencyFlag !== undefined
-      ? statusCurrencyFlag
-      : currencyEnabledFromStore
-  const currencyLabel = currencyEnabled ? getCurrencyLabel() : 'Tokens'
+  const summaryView = useMemo(
+    () =>
+      buildSubscriptionSummaryView(
+        subscriptionSummaryQuery.data?.data?.summary,
+        recentUsage
+      ),
+    [recentUsage, subscriptionSummaryQuery.data?.data?.summary]
+  )
+
+  const healthCfg = HEALTH_CONFIG[summaryView.healthLevel]
+  const runwayLabel = getRunwayLabel(summaryView.runwayDays)
 
   const sparklineData = useMemo(
     () =>
       buildSummarySparklines(
         usageTrendQuery.data?.data ?? [],
-        remainQuota,
         summaryTimeRange.start_timestamp,
         summaryTimeRange.end_timestamp
       ),
     [
-      remainQuota,
       summaryTimeRange.end_timestamp,
       summaryTimeRange.start_timestamp,
       usageTrendQuery.data?.data,
     ]
   )
 
-  const recentUsage = useMemo(
-    () =>
-      (usageTrendQuery.data?.data ?? []).reduce(
-        (total, item) => total + (Number(item.quota) || 0),
-        0
-      ),
-    [usageTrendQuery.data?.data]
-  )
-
-  const healthLevel = getHealthLevel(remainQuota, recentUsage)
-  const healthCfg = HEALTH_CONFIG[healthLevel]
-  const runwayDays = getRunwayDays(remainQuota, recentUsage)
-
-  const todayUsageDisplay = formatQuota(recentUsage)
-
   const items = useSummaryCardsConfig({
-    ...summaryValues,
-    todayUsageDisplay,
-    currencyEnabled,
-    currencyLabel,
+    remainingTokensDisplay: summaryView.remainingLabel,
+    cycleTokensDisplay: summaryView.usedLabel,
+    recentTokensDisplay: formatSubscriptionTokenAmount(recentUsage),
+    requestCountDisplay: formatNumber(requestCount),
   }).map((config, index) => {
-    const tones = ['rose', 'teal', 'gray'] as const
+    const tones = ['rose', 'teal', 'rose', 'gray'] as const
 
     return {
       key: config.key,
@@ -231,10 +193,7 @@ export function SummaryCards() {
       desc: config.description,
       icon: config.icon,
       tone: tones[index] ?? 'gray',
-      sparkline:
-        config.key === 'todayUsage'
-          ? sparklineData.usage
-          : getSummarySparkline(config.key, sparklineData),
+      sparkline: getSummarySparkline(config.key, sparklineData),
       sparklineVariant: 'line' as const,
     }
   })
@@ -249,7 +208,7 @@ export function SummaryCards() {
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm'>
-                {t('Monitor balance, usage, and request volume')}
+                {t('Monitor subscription tokens and request volume')}
               </p>
             </div>
           </div>
@@ -267,7 +226,7 @@ export function SummaryCards() {
                   tone={it.tone}
                   sparkline={it.sparkline}
                   sparklineVariant={it.sparklineVariant}
-                  loading={loading}
+                  loading={loading || subscriptionSummaryQuery.isLoading}
                 />
               </StaggerItem>
             ))}
@@ -278,7 +237,7 @@ export function SummaryCards() {
           <div className='flex flex-col gap-3'>
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-xs font-medium'>
-                {t('Credit remaining')}
+                {t('Subscription tokens remaining')}
               </span>
               <span className='flex items-center gap-1.5'>
                 <span
@@ -286,28 +245,28 @@ export function SummaryCards() {
                   aria-hidden='true'
                 />
                 <span className='text-muted-foreground text-[11px] font-medium'>
-                  {t(healthCfg.labelKey)}
+                  {t(summaryView.statusLabelKey)}
                 </span>
               </span>
             </div>
 
             <div className='font-mono text-2xl font-semibold tracking-tight'>
-              {formatQuota(remainQuota)}
+              {summaryView.remainingLabel}
             </div>
 
             <div className='grid grid-cols-2 gap-2'>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
                   <Flame className='size-3 shrink-0' aria-hidden='true' />
-                  <span className='truncate'>{t('Last 24h usage')}</span>
+                  <span className='truncate'>{t('Last 24h token usage')}</span>
                 </div>
                 <div className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'>
-                  {formatQuota(recentUsage)}
+                  {formatSubscriptionTokenAmount(recentUsage)}
                 </div>
               </div>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
-                  {runwayDays !== null && runwayDays < 3 ? (
+                  {summaryView.runwayDays !== null && summaryView.runwayDays < 3 ? (
                     <TrendingDown
                       className='size-3 shrink-0'
                       aria-hidden='true'
@@ -323,19 +282,15 @@ export function SummaryCards() {
                 <div
                   className={cn(
                     'mt-1.5 truncate text-xs font-semibold tabular-nums',
-                    healthLevel === 'critical' && 'text-destructive',
-                    healthLevel === 'caution' && 'text-warning'
+                    summaryView.healthLevel === 'critical' && 'text-destructive',
+                    summaryView.healthLevel === 'caution' && 'text-warning'
                   )}
                 >
-                  {runwayDays !== null
-                    ? runwayDays < 1
-                      ? t('Less than 1 day left')
-                      : runwayDays > 999
-                        ? `999+ ${t('days')}`
-                        : `~${formatNumber(Math.floor(runwayDays))} ${t('days')}`
-                    : remainQuota <= 0
-                      ? t('Balance depleted')
-                      : t('No recent usage')}
+                  {runwayLabel
+                    ? t(runwayLabel)
+                    : summaryView.healthLevel === 'critical'
+                      ? t(summaryView.statusLabelKey)
+                      : t('No recent token usage')}
                 </div>
               </div>
             </div>

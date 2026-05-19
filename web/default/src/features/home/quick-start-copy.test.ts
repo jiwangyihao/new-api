@@ -80,3 +80,39 @@ describe('Issue #3 quick start copy', () => {
     assert.match(dashboardSource, /step\.partial \? 0\.5/)
   })
 })
+
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
+}
+
+test('home and dashboard model directory links avoid pricing wording', () => {
+  const heroSource = readSource('./components/sections/hero.tsx')
+  const ctaSource = readSource('./components/sections/cta.tsx')
+  const dashboardOverviewSource = readSource(
+    '../dashboard/components/overview/overview-dashboard.tsx'
+  )
+  const combined = heroSource + ctaSource + dashboardOverviewSource
+
+  assert.doesNotMatch(combined, /View Pricing|Review model rates/)
+  assert.match(combined, /Model Directory|Browse Models|Browse available models/)
+})
+
+test('home terminal demo does not simulate cost', () => {
+  const demoSource = readSource('./components/hero-terminal-demo.tsx')
+
+  assert.doesNotMatch(
+    demoSource,
+    /cost\s*\$|0\.00003|demo\.tokens\s*\*|Total cost/i
+  )
+  assert.match(demoSource, /tokens|latency|plan/i)
+})
+
+test('ai context default usage does not include usd cost', () => {
+  const contextSource = readSource('../../components/ai-elements/context.tsx')
+
+  assert.doesNotMatch(
+    contextSource,
+    /getUsage|costUSD|Total cost|inputCost|outputCost|cache(?:Read|Creation)?Cost/i
+  )
+  assert.match(contextSource, /input|output|reasoning|cached|total/i)
+})

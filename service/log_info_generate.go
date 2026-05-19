@@ -144,7 +144,10 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 		if relayInfo.SubscriptionPlanTitle != "" {
 			other["subscription_plan_title"] = relayInfo.SubscriptionPlanTitle
 		}
-		// Compute "this request" subscription consumed + remaining
+		if relayInfo.SubscriptionDistributorTokenBilling {
+			appendSubscriptionTokenInfo(relayInfo, other)
+		}
+		// Compute legacy subscription consumed + remaining for compatibility.
 		consumed := relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
 		usedFinal := relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta
 		if consumed < 0 {
@@ -168,6 +171,29 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 		// Wallet quota is not deducted when billed from subscription.
 		other["wallet_quota_deducted"] = 0
 	}
+}
+
+func appendSubscriptionTokenInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	consumed := relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
+	if consumed < 0 {
+		consumed = 0
+	}
+	usedFinal := relayInfo.SubscriptionTokenUsedAfterPreConsume + relayInfo.SubscriptionPostDelta
+	if usedFinal < 0 {
+		usedFinal = 0
+	}
+	remaining := int64(0)
+	if !relayInfo.SubscriptionTokenUnlimited && relayInfo.SubscriptionTokenLimit > 0 {
+		remaining = relayInfo.SubscriptionTokenLimit - usedFinal
+		if remaining < 0 {
+			remaining = 0
+		}
+	}
+	other["subscription_token_limit"] = relayInfo.SubscriptionTokenLimit
+	other["subscription_token_used"] = usedFinal
+	other["subscription_token_remaining"] = remaining
+	other["subscription_token_unlimited"] = relayInfo.SubscriptionTokenUnlimited
+	other["subscription_tokens_consumed"] = consumed
 }
 
 func appendRequestConversionChain(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

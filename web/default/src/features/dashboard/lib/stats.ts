@@ -33,15 +33,14 @@ export function safeDivide(
 }
 
 /**
- * Calculate aggregated statistics from quota data
+ * Calculate aggregated statistics from usage data
  */
 export function calculateDashboardStats(data: QuotaDataItem[]) {
   return data.reduce(
     (acc, item) => ({
-      totalQuota: acc.totalQuota + (Number(item.quota) || 0),
       totalCount: acc.totalCount + (Number(item.count) || 0),
       totalTokens: acc.totalTokens + (Number(item.token_used) || 0),
     }),
-    { totalQuota: 0, totalCount: 0, totalTokens: 0 }
+    { totalCount: 0, totalTokens: 0 }
   )
 }

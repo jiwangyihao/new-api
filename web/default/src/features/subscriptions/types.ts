@@ -144,9 +144,25 @@ export interface CreateUserSubscriptionRequest {
 // Self Subscription Data (user-facing)
 // ============================================================================
 
+export interface SelfSubscriptionSummary {
+  active_count: number
+  subscription_id?: number
+  plan_id?: number
+  primary_plan_title?: string
+  token_limit: number
+  token_used: number
+  token_remaining: number
+  token_unlimited: boolean
+  concurrency_limit: number
+  next_reset_time?: number
+  end_time?: number
+}
+
 export interface SelfSubscriptionData {
+  billing_preference: string
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
+  summary: SelfSubscriptionSummary
 }
 
 // ============================================================================

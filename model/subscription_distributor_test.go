@@ -259,6 +259,24 @@ func TestSettleUserSubscription_UsesTokenUsedForDistributor(t *testing.T) {
 	assert.Equal(t, int64(8), sub.TokenUsed)
 }
 
+func TestPostConsumeUserSubscriptionDeltaOnlyChangesTokenUsed(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7451, Username: "delta_user", Status: common.UserStatusEnabled, AffCode: "aff7451"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7452, "delta", 0)
+	seedUserSubscriptionForDistributorTest(t, 7453, 7451, 7452, 0, 10, 1, "trial_code")
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", 7453).Update("source", "trial_code").Error)
+
+	require.NoError(t, PostConsumeUserSubscriptionDelta(7453, 7))
+
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7453).Error)
+	assert.Equal(t, int64(17), got.TokenUsed)
+	assert.Equal(t, "active", got.Status)
+	assert.Equal(t, "trial_code", got.GrantReason)
+	assert.Equal(t, "trial_code", got.Source)
+	assert.Equal(t, int64(0), got.TokenLimit)
+}
+
 func TestRefundUserSubscription_UsesRequestIDForDistributor(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7421, Username: "refund_user", Status: common.UserStatusEnabled, AffCode: "aff7421"}).Error)

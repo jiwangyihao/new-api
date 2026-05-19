@@ -1,10 +1,11 @@
 package model
 
 import (
+	"bytes"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
-
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
@@ -212,15 +213,15 @@ func assertRecordConsumeLogTokenAccounting(t *testing.T, username string, other 
 
 func TestRecordConsumeLogUsesSubscriptionConsumedForMeteredTokensAndQuotaData(t *testing.T) {
 	assertRecordConsumeLogTokenAccounting(t, "record-subscription-token-user", map[string]interface{}{
-		"billing_source":                 "subscription",
-		"subscription_tokens_consumed":   int64(80),
+		"billing_source":               "subscription",
+		"subscription_tokens_consumed": int64(80),
 	}, 80)
 }
 
 func TestRecordConsumeLogTreatsZeroSubscriptionConsumedAsAuthoritative(t *testing.T) {
 	assertRecordConsumeLogTokenAccounting(t, "record-zero-token-user", map[string]interface{}{
-		"billing_source":                 "subscription",
-		"subscription_tokens_consumed":   int64(0),
+		"billing_source":               "subscription",
+		"subscription_tokens_consumed": int64(0),
 	}, 0)
 }
 
@@ -228,4 +229,52 @@ func TestRecordConsumeLogFallsBackWhenSubscriptionConsumedMissing(t *testing.T) 
 	assertRecordConsumeLogTokenAccounting(t, "record-fallback-token-user", map[string]interface{}{
 		"billing_source": "subscription",
 	}, 15)
+}
+
+func TestRecordConsumeLogStdoutSummaryDoesNotSerializeFullParams(t *testing.T) {
+	resetLogStatTokenTestData(t)
+
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	oldDataExportEnabled := common.DataExportEnabled
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+		common.DataExportEnabled = oldDataExportEnabled
+	})
+
+	var buf bytes.Buffer
+	oldWriter := gin.DefaultWriter
+	gin.DefaultWriter = &buf
+	t.Cleanup(func() { gin.DefaultWriter = oldWriter })
+
+	ctx := testRecordConsumeLogContext(t, "perf-user")
+	RecordConsumeLog(ctx, 4001, RecordConsumeLogParams{
+		ChannelId:        7,
+		PromptTokens:     123,
+		CompletionTokens: 45,
+		ModelName:        "gpt-5.5",
+		TokenName:        "perf-token",
+		Quota:            999,
+		TokenId:          9,
+		UseTimeSeconds:   3,
+		IsStream:         true,
+		Group:            "default",
+		Other: map[string]interface{}{
+			"large_payload": strings.Repeat("x", 8192),
+		},
+	})
+
+	out := buf.String()
+	if strings.Contains(out, "params=") {
+		t.Fatalf("consume log stdout should not include full params JSON: %s", out)
+	}
+	if strings.Contains(out, "large_payload") || strings.Contains(out, strings.Repeat("x", 128)) {
+		t.Fatalf("consume log stdout should not include large Other payload: %s", out)
+	}
+	for _, want := range []string{"record consume log", "userId=4001", "model=gpt-5.5", "quota=999", "prompt=123", "completion=45"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("consume log stdout missing %q in %s", want, out)
+		}
+	}
 }

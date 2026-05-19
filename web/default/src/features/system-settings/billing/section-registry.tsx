@@ -63,6 +63,8 @@ const BILLING_SECTIONS = [
           QuotaForInviter: settings.QuotaForInviter,
           QuotaForInvitee: settings.QuotaForInvitee,
           TopUpLink: settings.TopUpLink,
+          MonthlyInvitationRewardPlanCode:
+            settings.MonthlyInvitationRewardPlanCode,
           general_setting: {
             docs_link: settings['general_setting.docs_link'],
           },

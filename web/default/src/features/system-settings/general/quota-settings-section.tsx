@@ -49,6 +49,7 @@ const quotaSchema = z.object({
   QuotaForInviter: z.coerce.number().min(0),
   QuotaForInvitee: z.coerce.number().min(0),
   TopUpLink: z.string(),
+  MonthlyInvitationRewardPlanCode: z.string().trim().min(1),
   general_setting: z.object({
     docs_link: z.string(),
   }),
@@ -206,6 +207,25 @@ export function QuotaSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t('Quota given to invited users')}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='MonthlyInvitationRewardPlanCode'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('Monthly Invitation Reward Plan Code')}</FormLabel>
+                <FormControl>
+                  <Input placeholder='basic_monthly' {...field} />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Business code of the subscription plan granted when an inviter has at least two qualified paid direct invitees.'
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>

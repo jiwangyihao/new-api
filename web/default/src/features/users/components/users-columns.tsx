@@ -41,6 +41,24 @@ function getQuotaProgressColor(percentage: number): string {
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
+export function getUserQuotaDisplayState(
+  user: Pick<User, 'quota' | 'used_quota'>
+) {
+  const used = user.used_quota
+  const remaining = user.quota
+  const hasQuota = remaining > 0
+  const total = hasQuota ? used + remaining : 0
+  const percentage = hasQuota && total > 0 ? (remaining / total) * 100 : 0
+
+  return {
+    hasQuota,
+    used,
+    remaining,
+    total,
+    percentage,
+  }
+}
+
 export function useUsersColumns(): ColumnDef<User>[] {
   const { t } = useTranslation()
   return [
@@ -166,12 +184,9 @@ export function useUsersColumns(): ColumnDef<User>[] {
       ),
       cell: ({ row }) => {
         const user = row.original
-        const used = user.used_quota
-        const remaining = user.quota
-        const total = used + remaining
-        const percentage = total > 0 ? (remaining / total) * 100 : 0
+        const quotaState = getUserQuotaDisplayState(user)
 
-        if (total === 0) {
+        if (!quotaState.hasQuota) {
           return (
             <StatusBadge
               label={t('No Quota')}
@@ -188,30 +203,33 @@ export function useUsersColumns(): ColumnDef<User>[] {
             >
               <div className='flex justify-between text-xs'>
                 <span className='font-medium tabular-nums'>
-                  {formatQuota(remaining)}
+                  {formatQuota(quotaState.remaining)}
                 </span>
                 <span className='text-muted-foreground tabular-nums'>
-                  {formatQuota(total)}
+                  {formatQuota(quotaState.total)}
                 </span>
               </div>
               <Progress
-                value={percentage}
-                className={cn('h-1.5', getQuotaProgressColor(percentage))}
+                value={quotaState.percentage}
+                className={cn(
+                  'h-1.5',
+                  getQuotaProgressColor(quotaState.percentage)
+                )}
               />
             </TooltipTrigger>
             <TooltipContent>
               <div className='space-y-1 text-xs'>
                 <div>
-                  {t('Used:')} {formatQuota(used)}
+                  {t('Used:')} {formatQuota(quotaState.used)}
                 </div>
                 <div>
-                  {t('Remaining:')} {formatQuota(remaining)}
+                  {t('Remaining:')} {formatQuota(quotaState.remaining)}
                 </div>
                 <div>
-                  {t('Total:')} {formatQuota(total)}
+                  {t('Total:')} {formatQuota(quotaState.total)}
                 </div>
                 <div>
-                  {t('Percentage:')} {percentage.toFixed(1)}%
+                  {t('Percentage:')} {quotaState.percentage.toFixed(1)}%
                 </div>
               </div>
             </TooltipContent>

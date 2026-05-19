@@ -1542,6 +1542,7 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if err != nil && sub.PlanId > 0 {
 		return err
 	}
+	updatedAt := common.GetTimestamp()
 	if isDistributorSubscription(&sub, plan) {
 		newUsed := sub.TokenUsed + delta
 		if newUsed < 0 {
@@ -1550,8 +1551,12 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 		if sub.TokenLimit > 0 && newUsed > sub.TokenLimit {
 			return fmt.Errorf("subscription token used exceeds limit, used=%d limit=%d", newUsed, sub.TokenLimit)
 		}
-		sub.TokenUsed = newUsed
-		return tx.Save(&sub).Error
+		return tx.Model(&UserSubscription{}).
+			Where("id = ?", userSubscriptionId).
+			Updates(map[string]interface{}{
+				"token_used": newUsed,
+				"updated_at": updatedAt,
+			}).Error
 	}
 	newUsed := sub.AmountUsed + delta
 	if newUsed < 0 {
@@ -1560,6 +1565,10 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
 		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
 	}
-	sub.AmountUsed = newUsed
-	return tx.Save(&sub).Error
+	return tx.Model(&UserSubscription{}).
+		Where("id = ?", userSubscriptionId).
+		Updates(map[string]interface{}{
+			"amount_used": newUsed,
+			"updated_at":  updatedAt,
+		}).Error
 }

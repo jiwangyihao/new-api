@@ -211,7 +211,6 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	if !common.LogConsumeEnabled {
 		return
 	}
-	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
 	username := c.GetString("username")
 	requestId := c.GetString(common.RequestIdKey)
 	upstreamRequestId := c.GetString(common.UpstreamRequestIdKey)
@@ -224,6 +223,19 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		}
 	}
 	meteredTokens := normalizedMeteredTokens(params.PromptTokens, params.CompletionTokens, params.Other)
+	logger.LogInfo(c, fmt.Sprintf(
+		"record consume log: userId=%d, model=%s, tokenId=%d, channelId=%d, quota=%d, prompt=%d, completion=%d, metered=%d, useTime=%d, stream=%t",
+		userId,
+		params.ModelName,
+		params.TokenId,
+		params.ChannelId,
+		params.Quota,
+		params.PromptTokens,
+		params.CompletionTokens,
+		meteredTokens,
+		params.UseTimeSeconds,
+		params.IsStream,
+	))
 	log := &Log{
 		UserId:           userId,
 		Username:         username,

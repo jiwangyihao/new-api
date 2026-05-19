@@ -26,26 +26,34 @@ func (PerfMetric) TableName() string {
 	return "perf_metrics"
 }
 
-func UpsertPerfMetric(metric *PerfMetric) error {
-	if metric == nil || metric.RequestCount == 0 {
-		return nil
-	}
-	return DB.Clauses(clause.OnConflict{
+func incrementPerfMetricColumn(name string, delta int64) clause.Expr {
+	return gorm.Expr("? + ?", clause.Column{Table: clause.CurrentTable, Name: name}, delta)
+}
+
+func perfMetricUpsertClause(metric *PerfMetric) clause.OnConflict {
+	return clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "model_name"},
 			{Name: "group"},
 			{Name: "bucket_ts"},
 		},
 		DoUpdates: clause.Assignments(map[string]interface{}{
-			"request_count":    gorm.Expr("request_count + ?", metric.RequestCount),
-			"success_count":    gorm.Expr("success_count + ?", metric.SuccessCount),
-			"total_latency_ms": gorm.Expr("total_latency_ms + ?", metric.TotalLatencyMs),
-			"ttft_sum_ms":      gorm.Expr("ttft_sum_ms + ?", metric.TtftSumMs),
-			"ttft_count":       gorm.Expr("ttft_count + ?", metric.TtftCount),
-			"output_tokens":    gorm.Expr("output_tokens + ?", metric.OutputTokens),
-			"generation_ms":    gorm.Expr("generation_ms + ?", metric.GenerationMs),
+			"request_count":    incrementPerfMetricColumn("request_count", metric.RequestCount),
+			"success_count":    incrementPerfMetricColumn("success_count", metric.SuccessCount),
+			"total_latency_ms": incrementPerfMetricColumn("total_latency_ms", metric.TotalLatencyMs),
+			"ttft_sum_ms":      incrementPerfMetricColumn("ttft_sum_ms", metric.TtftSumMs),
+			"ttft_count":       incrementPerfMetricColumn("ttft_count", metric.TtftCount),
+			"output_tokens":    incrementPerfMetricColumn("output_tokens", metric.OutputTokens),
+			"generation_ms":    incrementPerfMetricColumn("generation_ms", metric.GenerationMs),
 		}),
-	}).Create(metric).Error
+	}
+}
+
+func UpsertPerfMetric(metric *PerfMetric) error {
+	if metric == nil || metric.RequestCount == 0 {
+		return nil
+	}
+	return DB.Clauses(perfMetricUpsertClause(metric)).Create(metric).Error
 }
 
 func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) ([]PerfMetric, error) {

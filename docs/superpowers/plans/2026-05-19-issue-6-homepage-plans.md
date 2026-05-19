@@ -14,12 +14,15 @@
 
 - 实现根目录：`C:/Users/34404/source/repos/new-api`。
 - 规格文件：`C:/Users/34404/source/repos/new-api/docs/superpowers/specs/2026-05-19-issue-6-homepage-plans-spec.md`。
+- 实现前必须读取并遵守仓库根目录 `AGENTS.md` 与 `web/default/AGENTS.md`。
 - 直接在主工作区 `main` 分支开发，不使用 `.worktrees/issue-6-homepage-plans`。
 - 不删除、不格式化、不移动与 Issue #6 无关的未跟踪文件。
 - 不清理 `.worktrees/api-help-followup` 或任何其他 worktree。
 - 不修改受保护品牌、版权、归属信息，例如 `new-api`、`QuantumNous`、版权头。
 - 子代理实现任务只做指定文件范围内的变更，不运行项目级 build/test/lint/typecheck/formatter；主控在合并后统一运行验证。
 - 所有新增用户可见文案必须走 i18n。
+- 主控在启动代码实现前必须先提交本计划与规格文件变更，并确认没有 Issue #6 以外的 tracked 或 staged diff；若存在无关未跟踪文件，只记录并保持不动，不为追求“干净”而删除或移动。
+- 每个任务提交前必须执行 `git status --short`、`git diff -- <本任务文件>`、`git diff --cached -- <本任务文件>` 和 `git diff --cached --name-only`；只有确认目标文件和暂存区内没有无关 hunk 时才可 `git add <file>`，否则必须用 `git add -p` 只暂存 Issue #6 hunk，或先取消暂存无关 hunk。
 
 ## 1. 文件结构
 
@@ -119,10 +122,10 @@ package router
 import (
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -130,6 +133,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type subscriptionPlansPublicRouteResponse struct {
+	Success bool `json:"success"`
+	Data []struct {
+		Plan map[string]any `json:"plan"`
+	} `json:"data"`
+}
 
 func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -154,16 +164,39 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	engine.ServeHTTP(publicRecorder, publicReq)
 	require.Equal(t, http.StatusOK, publicRecorder.Code)
 
+	var payload subscriptionPlansPublicRouteResponse
+	require.NoError(t, common.Unmarshal(publicRecorder.Body.Bytes(), &payload))
+	require.True(t, payload.Success)
+	require.Len(t, payload.Data, 2)
+
+	allowedPlanKeys := map[string]struct{}{
+		"id": {},
+		"title": {},
+		"subtitle": {},
+		"price_amount": {},
+		"currency": {},
+		"duration_unit": {},
+		"duration_value": {},
+		"custom_seconds": {},
+		"monthly_token_limit": {},
+		"concurrency_limit": {},
+		"public_visible": {},
+	}
+
+	assert.Equal(t, "Public High", payload.Data[0].Plan["title"])
+	assert.Equal(t, "Public Low", payload.Data[1].Plan["title"])
+	for _, record := range payload.Data {
+		require.Len(t, record.Plan, len(allowedPlanKeys))
+		for key := range record.Plan {
+			_, ok := allowedPlanKeys[key]
+			assert.Truef(t, ok, "unexpected public plan key %q", key)
+		}
+	}
+
 	body := publicRecorder.Body.String()
-	assert.Contains(t, body, `"title":"Public High"`)
-	assert.Contains(t, body, `"title":"Public Low"`)
 	assert.NotContains(t, body, "Hidden Plan")
 	assert.NotContains(t, body, "Disabled Plan")
 	assert.NotContains(t, body, "Trial Plan")
-	assert.Less(t, strings.Index(body, "Public High"), strings.Index(body, "Public Low"))
-
-	assert.Contains(t, body, `"subtitle"`)
-	assert.Contains(t, body, `"price_amount"`)
 	assert.NotContains(t, body, "stripe_price_id")
 	assert.NotContains(t, body, "creem_product_id")
 	assert.NotContains(t, body, "max_purchase_per_user")
@@ -185,18 +218,39 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	engine.ServeHTTP(selfRecorder, selfReq)
 	require.Equal(t, http.StatusUnauthorized, selfRecorder.Code)
 }
+
+func TestSubscriptionPlansProtectedDTOStillIncludesPurchaseFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupSubscriptionPublicPlansRouteTestDB(t)
+	seedSubscriptionPublicPlanRouteTestPlans(t)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/subscription/plans", nil)
+	controller.GetSubscriptionPlans(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	body := recorder.Body.String()
+	assert.Contains(t, body, "stripe_price_id")
+	assert.Contains(t, body, "creem_product_id")
+	assert.Contains(t, body, "max_purchase_per_user")
+	assert.Contains(t, body, "upgrade_group")
+	assert.Contains(t, body, "business_code")
+	assert.Contains(t, body, "reward_eligible")
+}
 ```
 
-- [ ] 测试 helper 必须创建四类套餐：公开启用普通套餐、隐藏套餐、禁用套餐、试用套餐。
-- [ ] 若 router 包现有测试没有 DB 初始化工具，按项目已有 model/controller 测试模式实现最小初始化；不要依赖外部数据库。
-- [ ] 如果 exact key set 断言更适合解析 JSON，请在测试中解析响应并断言 `plan` key 集严格等于公开字段集合。
+- [ ] `setupSubscriptionPublicPlansRouteTestDB(t)` 必须使用独立内存 SQLite，保存并恢复 `model.DB`、`model.LOG_DB`、`common.UsingSQLite`、`common.UsingMySQL`、`common.UsingPostgreSQL`、`common.RedisEnabled` 等全局状态，`AutoMigrate(&model.SubscriptionPlan{})`，并在清理阶段关闭底层 `sql.DB`。
+- [ ] `seedSubscriptionPublicPlanRouteTestPlans(t)` 必须创建公开启用普通套餐、隐藏套餐、禁用套餐、试用套餐；对 `Enabled=false`、`PublicVisible=false`、`IsTrial=true` 等受 GORM default/零值影响的字段，必须在 `Create` 后用 `Updates(map[string]interface{}{...})` 或 `Select` 强制落库。
+- [ ] 测试必须解析 JSON 并断言每个 `data[*].plan` key 集严格等于公开字段集合；字符串 `NotContains` 只能作为额外泄露保护，不能替代 exact key set。
+- [ ] 必须包含受保护购买 DTO 回归测试：可以直接调用 `controller.GetSubscriptionPlans`，也可以构造带 session cookie 和 `New-Api-User` header 的认证路由请求；断言完整购买字段仍存在。
 
 ### 步骤 A2：运行后端失败测试
 
 - [ ] 运行：
 
 ```bash
-go test ./router -run 'TestSubscriptionPlansPublicRoute' -count=1
+go test ./router -run 'TestSubscriptionPlans(PublicRoute|ProtectedDTOStillIncludesPurchaseFields)' -count=1
 ```
 
 - [ ] 预期：失败，原因是 `/api/subscription/public/plans` 当前未注册或返回 404。
@@ -289,7 +343,7 @@ subscriptionRoute.Use(middleware.UserAuth())
 - [ ] 运行：
 
 ```bash
-go test ./router -run 'TestSubscriptionPlansPublicRoute' -count=1
+go test ./router -run 'TestSubscriptionPlans(PublicRoute|ProtectedDTOStillIncludesPurchaseFields)' -count=1
 ```
 
 - [ ] 预期：通过。
@@ -326,21 +380,30 @@ import { describe, test } from 'node:test'
 
 const apiSource = readFileSync(new URL('./api.ts', import.meta.url), 'utf8')
 
+function exportedFunctionSource(name: string): string {
+  const match = apiSource.match(
+    new RegExp(`export async function ${name}\\([^]*?\\n}`)
+  )
+  assert.ok(match, `missing exported function ${name}`)
+  return match[0]
+}
+
 describe('home public plans API helper', () => {
   test('uses an isolated quiet public endpoint for the home page', () => {
-    assert.match(apiSource, /getHomePublicPlansQuiet/)
-    assert.match(apiSource, /\/api\/subscription\/public\/plans/)
-    assert.match(apiSource, /skipErrorHandler:\s*true/)
-    assert.match(apiSource, /skipBusinessError:\s*true/)
-    assert.match(apiSource, /disableDuplicate:\s*true/)
-    assert.match(apiSource, /catch\s*\{/)
-    assert.match(apiSource, /success:\s*false/) 
-    assert.match(apiSource, /data:\s*\[\]/)
+    const source = exportedFunctionSource('getHomePublicPlansQuiet')
+    assert.match(source, /\/api\/subscription\/public\/plans/)
+    assert.match(source, /skipErrorHandler:\s*true/)
+    assert.match(source, /skipBusinessError:\s*true/)
+    assert.match(source, /disableDuplicate:\s*true/)
+    assert.match(source, /catch\s*\{/)
+    assert.match(source, /success:\s*false/)
+    assert.match(source, /data:\s*\[\]/)
   })
 
   test('keeps the purchasable plans helper on the protected endpoint', () => {
-    assert.match(apiSource, /getPublicPlans\(\)/)
-    assert.match(apiSource, /\/api\/subscription\/plans/)
+    const source = exportedFunctionSource('getPublicPlans')
+    assert.match(source, /\/api\/subscription\/plans/)
+    assert.doesNotMatch(source, /\/api\/subscription\/public\/plans/)
   })
 })
 ```
@@ -354,14 +417,38 @@ describe('home public plans API helper', () => {
 ```ts
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import {
-  HOME_PLANS_PREVIEW_LIMIT,
-  hasMoreHomePlans,
-  selectHomePlanRecords,
-} from './plans-preview'
-import type { PublicPlanRecord } from '@/features/subscriptions/types'
 
-function record(id: number, publicVisible = true): PublicPlanRecord {
+type PublicPlanRecordForTest = {
+  plan: {
+    id: number
+    title: string
+    subtitle: string
+    price_amount: number
+    currency: string
+    duration_unit: string
+    duration_value: number
+    custom_seconds: number
+    monthly_token_limit: number
+    concurrency_limit: number
+    public_visible: boolean
+  }
+}
+
+type PlansPreviewModule = {
+  HOME_PLANS_PREVIEW_LIMIT?: number
+  selectHomePlanRecords?: (records?: readonly unknown[]) => PublicPlanRecordForTest[]
+  hasMoreHomePlans?: (records?: readonly unknown[]) => boolean
+}
+
+async function loadPlansPreviewModule(): Promise<PlansPreviewModule> {
+  try {
+    return (await import('./plans-preview')) as unknown as PlansPreviewModule
+  } catch {
+    return {}
+  }
+}
+
+function record(id: number, publicVisible = true): PublicPlanRecordForTest {
   return {
     plan: {
       id,
@@ -380,23 +467,29 @@ function record(id: number, publicVisible = true): PublicPlanRecord {
 }
 
 describe('home plans preview selection', () => {
-  test('keeps backend order and limits to three visible plans', () => {
-    const selected = selectHomePlanRecords([
+  test('keeps backend order and limits to three visible plans', async () => {
+    const mod = await loadPlansPreviewModule()
+    assert.equal(mod.HOME_PLANS_PREVIEW_LIMIT, 3)
+    assert.equal(typeof mod.selectHomePlanRecords, 'function')
+
+    const selected = mod.selectHomePlanRecords?.([
       record(5),
       record(4),
       record(3),
       record(2),
     ])
 
-    assert.equal(HOME_PLANS_PREVIEW_LIMIT, 3)
     assert.deepEqual(
-      selected.map((item) => item.plan.id),
+      selected?.map((item) => item.plan.id),
       [5, 4, 3]
     )
   })
 
-  test('filters hidden and malformed records without type assertions', () => {
-    const selected = selectHomePlanRecords([
+  test('filters hidden and malformed records without type assertions', async () => {
+    const mod = await loadPlansPreviewModule()
+    assert.equal(typeof mod.selectHomePlanRecords, 'function')
+
+    const selected = mod.selectHomePlanRecords?.([
       record(3, false),
       null,
       undefined,
@@ -405,18 +498,21 @@ describe('home plans preview selection', () => {
     ])
 
     assert.deepEqual(
-      selected.map((item) => item.plan.id),
+      selected?.map((item) => item.plan.id),
       [2]
     )
   })
 
-  test('detects when more visible plans are available after filtering', () => {
+  test('detects when more visible plans are available after filtering', async () => {
+    const mod = await loadPlansPreviewModule()
+    assert.equal(typeof mod.hasMoreHomePlans, 'function')
+
     assert.equal(
-      hasMoreHomePlans([record(4), record(3), record(2), record(1)]),
+      mod.hasMoreHomePlans?.([record(4), record(3), record(2), record(1)]),
       true
     )
     assert.equal(
-      hasMoreHomePlans([record(4), record(3), record(2), record(1, false)]),
+      mod.hasMoreHomePlans?.([record(4), record(3), record(2), record(1, false)]),
       false
     )
   })
@@ -470,7 +566,22 @@ type DurationPlanLike = {
 }
 
 export function formatDuration(plan: DurationPlanLike, t: TranslationFn): string {
-  // existing body unchanged
+  const unit = plan?.duration_unit || 'month'
+  const value = plan?.duration_value || 1
+  const unitLabels: Record<string, string> = {
+    year: t('years'),
+    month: t('months'),
+    day: t('days'),
+    hour: t('hours'),
+    custom: t('Custom (seconds)'),
+  }
+  if (unit === 'custom') {
+    const seconds = plan?.custom_seconds || 0
+    if (seconds >= 86400) return `${Math.floor(seconds / 86400)} ${t('days')}`
+    if (seconds >= 3600) return `${Math.floor(seconds / 3600)} ${t('hours')}`
+    return `${seconds} ${t('seconds')}`
+  }
+  return `${value} ${unitLabels[unit] || unit}`
 }
 ```
 
@@ -599,13 +710,35 @@ function readSource(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
 }
 
+function readOptionalSource(relativePath: string): string {
+  try {
+    return readSource(relativePath)
+  } catch {
+    return ''
+  }
+}
+
 const homeSource = readSource('./index.tsx')
 const heroSource = readSource('./components/sections/hero.tsx')
 const demoSource = readSource('./components/hero-terminal-demo.tsx')
 const componentsIndexSource = readSource('./components/index.ts')
-const plansPreviewSource = readSource('./components/sections/plans-preview.tsx')
+const plansPreviewSource = readOptionalSource(
+  './components/sections/plans-preview.tsx'
+)
 
 describe('Issue #6 home page copy and sections', () => {
+  test('keeps custom home page content before the default landing sections', () => {
+    assert.match(homeSource, /useHomePageContent/)
+    assert.match(homeSource, /if \(content\)/)
+    assert.match(homeSource, /isUrl \? \(/)
+    assert.match(homeSource, /<iframe/)
+    assert.match(homeSource, /Markdown/)
+    assert.ok(
+      homeSource.indexOf('if (content)') >= 0 &&
+        homeSource.indexOf('if (content)') < homeSource.indexOf('<PlansPreview />')
+    )
+  })
+
   test('uses plans preview instead of default stats and features', () => {
     assert.match(homeSource, /<PlansPreview \/>/)
     assert.doesNotMatch(homeSource, /<Stats \/>/)
@@ -646,7 +779,7 @@ describe('Issue #6 home page copy and sections', () => {
 })
 ```
 
-- [ ] 该测试会先失败，因为 `plans-preview.tsx` 还不存在或首页未改。
+- [ ] 该测试会先以断言失败方式失败：`plans-preview.tsx` 不存在时 `plansPreviewSource` 为 `''`，相关 `assert.match` 失败；首页未改时默认组合、Hero 或 API demo 断言失败。不得让测试因 ENOENT 或模块解析错误失败。
 
 ### 步骤 C2：运行首页契约失败测试
 
@@ -665,7 +798,24 @@ bunx tsx --test src/features/home/home-page-copy.test.ts
 - [ ] 组件骨架：
 
 ```tsx
-/* copyright header matching project files */
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
 import { Link } from '@tanstack/react-router'
 import { Check, Sparkles } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
@@ -1013,17 +1163,22 @@ git commit -m "feat(web): 补齐首页套餐文案翻译"
 
 ## 6. 最终验证
 
-完成所有任务和审查修复后，主控运行：
+完成所有任务和审查修复后，主控逐条运行并记录每条命令的退出码；不得把多条验证命令拼成会掩盖前序失败的同一条 shell 链：
 
 ```bash
-go test ./router -run 'TestSubscriptionPlansPublicRoute' -count=1
-cd web/default
-bunx tsx --test \
+go test ./router -run 'TestSubscriptionPlans(PublicRoute|ProtectedDTOStillIncludesPurchaseFields)' -count=1
+```
+
+```bash
+cd web/default && bunx tsx --test \
   src/features/subscriptions/api.test.ts \
   src/features/home/home-page-copy.test.ts \
   src/features/home/lib/plans-preview.test.ts \
   src/features/home/quick-start-copy.test.ts
-bun run typecheck
+```
+
+```bash
+cd web/default && bun run typecheck
 ```
 
 若任何后端过滤 / DTO 测试放在 `controller` 包，还必须运行对应命令：
@@ -1049,15 +1204,15 @@ go test ./controller -run 'Test(GetPublicSubscriptionPlans|GetSubscriptionPlans)
 
 ## 7. 子代理拆分建议
 
-可以并发执行时的推荐拆分：
+推荐执行顺序：
 
-1. **后端代理**：任务 A，文件限定 `controller/subscription.go`、`router/api-router.go`、`router/subscription_public_plans_route_test.go`。
-2. **前端数据代理**：任务 B，文件限定 `web/default/src/features/subscriptions/types.ts`、`api.ts`、`lib/format.ts`、`api.test.ts`、`web/default/src/features/home/lib/plans-preview.ts`、`plans-preview.test.ts`。
-3. **前端首页代理**：任务 C，文件限定 `web/default/src/features/home/components/sections/plans-preview.tsx`、`index.tsx`、`components/index.ts`、`hero.tsx`、`hero-terminal-demo.tsx`、`constants.ts`、`home-page-copy.test.ts`。
-4. **i18n 代理**：任务 D，应在前端首页代理确定最终新增 key 后执行，或只负责 locale 文件和 i18n smoke 测试补充。
+1. **后端代理**：任务 A，文件限定 `controller/subscription.go`、`router/api-router.go`、`router/subscription_public_plans_route_test.go`。可与任务 B 并行。
+2. **前端数据代理**：任务 B，文件限定 `web/default/src/features/subscriptions/types.ts`、`api.ts`、`lib/format.ts`、`api.test.ts`、`web/default/src/features/home/lib/plans-preview.ts`、`plans-preview.test.ts`。可与任务 A 并行。
+3. **前端首页代理**：任务 C，必须在任务 B 的契约文件落地后执行；文件限定 `web/default/src/features/home/components/sections/plans-preview.tsx`、`index.tsx`、`components/index.ts`、`hero.tsx`、`hero-terminal-demo.tsx`、`constants.ts`、`home-page-copy.test.ts`。
+4. **i18n 代理**：任务 D，必须在任务 C 的 `home-page-copy.test.ts` 稳定后执行；若必须提前并行，只允许修改 locale 文件，i18n smoke 测试由主控或首页代理合并。
 
 冲突控制：
 
-- 前端首页代理会依赖前端数据代理提供的 `PublicPlanRecord`、`getHomePublicPlansQuiet` 和 `selectHomePlanRecords` 契约；若并发，必须严格按本计划中的名称实现，不得改名。
-- i18n 代理可能与前端首页代理共同修改 `home-page-copy.test.ts`；如果并发，指定前端首页代理负责测试主体，i18n 代理只追加 i18n smoke 块或由主控合并。
+- 前端首页代理依赖前端数据代理提供的 `PublicPlanRecord`、`getHomePublicPlansQuiet` 和 `selectHomePlanRecords` 契约；任务 C 不得与任务 B 竞争修改这些文件。
+- i18n 代理不得与前端首页代理同时改写 `home-page-copy.test.ts`；如果发现该文件已有未合并改动，必须停止并通过 IRC 向主控确认。
 - 所有代理不得运行项目级验证、lint 或 formatter；主控统一验证。

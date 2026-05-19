@@ -100,6 +100,8 @@ export const STATIC_I18N_KEYS = [
   'Last 24h token usage',
   'Browse Models',
   'No recent token usage',
+  'Subscription resets at',
+  'Subscription expires at',
 
   // Roles
   'Super Admin',

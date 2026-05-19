@@ -19,10 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, Flame, ShieldCheck, TrendingDown } from 'lucide-react'
+import { ArrowRight, Flame, CalendarClock } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { formatNumber } from '@/lib/format'
+import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
 import { cn } from '@/lib/utils'
 import { useStatus } from '@/hooks/use-status'
@@ -89,12 +89,6 @@ function getSummarySparkline(
   return undefined
 }
 
-function getRunwayLabel(runwayDays: number | null): string {
-  if (runwayDays === null) return ''
-  if (runwayDays < 1) return 'Less than 1 day left'
-  if (runwayDays > 999) return '999+ days'
-  return `~${formatNumber(Math.floor(runwayDays))} days`
-}
 
 const HEALTH_CONFIG: Record<
   SubscriptionSummaryHealthLevel,
@@ -162,7 +156,6 @@ export function SummaryCards() {
   )
 
   const healthCfg = HEALTH_CONFIG[summaryView.healthLevel]
-  const runwayLabel = getRunwayLabel(summaryView.runwayDays)
 
   const sparklineData = useMemo(
     () =>
@@ -266,31 +259,18 @@ export function SummaryCards() {
               </div>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
-                  {summaryView.runwayDays !== null && summaryView.runwayDays < 3 ? (
-                    <TrendingDown
-                      className='size-3 shrink-0'
-                      aria-hidden='true'
-                    />
-                  ) : (
-                    <ShieldCheck
-                      className='size-3 shrink-0'
-                      aria-hidden='true'
-                    />
-                  )}
-                  <span className='truncate'>{t('Runway')}</span>
+                  <CalendarClock
+                    className='size-3 shrink-0'
+                    aria-hidden='true'
+                  />
+                  <span className='truncate'>{t(summaryView.timeLabelKey)}</span>
                 </div>
                 <div
-                  className={cn(
-                    'mt-1.5 truncate text-xs font-semibold tabular-nums',
-                    summaryView.healthLevel === 'critical' && 'text-destructive',
-                    summaryView.healthLevel === 'caution' && 'text-warning'
-                  )}
+                  className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'
                 >
-                  {runwayLabel
-                    ? t(runwayLabel)
-                    : summaryView.healthLevel === 'critical'
-                      ? t(summaryView.statusLabelKey)
-                      : t('No recent token usage')}
+                  {summaryView.timeTimestamp
+                    ? formatTimestampToDate(summaryView.timeTimestamp)
+                    : '-'}
                 </div>
               </div>
             </div>

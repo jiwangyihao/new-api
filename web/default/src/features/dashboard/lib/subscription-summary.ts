@@ -25,7 +25,8 @@ export interface SubscriptionSummaryView {
   usedLabel: string
   limitLabel: string
   healthLevel: SubscriptionSummaryHealthLevel
-  runwayDays: number | null
+  timeLabelKey: string
+  timeTimestamp: number | null
   statusLabelKey: string
 }
 
@@ -47,24 +48,9 @@ export function formatSubscriptionTokenAmount(value: number): string {
   return `${millions < 10 ? millions.toFixed(2) : millions.toFixed(1)}M`
 }
 
-export function getSubscriptionRunwayDays(
-  summary: SelfSubscriptionSummary | undefined,
-  recentTokens: number
-): number | null {
-  if (!summary || summary.active_count <= 0 || summary.token_unlimited) {
-    return null
-  }
-  const remaining = normalizeAmount(summary.token_remaining)
-  const recent = normalizeAmount(recentTokens)
-  if (remaining <= 0 || recent <= 0) return null
-  const days = remaining / recent
-  if (!Number.isFinite(days)) return null
-  return days
-}
-
 export function buildSubscriptionSummaryView(
   summary: SelfSubscriptionSummary | undefined,
-  recentTokens = 0
+  _recentTokens = 0
 ): SubscriptionSummaryView {
   if (!summary || summary.active_count <= 0) {
     return {
@@ -72,7 +58,8 @@ export function buildSubscriptionSummaryView(
       usedLabel: '0',
       limitLabel: '0',
       healthLevel: 'critical',
-      runwayDays: null,
+      timeLabelKey: 'Subscription expires at',
+      timeTimestamp: null,
       statusLabelKey: 'Subscription required',
     }
   }
@@ -85,22 +72,22 @@ export function buildSubscriptionSummaryView(
       usedLabel: formatSubscriptionTokenAmount(used),
       limitLabel: 'Unlimited',
       healthLevel: 'healthy',
-      runwayDays: null,
+      timeLabelKey: summary.next_reset_time
+        ? 'Subscription resets at'
+        : 'Subscription expires at',
+      timeTimestamp: summary.next_reset_time || summary.end_time || null,
       statusLabelKey: 'Healthy',
     }
   }
 
   const remaining = normalizeAmount(summary.token_remaining)
-  const runwayDays = getSubscriptionRunwayDays(summary, recentTokens)
+
   let healthLevel: SubscriptionSummaryHealthLevel = 'healthy'
   let statusLabelKey = 'Healthy'
 
   if (remaining <= 0) {
     healthLevel = 'critical'
     statusLabelKey = 'Tokens depleted'
-  } else if (runwayDays !== null && runwayDays < 3) {
-    healthLevel = 'caution'
-    statusLabelKey = 'Low token balance'
   }
 
   return {
@@ -108,7 +95,10 @@ export function buildSubscriptionSummaryView(
     usedLabel: formatSubscriptionTokenAmount(used),
     limitLabel: formatSubscriptionTokenAmount(summary.token_limit),
     healthLevel,
-    runwayDays,
+    timeLabelKey: summary.next_reset_time
+      ? 'Subscription resets at'
+      : 'Subscription expires at',
+    timeTimestamp: summary.next_reset_time || summary.end_time || null,
     statusLabelKey,
   }
 }

@@ -97,3 +97,26 @@ test('formatSubscriptionSummary marks missing subscription as required', () => {
   assert.equal(result.remainingLabel, 'Subscription required')
   assert.equal(result.healthLevel, 'critical')
 })
+
+test('formatSubscriptionSummary exposes reset time when present', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      next_reset_time: 1_700_000_000,
+      end_time: 1_800_000_000,
+    })
+  )
+
+  assert.equal(result.timeLabelKey, 'Subscription resets at')
+  assert.equal(result.timeTimestamp, 1_700_000_000)
+})
+
+test('formatSubscriptionSummary falls back to expiry time when reset time is absent', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      end_time: 1_800_000_000,
+    })
+  )
+
+  assert.equal(result.timeLabelKey, 'Subscription expires at')
+  assert.equal(result.timeTimestamp, 1_800_000_000)
+})

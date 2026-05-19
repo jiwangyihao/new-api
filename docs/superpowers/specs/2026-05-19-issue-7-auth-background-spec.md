@@ -172,7 +172,7 @@ import signUpAnimeGirlBackground from '../assets/sign-up-anime-girl.svg'
 - 背景专用类 `bg-background/90`、`shadow-2xl`、`backdrop-blur`、`rounded-3xl`、背景遮罩层等必须位于 `backgroundImageSrc` / `hasBackground` 控制的分支或 class 组合中；未传入背景时默认认证页不得启用注册页专用卡片视觉。
 - `SignUp` import `sign-up-anime-girl.svg` 并向 `AuthLayout` 传入 `backgroundImageSrc`。
 - `SignIn` 源码不传入 `backgroundImageSrc`。
-- SVG 文件包含 `AI-generated original illustration`、`No external image source`、`Intended for commercial use`，且不包含 `http://`、`https://`、`data:`、`base64`、`<image`、`<foreignObject`、`<script`、`@import`、`url(` 等外部资源或脚本入口；同时应包含矢量绘制元素，例如 `<path`、`<circle`、`<ellipse`、`<linearGradient`。
+- SVG 文件包含 `AI-generated original illustration`、`No external image source`、`Intended for commercial use`，且不包含 `data:`、`base64`、`<image`、`<foreignObject`、`<script`、`@import`、`xlink:href`、`href="http`、`href='http`、`src="http`、`src='http`、`url(http`、`url(//` 等外部资源或脚本入口；同时应包含矢量绘制元素，例如 `<path`、`<circle`、`<ellipse`、`<linearGradient`。
 
 ### 6.2 定向验证命令
 

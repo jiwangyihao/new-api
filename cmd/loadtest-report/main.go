@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -49,7 +50,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		cmp, err := report.BuildCompareReport(base, candidate, thresholds)
 		if err != nil {
-			if *failOnRegression {
+			var regression report.RegressionError
+			if !errors.As(err, &regression) || *failOnRegression {
 				writeErr(stderr, err)
 				return 2
 			}

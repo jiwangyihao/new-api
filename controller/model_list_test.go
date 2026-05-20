@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -16,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -239,4 +241,67 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	require.NotContains(t, ids, "zz-token-tiered-empty-expr-model")
 	require.NotContains(t, ids, "zz-token-tiered-missing-expr-model")
 	require.NotContains(t, ids, "zz-token-unpriced-model")
+}
+
+func TestGetAllUsersReportsInviteCountsFromRelationships(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	rewardCode := "admin-list-reward"
+	paidCode := "admin-list-paid"
+	now := time.Now().Unix()
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, model.DB.Create(&model.User{Id: 9801, Username: "list-inviter", Status: common.UserStatusEnabled, AffCode: "list-inviter", AffCount: 0, AffHistoryQuota: 0}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9802, Username: "list-invitee-a", Status: common.UserStatusEnabled, AffCode: "list-a", InviterId: 9801}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9803, Username: "list-invitee-b", Status: common.UserStatusEnabled, AffCode: "list-b", InviterId: 9801}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9811, Title: "Reward Basic", Enabled: true, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &rewardCode}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9812, Title: "Paid Standard", Enabled: true, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2000, ConcurrencyLimit: 2, RewardEligible: true, BusinessCode: &paidCode}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 9821, UserId: 9802, PlanId: 9812, Status: "active", StartTime: now - 60, EndTime: now + 3600, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{UserId: 9802, PlanId: 9812, Money: 80, TradeNo: "list-invite-paid", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusSuccess, CreateTime: now - 60, CompleteTime: now - 60}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 9822, UserId: 9801, PlanId: 9811, Status: "active", StartTime: now - 30, EndTime: now + 7200, GrantReason: model.SubscriptionGrantMonthlyInviteEntitlement, Source: model.SubscriptionGrantMonthlyInviteEntitlement}).Error)
+	require.NoError(t, model.DB.Create(&model.InvitationMonthlyEntitlement{InviterId: 9801, RewardMonth: time.Now().UTC().Format("2006-01"), QualifiedActiveCount: 1, RewardPlanId: 9811, RewardSubscriptionId: 9822, Status: model.InvitationEntitlementStatusQualified}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/user/?p=1&page_size=10", nil)
+
+	GetAllUsers(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var payload struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []struct {
+				Id                        int    `json:"id"`
+				AffCount                  int    `json:"aff_count"`
+				AffHistoryQuota           int    `json:"aff_history_quota"`
+				DirectInviteCount         int    `json:"direct_invite_count"`
+				QualifiedPaidInviteCount  int    `json:"qualified_paid_invite_count"`
+				InvitationRewardStatus    string `json:"invitation_reward_status"`
+				InvitationRewardPlanTitle string `json:"invitation_reward_plan_title"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+	require.True(t, payload.Success)
+	var inviter *struct {
+		Id                        int    `json:"id"`
+		AffCount                  int    `json:"aff_count"`
+		AffHistoryQuota           int    `json:"aff_history_quota"`
+		DirectInviteCount         int    `json:"direct_invite_count"`
+		QualifiedPaidInviteCount  int    `json:"qualified_paid_invite_count"`
+		InvitationRewardStatus    string `json:"invitation_reward_status"`
+		InvitationRewardPlanTitle string `json:"invitation_reward_plan_title"`
+	}
+	for i := range payload.Data.Items {
+		if payload.Data.Items[i].Id == 9801 {
+			inviter = &payload.Data.Items[i]
+			break
+		}
+	}
+	require.NotNil(t, inviter)
+	assert.Equal(t, 0, inviter.AffCount)
+	assert.Equal(t, 0, inviter.AffHistoryQuota)
+	assert.Equal(t, 2, inviter.DirectInviteCount)
+	assert.Equal(t, 1, inviter.QualifiedPaidInviteCount)
+	assert.Equal(t, model.InvitationEntitlementStatusQualified, inviter.InvitationRewardStatus)
+	assert.Equal(t, "Reward Basic", inviter.InvitationRewardPlanTitle)
 }

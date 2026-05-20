@@ -89,8 +89,9 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	}
 	rc.SeedOutputHash = seedHash
 	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
-
-	newAPIServer := httptest.NewServer(mockopenai.NewServer(mockopenai.Config{RunContext: rc, OutputBytes: 128, PromptTokens: 11, CompletionTokens: 17, ChunkInterval: time.Millisecond}))
+	db := openSweepCommandTestDB(t)
+	seedSweepBusinessRows(t, db, seed)
+	newAPIServer := httptest.NewServer(newSweepHarnessHandler(rc, db, seed, true))
 	defer newAPIServer.Close()
 
 	runContextPath := filepath.Join(dir, "run-context.json")
@@ -101,12 +102,9 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	writeTestJSON(t, runContextPath, rc)
 	writeTestJSON(t, seedPath, seed)
 	writeSweepConfig(t, configPath, newAPIServer.URL)
-	db := openSweepCommandTestDB(t)
-	seedSweepBusinessRows(t, db, seed)
 	originalOpenSweepDB := openSweepDB
 	openSweepDB = func(string) (*gorm.DB, error) { return db, nil }
 	t.Cleanup(func() { openSweepDB = originalOpenSweepDB })
-	registerSweepRoundTripper(t, db, seed)
 
 	var stdout, stderr bytes.Buffer
 	exit := Run([]string{
@@ -154,6 +152,62 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(point.SummaryPath, "c2-summary.json") {
 		t.Fatalf("summary path should include point concurrency: %s", point.SummaryPath)
+	}
+}
+
+func TestRunFailsS3WithoutRuntimeResourceSamples(t *testing.T) {
+	dir := t.TempDir()
+	rc := sweepTestRunContext()
+	rc.Scenario = "s3-long-stream"
+	seed := artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: 1, UserIDCompat: 2, TokenDBKeySubscription: "loadtestsub", TokenDBKeyCompat: "loadtestcompat", ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
+	seedHash, err := artifact.HashSeedOutput(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.SeedOutputHash = seedHash
+	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
+	db := openSweepCommandTestDB(t)
+	seedSweepBusinessRows(t, db, seed)
+	newAPIServer := httptest.NewServer(newSweepHarnessHandler(rc, db, seed, false))
+	defer newAPIServer.Close()
+	runContextPath := filepath.Join(dir, "run-context.json")
+	seedPath := filepath.Join(dir, "seed.json")
+	outPath := filepath.Join(dir, "sweep.json")
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestJSON(t, runContextPath, rc)
+	writeTestJSON(t, seedPath, seed)
+	writeSweepConfig(t, configPath, newAPIServer.URL)
+	originalOpenSweepDB := openSweepDB
+	openSweepDB = func(string) (*gorm.DB, error) { return db, nil }
+	t.Cleanup(func() { openSweepDB = originalOpenSweepDB })
+
+	exit := Run([]string{
+		"--config", configPath,
+		"--url", newAPIServer.URL,
+		"--api-key", "sk-loadtestsub",
+		"--token-profile", "subscription",
+		"--path", "/v1/responses",
+		"--model", "gpt-5.5",
+		"--scenario", "s3-long-stream",
+		"--points", "2",
+		"--max-requests-per-point", "1",
+		"--timeout", "5s",
+		"--input-bytes", "8",
+		"--output-bytes", "128",
+		"--seed-output", seedPath,
+		"--mock-stats", newAPIServer.URL + "/debug/loadtest/mock-stats",
+		"--run-context", runContextPath,
+		"--mock-hash", rc.MockHash,
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--out", outPath,
+	}, ioDiscard(), ioDiscard())
+	if exit == 0 {
+		t.Fatal("S3 sweep without runtime resource samples passed")
+	}
+	var result artifact.SweepResult
+	readTestJSON(t, outPath, &result)
+	if len(result.Points) == 0 || !containsReason(result.Points[0].Gate.FailedReasons, "resource samples") {
+		t.Fatalf("missing resource sample gate failure: %#v", result)
 	}
 }
 
@@ -303,36 +357,38 @@ func seedSweepBusinessRows(t *testing.T, db *gorm.DB, seed artifact.SeedOutput) 
 	}
 }
 
-func registerSweepRoundTripper(t *testing.T, db *gorm.DB, seed artifact.SeedOutput) {
-	t.Helper()
-	original := http.DefaultTransport
-	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		resp, err := original.RoundTrip(req)
-		if err != nil || req.Method != http.MethodPost || req.URL.Path != "/v1/responses" {
-			return resp, err
+func newSweepHarnessHandler(rc artifact.RunContext, db *gorm.DB, seed artifact.SeedOutput, runtimeSamples bool) http.Handler {
+	mockHandler := mockopenai.NewServer(mockopenai.Config{RunContext: rc, OutputBytes: 128, PromptTokens: 11, CompletionTokens: 17, ChunkInterval: time.Millisecond})
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/debug/loadtest/runtime" {
+			w.Header().Set("Content-Type", "application/json")
+			if runtimeSamples {
+				_, _ = w.Write([]byte(`{"goroutines":5,"heap_alloc_bytes":2048,"batch_update":{"status":"ok"},"quota_data":{"status":"unavailable"},"perf_metrics":{"status":"unavailable"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"goroutines":0,"heap_alloc_bytes":0}`))
+			return
 		}
-		requestID := resp.Header.Get("X-Oneapi-Request-Id")
+		mockHandler.ServeHTTP(w, r)
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			return
+		}
+		requestID := w.Header().Get("X-Oneapi-Request-Id")
 		if requestID == "" {
-			return resp, nil
+			return
 		}
 		usage := seed.ExpectedUsagePerSuccess.TotalTokens
 		if err := db.Model(&model.UserSubscription{}).Where("user_id = ?", seed.UserIDSubscription).Update("token_used", gorm.Expr("token_used + ?", usage)).Error; err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
 		if err := db.Create(&model.Log{RequestId: requestID, Type: model.LogTypeConsume, Quota: usage}).Error; err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
 		if err := db.Create(&model.SubscriptionPreConsumeRecord{RequestId: requestID, UserId: seed.UserIDSubscription, PreConsumed: int64(usage), Status: "consumed"}).Error; err != nil {
-			t.Fatal(err)
+			panic(err)
 		}
-		return resp, nil
 	})
-	t.Cleanup(func() { http.DefaultTransport = original })
 }
-
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func assertPassedInvariant(t *testing.T, invariants []artifact.Invariant, name string) {
 	t.Helper()
@@ -346,6 +402,15 @@ func assertPassedInvariant(t *testing.T, invariants []artifact.Invariant, name s
 		return
 	}
 	t.Fatalf("missing invariant %s: %#v", name, invariants)
+}
+
+func containsReason(reasons []string, needle string) bool {
+	for _, reason := range reasons {
+		if strings.Contains(reason, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func ioDiscard() *bytes.Buffer { return &bytes.Buffer{} }

@@ -26,6 +26,9 @@ tiktoken_cache
 .cursor
 .worktrees/
 
+# Local loadtest harness outputs and packaged binaries
+.loadtest/
+
 electron/node_modules
 electron/dist
 data/

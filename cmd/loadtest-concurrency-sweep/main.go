@@ -185,7 +185,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	result := artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Scenario: rc.Scenario, Path: rc.Path, TokenProfile: rc.TokenProfile, RunID: time.Now().UTC().Format("20060102T150405Z") + "-" + sanitizeName(rc.Scenario)}
 	for _, c := range points {
-		point, code := runPoint(runPointOptions{Concurrency: c, BaseURL: *urlFlag, APIKey: *apiKey, TokenProfile: *tokenProfile, Path: *path, Model: *model, Scenario: *scenario, RPS: *rps, Duration: *duration, MaxRequests: *maxRequests, RampStep: *rampStep, RampInterval: *rampInterval, Timeout: *timeout, InputBytes: *inputBytes, OutputBytes: *outputBytes, Cooldown: *cooldown, MockStats: *mockStats, ArtifactDir: *artifactDir, Seed: seed, RunContext: rc, Config: cfg, MockProfile: *mockProfile, Stdout: stdout, Stderr: stderr, DB: db})
+		point, code := runPoint(runPointOptions{Concurrency: c, BaseURL: *urlFlag, APIKey: *apiKey, TokenProfile: *tokenProfile, Path: *path, Model: *model, Scenario: *scenario, RPS: *rps, Duration: *duration, MaxRequests: *maxRequests, RampStep: *rampStep, RampInterval: *rampInterval, Timeout: *timeout, InputBytes: *inputBytes, OutputBytes: *outputBytes, Cooldown: *cooldown, MockStats: *mockStats, RuntimeURL: mustJoinURL(*urlFlag, "/debug/loadtest/runtime"), ArtifactDir: *artifactDir, Seed: seed, RunContext: rc, Config: cfg, MockProfile: *mockProfile, Stdout: stdout, Stderr: stderr, DB: db})
 		result.Points = append(result.Points, point)
 		if point.Passed {
 			result.HighestPassedConcurrency = c
@@ -230,6 +230,7 @@ type runPointOptions struct {
 	OutputBytes  int
 	Cooldown     time.Duration
 	MockStats    string
+	RuntimeURL   string
 	ArtifactDir  string
 	Seed         artifact.SeedOutput
 	RunContext   artifact.RunContext
@@ -260,7 +261,12 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
 	}
-	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: beforeBusiness, Logs: metrics.ScanServerLogs("", "")}
+	beforeRuntime, err := readRuntimeSnapshot(opts.RuntimeURL)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
+	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: beforeBusiness, Runtime: beforeRuntime, Logs: metrics.ScanServerLogs("", "")}
 	if err := writeJSONFile(point.MetricsBeforePath, beforeSnapshot); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
@@ -308,7 +314,12 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
 	}
-	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: afterBusiness, Logs: metrics.ScanServerLogs("", "")}
+	afterRuntime, err := readRuntimeSnapshot(opts.RuntimeURL)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
+	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: afterBusiness, Runtime: afterRuntime, Logs: metrics.ScanServerLogs("", "")}
 	if err := writeJSONFile(point.MetricsAfterPath, afterSnapshot); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
@@ -328,9 +339,55 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 	point.Invariants = diff.BusinessDelta.Invariants
 	point.Invariants = append(point.Invariants, inv)
 	point.ResourceDelta = diff.ResourceDelta
-	point.Gate = sweep.EvaluateGate(opts.Scenario, point, gateOptions(opts, point))
+	point.ResourcePeaks = resourcePeaks(beforeSnapshot.Runtime, afterSnapshot.Runtime)
+	point.Gate = sweep.EvaluateGate(opts.Scenario, point, gateOptions(opts))
 	point.Passed = point.Gate.Passed
 	return point, 0
+}
+
+func readRuntimeSnapshot(runtimeURL string) (artifact.RuntimeSnapshot, error) {
+	if runtimeURL == "" {
+		return artifact.RuntimeSnapshot{}, fmt.Errorf("runtime URL is required")
+	}
+	if err := loadtestclient.ValidateLoopbackURL(runtimeURL); err != nil {
+		return artifact.RuntimeSnapshot{}, err
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(runtimeURL)
+	if err != nil {
+		return artifact.RuntimeSnapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return artifact.RuntimeSnapshot{}, fmt.Errorf("runtime stats status %d", resp.StatusCode)
+	}
+	var snap artifact.RuntimeSnapshot
+	if err := common.DecodeJson(resp.Body, &snap); err != nil {
+		return artifact.RuntimeSnapshot{}, err
+	}
+	if snap.Goroutines <= 0 || snap.HeapAllocBytes == 0 {
+		return artifact.RuntimeSnapshot{}, fmt.Errorf("runtime stats missing resource samples")
+	}
+	snap.Statused = artifact.Statused{Status: "ok"}
+	return snap, nil
+}
+
+func resourcePeaks(before, after artifact.RuntimeSnapshot) artifact.ResourcePeaks {
+	return artifact.ResourcePeaks{GoroutinesPeak: maxInt(before.Goroutines, after.Goroutines), HeapAllocPeakBytes: maxUint64(before.HeapAllocBytes, after.HeapAllocBytes)}
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxUint64(a, b uint64) uint64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func validateSweepBaseURL(raw string, cfg *loadtestconfig.File) error {
@@ -350,6 +407,17 @@ func validateSweepBaseURL(raw string, cfg *loadtestconfig.File) error {
 		return fmt.Errorf("--url must match configured new-api address http://%s", wantHost)
 	}
 	return nil
+}
+
+func mustJoinURL(baseURL string, requestPath string) string {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return baseURL
+	}
+	parsed.Path = requestPath
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func readMockStats(source string) (artifact.MockStats, error) {
@@ -398,7 +466,7 @@ func nonInjectedErrors(summary artifact.Summary, delta artifact.MockStatsDelta) 
 	return 0
 }
 
-func gateOptions(opts runPointOptions, point artifact.PointResult) sweep.GateOptions {
+func gateOptions(opts runPointOptions) sweep.GateOptions {
 	var statusRate map[int]float64
 	var seed int64
 	if opts.Config != nil && opts.MockProfile != "" {
@@ -408,8 +476,7 @@ func gateOptions(opts runPointOptions, point artifact.PointResult) sweep.GateOpt
 			seed = profile.Seed
 		}
 	}
-	_ = point
-	return sweep.GateOptions{MockOutputBytes: opts.OutputBytes, RequiredInvariantNames: sweep.RequiredInvariantNames(), Seed: seed, StatusRate: statusRate}
+	return sweep.GateOptions{MockOutputBytes: opts.OutputBytes, RequiredInvariantNames: sweep.RequiredInvariantNames(), Seed: seed, StatusRate: statusRate, RequireResourceSamples: opts.Scenario == "s3-long-stream" || opts.Scenario == "s5-large-payload"}
 }
 
 func sanitizeName(value string) string {

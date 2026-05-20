@@ -119,6 +119,35 @@ test('free-user line chart supports hourly and cumulative modes', () => {
   assert.match(source, /No free-plan trend data available/)
 })
 
+test('free-user charts mirror dashboard user chart internals', () => {
+  const bar = readFreeUsersBarChartSource()
+  const line = readFreeUsersLineChartSource()
+  assert.match(bar, /seriesField:\s*'series_label'/)
+  assert.match(bar, /label:\s*\{/)
+  assert.match(bar, /position:\s*'outside'/)
+  assert.match(bar, /color:\s*\{\s*specified:/)
+  assert.match(bar, /animation:\s*true/)
+  assert.match(line, /type:\s*'area'/)
+  assert.match(line, /stack:\s*false/)
+  assert.match(line, /selectMode:\s*'single'/)
+  assert.match(line, /curveType:\s*'monotone'/)
+  assert.match(line, /fillOpacity:\s*0\.15/)
+  assert.match(line, /lineWidth:\s*2/)
+  assert.match(line, /animation:\s*true/)
+})
+
+test('free-user chart blocks use dashboard user chart sizing and framing', () => {
+  const section = readFreeUsersSectionSource()
+  const bar = readFreeUsersBarChartSource()
+  const line = readFreeUsersLineChartSource()
+  assert.match(section, /rounded-lg border/)
+  assert.match(section, /border-b px-3 py-2[\s\S]*sm:px-5 sm:py-3/)
+  assert.match(bar, /h-\[300px\] p-1\.5 sm:h-96 sm:p-2/)
+  assert.match(line, /h-\[300px\] p-1\.5 sm:h-96 sm:p-2/)
+  assert.doesNotMatch(bar, /h-64 sm:h-72/)
+  assert.doesNotMatch(line, /h-64 sm:h-72/)
+})
+
 test('free-user chart i18n keys exist in all supported locales', () => {
   for (const locale of ['en', 'zh', 'fr', 'ja', 'ru', 'vi']) {
     const translation = readLocale(locale)

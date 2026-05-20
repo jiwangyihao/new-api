@@ -61,8 +61,8 @@ export function FreeUsersSection(props: FreeUsersSectionProps) {
         </div>
       </header>
 
-      <div className='border-t px-5 py-4'>
-        <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+      <div className='border-t'>
+        <div className='flex w-full flex-col gap-3 border-b px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-5 sm:py-3'>
           <div>
             <h3 className='text-foreground inline-flex items-center gap-2 text-sm font-semibold'>
               {view === 'bar' ? (
@@ -85,10 +85,10 @@ export function FreeUsersSection(props: FreeUsersSectionProps) {
               type='button'
               onClick={() => setView('bar')}
               className={cn(
-                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
                 view === 'bar'
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-background text-muted-foreground hover:text-foreground'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               )}
             >
               {t('Bar chart')}
@@ -97,50 +97,51 @@ export function FreeUsersSection(props: FreeUsersSectionProps) {
               type='button'
               onClick={() => setView('trend')}
               className={cn(
-                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
                 view === 'trend'
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-background text-muted-foreground hover:text-foreground'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground'
               )}
             >
               {t('24-hour trend')}
             </button>
           </div>
         </div>
-
-        {view === 'bar' ? (
-          <FreeUsersBarChart rows={props.rows} />
-        ) : (
-          <div className='space-y-4'>
-            <div className='flex flex-wrap gap-2'>
-              <button
-                type='button'
-                onClick={() => setTrendMode('hourly')}
-                className={cn(
-                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                  trendMode === 'hourly'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'bg-background text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {t('Hourly usage')}
-              </button>
-              <button
-                type='button'
-                onClick={() => setTrendMode('cumulative')}
-                className={cn(
-                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
-                  trendMode === 'cumulative'
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'bg-background text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {t('Cumulative usage')}
-              </button>
+        <div className='p-1.5 sm:p-2'>
+          {view === 'bar' ? (
+            <FreeUsersBarChart rows={props.rows} />
+          ) : (
+            <div className='space-y-3'>
+              <div className='flex w-fit flex-wrap gap-1.5 rounded-lg border p-0.5'>
+                <button
+                  type='button'
+                  onClick={() => setTrendMode('hourly')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    trendMode === 'hourly'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('Hourly usage')}
+                </button>
+                <button
+                  type='button'
+                  onClick={() => setTrendMode('cumulative')}
+                  className={cn(
+                    'rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                    trendMode === 'cumulative'
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                  )}
+                >
+                  {t('Cumulative usage')}
+                </button>
+              </div>
+              <FreeUsersLineChart history={props.history} mode={trendMode} />
             </div>
-            <FreeUsersLineChart history={props.history} mode={trendMode} />
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       <div className='border-t'>

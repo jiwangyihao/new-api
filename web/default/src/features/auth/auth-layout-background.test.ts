@@ -24,6 +24,10 @@ function readSource(relativePath: string): string {
   return readFileSync(new URL(relativePath, import.meta.url), 'utf8')
 }
 
+function readBinary(relativePath: string): Buffer {
+  return readFileSync(new URL(relativePath, import.meta.url))
+}
+
 function assertIncludes(source: string, expected: string): void {
   assert.ok(source.includes(expected), `expected source to include ${expected}`)
 }
@@ -58,7 +62,7 @@ describe('auth layout sign-up background', () => {
   test('keeps sign-up card readability styles behind the background branch', () => {
     assert.match(
       authLayoutSource,
-      /hasBackground\s*\?\s*['"][^'"]*rounded-3xl[^'"]*bg-background\/90[^'"]*shadow-2xl[^'"]*backdrop-blur-xl/s
+      /hasBackground\s*\?\s*['"][^'"]*rounded-3xl[^'"]*border[^'"]*bg-background\/90[^'"]*shadow-2xl[^'"]*backdrop-blur-xl/s
     )
     assertIncludes(
       authLayoutSource,
@@ -67,37 +71,37 @@ describe('auth layout sign-up background', () => {
     assert.match(authLayoutSource, /:\s*'items-center pt-16 sm:pt-0'/)
   })
 
-  test('wires the anime girl background only into sign-up', () => {
-    assert.match(signUpSource, /sign-up-anime-girl\.svg/)
+  test('wires the generated JPG background only into sign-up', () => {
+    assert.match(signUpSource, /sign-up-anime-girl\.jpg/)
+    assert.doesNotMatch(signUpSource, /sign-up-anime-girl\.svg/)
     assert.match(signUpSource, /backgroundImageSrc=\{signUpAnimeGirlBackground\}/)
     assert.doesNotMatch(signInSource, /backgroundImageSrc/)
   })
 
-  test('documents the generated SVG source and excludes external assets', () => {
-    const svgSource = readSource('./assets/sign-up-anime-girl.svg')
+  test('keeps the generated image as an unlabelled local asset', () => {
+    const imageBytes = readBinary('./assets/sign-up-anime-girl.jpg')
 
-    assertIncludes(svgSource, 'AI-generated original illustration')
-    assertIncludes(svgSource, 'No external image source')
-    assertIncludes(svgSource, 'Intended for commercial use')
-    assert.match(svgSource, /<svg\b/)
-    assert.match(svgSource, /<(path|circle|ellipse|linearGradient)\b/)
+    assert.equal(imageBytes[0], 0xff)
+    assert.equal(imageBytes[1], 0xd8)
+    assert.equal(imageBytes[2], 0xff)
 
+    const imageText = imageBytes.toString('latin1')
     for (const forbidden of [
+      'AI-generated',
+      'No external image source',
+      'Intended for commercial use',
+      'Pollinations',
+      '<svg',
+      '<image',
+      '<script',
+      '<foreignObject',
+      '<iframe',
       'data:',
       'base64',
-      '<image',
-      '<foreignObject',
-      '<script',
-      '@import',
-      'xlink:href',
-      'href="http',
-      "href='http",
-      'src="http',
-      "src='http",
-      'url(http',
-      'url(//',
+      'http://',
+      'https://',
     ]) {
-      assertExcludes(svgSource, forbidden)
+      assertExcludes(imageText, forbidden)
     }
   })
 })

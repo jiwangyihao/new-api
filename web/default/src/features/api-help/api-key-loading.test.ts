@@ -62,7 +62,14 @@ describe('api help key loading', () => {
   test('hides ready config blocks until an API key and backend artifacts are available', () => {
     assert.match(source, /const hasSelectedApiKey = Boolean\(currentSelectedKeyId\) && Boolean\(apiKey\)/)
     assert.match(source, /if \(!hasSelectedApiKey\) return \[\]/)
-    assert.match(source, /state=\{opencodeArtifactReady \? opencodeMetadataState : 'unavailable'\}/)
-    assert.match(source, /state=\{ompArtifactsReady \? ompMetadataState : 'unavailable'\}/)
+    assert.match(source, /const opencodeCardState: MetadataState = apiKeySelectionNotice/)
+    assert.match(source, /const ompCardState: MetadataState = apiKeySelectionNotice/)
+  })
+
+  test('shows an explicit selection hint before metadata readiness checks', () => {
+    assert.match(source, /const apiKeySelectionNotice = !hasSelectedApiKey/)
+    assert.match(source, /Select an API key to load AI auto-configuration/)
+    assert.match(source, /state=\{opencodeCardState\}/)
+    assert.match(source, /state=\{ompCardState\}/)
   })
 })

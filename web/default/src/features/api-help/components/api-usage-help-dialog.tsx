@@ -75,7 +75,7 @@ type ApiHelpKey = {
 const REQUIRED_OPENCODE_MODEL_IDS = ['gpt-5.5'] as const
 const REQUIRED_OMP_MODEL_IDS = ['gpt-5.5'] as const
 
-type MetadataState = 'loading' | 'ready' | 'unavailable'
+type MetadataState = 'loading' | 'ready' | 'unavailable' | 'needs-key'
 
 type ArtifactQueryResult = {
   selectedKeyId: string
@@ -87,6 +87,7 @@ function metadataNoticeText(
   missingIds: string[] | undefined,
   t: ReturnType<typeof useTranslation>['t']
 ): string {
+  if (state === 'needs-key') return t('Select an API key to load AI auto-configuration.')
   if (state === 'loading') return t('Loading AI auto-configuration metadata...')
   if (missingIds && missingIds.length > 0) {
     return t('AI auto-configuration metadata is missing required models: {{models}}', {
@@ -458,6 +459,19 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
   const hasSelectedApiKey = Boolean(currentSelectedKeyId) && Boolean(apiKey)
   const opencodeArtifactReady = canFetchOpenCodeArtifacts && Boolean(opencodeContent) && !opencodeArtifactQuery.isError
   const ompArtifactsReady = canFetchOMPArtifacts && Boolean(ompModelsContent) && Boolean(ompConfigContent) && !ompModelsArtifactQuery.isError && !ompConfigArtifactQuery.isError
+  const apiKeySelectionNotice = !hasSelectedApiKey
+  const opencodeCardState: MetadataState = apiKeySelectionNotice
+    ? 'needs-key'
+    : opencodeArtifactReady
+      ? opencodeMetadataState
+      : 'unavailable'
+  const ompCardState: MetadataState = apiKeySelectionNotice
+    ? 'needs-key'
+    : ompArtifactsReady
+      ? ompMetadataState
+      : 'unavailable'
+  const noticeMetadataState: MetadataState = apiKeySelectionNotice ? 'needs-key' : opencodeMetadataState
+  const noticeOMPState: MetadataState = apiKeySelectionNotice ? 'needs-key' : ompMetadataState
 
   const opencodeFiles = useMemo<ConfigFile[]>(
     () => buildAgentConfigSections({
@@ -586,11 +600,11 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                     client='opencode'
                     serverAddress={serverAddress}
                     apiKey={apiKey}
-                    state={opencodeArtifactReady ? opencodeMetadataState : 'unavailable'}
+                    state={opencodeCardState}
                     missingIds={opencodeMissingIds}
                   />
                   <MetadataNotice
-                    state={opencodeMetadataState}
+                    state={noticeMetadataState}
                     missingIds={opencodeMissingIds}
                   />
                   {canFetchOpenCodeArtifacts && opencodeArtifactQuery.isLoading ? (
@@ -612,10 +626,10 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                     client='omp'
                     serverAddress={serverAddress}
                     apiKey={apiKey}
-                    state={ompArtifactsReady ? ompMetadataState : 'unavailable'}
+                    state={ompCardState}
                     missingIds={ompMissingIds}
                   />
-                  <MetadataNotice state={ompMetadataState} missingIds={ompMissingIds} />
+                  <MetadataNotice state={noticeOMPState} missingIds={ompMissingIds} />
                   {canFetchOMPArtifacts && (ompModelsArtifactQuery.isLoading || ompConfigArtifactQuery.isLoading) ? (
                     <Alert><AlertDescription>{t('Configuration file is loading...')}</AlertDescription></Alert>
                   ) : null}

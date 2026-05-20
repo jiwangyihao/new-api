@@ -53,6 +53,9 @@ export interface CommonLogFilters extends CommonFilters {
   username?: string
   requestId?: string
   upstreamRequestId?: string
+  tokenId?: number
+  isStream?: boolean
+  status?: 'success' | 'error'
 }
 
 /**
@@ -275,6 +278,9 @@ export interface GetLogsParams {
   group?: string
   request_id?: string
   upstream_request_id?: string
+  token_id?: number
+  is_stream?: boolean
+  status?: 'success' | 'error'
 }
 
 export interface GetLogsResponse {
@@ -299,6 +305,9 @@ export interface GetLogStatsParams {
   group?: string
   request_id?: string
   upstream_request_id?: string
+  token_id?: number
+  is_stream?: boolean
+  status?: 'success' | 'error'
 }
 
 export interface GetLogStatsResponse {

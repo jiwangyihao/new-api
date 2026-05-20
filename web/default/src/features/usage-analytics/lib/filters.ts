@@ -302,11 +302,12 @@ export function buildUsageLogsDrilldownSearch(
   >,
   drilldown: UsageAnalyticsDrilldown
 ): UsageLogsDrilldownSearch {
+  const tokenId = drilldown.token_id
   return {
     startTime: filters.start_timestamp * 1000,
     endTime: filters.end_timestamp * 1000,
-    ...(drilldown.token_id !== undefined
-      ? { tokenId: drilldown.token_id }
+    ...(tokenId !== undefined && Number.isSafeInteger(tokenId) && tokenId > 0
+      ? { tokenId }
       : {}),
     ...(drilldown.model_name !== undefined
       ? { model: drilldown.model_name }

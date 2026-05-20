@@ -95,3 +95,37 @@ func TestSelfLogsStatUsesUserIDInsteadOfUsername(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), `"total_tokens":10`)
 	require.NotContains(t, recorder.Body.String(), "999")
 }
+
+func TestAdminLogsFiltersByTokenIDStreamAndStatus(t *testing.T) {
+	setupUsageAnalyticsControllerTestDBs(t)
+	now := usageAnalyticsControllerNow()
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 101, CreatedAt: now - 10, Type: model.LogTypeConsume, TokenId: 21, IsStream: true, MeteredTokens: intPtrForUsageAnalyticsControllerTest(10)})
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 101, CreatedAt: now - 9, Type: model.LogTypeError, TokenId: 21, IsStream: true, MeteredTokens: intPtrForUsageAnalyticsControllerTest(999)})
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 101, CreatedAt: now - 8, Type: model.LogTypeConsume, TokenId: 22, IsStream: false, MeteredTokens: intPtrForUsageAnalyticsControllerTest(777)})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/log?token_id=21&is_stream=true&status=success", nil, 1)
+	GetAllLogs(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"token_id":21`)
+	require.NotContains(t, recorder.Body.String(), `"token_id":22`)
+	require.NotContains(t, recorder.Body.String(), `"type":`+strconv.Itoa(model.LogTypeError))
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/log/stat?token_id=21&is_stream=true&status=success", nil, 1)
+	GetLogsStat(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"total_tokens":10`)
+	require.NotContains(t, recorder.Body.String(), "999")
+	require.NotContains(t, recorder.Body.String(), "777")
+}
+
+func TestAdminLogsStatusConflictsWithType(t *testing.T) {
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/log?status=success&type="+strconv.Itoa(model.LogTypeError), nil, 1)
+	GetAllLogs(ctx)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "status conflicts with type")
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/log/stat?status=success&type="+strconv.Itoa(model.LogTypeError), nil, 1)
+	GetLogsStat(ctx)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "status conflicts with type")
+}

@@ -150,3 +150,15 @@ test('builds usage logs drilldown search with status not numeric type', () => {
   })
   assert.equal(Object.prototype.hasOwnProperty.call(search, 'type'), false)
 })
+
+test('omits invalid token id from usage logs drilldown search', () => {
+  const search = buildUsageLogsDrilldownSearch(
+    { start_timestamp: 10, end_timestamp: 20 },
+    { token_id: 0 }
+  )
+
+  assert.deepEqual(search, {
+    startTime: 10_000,
+    endTime: 20_000,
+  })
+})

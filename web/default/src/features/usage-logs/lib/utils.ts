@@ -167,6 +167,11 @@ export function buildBaseParams(config: {
   }
 }
 
+function normalizeTokenId(value: unknown): number | undefined {
+  const id = Number(value)
+  return Number.isSafeInteger(id) && id > 0 ? id : undefined
+}
+
 /**
  * Build API params from search params and column filters (for common logs)
  */
@@ -186,8 +191,9 @@ export function buildApiParams(config: {
     }
     return undefined
   }
-
   // Build base params from search params
+  const tokenId = normalizeTokenId(searchParams.tokenId)
+
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
@@ -206,6 +212,13 @@ export function buildApiParams(config: {
       : {}),
     ...(searchParams.upstreamRequestId
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
+      : {}),
+    ...(tokenId !== undefined ? { token_id: tokenId } : {}),
+    ...(searchParams.isStream !== undefined
+      ? { is_stream: Boolean(searchParams.isStream) }
+      : {}),
+    ...(searchParams.status === 'success' || searchParams.status === 'error'
+      ? { status: searchParams.status }
       : {}),
     ...buildTimeRangeParams(searchParams, false),
   }

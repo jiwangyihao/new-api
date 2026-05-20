@@ -58,6 +58,13 @@ export function buildSearchParams(
         ...(commonFilters.upstreamRequestId && {
           upstreamRequestId: commonFilters.upstreamRequestId,
         }),
+        ...(commonFilters.tokenId !== undefined
+          ? { tokenId: commonFilters.tokenId }
+          : {}),
+        ...(commonFilters.isStream !== undefined
+          ? { isStream: commonFilters.isStream }
+          : {}),
+        ...(commonFilters.status && { status: commonFilters.status }),
       }
     }
     case 'drawing': {

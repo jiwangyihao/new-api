@@ -78,27 +78,33 @@ export function CommonLogsFilterBar<TData>(
   const [logType, setLogType] = useState<LogTypeValue | ''>('')
 
   useEffect(() => {
-    const next: Partial<CommonLogFilters> = {}
-    if (searchParams.startTime)
-      next.startTime = new Date(searchParams.startTime)
-    if (searchParams.endTime) next.endTime = new Date(searchParams.endTime)
-    if (searchParams.channel) next.channel = String(searchParams.channel)
-    if (searchParams.model) next.model = searchParams.model
-    if (searchParams.token) next.token = searchParams.token
-    if (searchParams.group) next.group = searchParams.group
-    if (searchParams.username) next.username = searchParams.username
-    if (searchParams.requestId) next.requestId = searchParams.requestId
-    if (searchParams.upstreamRequestId)
-      next.upstreamRequestId = searchParams.upstreamRequestId
-
-    if (Object.keys(next).length > 0) {
-      setFilters((prev) => ({ ...prev, ...next }))
-    }
+    setFilters((previous) => ({
+      ...previous,
+      startTime: searchParams.startTime
+        ? new Date(searchParams.startTime)
+        : previous.startTime,
+      endTime: searchParams.endTime
+        ? new Date(searchParams.endTime)
+        : previous.endTime,
+      channel: searchParams.channel ? String(searchParams.channel) : undefined,
+      model: searchParams.model || undefined,
+      token: searchParams.token || undefined,
+      group: searchParams.group || undefined,
+      username: searchParams.username || undefined,
+      requestId: searchParams.requestId || undefined,
+      upstreamRequestId: searchParams.upstreamRequestId || undefined,
+      tokenId:
+        searchParams.tokenId !== undefined &&
+        Number.isSafeInteger(searchParams.tokenId) &&
+        searchParams.tokenId > 0
+          ? searchParams.tokenId
+          : undefined,
+      isStream: searchParams.isStream,
+      status: searchParams.status,
+    }))
 
     const typeArr = searchParams.type
-    if (Array.isArray(typeArr) && typeArr.length === 1) {
-      setLogType(typeArr[0])
-    }
+    setLogType(Array.isArray(typeArr) && typeArr.length === 1 ? typeArr[0] : '')
   }, [
     searchParams.startTime,
     searchParams.endTime,
@@ -109,11 +115,17 @@ export function CommonLogsFilterBar<TData>(
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
+    searchParams.tokenId,
+    searchParams.isStream,
+    searchParams.status,
     searchParams.type,
   ])
 
   const handleChange = useCallback(
-    (field: keyof CommonLogFilters, value: Date | string | undefined) => {
+    (
+      field: keyof CommonLogFilters,
+      value: Date | string | number | boolean | undefined
+    ) => {
       setFilters((prev) => ({ ...prev, [field]: value }))
     },
     []
@@ -162,13 +174,22 @@ export function CommonLogsFilterBar<TData>(
 
   const hasExpandedFilters =
     !!filters.token ||
+    filters.tokenId !== undefined ||
+    filters.isStream !== undefined ||
+    !!filters.status ||
     !!filters.username ||
     !!filters.channel ||
     !!filters.requestId ||
     !!filters.upstreamRequestId
 
   const hasAdditionalFilters =
-    !!filters.model || !!filters.group || !!logType || hasExpandedFilters
+    !!filters.model ||
+    !!filters.group ||
+    !!logType ||
+    !!filters.status ||
+    filters.isStream !== undefined ||
+    filters.tokenId !== undefined ||
+    hasExpandedFilters
 
   const inputClass = 'w-full sm:w-[140px] lg:w-[160px]'
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
@@ -268,6 +289,73 @@ export function CommonLogsFilterBar<TData>(
             onKeyDown={handleKeyDown}
             className={inputClass}
           />
+          <Input
+            placeholder={t('API Key ID')}
+            value={filters.tokenId?.toString() || ''}
+            onChange={(e) => {
+              const value = e.target.value.trim()
+              const parsed = Number(value)
+              handleChange(
+                'tokenId',
+                value && Number.isSafeInteger(parsed) && parsed > 0
+                  ? parsed
+                  : undefined
+              )
+            }}
+            onKeyDown={handleKeyDown}
+            className={inputClass}
+          />
+          <Select
+            items={[
+              { value: 'all', label: t('All Stream States') },
+              { value: 'true', label: t('Streaming') },
+              { value: 'false', label: t('Non-streaming') },
+            ]}
+            value={
+              filters.isStream === undefined ? '' : String(filters.isStream)
+            }
+            onValueChange={(value) => {
+              if (value === 'true') handleChange('isStream', true)
+              else if (value === 'false') handleChange('isStream', false)
+              else handleChange('isStream', undefined)
+            }}
+          >
+            <SelectTrigger className={inputClass}>
+              <SelectValue placeholder={t('All Stream States')} />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='all'>{t('All Stream States')}</SelectItem>
+                <SelectItem value='true'>{t('Streaming')}</SelectItem>
+                <SelectItem value='false'>{t('Non-streaming')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <Select
+            items={[
+              { value: 'all', label: t('All Statuses') },
+              { value: 'success', label: t('Success') },
+              { value: 'error', label: t('Error') },
+            ]}
+            value={filters.status || ''}
+            onValueChange={(value) => {
+              handleChange(
+                'status',
+                value === 'success' || value === 'error' ? value : undefined
+              )
+            }}
+          >
+            <SelectTrigger className={inputClass}>
+              <SelectValue placeholder={t('All Statuses')} />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false}>
+              <SelectGroup>
+                <SelectItem value='all'>{t('All Statuses')}</SelectItem>
+                <SelectItem value='success'>{t('Success')}</SelectItem>
+                <SelectItem value='error'>{t('Error')}</SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
           {isAdmin && (
             <Input
               placeholder={t('Username')}

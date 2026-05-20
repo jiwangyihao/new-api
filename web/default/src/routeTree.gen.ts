@@ -40,6 +40,7 @@ import { Route as PricingModelIdIndexRouteImport } from './routes/pricing/$model
 import { Route as AuthenticatedWalletIndexRouteImport } from './routes/_authenticated/wallet/index'
 import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authenticated/users/index'
 import { Route as AuthenticatedUsageLogsIndexRouteImport } from './routes/_authenticated/usage-logs/index'
+import { Route as AuthenticatedUsageAnalyticsIndexRouteImport } from './routes/_authenticated/usage-analytics/index'
 import { Route as AuthenticatedTrialCodesIndexRouteImport } from './routes/_authenticated/trial-codes/index'
 import { Route as AuthenticatedSystemSettingsIndexRouteImport } from './routes/_authenticated/system-settings/index'
 import { Route as AuthenticatedSubscriptionsIndexRouteImport } from './routes/_authenticated/subscriptions/index'
@@ -225,6 +226,12 @@ const AuthenticatedUsageLogsIndexRoute =
   AuthenticatedUsageLogsIndexRouteImport.update({
     id: '/usage-logs/',
     path: '/usage-logs/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedUsageAnalyticsIndexRoute =
+  AuthenticatedUsageAnalyticsIndexRouteImport.update({
+    id: '/usage-analytics/',
+    path: '/usage-analytics/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedTrialCodesIndexRoute =
@@ -447,6 +454,7 @@ export interface FileRoutesByFullPath {
   '/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
   '/trial-codes/': typeof AuthenticatedTrialCodesIndexRoute
+  '/usage-analytics/': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
   '/users/': typeof AuthenticatedUsersIndexRoute
   '/wallet/': typeof AuthenticatedWalletIndexRoute
@@ -507,6 +515,7 @@ export interface FileRoutesByTo {
   '/subscriptions': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-settings': typeof AuthenticatedSystemSettingsIndexRoute
   '/trial-codes': typeof AuthenticatedTrialCodesIndexRoute
+  '/usage-analytics': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/usage-logs': typeof AuthenticatedUsageLogsIndexRoute
   '/users': typeof AuthenticatedUsersIndexRoute
   '/wallet': typeof AuthenticatedWalletIndexRoute
@@ -571,6 +580,7 @@ export interface FileRoutesById {
   '/_authenticated/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/_authenticated/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
   '/_authenticated/trial-codes/': typeof AuthenticatedTrialCodesIndexRoute
+  '/_authenticated/usage-analytics/': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/_authenticated/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
   '/_authenticated/users/': typeof AuthenticatedUsersIndexRoute
   '/_authenticated/wallet/': typeof AuthenticatedWalletIndexRoute
@@ -634,6 +644,7 @@ export interface FileRouteTypes {
     | '/subscriptions/'
     | '/system-settings/'
     | '/trial-codes/'
+    | '/usage-analytics/'
     | '/usage-logs/'
     | '/users/'
     | '/wallet/'
@@ -694,6 +705,7 @@ export interface FileRouteTypes {
     | '/subscriptions'
     | '/system-settings'
     | '/trial-codes'
+    | '/usage-analytics'
     | '/usage-logs'
     | '/users'
     | '/wallet'
@@ -757,6 +769,7 @@ export interface FileRouteTypes {
     | '/_authenticated/subscriptions/'
     | '/_authenticated/system-settings/'
     | '/_authenticated/trial-codes/'
+    | '/_authenticated/usage-analytics/'
     | '/_authenticated/usage-logs/'
     | '/_authenticated/users/'
     | '/_authenticated/wallet/'
@@ -1016,6 +1029,13 @@ declare module '@tanstack/react-router' {
       path: '/usage-logs'
       fullPath: '/usage-logs/'
       preLoaderRoute: typeof AuthenticatedUsageLogsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/usage-analytics/': {
+      id: '/_authenticated/usage-analytics/'
+      path: '/usage-analytics'
+      fullPath: '/usage-analytics/'
+      preLoaderRoute: typeof AuthenticatedUsageAnalyticsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/trial-codes/': {
@@ -1331,6 +1351,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
   AuthenticatedSubscriptionsIndexRoute: typeof AuthenticatedSubscriptionsIndexRoute
   AuthenticatedTrialCodesIndexRoute: typeof AuthenticatedTrialCodesIndexRoute
+  AuthenticatedUsageAnalyticsIndexRoute: typeof AuthenticatedUsageAnalyticsIndexRoute
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
   AuthenticatedUsersIndexRoute: typeof AuthenticatedUsersIndexRoute
   AuthenticatedWalletIndexRoute: typeof AuthenticatedWalletIndexRoute
@@ -1355,6 +1376,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
     AuthenticatedRedemptionCodesIndexRoute,
   AuthenticatedSubscriptionsIndexRoute: AuthenticatedSubscriptionsIndexRoute,
   AuthenticatedTrialCodesIndexRoute: AuthenticatedTrialCodesIndexRoute,
+  AuthenticatedUsageAnalyticsIndexRoute: AuthenticatedUsageAnalyticsIndexRoute,
   AuthenticatedUsageLogsIndexRoute: AuthenticatedUsageLogsIndexRoute,
   AuthenticatedUsersIndexRoute: AuthenticatedUsersIndexRoute,
   AuthenticatedWalletIndexRoute: AuthenticatedWalletIndexRoute,

@@ -17,8 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { type Row } from '@tanstack/react-table'
 import {
+  BarChart3,
   Trash2,
   Edit,
   Power,
@@ -53,6 +55,7 @@ import {
 import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
 import { sendToFluent } from '@/features/chat/lib/send-to-fluent'
+import { buildApiKeyUsageAnalyticsSearch } from '@/features/usage-analytics/lib/filters'
 import { updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import { apiKeySchema } from '../types'
@@ -87,6 +90,7 @@ export function DataTableRowActions<TData>({
   row,
 }: DataTableRowActionsProps<TData>) {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const apiKey = apiKeySchema.parse(row.original)
   const {
     setOpen,
@@ -242,6 +246,22 @@ export function DataTableRowActions<TData>({
             {t('Copy Connection Info')}
             <DropdownMenuShortcut>
               <Link size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onClick={() => {
+              void navigate({
+                to: '/usage-analytics',
+                search: buildApiKeyUsageAnalyticsSearch({
+                  id: apiKey.id,
+                  name: apiKey.name,
+                }),
+              })
+            }}
+          >
+            {t('Analyze this Key')}
+            <DropdownMenuShortcut>
+              <BarChart3 size={16} />
             </DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuSeparator />

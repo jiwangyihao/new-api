@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Plus } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { BarChart3, Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { useApiKeys } from './api-keys-provider'
@@ -26,6 +27,14 @@ export function ApiKeysPrimaryButtons() {
   const { setOpen } = useApiKeys()
   return (
     <div className='flex gap-2'>
+      <Button
+        size='sm'
+        variant='outline'
+        render={<Link to={'/usage-analytics' as '/keys'} />}
+      >
+        <BarChart3 className='h-4 w-4' />
+        {t('View Usage Analytics')}
+      </Button>
       <Button size='sm' onClick={() => setOpen('create')}>
         <Plus className='h-4 w-4' />
         {t('Create API Key')}

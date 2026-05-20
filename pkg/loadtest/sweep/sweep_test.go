@@ -50,6 +50,24 @@ func TestS1S2GateRequiresAllBusinessConditions(t *testing.T) {
 	if gate.Passed {
 		t.Fatalf("missing invariant passed")
 	}
+	point.Invariants = invariants
+	point.SummaryExcerpt.MaxObservedInFlight = 89
+	gate = EvaluateGate("s2-short-stream", point, GateOptions{MockOutputBytes: 128, RequiredInvariantNames: RequiredInvariantNames()})
+	if gate.Passed {
+		t.Fatalf("low observed concurrency passed")
+	}
+	point.SummaryExcerpt.MaxObservedInFlight = 95
+	point.SummaryExcerpt.StreamUsageEvents = 999
+	gate = EvaluateGate("s2-short-stream", point, GateOptions{MockOutputBytes: 128, RequiredInvariantNames: RequiredInvariantNames()})
+	if gate.Passed {
+		t.Fatalf("missing stream usage event passed")
+	}
+	point.SummaryExcerpt.StreamUsageEvents = 1000
+	point.SummaryExcerpt.StatusCodes = map[string]int{"200": 999, "500": 1}
+	gate = EvaluateGate("s2-short-stream", point, GateOptions{MockOutputBytes: 128, RequiredInvariantNames: RequiredInvariantNames()})
+	if gate.Passed {
+		t.Fatalf("non-200 status passed")
+	}
 }
 
 func TestS4GateUsesCurrentPointMockDeltaAndRefundInvariant(t *testing.T) {
@@ -81,9 +99,21 @@ func TestS4GateRequiresDeterministicExpectedErrors(t *testing.T) {
 	}
 }
 
-func TestS3S5GateFailsOnResourceGrowth(t *testing.T) {
-	point := artifact.PointResult{ResourcePeaks: artifact.ResourcePeaks{RSSPeakBytes: 2 << 30, GoroutinesPeak: 100000}, ResourceDelta: artifact.ResourceDelta{RSSBeforeBytes: 100, RSSAfterDrainBytes: 500, GoroutinesBefore: 10, GoroutinesAfterDrain: 100}}
-	gate := EvaluateGate("s5-large-payload", point, GateOptions{MaxRSSBytes: 1 << 30, MaxRSSAfterDrainGrowthBytes: 100, MaxGoroutineAfterDrainGrowth: 20})
+func TestS3S5GateRequiresRequestsAndResourceSamples(t *testing.T) {
+	invariants := []artifact.Invariant{{Name: "subscription_token_used_matches_success_usage", Status: "passed"}, {Name: "consume_logs_by_request", Status: "passed"}}
+	point := artifact.PointResult{Concurrency: 10, SummaryExcerpt: artifact.SummaryExcerpt{Total: 0}, Invariants: invariants}
+	gate := EvaluateGate("s5-large-payload", point, GateOptions{RequiredInvariantNames: []string{"subscription_token_used_matches_success_usage", "consume_logs_by_request"}, RequireResourceSamples: true})
+	if gate.Passed {
+		t.Fatalf("zero request resource scenario passed: %#v", gate)
+	}
+	point = artifact.PointResult{Concurrency: 10, SummaryExcerpt: artifact.SummaryExcerpt{Total: 10, Success: 10, StatusCodes: map[string]int{"200": 10}, MaxObservedInFlight: 10, StreamDoneReceived: 10, StreamUsageEvents: 10, StreamBytes: 1280}, Invariants: invariants}
+	gate = EvaluateGate("s5-large-payload", point, GateOptions{MockOutputBytes: 128, RequiredInvariantNames: []string{"subscription_token_used_matches_success_usage", "consume_logs_by_request"}, RequireResourceSamples: true})
+	if gate.Passed {
+		t.Fatalf("missing resource sample passed: %#v", gate)
+	}
+	point.ResourcePeaks = artifact.ResourcePeaks{RSSPeakBytes: 2 << 30, GoroutinesPeak: 100000}
+	point.ResourceDelta = artifact.ResourceDelta{RSSBeforeBytes: 100, RSSAfterDrainBytes: 500, GoroutinesBefore: 10, GoroutinesAfterDrain: 100}
+	gate = EvaluateGate("s5-large-payload", point, GateOptions{MockOutputBytes: 128, RequiredInvariantNames: []string{"subscription_token_used_matches_success_usage", "consume_logs_by_request"}, RequireResourceSamples: true, MaxRSSBytes: 1 << 30, MaxRSSAfterDrainGrowthBytes: 100, MaxGoroutineAfterDrainGrowth: 20})
 	if gate.Passed {
 		t.Fatalf("resource leak gate passed: %#v", gate)
 	}

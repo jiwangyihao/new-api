@@ -24,6 +24,7 @@ type GateOptions struct {
 	MaxRSSBytes                  uint64
 	MaxRSSAfterDrainGrowthBytes  uint64
 	MaxGoroutineAfterDrainGrowth int
+	RequireResourceSamples       bool
 }
 
 func DeriveRunContext(base artifact.RunContext, opts DeriveOptions) (artifact.RunContext, error) {
@@ -63,14 +64,12 @@ func RequiredInvariantNames() []string {
 func EvaluateGate(scenario string, point artifact.PointResult, opts GateOptions) artifact.GateResult {
 	failed := make([]string, 0)
 	failed = append(failed, missingOrFailedInvariants(point.Invariants, opts.RequiredInvariantNames)...)
+	if point.SummaryExcerpt.Total == 0 {
+		failed = append(failed, "at least one request is required")
+	}
 	switch scenario {
 	case "s1-smoke", "s2-short-stream":
-		if point.SummaryExcerpt.Total == 0 || point.SummaryExcerpt.Success != point.SummaryExcerpt.Total {
-			failed = append(failed, "all requests must succeed")
-		}
-		if point.SummaryExcerpt.StreamBytes < int64(opts.MockOutputBytes*point.SummaryExcerpt.Success) {
-			failed = append(failed, "stream bytes below expected mock output")
-		}
+		failed = append(failed, successStreamGateFailures(point, opts)...)
 	case "s4-error-refund":
 		if point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.UpstreamAttemptsTotal || point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.Total {
 			failed = append(failed, "mock delta must describe current point only")
@@ -88,6 +87,10 @@ func EvaluateGate(scenario string, point artifact.PointResult, opts GateOptions)
 			failed = append(failed, "non injected errors present")
 		}
 	case "s3-long-stream", "s5-large-payload":
+		failed = append(failed, successStreamGateFailures(point, opts)...)
+		if opts.RequireResourceSamples && point.ResourcePeaks.RSSPeakBytes == 0 && point.ResourcePeaks.GoroutinesPeak == 0 && point.ResourcePeaks.HeapAllocPeakBytes == 0 {
+			failed = append(failed, "resource samples are required")
+		}
 		if opts.MaxRSSBytes > 0 && point.ResourcePeaks.RSSPeakBytes > opts.MaxRSSBytes {
 			failed = append(failed, "rss peak exceeded")
 		}
@@ -99,6 +102,33 @@ func EvaluateGate(scenario string, point artifact.PointResult, opts GateOptions)
 		}
 	}
 	return artifact.GateResult{Passed: len(failed) == 0, FailedReasons: failed}
+}
+
+func successStreamGateFailures(point artifact.PointResult, opts GateOptions) []string {
+	failed := make([]string, 0)
+	if point.SummaryExcerpt.Success != point.SummaryExcerpt.Total {
+		failed = append(failed, "all requests must succeed")
+	}
+	if len(point.SummaryExcerpt.StatusCodes) != 1 || point.SummaryExcerpt.StatusCodes["200"] != point.SummaryExcerpt.Total {
+		failed = append(failed, "status codes must contain only 200")
+	}
+	minInFlight := point.Concurrency * 9 / 10
+	if point.Concurrency > 0 && minInFlight == 0 {
+		minInFlight = 1
+	}
+	if minInFlight > 0 && point.SummaryExcerpt.MaxObservedInFlight < minInFlight {
+		failed = append(failed, "max observed in-flight below target")
+	}
+	if point.SummaryExcerpt.StreamDoneReceived != point.SummaryExcerpt.Success {
+		failed = append(failed, "stream done events must match successes")
+	}
+	if point.SummaryExcerpt.StreamUsageEvents != point.SummaryExcerpt.Success {
+		failed = append(failed, "stream usage events must match successes")
+	}
+	if point.SummaryExcerpt.StreamBytes < int64(opts.MockOutputBytes*point.SummaryExcerpt.Success) {
+		failed = append(failed, "stream bytes below expected mock output")
+	}
+	return failed
 }
 
 func missingOrFailedInvariants(invariants []artifact.Invariant, required []string) []string {

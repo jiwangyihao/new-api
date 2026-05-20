@@ -5,7 +5,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -129,6 +131,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 	if err := loadtestclient.ValidateTokenProfile(*apiKey, *tokenProfile); err != nil {
+		writeErr(stderr, err)
+		return 2
+	}
+	if err := validateSweepBaseURL(*urlFlag, cfg); err != nil {
 		writeErr(stderr, err)
 		return 2
 	}
@@ -286,6 +292,13 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 		return point, 2
 	}
 	delta.Path = deltaPath
+	delta.Hash = ""
+	deltaHash, err := artifact.HashCanonical(delta)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
+	delta.Hash = deltaHash
 	if err := writeJSONFile(deltaPath, delta); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
@@ -318,6 +331,25 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 	point.Gate = sweep.EvaluateGate(opts.Scenario, point, gateOptions(opts, point))
 	point.Passed = point.Gate.Passed
 	return point, 0
+}
+
+func validateSweepBaseURL(raw string, cfg *loadtestconfig.File) error {
+	if err := loadtestclient.ValidateLoopbackURL(raw); err != nil {
+		return err
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	wantHost := net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port))
+	gotHost := parsed.Host
+	if parsed.Port() == "" {
+		gotHost = net.JoinHostPort(parsed.Hostname(), "80")
+	}
+	if gotHost != wantHost {
+		return fmt.Errorf("--url must match configured new-api address http://%s", wantHost)
+	}
+	return nil
 }
 
 func readMockStats(source string) (artifact.MockStats, error) {

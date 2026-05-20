@@ -134,6 +134,17 @@ func BuildDiff(in DiffInputs) (artifact.Diff, artifact.Invariant) {
 	return diff, artifact.Invariant{Name: "diff_context_and_seed", Status: "passed"}
 }
 
+func DiffFailedInvariant(diff artifact.Diff) artifact.Invariant {
+	if diff.BusinessDelta.Statused.Status == "" || diff.BusinessDelta.Statused.Status == "passed" {
+		return artifact.Invariant{Name: "business_invariants", Status: "passed"}
+	}
+	reason := diff.BusinessDelta.Statused.Reason
+	if reason == "" {
+		reason = "business invariants did not pass"
+	}
+	return artifact.Invariant{Name: "business_invariants", Status: "failed", Reason: reason}
+}
+
 func buildInvariants(in DiffInputs, chargeInv artifact.Invariant, logs artifact.LogsSnapshot) []artifact.Invariant {
 	invariants := []artifact.Invariant{
 		chargeInv,

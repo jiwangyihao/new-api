@@ -84,6 +84,14 @@ func TestBuildChargesByRequestJoinsOnlyNewAPIRequestID(t *testing.T) {
 	}
 }
 
+func TestDiffFailedInvariantReportsBusinessInvariantFailure(t *testing.T) {
+	diff := artifact.Diff{BusinessDelta: artifact.BusinessDelta{Statused: artifact.Statused{Status: "failed", Reason: "consume_logs_by_request: missing"}}}
+	inv := DiffFailedInvariant(diff)
+	if inv.Status != "failed" || !strings.Contains(inv.Reason, "consume_logs_by_request") {
+		t.Fatalf("business failure was not propagated: %#v", inv)
+	}
+}
+
 func TestLoadBusinessRowsAndSnapshotUseDatabaseRows(t *testing.T) {
 	db := openMetricsTestDB(t)
 	seed := artifact.SeedOutput{UserIDSubscription: 1, UserIDCompat: 2, TokenDBKeySubscription: "loadtestsub", TokenDBKeyCompat: "loadtestcompat"}

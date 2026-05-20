@@ -49,11 +49,14 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		cmp, err := report.BuildCompareReport(base, candidate, thresholds)
 		if err != nil {
-			writeErr(stderr, err)
-			_ = failOnRegression
-			return 2
+			if *failOnRegression {
+				writeErr(stderr, err)
+				return 2
+			}
+			md = report.RenderCompareFailure(candidate, err)
+		} else {
+			md = cmp.Markdown
 		}
-		md = cmp.Markdown
 	} else {
 		if *sweepPath == "" {
 			writeErr(stderr, fmt.Errorf("--sweep or --baseline-sweep/--candidate-sweep is required"))

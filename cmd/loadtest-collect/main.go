@@ -140,6 +140,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 			_, _ = fmt.Fprintln(stderr, artifact.Redact(inv.Reason))
 			return 2
 		}
+		if businessInv := metrics.DiffFailedInvariant(diff); businessInv.Status == "failed" {
+			_, _ = fmt.Fprintln(stderr, artifact.Redact(businessInv.Reason))
+			return 2
+		}
 		fmt.Fprintf(stdout, "diff written %s\n", *outDiffPath)
 	}
 	return 0

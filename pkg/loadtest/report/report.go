@@ -30,6 +30,18 @@ func BuildCompareReport(baseline artifact.SweepResult, candidate artifact.SweepR
 	return CompareReport{Markdown: RenderSingleReport(candidate, nil)}, nil
 }
 
+func RenderCompareFailure(candidate artifact.SweepResult, err error) string {
+	var b strings.Builder
+	b.WriteString(RenderSingleReport(candidate, nil))
+	b.WriteString("\nComparison: failed")
+	if err != nil {
+		b.WriteString(" - ")
+		b.WriteString(err.Error())
+	}
+	b.WriteByte('\n')
+	return b.String()
+}
+
 func RenderSingleReport(sweep artifact.SweepResult, diffs []artifact.Diff) string {
 	var b strings.Builder
 	b.WriteString("# Loadtest Report\n\n")

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -40,6 +41,44 @@ func TestRunRejectsSweepWithoutRealInputs(t *testing.T) {
 	}
 }
 
+func TestRunRejectsURLOutsideConfiguredNewAPI(t *testing.T) {
+	dir := t.TempDir()
+	rc := sweepTestRunContext()
+	seed := artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: 1, TokenDBKeySubscription: "loadtestsub", ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
+	seedHash, err := artifact.HashSeedOutput(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.SeedOutputHash = seedHash
+	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
+	runContextPath := filepath.Join(dir, "run-context.json")
+	seedPath := filepath.Join(dir, "seed.json")
+	configPath := filepath.Join(dir, "config.yaml")
+	writeTestJSON(t, runContextPath, rc)
+	writeTestJSON(t, seedPath, seed)
+	writeSweepConfig(t, configPath, "http://127.0.0.1:13080")
+	exit := Run([]string{
+		"--config", configPath,
+		"--url", "http://127.0.0.1:13081",
+		"--api-key", "sk-loadtestsub",
+		"--token-profile", "subscription",
+		"--path", "/v1/responses",
+		"--scenario", "s1-smoke",
+		"--points", "1",
+		"--max-requests-per-point", "1",
+		"--output-bytes", "128",
+		"--seed-output", seedPath,
+		"--mock-stats", filepath.Join(dir, "mock-stats.json"),
+		"--run-context", runContextPath,
+		"--mock-hash", rc.MockHash,
+		"--artifact-dir", filepath.Join(dir, "artifacts"),
+		"--out", filepath.Join(dir, "sweep.json"),
+	}, ioDiscard(), ioDiscard())
+	if exit == 0 {
+		t.Fatal("sweep accepted a URL that does not match config.server host/port")
+	}
+}
+
 func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	rc := sweepTestRunContext()
@@ -51,8 +90,8 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	rc.SeedOutputHash = seedHash
 	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
 
-	mockServer := httptest.NewServer(mockopenai.NewServer(mockopenai.Config{RunContext: rc, OutputBytes: 128, PromptTokens: 11, CompletionTokens: 17, ChunkInterval: time.Millisecond}))
-	defer mockServer.Close()
+	newAPIServer := httptest.NewServer(mockopenai.NewServer(mockopenai.Config{RunContext: rc, OutputBytes: 128, PromptTokens: 11, CompletionTokens: 17, ChunkInterval: time.Millisecond}))
+	defer newAPIServer.Close()
 
 	runContextPath := filepath.Join(dir, "run-context.json")
 	seedPath := filepath.Join(dir, "seed.json")
@@ -61,7 +100,7 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	configPath := filepath.Join(dir, "config.yaml")
 	writeTestJSON(t, runContextPath, rc)
 	writeTestJSON(t, seedPath, seed)
-	writeSweepConfig(t, configPath)
+	writeSweepConfig(t, configPath, newAPIServer.URL)
 	db := openSweepCommandTestDB(t)
 	seedSweepBusinessRows(t, db, seed)
 	originalOpenSweepDB := openSweepDB
@@ -72,7 +111,7 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	exit := Run([]string{
 		"--config", configPath,
-		"--url", mockServer.URL,
+		"--url", newAPIServer.URL,
 		"--api-key", "sk-loadtestsub",
 		"--token-profile", "subscription",
 		"--path", "/v1/responses",
@@ -84,7 +123,7 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 		"--input-bytes", "8",
 		"--output-bytes", "128",
 		"--seed-output", seedPath,
-		"--mock-stats", mockServer.URL + "/debug/loadtest/mock-stats",
+		"--mock-stats", newAPIServer.URL + "/debug/loadtest/mock-stats",
 		"--run-context", runContextPath,
 		"--mock-hash", rc.MockHash,
 		"--artifact-dir", artifactDir,
@@ -104,6 +143,12 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	}
 	assertPassedInvariant(t, point.Invariants, "subscription_token_used_matches_success_usage")
 	assertPassedInvariant(t, point.Invariants, "consume_logs_by_request")
+	if point.SummaryExcerpt.StatusCodes["200"] != 3 || point.SummaryExcerpt.StreamUsageEvents != 3 || point.SummaryExcerpt.StreamDoneReceived != 3 {
+		t.Fatalf("point did not record required stream/status fields: %#v", point.SummaryExcerpt)
+	}
+	if got, err := artifact.HashCanonical(artifact.MockStatsDelta{SchemaVersion: point.MockDelta.SchemaVersion, RunContext: point.MockDelta.RunContext, Path: point.MockDelta.Path, Actual429: point.MockDelta.Actual429, Actual502: point.MockDelta.Actual502, UpstreamAttemptsTotal: point.MockDelta.UpstreamAttemptsTotal}); err != nil || got != point.MockDelta.Hash {
+		t.Fatalf("mock delta hash mismatch got=%s want=%s err=%v", got, point.MockDelta.Hash, err)
+	}
 	if point.SummaryPath == "" || point.MetricsDiffPath == "" || point.MockDelta.Path == "" {
 		t.Fatalf("missing point artifacts: %#v", point)
 	}
@@ -170,11 +215,11 @@ func readTestJSON(t *testing.T, path string, value any) {
 	}
 }
 
-func writeSweepConfig(t *testing.T, path string) {
+func writeSweepConfig(t *testing.T, path string, baseURL string) {
 	t.Helper()
 	content := `server:
   host: "127.0.0.1"
-  port: 13080
+  port: ` + serverPortForConfig(t, baseURL) + `
   pprof_addr: "127.0.0.1:8005"
   runtime_stats_enabled: true
 postgres:
@@ -209,6 +254,19 @@ thresholds:
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func serverPortForConfig(t *testing.T, baseURL string) string {
+	t.Helper()
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := parsed.Port()
+	if port == "" {
+		t.Fatalf("test server URL has no port: %s", baseURL)
+	}
+	return port
 }
 
 func openSweepCommandTestDB(t *testing.T) *gorm.DB {

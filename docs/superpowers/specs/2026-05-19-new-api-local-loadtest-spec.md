@@ -102,17 +102,21 @@ loadtest-report
 ```
 
 要求：
+- `mock_hash` 仅场景 context 必填；base/seed context 中必须为空或省略。
 
 - `loadtest-client` summary 顶层必须包含 `run_context`。
 - `loadtest-concurrency-sweep` 顶层必须包含 `run_context`。
 - `loadtest-collect` snapshot 和 diff 顶层必须包含 `run_context`。
+- `loadtest-mock-openai` stats snapshot 和由 sweep 写出的 stats delta 顶层必须包含 `run_context`；stats delta 的 `run_context` 必须是当前 scenario/point 的运行上下文。
 - `loadtest-report` 必须校验 baseline/candidate 的 `comparison_config_hash`、`mock_hash`、`cache_mode`、`scenario`、`path`、`token_profile` 一致。
 
 生成责任：
 
-- `loadtest-check-config` 生成不含 `seed_output_hash` 的基础 `.loadtest/run-context.base.json`，包含 commit、comparison_config_hash、cache_mode、model 和全局配置。
-- `loadtest-seed` 读取 base context，写入 seed_output_hash，输出 `.loadtest/run-context.seeded.json`。
-- `loadtest-concurrency-sweep` 按 scenario/path/token_profile/mock_hash 派生每个场景自己的 `.loadtest/<scenario>/run-context.json`，并传给 client/collector/report。
+- `loadtest-check-config` 生成不含 `seed_output_hash` 和场景级 `mock_hash` 的基础 `.loadtest/run-context.base.json`，包含 role、commit、comparison_config_hash、cache_mode、model 和全局配置。`role` 未传时默认为 `baseline`；`commit` 未传时自动读取当前 git HEAD。
+- `loadtest-seed` 读取 base context，输出 `.loadtest/baseline/seed.json`。`seed.json` 顶层必须包含从 base context 复制的 `run_context`，但该对象内的 `seed_output_hash` 必须为空或省略，避免自引用 hash；场景级 `mock_hash` 也必须为空或省略。
+- `loadtest-seed` 对规范化后的 `seed.json` 计算 `seed_output_hash`，再输出 `.loadtest/run-context.seeded.json`：该 context 等于 base context 加上 `seed_output_hash`。
+- `loadtest-concurrency-sweep` 按 scenario/path/token_profile/mock_hash 派生每个场景自己的 `.loadtest/<scenario>/run-context.json`，并传给 client/collector/mock stats/report。
+- collector 读取 `--seed-output` 时，必须按相同规范重新计算 hash 并与当前 `run_context.seed_output_hash` 比对；同时校验 seed output 的 base context 与当前 context 的 commit、comparison_config_hash、cache_mode、model 一致。`mock_hash` 是场景级字段，不参与 seed output base context 校验。
 - 多场景并行运行时不得复用同一个 `.loadtest/run-context.json` 路径。
 
 ## 实现位置与命令形态
@@ -281,6 +285,52 @@ loadtest:
   subscription_key: "sk-loadtestsub"
   compat_key: "sk-loadtestcompat"
   pid_file: ".loadtest/new-api.pid"
+mock_profiles:
+  s1-smoke:
+    first_token_delay: 50ms
+    stream_duration: 500ms
+    chunk_interval: 50ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s2-short-stream:
+    first_token_delay: 100ms
+    stream_duration: 1s
+    chunk_interval: 100ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s3-long-stream:
+    first_token_delay: 150ms
+    stream_duration: 30s
+    chunk_interval: 250ms
+    output_bytes: 4096
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s4-error-refund:
+    first_token_delay: 100ms
+    stream_duration: 1s
+    chunk_interval: 100ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0.05, 502: 0.01}
+    seed: 1
+  s5-large-payload:
+    first_token_delay: 150ms
+    stream_duration: 3s
+    chunk_interval: 100ms
+    output_bytes: 65536
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
 retry:
   retry_times: 0
   automatic_retry_status_codes: []
@@ -308,6 +358,12 @@ BATCH_UPDATE_ENABLED=true
 SQL_MAX_OPEN_CONNS=10
 SQL_MAX_IDLE_CONNS=5
 SQL_MAX_LIFETIME=60
+CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED=false
+CHANNEL_TEST_FREQUENCY=0
+PYROSCOPE_URL=
+SYNC_UPSTREAM_BASE=
+RetryTimes=0
+AutomaticRetryStatusCodes=
 ```
 
 哈希字段拆分：
@@ -324,6 +380,7 @@ SQL_MAX_LIFETIME=60
 ```text
 loadtest-mock-openai \
   --addr 127.0.0.1:19080 \
+  --run-context .loadtest/s2-responses-subscription/run-context.json \
   --first-token-delay 100ms \
   --stream-duration 1s \
   --chunk-interval 100ms \
@@ -350,11 +407,12 @@ loadtest-mock-openai \
 
 ### Mock stats artifact
 
-mock 必须输出可选统计 artifact，供 S4 校验上游注入错误数量：
+mock 必须输出可选统计 artifact，供 S4 校验上游注入错误数量。stats snapshot 和 sweep 计算出的 delta artifact 都必须包含当前 scenario/point 的 `run_context`；collector 读取 delta 时必须校验其 `run_context` 与 summary、diff 的 `run_context` 一致。
 
 ```json
 {
   "schema_version": 1,
+  "run_context": {},
   "attempts_total": 1000,
   "injected_status_counts": {"429": 50, "502": 10},
   "attempts": [
@@ -478,6 +536,7 @@ X-Oneapi-Request-Id: upstream-loadtest-<attempt>
 --path /v1/responses
 --model gpt-5.5
 --scenario s2-short-stream
+--token-profile subscription
 --concurrency 100
 --rps 0
 --duration 30s
@@ -492,6 +551,7 @@ X-Oneapi-Request-Id: upstream-loadtest-<attempt>
 ```
 
 `--scenario` 用于标记场景，不再表示钱包/订阅资金来源。第一阶段所有 relay 请求都使用订阅计费。
+`--token-profile` 必须显式传入，枚举为 `subscription`、`compat`、`invalid`；命令必须校验它与 API key 的固定映射一致：`sk-loadtestsub -> subscription`，`sk-loadtestcompat -> compat`，`sk-loadtestinvalid -> invalid`。不得从场景名猜测资金来源。
 
 调度语义：
 
@@ -599,17 +659,28 @@ request id 规则：
 --path /v1/responses
 --model gpt-5.5
 --scenario s2-short-stream
+--token-profile subscription
 --points 10,20,50,100,150,200,300
 --duration 30s
 --max-requests-per-point 1000
+--rps 5
+--ramp-step 25
+--ramp-interval 5s
+--input-bytes 4096
+--output-bytes 1024
 --timeout 90s
 --cooldown 2s
 --pid-file .loadtest/new-api.pid
+--seed-output .loadtest/baseline/seed.json
+--mock-profile s2-short-stream
 --mock-stats .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats.json
 --run-context .loadtest/s2-responses-subscription/run-context.json
+--mock-hash sha256:...
 --artifact-dir .loadtest/concurrency-sweep/responses-subscription
 --out .loadtest/concurrency-sweep/responses-subscription.json
 ```
+
+`--token-profile` 与 API key 的固定映射同 `loadtest-client`。`--mock-profile` 选择配置文件中的 mock profile；`--derive-run-context-only` 必须读取 `--config` 并按 `--mock-profile` 计算 `MockProfileHash` 写入场景 `run_context.mock_hash`；如果未传 `--config` 且未显式传 `--mock-hash`，必须返回配置错误。实际执行场景时，sweep 必须确保当前 mock upstream 的 profile hash 与 `--mock-hash`/`run_context.mock_hash` 一致。第一阶段允许由 SOP 在每个场景前重启 mock，也允许 sweep 管理 mock 进程；但二者必须有且只有一个责任方，并在 artifact 中记录 mock stats delta。
 
 `sweep` 每个并发点必须执行：
 
@@ -707,11 +778,11 @@ passed = errors == 0
 
 ### S4：错误和退款路径
 
-确定性错误注入规则：对第 `n` 个主请求，使用 `hash(seed, n) % 10000`。429 命中区间 `[0, rate429*10000)`，502 命中接续区间。这样每个并发点都能预先计算期望错误数。
+确定性错误注入规则必须与 mock upstream 共用同一个 helper：对每个主请求 attempt 和每个 status，计算 `sha256(fmt.Sprintf("%d:%d:%d", seed, attempt, status))`，取前 8 字节 big-endian 后 `% 10000`；当结果低于 `status_rate[status] * 10000` 时注入该 status。不同 status 按数值升序判定，命中后停止，避免同一 attempt 同时计入多个错误。
 
 ```text
-expected_429 = deterministic_count(seed, total, 429)
-expected_502 = deterministic_count(seed, total, 502)
+expected_429, expected_502 = deterministic_error_counts(seed, total, status_rate)
+success = total - expected_429 - expected_502
 passed = actual_429 == expected_429
       && actual_502 == expected_502
       && non_injected_errors == 0
@@ -834,6 +905,8 @@ GroupRatio={"default":1}
 LogConsumeEnabled=true
 DataExportEnabled=true
 perf_metrics_setting.enabled=true
+RetryTimes=0
+AutomaticRetryStatusCodes=
 ```
 
 不得关闭订阅并发队列。
@@ -843,6 +916,14 @@ perf_metrics_setting.enabled=true
 ```json
 {
   "schema_version": 1,
+  "run_context": {
+    "schema_version": 1,
+    "role": "baseline",
+    "commit": "abcdef0",
+    "comparison_config_hash": "sha256:...",
+    "cache_mode": "cold-fresh-role,warm-per-point",
+    "model": "gpt-5.5"
+  },
   "user_id_subscription": 1001,
   "user_id_compat": 1002,
   "token_subscription": "sk-loadtestsub",
@@ -857,6 +938,18 @@ perf_metrics_setting.enabled=true
     "prompt_tokens": 11,
     "completion_tokens": 17,
     "total_tokens": 28
+  },
+  "ratio_config": {
+    "ModelRatio": {"gpt-5.5": 1},
+    "CompletionRatio": {"gpt-5.5": 1},
+    "GroupRatio": {"default": 1}
+  },
+  "feature_options": {
+    "LogConsumeEnabled": true,
+    "DataExportEnabled": true,
+    "perf_metrics_setting.enabled": true,
+    "RetryTimes": 0,
+    "AutomaticRetryStatusCodes": ""
   }
 }
 ```
@@ -878,6 +971,9 @@ loadtest-collect \
   --config .loadtest/config/config.yaml \
   --pid-file .loadtest/new-api.pid \
   --run-context .loadtest/s2-responses-subscription/run-context.json \
+  --seed-output .loadtest/baseline/seed.json \
+  --stdout-log .loadtest/logs/new-api.stdout.log \
+  --stderr-log .loadtest/logs/new-api.stderr.log \
   --out-snapshot .loadtest/.../metrics-before.json
 ```
 
@@ -888,11 +984,14 @@ loadtest-collect \
   --config .loadtest/config/config.yaml \
   --pid-file .loadtest/new-api.pid \
   --run-context .loadtest/s2-responses-subscription/run-context.json \
+  --seed-output .loadtest/baseline/seed.json \
   --summary .loadtest/.../c100-summary.json \
   --before .loadtest/.../metrics-before.json \
   --out-snapshot .loadtest/.../metrics-after.json \
   --out-diff .loadtest/.../metrics-diff.json \
   --mock-stats-delta .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats-delta.json \
+  --stdout-log .loadtest/logs/new-api.stdout.log \
+  --stderr-log .loadtest/logs/new-api.stderr.log \
   --wait-drain
 ```
 
@@ -903,6 +1002,8 @@ loadtest-collect \
 - diff 以 `summary.requests[*].new_api_request_id` join DB 日志和预扣记录。
 - diff 需要读取当前并发点对应的 mock stats delta，S4 的 `actual_429`、`actual_502`、`upstream_attempts_total` 只来自该并发点窗口。
 - `--mock-stats-delta` 是当前并发点的 mock stats 差量文件；如果 S4 gate 由 sweep 计算，collector 仍必须把该路径写入 diff artifact。
+- `--seed-output` 是 `loadtest-seed` 输出的 seed artifact，collector 必须按规范化 JSON 重算 hash 并与 `run_context.seed_output_hash` 一致，否则 exit code 为 `2`。
+- `--stdout-log` 和 `--stderr-log` 必须分别来自 `loadtest-run-new-api` 捕获的服务日志。`stdout_full_params_lines` 只扫描 stdout；`perf_metric_upsert_errors` 必须扫描 stdout 与 stderr，避免 stderr 中的 `common.SysError` 被漏报。
 
 ### Snapshot JSON schema
 
@@ -995,6 +1096,13 @@ loadtest-collect \
   "before_path": "metrics-before.json",
   "after_path": "metrics-after.json",
   "summary_path": "c100-summary.json",
+  "mock_stats_delta_path": "c100-mock-stats-delta.json",
+  "mock_stats_delta_hash": "sha256:...",
+  "mock_delta": {
+    "actual_429": 50,
+    "actual_502": 10,
+    "upstream_attempts_total": 1000
+  },
   "business_delta": {
     "logs_count": 0,
     "subscription_token_used_sum": 0,
@@ -1006,6 +1114,7 @@ loadtest-collect \
       {
         "new_api_request_id": "20260519120000-abcdef12",
         "client_request_id": "client-loadtest-1",
+        "upstream_request_id": "upstream-loadtest-1",
         "status_code": 200,
         "success": true,
         "subscription_token_delta": 28,
@@ -1050,6 +1159,8 @@ loadtest-collect \
 Invariant status 枚举：`passed`、`failed`、`unavailable`、`not_applicable`。
 
 `unavailable` 传播规则：任一必读字段不可用时，对应派生指标也必须输出 `{"status":"unavailable","reason":"source unavailable"}`，report 不得把它当 0。
+
+`mock_delta` 必须来自当前并发点的 mock stats delta artifact。collector 必须校验 mock delta 的 `run_context` 与 diff、summary 的 `run_context` 一致，校验 `mock_stats_delta_hash` 后再把 `actual_429`、`actual_502`、`upstream_attempts_total` 写入 diff。S4 gate 不得读取 mock 的全局累计 stats。
 
 ### PostgreSQL 指标
 
@@ -1224,9 +1335,9 @@ seed 后请求：
 mock：
 
 ```text
-first-token-delay=150ms
-stream-duration=3s
-chunk-interval=100ms
+first-token-delay=50ms
+stream-duration=500ms
+chunk-interval=50ms
 output-bytes=128
 prompt-tokens=11
 completion-tokens=17
@@ -1353,12 +1464,12 @@ seed=1
 
 目的：定位 JSON、token 估算、request body、SSE buffer 和内存分配热点。
 
-矩阵：
+第一阶段收敛为单点 large payload profile，覆盖高收益的大输出热路径；后续如需更细归因，再扩展为输入/输出矩阵。
 
 ```text
-input-bytes: 4KB, 64KB, 256KB
-output-bytes: 4KB, 64KB
-concurrency: 5, 10, 20
+input-bytes=4096
+output-bytes=65536
+concurrency=20
 ```
 
 通过标准：使用 S5 gate。
@@ -1516,61 +1627,69 @@ config.loadtest.yaml -> .loadtest/config/config.yaml
 运行：
 
 ```text
-loadtest-check-config --config .loadtest/config/config.yaml --out-env .loadtest/config/new-api.env --out-run-context .loadtest/run-context.base.json
+.loadtest/bin/loadtest-check-config --config .loadtest/config/config.yaml --out-env .loadtest/config/new-api.env --out-run-context .loadtest/run-context.base.json
 ```
 
 通过标准：命令 exit `0`，最终配置没有生产地址。
 
-### 4. 启动 mock upstream
-
-```text
-loadtest-mock-openai --addr 127.0.0.1:19080 --first-token-delay 150ms --stream-duration 3s --chunk-interval 100ms --output-bytes 128 --prompt-tokens 11 --completion-tokens 17 --stats-out .loadtest/mock-stats.json
-```
-
-### 5. 启动 new-api 执行 schema bootstrap
+### 4. 启动 new-api 执行 schema bootstrap
 
 必须使用 `.loadtest/config/new-api.env` 中的环境变量。
 
 ```text
-loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid --bootstrap-only
+.loadtest/bin/loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid --stdout-log .loadtest/logs/new-api.stdout.log --stderr-log .loadtest/logs/new-api.stderr.log --bootstrap-only
 ```
 
 `--bootstrap-only` 必须用干净环境启动 `new-api`，等待数据库迁移完成后退出或终止进程；该步骤只负责创建 schema，不做压测。
 
-### 6. Seed 数据
+### 5. Seed 数据
 
 运行：
 
 ```text
-loadtest-seed --config .loadtest/config/config.yaml --run-context .loadtest/run-context.base.json --out .loadtest/baseline/seed.json --out-run-context .loadtest/run-context.seeded.json
+.loadtest/bin/loadtest-seed --config .loadtest/config/config.yaml --run-context .loadtest/run-context.base.json --out .loadtest/baseline/seed.json --out-run-context .loadtest/run-context.seeded.json
 ```
 
-### 7. 启动 new-api 压测实例
+### 6. 生成场景 run context
 
 ```text
-loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid
+.loadtest/bin/loadtest-concurrency-sweep --derive-run-context-only --config .loadtest/config/config.yaml --run-context .loadtest/run-context.seeded.json --scenario s2-short-stream --token-profile subscription --path /v1/responses --api-key sk-loadtestsub --seed-output .loadtest/baseline/seed.json --mock-profile s2-short-stream --out-run-context .loadtest/s2-responses-subscription/run-context.json
+```
+
+### 7. 启动 mock upstream
+
+```text
+.loadtest/bin/loadtest-mock-openai --addr 127.0.0.1:19080 --run-context .loadtest/s2-responses-subscription/run-context.json --first-token-delay 100ms --stream-duration 1s --chunk-interval 100ms --output-bytes 128 --prompt-tokens 11 --completion-tokens 17 --status-rate 429=0,502=0 --seed 1 --stats-out .loadtest/mock-stats.json & echo $! > .loadtest/mock-openai.pid
+```
+
+每个场景必须只由一个责任方管理 mock profile：要么 SOP 按场景重启 mock upstream，要么 `loadtest-concurrency-sweep` 托管 mock 进程。第一阶段默认采用 SOP 重启方式；sweep 必须校验 `--mock-profile`、`--mock-hash` 与当前 `run_context.mock_hash` 一致。
+
+### 8. 启动 new-api 压测实例
+
+```text
+.loadtest/bin/loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid --stdout-log .loadtest/logs/new-api.stdout.log --stderr-log .loadtest/logs/new-api.stderr.log
 ```
 
 启动器必须使用干净环境、避开生产 `.env`，并把 `new-api` 进程 ID 写入 `.loadtest/new-api.pid`；`loadtest-collect` 只通过该 pid file 采集进程指标。`--binary` 必须指向已构建的 `new-api` 可执行文件；启动器不得从 `PATH` 猜测二进制，不得在仓库根目录运行服务。
 
-### 8. seed 后鉴权健康检查
+### 9. seed 后鉴权健康检查
 
 ```text
 GET http://127.0.0.1:<port>/v1/models Authorization: Bearer sk-loadtestsub
 POST http://127.0.0.1:<port>/v1/chat/completions Authorization: Bearer sk-loadtestinvalid
 ```
 
-### 9. 采集 before metrics
+### 10. 采集 before metrics
 
 ```text
-loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --out-snapshot .loadtest/baseline/metrics-before.json
+.loadtest/bin/loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --seed-output .loadtest/baseline/seed.json --stdout-log .loadtest/logs/new-api.stdout.log --stderr-log .loadtest/logs/new-api.stderr.log --out-snapshot .loadtest/baseline/metrics-before.json
 ```
 
-### 10. 执行场景
+### 11. 执行场景
 
 第一阶段必须可机器运行 S1、S2、S3、S4、S5。第一份最小 baseline 报告至少包含 S1 和 S2；未产出 S3、S4、S5 baseline 前，不得据此给出完整代码级优化排序，只能给出「短流式常规并发」结论。
 
-### 11. usage / batch / data export drain
+### 12. usage / batch / data export drain
 
 等待至少：
 
@@ -1584,10 +1703,10 @@ BatchUpdateInterval + 2s
 - `quota_data`：如果 pending 状态可读，drain 后必须不持续增长；如果 pending 不可读，输出 `unavailable`，不作为硬门禁。
 - `perf_metrics`：优先读取 runtime pending 或调用 loadtest 专用强制 flush；如果二者都不可用，输出 `unavailable`，不作为硬门禁；仍必须检查日志中没有 perf metric upsert error。
 
-### 12. 采集 after metrics
+### 13. 采集 after metrics
 
 ```text
-loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --summary .loadtest/baseline/c100-summary.json --before .loadtest/baseline/metrics-before.json --mock-stats-delta .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats-delta.json --out-snapshot .loadtest/baseline/metrics-after.json --out-diff .loadtest/baseline/metrics-diff.json --wait-drain
+.loadtest/bin/loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --seed-output .loadtest/baseline/seed.json --summary .loadtest/baseline/c100-summary.json --before .loadtest/baseline/metrics-before.json --mock-stats-delta .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats-delta.json --stdout-log .loadtest/logs/new-api.stdout.log --stderr-log .loadtest/logs/new-api.stderr.log --out-snapshot .loadtest/baseline/metrics-after.json --out-diff .loadtest/baseline/metrics-diff.json --wait-drain
 ```
 
 额外保存：
@@ -1602,7 +1721,7 @@ loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-
 - server log excerpt；
 - process snapshot。
 
-### 13. 清理
+### 14. 清理
 
 停止：
 
@@ -1648,8 +1767,8 @@ loadtest-report \
 loadtest-report \
   --baseline-sweep .loadtest/baseline/s2-responses-subscription.json \
   --candidate-sweep .loadtest/candidate/s2-responses-subscription.json \
-  --baseline-metrics .loadtest/baseline/metrics-after.json \
-  --candidate-metrics .loadtest/candidate/metrics-after.json \
+  --baseline-metrics .loadtest/baseline/metrics-diff.json \
+  --candidate-metrics .loadtest/candidate/metrics-diff.json \
   --thresholds .loadtest/config/regression-thresholds.json \
   --out .loadtest/reports/s2-responses-subscription-compare.md \
   --fail-on-regression
@@ -1657,7 +1776,7 @@ loadtest-report \
 
 要求：
 
-- baseline/candidate 的 `comparison_config_hash` 必须一致；不一致时 exit code 为 `2`。
+- baseline/candidate 的 `comparison_config_hash`、`mock_hash`、`cache_mode`、`scenario`、`path`、`token_profile` 必须一致；任一不一致时 exit code 为 `2`。
 - 输入 artifact schema version 不兼容时 exit code 为 `2`。
 - `--fail-on-regression` 且任一 regression gate 失败时 exit code 为 `2`。
 - 缺失可选 pprof 时报告 `unavailable`，不得失败；缺失 summary/diff 必需字段时失败。

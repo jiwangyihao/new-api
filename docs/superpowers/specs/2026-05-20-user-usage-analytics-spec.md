@@ -2,9 +2,49 @@
 
 ## 背景
 
-有用户希望在自己的控制台中看到按 API Key 分别统计的用量。进一步讨论后，该能力不应被设计成单一的「API Key 用量页」，因为用户后续很可能还需要按模型、分组、端点、计费来源、调用形态等维度分析自己的用量。
+有用户希望在自己的控制台中看到按 API Key 分别统计的用量。进一步讨论后，该能力不应被设计成单一的「API Key 用量页」，因为用户后续还会自然提出按模型、分组、调用形态、结果状态、端点、计费来源等维度分析自己的用量。
 
-因此，本规格将功能定位为用户侧「用量分析中心」（Usage Analytics）：默认按 API Key 聚合，满足当前明确诉求；同时提供可扩展的聚合维度模型，避免后续为每个维度重复建设页面和接口。
+本规格将功能定位为用户侧「用量分析中心」（Usage Analytics）：第一版默认按 API Key 聚合，并同时支持模型、分组、流式状态、调用结果等结构化维度；后续阶段再扩展请求端点、计费来源和交叉热力图。这样可以满足当前 API Key 聚合诉求，也避免后续为每个维度重复建设页面和接口。
+
+## 交付分期约定
+
+Phase 1 是第一版必须交付范围；本规格中未特别标注 Phase 2 或 Future 的验收标准，默认均指 Phase 1。Phase 2 和 Phase 3 不阻塞 Phase 1 合并。
+
+Phase 1 必须交付：
+
+- 用户侧 `/usage-analytics` 页面。
+- 默认按 API Key 聚合最近 7 天用量。
+- 支持聚合维度：API Key、模型、分组、流式状态、调用结果。
+- 支持指标：请求数、总 Tokens、额度、成功率、错误率、平均延迟、P95 延迟、RPM、TPM、活跃 API Key 数。
+- 支持总览卡片、趋势图、分布图、排行表。
+- 支持 API Keys 页面跳转并预选 API Key。
+- 支持从分析页钻取到 `/usage-logs/common`，Phase 1 钻取参数为 `token_id`、`model`、`group`、`is_stream`、`status`、时间范围。
+
+Phase 1 不包含：
+
+- endpoint、billing_source、billing_tier、modality 聚合维度。
+- `/api/usage-analytics/matrix`。
+- 热力图。
+- 洞察卡片。
+- 新增小时级聚合表。
+- 性能基准工程。
+
+Phase 2 扩展 endpoint、billing_source、matrix、热力图和洞察卡片。Phase 3 只在真实数据量证明需要时进入性能优化。
+
+## 实施约束
+
+后续实现直接在当前主工作区 `C:/Users/34404/source/repos/new-api` 开发，不创建、不切换 Git worktree。实现采用子代理方式按文件边界并发开发；不得修改与用量分析无关的文件，不提交未要求的变更。
+
+多子代理实现时，以下共享文件必须串行编辑，不能由多个子代理同时修改同一处：
+
+- `router/api-router.go`
+- `controller/log.go`
+- `model/log.go`
+- `web/default/src/hooks/use-sidebar-data.ts`
+- `web/default/src/hooks/use-sidebar-config.ts`
+- `web/default/src/routeTree.gen.ts`
+- `web/default/src/i18n/locales/*.json`
+- `web/default/src/i18n/static-keys.ts`
 
 ## 现状与可复用能力
 
@@ -18,22 +58,29 @@
 - `logs.token_id`：API Key 对应的 token ID，已有索引。
 - `logs.token_name`：API Key 名称。
 - `logs.model_name`：模型名称。
-- `logs.group`：用户分组。
+- `logs.group`：用户分组。该列名是保留字，原始 SQL 必须通过 `logGroupCol` 引用，不能手写裸 `group`。
 - `logs.quota`：本次计费额度。
 - `logs.prompt_tokens`：输入 token。
 - `logs.completion_tokens`：输出 token。
 - `logs.metered_tokens`：实际计量 token，可为空。
 - `logs.use_time`：耗时，当前语义为秒。
 - `logs.is_stream`：是否流式调用。
+- `logs.channel_id`：`model.Log.ChannelId` 的数据库列名；JSON 字段名为 `channel`。Phase 1 用户侧不暴露渠道维度。
 - `logs.other`：JSON 文本，包含请求路径、计费来源、订阅扣费、多模态细分等扩展字段。
+
+日志库与主业务库可能分离：
+
+- `logs` 必须通过 `model.LOG_DB` 查询。
+- `tokens` 必须通过 `model.DB` 查询。
+- 禁止写出跨 `LOG_DB` 与 `DB` 的 SQL JOIN。
 
 现有 `model.SumUsedQuota()` 已确立 token 统计语义：
 
-- `metered_tokens IS NOT NULL` 时使用 `metered_tokens`；
-- `metered_tokens IS NULL` 时回退到 `prompt_tokens + completion_tokens`；
+- `metered_tokens IS NOT NULL` 时使用 `metered_tokens`。
+- `metered_tokens IS NULL` 时回退到 `prompt_tokens + completion_tokens`。
 - `metered_tokens = 0` 是权威值，必须保留 0，不能回退。
 
-本功能必须沿用该语义。
+本功能必须沿用该语义，并贯穿 summary、timeseries、breakdown、RPM、TPM 和测试。
 
 ### 前端现状
 
@@ -44,13 +91,14 @@
 - 现有 Dashboard 已有 chart spec 构建、主题色、空状态和统计卡片模式。
 - Usage Logs 已有用户侧日志列表与统计接口。
 - API Keys 页面已有密钥列表和行操作模式。
+- 前端规则要求：用户可见文案必须 i18n；组件 props 非必要不解构；类型显式；避免 `any`；常量 labelKey 需要静态 key 登记或字面量 `t()`。
 
 ## 目标
 
 - 新增用户侧「用量分析」页面，面向普通用户展示自己的 API 使用情况。
 - 默认按 API Key 聚合，满足「按 API Key 分别统计用量」的直接诉求。
-- 支持按模型、分组、端点、计费来源、流式状态、调用结果等维度切换聚合。
-- 提供总览卡片、趋势图、分布图、排行表、交叉热力图和洞察卡片。
+- Phase 1 支持按 API Key、模型、分组、流式状态、调用结果切换聚合。
+- 提供总览卡片、趋势图、分布图、排行表。
 - 支持从聚合结果钻取到 Usage Logs 明细。
 - 不暴露完整 API Key，不展示其他用户数据。
 - 保持 SQLite、MySQL、PostgreSQL 三库兼容。
@@ -60,9 +108,10 @@
 - 不做管理员全站分析页。管理员如果进入本页面，默认也只分析自己的用量。
 - 不展示或重新引入价格、余额、可用天数、runway 等 dashboard 指标。
 - 不替代 Usage Logs。分析页负责聚合洞察，日志页负责原始明细。
-- 不在初版引入新的外部图表库。
-- 不在初版强制新增聚合表；性能不足时再进入后续优化阶段。
+- 不在 Phase 1 引入新的外部图表库或测试框架。
+- 不在 Phase 1 强制新增聚合表；性能不足时再进入 Phase 3。
 - 不在用户侧暴露渠道名称、渠道密钥或上游供应商内部信息。
+- 不使用 `quota_data` 伪造 API Key 维度，因为 `quota_data` 没有 `token_id`。
 
 ## 产品信息架构
 
@@ -72,42 +121,50 @@
 
 - 导航名称：`用量分析`
 - 英文文案：`Usage Analytics`
-- 路由建议：`/usage-analytics`
+- 路由：`/usage-analytics`
 - 前端目录：`web/default/src/features/usage-analytics/`
 
 入口：
 
-1. 侧边栏 `General` 分组中，放在 `API Keys` 与 `Usage Logs` 之间或紧邻 `Usage Logs`。
-2. `API Keys` 页面顶部增加「查看用量分析」按钮。
+1. 侧边栏 `General` 分组中，放在 `API Keys` 与 `Usage Logs` 之间。
+2. `API Keys` 页面顶部动作区增加「查看用量分析」按钮。
 3. `API Keys` 表格行操作增加「分析此 Key」，跳转到 `/usage-analytics?group_by=token&token_ids=<id>`。
-4. Dashboard Overview 可增加轻量入口卡片「最近 7 天用量分析」，但不是初版必需项。
-5. Usage Analytics 中点击任意聚合项，可跳转到 Usage Logs 并携带可钻取筛选参数。
+4. Usage Analytics 中点击可钻取聚合项，跳转到 `/usage-logs/common` 并携带可钻取筛选参数。
+
+API Keys 入口安全边界：
+
+- 顶部按钮放入现有 `ApiKeysPrimaryButtons` 动作区。
+- 行操作只使用当前行的 `apiKey.id` 与 `apiKey.name` 生成导航。
+- 不调用 `fetchTokenKey`、`fetchTokenKeysBatch` 或任何完整密钥获取接口。
+- 不把完整 API Key 写入 URL、React state、日志或 toast。
+- 不把 API Keys 页面扩展成分析大屏；Key 管理页只提供入口。
 
 ### 页面布局
 
 桌面端布局：
 
 ```text
-[页面标题与说明]
+[页面标题]
 [全局筛选栏]
 [总览指标卡片]
 [主趋势图 2/3] [分布图 1/3]
-[排行条形图 1/2] [错误率趋势 1/2]
-[交叉热力图]
-[聚合排行表]
-[洞察卡片]
+[排行表]
 ```
+
+Phase 1 不显示热力图和洞察卡片，也不放置不可点击占位。
 
 移动端布局：
 
-- 筛选栏折叠为抽屉或纵向卡片。
+- 筛选栏使用现有 `Sheet` / `Drawer` 类组件承载，或降级为纵向卡片。
 - 图表单列展示。
-- 热力图允许横向滚动。
-- 排行表使用现有 DataTable 移动卡片模式或精简列。
+- 排行表使用现有 DataTable 移动卡片或精简列模式。
+- 每个面板都必须有加载态、空态、错误态和 background fetching 态。
+
+页面说明文案不能依赖当前 `SectionPageLayout.Description` 是否渲染；如果需要展示说明，应在页面内容区 header 或首屏提示卡中显式渲染。
 
 ## 聚合维度
 
-### 第一阶段必须支持
+### Phase 1 必须支持
 
 | 维度 | `group_by` | 数据来源 | 说明 |
 |---|---|---|---|
@@ -117,30 +174,47 @@
 | 流式状态 | `stream` | `logs.is_stream` | 对比 stream / non-stream。 |
 | 调用结果 | `status` | `logs.type` | 成功 / 错误聚合。 |
 
-### 第二阶段支持
+Phase 1 的后端请求校验只允许以上 5 个 `group_by`。传入 `endpoint`、`billing_source`、`billing_tier`、`modality` 时返回业务错误：`unsupported group_by in current phase`。
+
+### Phase 2 支持
 
 | 维度 | `group_by` | 数据来源 | 说明 |
 |---|---|---|---|
 | 请求端点 | `endpoint` | `logs.other.request_path` | chat、responses、image、audio、task 等端点。 |
 | 计费来源 | `billing_source` | `logs.other.billing_source` | wallet / subscription 等。 |
-| 计费档位 | `billing_tier` | `logs.other.matched_tier` | tiered expression billing 场景。 |
-| 多模态类型 | `modality` | `logs.other.audio/image/web_search/file_search` | 多模态消耗构成。 |
+
+### Future 维度
+
+`billing_tier`、`modality` 标记为 Future。它们不出现在 Phase 1 的后端 union type、前端 union type、请求校验、UI 选项或验收中。若要纳入 Phase 2，必须补齐 Go 常量、DTO、解析规则、筛选参数、测试和 UI 文案。
 
 ### 维度标签规则
 
 - 空模型名显示为 `Unknown Model`。
-- 空分组显示为 `Default` 或 `Unknown Group`，以现有分组展示约定为准。
+- 空分组、空字符串分组和 NULL 分组统一显示为 `Unknown Group`。
 - `stream = true` 显示为 `Streaming`，`false` 显示为 `Non-streaming`。
-- `status` 显示为 `Success` / `Error`。
-- `endpoint` 应对常见路径做归一化，例如：
+- `status = success` 显示为 `Success`；`status = error` 显示为 `Error`。
+- Phase 2 endpoint 常见路径归一化：
   - `/v1/chat/completions` → `Chat Completions`
   - `/v1/responses` → `Responses`
   - `/v1/images/generations` → `Images`
   - `/v1/audio/*` → `Audio`
-  - 其他路径保留原路径或显示为 `Other Endpoint`。
-- `billing_source` 为空时显示为 `Unknown Billing Source`，不要猜测为 wallet。
+  - 其他路径显示为 `Other Endpoint` 或原路径，具体由 Phase 2 实现固定。
+- Phase 2 `billing_source` 为空时显示为 `Unknown Billing Source`，不要猜测为 wallet。
 
 ## 指标定义
+
+### 基础日志集合
+
+所有 Usage Analytics 查询的基础日志集合固定为：
+
+```text
+logs.user_id = 当前用户 ID
+logs.type IN (LogTypeConsume, LogTypeError)
+logs.created_at >= start_timestamp
+logs.created_at <= end_timestamp
+```
+
+错误日志参与请求数、错误数、错误率、RPM 和延迟样本；错误日志的 quota 与 tokens 永远按 0 进入 token/quota 指标。
 
 ### 基础指标
 
@@ -151,17 +225,18 @@
 | 错误数 | `error_count` | `type = LogTypeError` 的日志数。 |
 | 成功率 | `success_rate` | `success_count / request_count`。无请求时为 0。 |
 | 错误率 | `error_rate` | `error_count / request_count`。无请求时为 0。 |
-| 额度 | `quota` | 消费日志的 `quota` 汇总。错误日志 quota 记 0。 |
-| 输入 tokens | `prompt_tokens` | 消费日志 `prompt_tokens` 汇总。 |
-| 输出 tokens | `completion_tokens` | 消费日志 `completion_tokens` 汇总。 |
-| 计量 tokens | `metered_tokens` | 消费日志实际计量 token 汇总。 |
+| 额度 | `quota` | 消费日志的 `quota` 汇总，错误日志计 0。 |
+| 输入 tokens | `prompt_tokens` | 消费日志 `prompt_tokens` 汇总，错误日志计 0。 |
+| 输出 tokens | `completion_tokens` | 消费日志 `completion_tokens` 汇总，错误日志计 0。 |
+| 计量 tokens | `metered_tokens` | 消费日志实际计量 token 汇总，错误日志计 0。 |
 | 总 tokens | `total_tokens` | 展示口径，等于计量 token 语义。 |
-| 平均延迟 | `avg_latency_ms` | `use_time` 换算毫秒后的平均值。 |
-| P95 延迟 | `p95_latency_ms` | 当前候选日志内的 95 分位耗时。 |
+| 平均延迟 | `avg_latency_ms` | 过滤后消费日志 + 错误日志的 `use_time` 换算毫秒后的平均值。 |
+| P95 延迟 | `p95_latency_ms` | 过滤后消费日志 + 错误日志的 95 分位耗时。 |
 | 首次使用时间 | `first_used_at` | 当前筛选范围内最早日志时间。 |
 | 最后使用时间 | `last_used_at` | 当前筛选范围内最晚日志时间。 |
-| 当前 RPM | `rpm` | 最近 60 秒请求数。 |
-| 当前 TPM | `tpm` | 最近 60 秒总 tokens。 |
+| 当前 RPM | `rpm` | 最近 60 秒、应用除 start/end 以外当前筛选条件后的请求数。 |
+| 当前 TPM | `tpm` | 最近 60 秒、应用除 start/end 以外当前筛选条件后的消费日志 total_tokens，错误日志计 0。 |
+| 活跃 API Key 数 | `active_key_count` | 当前筛选范围内有消费或错误日志的 distinct `token_id` 数；删除 token 的历史日志仍计入。 |
 
 ### Token 统计口径
 
@@ -176,11 +251,14 @@ END
 
 约束：
 
+- 该表达式只应用于 `LogTypeConsume`。
 - `metered_tokens = 0` 必须计为 0。
-- 如果 prompt 或 completion 出现负数，聚合层不得产生负 token；应在 Go 层将异常结果归零或沿用现有日志层归一化规则。
+- `metered_tokens IS NULL` 才回退到 `prompt_tokens + completion_tokens`。
+- 如果 prompt、completion 或表达式结果为负数，聚合层按 0 计入，不得产生负 token。
 - 订阅扣费日志中，`subscription_tokens_consumed` 已在写日志时进入 `metered_tokens`，分析页不再重复读取该字段作为总 tokens，避免双重口径。
+- summary、timeseries、breakdown、TPM 必须使用同一口径；测试必须分别覆盖 NULL fallback 和显式 0。
 
-### 延迟单位
+### 延迟单位与 P95
 
 当前 `logs.use_time` 语义为秒。接口对外统一返回毫秒：
 
@@ -189,46 +267,169 @@ avg_latency_ms = AVG(use_time) * 1000
 p95_latency_ms = percentile(use_time) * 1000
 ```
 
+延迟样本规则：
+
+- 默认包含当前候选集合内的 `LogTypeConsume` 与 `LogTypeError`。
+- 如果 `status` / `type` 过滤只选择其中一种，则只统计过滤后的类型。
+- `use_time = 0` 是有效样本。
+- `use_time < 0` 按 0 处理。
+- 无样本时 `avg_latency_ms = 0`、`p95_latency_ms = 0`。
+- P95 在 Go 层对每个 group、每个 timeseries bucket 分别计算：`index = ceil(0.95 * n) - 1`，index 最小为 0，最大为 `n - 1`。
+
 前端展示时：
 
-- 小于 1000 ms 时显示 `xxx ms`；
+- 小于 1000 ms 时显示 `xxx ms`。
 - 大于等于 1000 ms 时显示 `x.x s`。
+- 格式化函数统一放入 `web/default/src/features/usage-analytics/lib/format.ts` 的 `formatLatencyMs`。
 
 ## 后端 API 设计
 
-所有用户侧接口必须使用 `UserAuth`，并强制使用当前登录用户 ID 查询。
+所有用户侧接口必须使用 `UserAuth`，并强制使用当前登录用户 ID 查询。普通用户请求中的 `user_id`、`username` 一律忽略或返回 400；实现中推荐返回 400，避免误解。
+
+### 路由
+
+在 `router/api-router.go` 中新增：
+
+```go
+usageAnalyticsRoute := apiRouter.Group("/usage-analytics")
+usageAnalyticsRoute.Use(middleware.UserAuth())
+{
+    usageAnalyticsRoute.GET("/summary", controller.GetUsageAnalyticsSummary)
+    usageAnalyticsRoute.GET("/timeseries", controller.GetUsageAnalyticsTimeseries)
+    usageAnalyticsRoute.GET("/breakdown", controller.GetUsageAnalyticsBreakdown)
+}
+```
+
+Phase 2 再新增：
+
+```go
+usageAnalyticsRoute.GET("/matrix", controller.GetUsageAnalyticsMatrix)
+```
+
+所有 handler 必须从 `c.GetInt("id")` 获取当前用户 ID。
 
 ### 查询参数通用结构
 
+Phase 1 后端接受：
+
 ```ts
 type UsageAnalyticsQuery = {
-  start_timestamp: number
-  end_timestamp: number
+  start_timestamp?: number
+  end_timestamp?: number
   granularity?: 'hour' | 'day'
-  group_by?: 'token' | 'model' | 'group' | 'stream' | 'status' | 'endpoint' | 'billing_source' | 'billing_tier' | 'modality'
+  group_by?: 'token' | 'model' | 'group' | 'stream' | 'status'
   metric?: 'request_count' | 'total_tokens' | 'quota' | 'error_rate' | 'avg_latency_ms' | 'p95_latency_ms'
   token_ids?: string
   model_names?: string
   groups?: string
-  endpoints?: string
-  billing_sources?: string
   streams?: string
   statuses?: string
   limit?: number
+  sort_by?: 'request_count' | 'total_tokens' | 'quota' | 'error_rate' | 'avg_latency_ms' | 'p95_latency_ms'
+  sort_order?: 'asc' | 'desc'
 }
 ```
 
 参数规则：
 
-- `start_timestamp`、`end_timestamp` 必填。
-- 普通用户最大时间跨度为 31 天。
+- `start_timestamp` 与 `end_timestamp` 可同时省略；同时省略时后端默认最近 7 天。
+- 只传 `start_timestamp` 或只传 `end_timestamp` 时返回 400。
+- 最终时间跨度 `end_timestamp - start_timestamp` 不得超过 31 天。
 - 默认 `granularity = day`。
 - 默认 `group_by = token`。
 - 默认 `metric = total_tokens`。
 - `limit` 默认 10，最大 50。
-- 多选参数使用英文逗号分隔；后端负责 trim、去空、去重。
-- 普通用户接口不接受 `user_id`、`username`。
-- `token_ids` 中的每个 ID 必须校验属于当前用户；不属于当前用户的 ID 直接忽略或返回 400，推荐返回 400，避免用户误以为筛选生效。
+- `sort_by` 默认等于当前 `metric`。
+- `sort_order` 默认 `desc`。
+- 多选参数使用英文逗号分隔；后端负责 trim、去空、去重、排序。
+- `streams` 只接受 `true,false` 形式的布尔字符串。
+- `statuses` 只接受 `success,error`。
+- `token_ids` 中的每个 ID 必须校验属于当前用户，或存在当前用户该 `token_id` 的历史日志；否则返回 400。
+- Phase 1 不接受 `endpoint`、`billing_source`、`billing_tier`、`modality` 相关参数；若传入，返回 `unsupported filter in current phase`。
+
+### 前端维度引用 DTO
+
+所有聚合项必须返回可直接用于展示和钻取的维度引用。前端不得解析 `group_key` 来猜 raw value。
+
+```ts
+type UsageAnalyticsDimensionRef = {
+  group_by: 'token' | 'model' | 'group' | 'stream' | 'status'
+  group_key: string
+  group_value: string
+  group_label: string
+  drilldown: {
+    token_id?: number
+    model_name?: string
+    group?: string
+    is_stream?: boolean
+    status?: 'success' | 'error'
+  } | null
+}
+```
+
+字段语义：
+
+- `group_key`：全局稳定 key，仅用于 React key、VChart series id、表格 row id。
+- `group_value`：未本地化的原始筛选值；token 维度为 token id 字符串。
+- `group_label`：展示文案，可由后端归一化或前端本地化。
+- `drilldown`：能精确映射到 Usage Logs 时返回具体参数；不能钻取时为 `null`。
+
+Phase 1 各维度 drilldown：
+
+| group_by | drilldown |
+|---|---|
+| token | `{ token_id }` |
+| model | `{ model_name }` |
+| group | `{ group }` |
+| stream | `{ is_stream }` |
+| status | `{ status }` |
+
+API Key 补充信息：
+
+```ts
+type UsageAnalyticsTokenInfo = {
+  id: number
+  name: string
+  masked_key: string | null
+  status: number | null
+  group: string | null
+  remain_quota: number | null
+  unlimited_quota: boolean | null
+  deleted: boolean
+}
+```
+
+不得返回完整 `key`。
+
+### 聚合组 DTO
+
+```ts
+type UsageAnalyticsGroup = UsageAnalyticsDimensionRef & {
+  request_count: number
+  success_count: number
+  error_count: number
+  success_rate: number
+  error_rate: number
+  quota: number
+  prompt_tokens: number
+  completion_tokens: number
+  metered_tokens: number
+  total_tokens: number
+  avg_latency_ms: number
+  p95_latency_ms: number
+  first_used_at: number
+  last_used_at: number
+  share: number | null
+  token: UsageAnalyticsTokenInfo | null
+}
+```
+
+`share` 定义：
+
+- 仅 additive metric（`request_count`、`total_tokens`、`quota`）返回数值。
+- 分母为当前筛选范围内所有真实 group 与 Other 合计的当前 metric 值。
+- 分母为 0 时 `share = 0`。
+- rate / latency metric 返回 `null`。
 
 ### 总览接口
 
@@ -264,8 +465,11 @@ GET /api/usage-analytics/summary
     },
     "groups": [
       {
+        "group_by": "token",
         "group_key": "token:123",
+        "group_value": "123",
         "group_label": "Production Key",
+        "drilldown": { "token_id": 123 },
         "request_count": 900,
         "success_count": 890,
         "error_count": 10,
@@ -316,8 +520,11 @@ GET /api/usage-analytics/timeseries
       {
         "timestamp": 1778716800,
         "time_label": "05-13",
+        "group_by": "token",
         "group_key": "token:123",
+        "group_value": "123",
         "group_label": "Production Key",
+        "drilldown": { "token_id": 123 },
         "request_count": 120,
         "success_count": 118,
         "error_count": 2,
@@ -328,7 +535,8 @@ GET /api/usage-analytics/timeseries
         "completion_tokens": 30000,
         "metered_tokens": 100000,
         "total_tokens": 100000,
-        "avg_latency_ms": 810
+        "avg_latency_ms": 810,
+        "p95_latency_ms": 1600
       }
     ],
     "granularity": "day"
@@ -336,15 +544,24 @@ GET /api/usage-analytics/timeseries
 }
 ```
 
+时间桶规则：
+
+- Phase 1 不使用数据库日期函数生成 bucket。
+- 后端读取候选日志必要字段后在 Go 层计算 bucket。
+- `stepSeconds = 3600`（hour）或 `86400`（day）。
+- `bucket = start_timestamp + ((created_at - start_timestamp) / stepSeconds) * stepSeconds`。
+- `created_at < start_timestamp` 或 `created_at > end_timestamp` 的日志不进入结果。
+- 如果后续改为 SQL bucket，必须分别为 SQLite、MySQL、PostgreSQL 提供实现和测试，禁止直接使用单库函数。
+
 ### 分布与排行接口
 
 ```http
 GET /api/usage-analytics/breakdown
 ```
 
-用途：分布环形图、排行条形图、排行表。
+用途：分布环形图、排行图、排行表。
 
-响应结构可与 `summary.data.groups` 一致，但支持 `limit` 和 `sort`。
+响应：
 
 ```json
 {
@@ -354,12 +571,18 @@ GET /api/usage-analytics/breakdown
     "groups": [],
     "total_groups": 18,
     "other": {
+      "group_by": "token",
       "group_key": "other",
+      "group_value": "other",
       "group_label": "Other",
+      "drilldown": null,
       "request_count": 30,
       "total_tokens": 12000,
-      "quota": 3000
-    }
+      "quota": 3000,
+      "share": 0.01
+    },
+    "sort_by": "total_tokens",
+    "sort_order": "desc"
   }
 }
 ```
@@ -367,100 +590,34 @@ GET /api/usage-analytics/breakdown
 规则：
 
 - 图表默认取 Top 10。
-- 超出部分合并为 `Other`。
 - 表格可显示 Top 50。
-- `Other` 不参与日志钻取。
-
-### 交叉分析接口
-
-```http
-GET /api/usage-analytics/matrix
-```
-
-查询参数：
-
-```ts
-type UsageAnalyticsMatrixQuery = UsageAnalyticsQuery & {
-  x_group_by: 'token' | 'model' | 'group' | 'endpoint' | 'billing_source'
-  y_group_by: 'token' | 'model' | 'group' | 'endpoint' | 'billing_source'
-}
-```
-
-响应：
-
-```json
-{
-  "success": true,
-  "message": "",
-  "data": {
-    "x": [
-      { "key": "model:gpt-4.1-mini", "label": "gpt-4.1-mini" }
-    ],
-    "y": [
-      { "key": "token:123", "label": "Production Key" }
-    ],
-    "cells": [
-      {
-        "x": "model:gpt-4.1-mini",
-        "y": "token:123",
-        "value": 100000,
-        "request_count": 120,
-        "success_count": 118,
-        "error_count": 2,
-        "total_tokens": 100000,
-        "quota": 32000,
-        "error_rate": 0.0167
-      }
-    ],
-    "metric": "total_tokens"
-  }
-}
-```
-
-初版推荐固定提供两个矩阵视图：
-
-- API Key × 模型。
-- API Key × 请求端点。
-
-### 日志钻取增强
-
-增强现有：
-
-```http
-GET /api/log/self
-GET /api/log/self/stat
-```
-
-新增查询参数：
-
-```ts
-{
-  token_id?: number
-  endpoint?: string
-  billing_source?: string
-  is_stream?: boolean
-  status?: 'success' | 'error'
-}
-```
-
-规则：
-
-- `token_id` 必须校验属于当前用户。
-- `status=success` 等价于 `type=LogTypeConsume`。
-- `status=error` 等价于 `type=LogTypeError`。
-- endpoint / billing_source 初版如基于 `Other` 解析，可只用于分析页 drilldown 后的用户侧过滤；若性能不足，后续结构化列优化。
+- `total_groups` 是合并 Other 前的真实分组数量。
+- 超出 Top N 的组由后端合并为 `Other`。
+- `Other` 不参与日志钻取，`drilldown = null`。
+- additive metric 下 `Other` 的值为真实合计。
+- `error_rate` 下 `Other.error_rate = Other.error_count / Other.request_count`，不能简单平均。
+- `avg_latency_ms` 与 `p95_latency_ms` 下，Other 必须由样本或后端聚合结果重算，不能简单平均各组值。
 
 ## 后端实现设计
 
 ### 文件组织
 
-建议新增：
+Phase 1 建议新增：
 
 ```text
+dto/usage_analytics.go
 model/usage_analytics.go
+model/usage_analytics_test.go
 controller/usage_analytics.go
 controller/usage_analytics_test.go
-model/usage_analytics_test.go
+```
+
+需要修改：
+
+```text
+router/api-router.go
+model/log.go
+controller/log.go
 ```
 
 ### 核心类型
@@ -469,48 +626,48 @@ model/usage_analytics_test.go
 type UsageAnalyticsGroupBy string
 
 const (
-    UsageAnalyticsGroupByToken         UsageAnalyticsGroupBy = "token"
-    UsageAnalyticsGroupByModel         UsageAnalyticsGroupBy = "model"
-    UsageAnalyticsGroupByGroup         UsageAnalyticsGroupBy = "group"
-    UsageAnalyticsGroupByStream        UsageAnalyticsGroupBy = "stream"
-    UsageAnalyticsGroupByStatus        UsageAnalyticsGroupBy = "status"
-    UsageAnalyticsGroupByEndpoint      UsageAnalyticsGroupBy = "endpoint"
-    UsageAnalyticsGroupByBillingSource UsageAnalyticsGroupBy = "billing_source"
+    UsageAnalyticsGroupByToken  UsageAnalyticsGroupBy = "token"
+    UsageAnalyticsGroupByModel  UsageAnalyticsGroupBy = "model"
+    UsageAnalyticsGroupByGroup  UsageAnalyticsGroupBy = "group"
+    UsageAnalyticsGroupByStream UsageAnalyticsGroupBy = "stream"
+    UsageAnalyticsGroupByStatus UsageAnalyticsGroupBy = "status"
 )
 
 type UsageAnalyticsQuery struct {
-    UserID         int
-    StartTimestamp int64
-    EndTimestamp   int64
-    Granularity    string
-    GroupBy        UsageAnalyticsGroupBy
-    Metric         string
-    TokenIDs       []int
-    ModelNames     []string
-    Groups         []string
-    Endpoints      []string
-    BillingSources []string
-    Streams        []bool
-    Statuses       []int
-    Limit          int
+    UserID          int
+    StartTimestamp  int64
+    EndTimestamp    int64
+    Granularity     string
+    GroupBy         UsageAnalyticsGroupBy
+    Metric          string
+    TokenIDs        []int
+    ModelNames      []string
+    Groups          []string
+    Streams         []bool
+    Statuses        []string
+    Limit           int
+    SortBy          string
+    SortOrder       string
 }
 ```
 
-响应 DTO 可放在 controller 或 dto 包。若其他层也要复用，放入 `dto/usage_analytics.go`。
+Phase 1 不定义 endpoint、billing_source、billing_tier、modality 的 Go 常量、DTO 字段和前端 union 类型。
 
 ### 查询策略
 
+#### 基础过滤
+
+所有查询先按结构化条件过滤：
+
+- `logs.user_id = 当前用户 ID`
+- `logs.created_at >= start_timestamp`
+- `logs.created_at <= end_timestamp`
+- `logs.type IN (LogTypeConsume, LogTypeError)`，除非 status 过滤进一步限制。
+- `token_ids`、`model_names`、`groups`、`streams`、`statuses` 按请求过滤。
+
 #### 结构化列维度
 
-以下维度可以使用 SQL 聚合：
-
-- token
-- model
-- group
-- stream
-- status
-
-查询必须通过白名单选择 group expression，不允许把前端传入的 `group_by` 直接拼接到 SQL。
+Phase 1 的所有维度均可从结构化列取得。查询必须通过白名单选择 group expression，不允许把前端传入的 `group_by` 直接拼接到 SQL。
 
 示例映射：
 
@@ -518,7 +675,7 @@ type UsageAnalyticsQuery struct {
 func usageAnalyticsGroupExpr(groupBy UsageAnalyticsGroupBy) (selectExpr string, groupExpr string, ok bool) {
     switch groupBy {
     case UsageAnalyticsGroupByToken:
-        return "token_id, token_name", "token_id, token_name", true
+        return "token_id", "token_id", true
     case UsageAnalyticsGroupByModel:
         return "model_name", "model_name", true
     case UsageAnalyticsGroupByGroup:
@@ -533,78 +690,96 @@ func usageAnalyticsGroupExpr(groupBy UsageAnalyticsGroupBy) (selectExpr string, 
 }
 ```
 
+API Key 维度规则：
+
+- 只按 `logs.token_id` 分组，不得按 `logs.token_name` 分组。
+- `group_key = "token:" + token_id`。
+- Token 补充信息禁止通过 logs 与 tokens 做 SQL JOIN。
+- 聚合步骤：先使用 `LOG_DB` 聚合日志，再使用 `DB` 批量查询 `tokens` 表中 `id IN (...) AND user_id = 当前用户 ID` 的当前未删除 token。
+- 当前 token 存在：`group_label` 使用 `tokens.name`，`masked_key` 使用 `token.GetMaskedKey()`。
+- 当前 token 不存在或已删除：`group_label` 使用该 token_id 分组内 `last_used_at` 对应的非空 `logs.token_name`；`token.deleted = true`；`masked_key = null`。
+- 如需判断软删除 token 归属，只能用 `Unscoped` 校验 `id`、`user_id`、`deleted_at`，不得返回已删除 token 的 `key` 或掩码。
+
 #### `Other` JSON 维度
 
-以下维度初版在 Go 层解析：
+Phase 1 不实现 `Other` JSON 维度。
 
-- endpoint
-- billing_source
-- billing_tier
-- modality
+Phase 2 实现 endpoint / billing_source 时必须遵守：
 
-原因：
-
-- `logs.other` 是 TEXT JSON。
-- SQLite、MySQL、PostgreSQL 的 JSON 函数与索引能力不一致。
-- 项目要求三库兼容。
-
-实现方式：
-
-1. SQL 只筛选 `user_id`、`created_at`、`type`、基础列和必要过滤条件。
-2. 读取候选日志的有限字段。
-3. 使用 `common.UnmarshalJsonStr` 解析 `Other`。
-4. 在 Go 内完成分组、聚合、排序、Top N 合并。
-
-注意：业务代码不得直接调用 `encoding/json.Unmarshal`，必须使用 `common.UnmarshalJsonStr` 或项目 JSON wrapper。
+- 只要请求包含 endpoint / billing_source 过滤，无论当前 `group_by` 是结构化列还是 Other 维度，都必须走 Go 层候选日志解析路径。
+- SQL 先按 user_id、created_at、type、token_id、model、group、is_stream、status 等结构化条件缩小候选集合。
+- 最多读取 50,000 条必要字段，超过时返回业务错误：`当前筛选范围数据量过大，请缩小时间范围或增加筛选条件`。
+- 解析 `Other` 必须使用 `common.UnmarshalJsonStr`，不得直接调用 `encoding/json.Unmarshal`。
+- 解析失败、字段缺失或字段类型错误时，不使接口失败，统一归入 Unknown 分类。
 
 ### 候选日志限制
 
-为避免单用户大窗口查询拖垮服务：
+Phase 1 结构化维度仍受 31 天窗口限制。若实现中某个接口需要在 Go 层计算 P95 或 bucket，需要按用户、时间和结构化过滤条件读取候选日志必要字段。单次候选日志硬上限为 50,000 条；超过时返回业务错误：`当前筛选范围数据量过大，请缩小时间范围或增加筛选条件`。
 
-- 普通用户最大查询跨度：31 天。
-- 默认时间范围：7 天。
-- `Other` 维度 Go 内聚合时，候选日志上限建议为 50,000 条；超过时返回明确错误：`当前筛选范围数据量过大，请缩小时间范围或增加筛选条件`。
-- 结构化 SQL 聚合不使用该候选日志上限，但仍受 31 天窗口限制。
+该限制是 MUST，不是建议。
 
-### P95 计算
+### 索引与迁移
 
-初版不使用数据库专属 percentile 函数。
+Phase 1 不新增聚合表。
 
-实现：
+Phase 1 是否新增轻量复合索引由实现阶段根据现有迁移风险决定，但必须二选一写入实现计划：
 
-- SQL 聚合提供 `avg_latency_ms`。
-- P95 使用 Go 层计算。
-- 对每个 group 收集 `use_time` 样本并排序。
-- 样本数过大时允许固定上限采样，但必须在代码注释中说明近似口径；推荐第一版在 31 天用户侧窗口内直接精确计算。
+1. 新增三库兼容复合索引：
+   - `logs(user_id, created_at, type)`：summary / timeseries / breakdown 的基础范围查询。
+   - `logs(user_id, token_id, created_at)`：token drilldown 与 token_ids 过滤。
+2. 不新增索引：依赖现有 `user_id`、`token_id`、`created_at` 单列/既有索引、31 天窗口和 50,000 候选上限；性能验收降级为功能正确性验收。
 
-P95 算法：
+若新增索引，必须通过 GORM tag 或三库兼容迁移创建，不能使用单库 DDL。
 
-```text
-index = ceil(0.95 * n) - 1
-index 最小为 0，最大为 n - 1
+## Usage Logs 钻取增强
+
+增强现有：
+
+```http
+GET /api/log/self
+GET /api/log/self/stat
 ```
 
-### API Key 补充信息
+Phase 1 新增查询参数：
 
-当 `group_by = token` 时，需要补充 token 信息：
+```ts
+type UsageLogsDrilldownQuery = {
+  token_id?: number
+  is_stream?: boolean
+  status?: 'success' | 'error'
+}
+```
 
-- `tokens.id`
-- `tokens.name`
-- `tokens.key` 的掩码结果
-- `tokens.status`
-- `tokens.group`
-- `tokens.remain_quota`
-- `tokens.unlimited_quota`
+已有参数继续支持：
+
+- `model_name`
+- `group`
+- `start_timestamp`
+- `end_timestamp`
+- `type`
+- `request_id`
+- `upstream_request_id`
 
 规则：
 
-- 只能查询当前用户自己的 tokens。
-- 返回 `masked_key`，不得返回完整 `key`。
-- 已删除 token 或 token 表中查不到的历史日志，仍显示日志中的 `token_name`，并标记 `deleted = true`。
+- 新增参数同时适用于 `/api/log/self` 与 `/api/log/self/stat`，二者必须复用同一套过滤构造器。
+- self stat 必须按 `logs.user_id = 当前用户 ID` 查询，不再以 username 作为主过滤条件。
+- `status` 只接受 `success` / `error`。
+- `status=success` 映射 `LogTypeConsume`；`status=error` 映射 `LogTypeError`。
+- 如果请求同时传入 `type` 与 `status`：两者等价时允许；冲突时返回 400，`message = "status conflicts with type"`。
+- `token_id` 对当前未删除 token 用 `tokens.user_id` 校验。
+- 对 deleted token drilldown，若当前筛选范围内存在 `logs.user_id = 当前用户 ID AND logs.token_id = token_id` 的历史日志，也视为允许；否则返回 400。
+- endpoint / billing_source 钻取仅 Phase 2。
+
+Phase 2 的 endpoint / billing_source 过滤必须在 Go 层解析完整候选集合后，再计算 total 并做分页切片，禁止只过滤 SQL 分页后的当前页。
 
 ## 前端实现设计
 
+所有新增 TS / TSX / 测试文件按仓库现有模式保留 AGPL / QuantumNous 版权头，不修改受保护项目标识。
+
 ### 文件组织
+
+Phase 1 新增：
 
 ```text
 web/default/src/features/usage-analytics/
@@ -614,19 +789,26 @@ web/default/src/features/usage-analytics/
   index.tsx
   lib/
     chart-data.ts
+    chart-data.test.ts
     filters.ts
+    filters.test.ts
     format.ts
-    insights.ts
+    format.test.ts
   components/
     usage-analytics-filter-bar.tsx
     usage-analytics-summary-cards.tsx
     usage-trend-chart.tsx
     usage-breakdown-chart.tsx
-    usage-ranking-chart.tsx
-    usage-error-rate-chart.tsx
-    usage-matrix-heatmap.tsx
-    usage-breakdown-table.tsx
-    usage-insights.tsx
+    usage-ranking-table.tsx
+```
+
+Phase 2 再新增：
+
+```text
+web/default/src/features/usage-analytics/lib/insights.ts
+web/default/src/features/usage-analytics/lib/insights.test.ts
+web/default/src/features/usage-analytics/components/usage-matrix-heatmap.tsx
+web/default/src/features/usage-analytics/components/usage-insights.tsx
 ```
 
 路由：
@@ -635,42 +817,103 @@ web/default/src/features/usage-analytics/
 web/default/src/routes/_authenticated/usage-analytics/index.tsx
 ```
 
-导航：
+### 路由与 Sidebar 配置
 
-- `web/default/src/hooks/use-sidebar-data.ts` 增加 `Usage Analytics`。
-- 图标建议使用 `ChartNoAxesCombined`、`BarChart3` 或项目当前 lucide 可用图标。
+- 路由文件使用 `createFileRoute('/_authenticated/usage-analytics/')` 定义，必须提供 Zod `validateSearch`。
+- `routeTree.gen.ts` 为生成文件，不手写修改；新增 file route 后必须运行能触发 TanStack Router 生成的命令，并提交生成结果。
+- 页面组件入口为 `web/default/src/features/usage-analytics/index.tsx`。
+- 复用现有 `SectionPageLayout`、`Sheet` / `Drawer`、`Skeleton`、空状态和 DataTable 组件，不新增平行 UI 体系。
+- 侧边栏在 `use-sidebar-data.ts` 新增 `Usage Analytics`。
+- 侧边栏必须在 `use-sidebar-config.ts` 的 `URL_TO_CONFIG_MAP` 中登记 `/usage-analytics`。Phase 1 复用 `{ section: 'console', module: 'log' }`，使关闭 Usage Logs / 日志模块时分析入口也一致隐藏。
+- 图标实现前必须确认 `lucide-react` 实际导出，不能写死不存在的图标。
+
+### URL 状态
+
+`/usage-analytics` 必须支持空 URL 直接打开。路由 `validateSearch` 负责把缺省或非法 search 归一化为：最近 7 天、`granularity = 'day'`、`group_by = 'token'`、`metric = 'total_tokens'`、`limit = 10`。
+
+Phase 1 必须进入 URL 的字段：
+
+- `start_timestamp`、`end_timestamp`：秒级 Unix 时间；空 URL 由前端计算默认值后请求 API。
+- `granularity`: `hour | day`
+- `group_by`: `token | model | group | stream | status`
+- `metric`: `request_count | total_tokens | quota | error_rate | avg_latency_ms | p95_latency_ms`
+- `token_ids: number[]`
+- `model_names: string[]`
+- `groups: string[]`
+- `streams: ('true' | 'false')[]`
+- `statuses: ('success' | 'error')[]`
+- `limit`：默认 10，最大 50。
+- `sort_by`
+- `sort_order`
+
+URL 层使用类型化数组保存多选，API 层再序列化为后端需要的英文逗号分隔字符串；外部链接传入单个字符串或逗号字符串时，`validateSearch` 也要 normalize 为数组并去空、去重、排序，保证 React Query key 稳定。若某个值本身包含逗号，URL 类型化数组是权威来源；API 序列化时应使用 `URLSearchParams` 多值或后端支持的安全编码，不得不可逆拆分。
+
+从 API Keys 跳转使用类型安全导航：`/usage-analytics?group_by=token&token_ids=<id>`；前端不得把完整 API Key 放入 URL 或 state。
+
+### Usage Logs 前端钻取契约
+
+Usage Analytics 的「查看日志」必须跳转到 `/usage-logs/common`，不要跳到 `/usage-logs`，避免默认 redirect 丢失 search。
+
+需要同步更新：
+
+- `web/default/src/routes/_authenticated/usage-logs/$section.tsx` 的 `validateSearch`。
+- `web/default/src/features/usage-logs/types.ts` 的 `CommonLogFilters`、`GetLogsParams`、`GetLogStatsParams`。
+- `web/default/src/features/usage-logs/lib/utils.ts` 或现有 search/API 参数映射函数。
+- `CommonLogsFilterBar` 的展示、清空和敏感信息处理。
+
+Phase 1 新增 Usage Logs search 字段：
+
+```ts
+type UsageLogsDrilldownSearch = {
+  startTime?: number
+  endTime?: number
+  tokenId?: number
+  model?: string
+  group?: string
+  isStream?: boolean
+  status?: 'success' | 'error'
+}
+```
+
+映射规则：
+
+- `tokenId` → `/api/log/self?token_id=<id>`，后端校验归属。
+- `status='success'` → `type=LogTypeConsume`；`status='error'` → `type=LogTypeError`。
+- `isStream` → `/api/log/self?is_stream=<true|false>`。
+- `model` → 现有 `model_name`。
+- `group` → 现有 group 过滤。
+- 普通用户路径不得接受或发送 `username`、`channel`。
 
 ### React Query
 
-查询 key 必须包含筛选条件：
+API 查询参数必须由 `buildUsageAnalyticsApiParams(search)` 生成 canonical 对象：数组去空、去重、排序；数字和布尔值完成 coercion；不把 Date、函数、`t` 或临时 UI draft state 放进 query key。
+
+query key 使用层级数组：
 
 ```ts
-['usage-analytics-summary', filters]
-['usage-analytics-timeseries', filters]
-['usage-analytics-breakdown', filters]
-['usage-analytics-matrix', filters]
+['usage-analytics', 'summary', canonicalFilters]
+['usage-analytics', 'timeseries', canonicalFilters]
+['usage-analytics', 'breakdown', canonicalFilters]
 ```
 
 要求：
 
-- 使用 `placeholderData` 保持切换筛选时图表稳定。
-- 查询失败使用 `handleServerError` 或现有错误处理模式。
-- 空数据必须显示友好空状态，不显示空白图表。
+- 筛选表单采用 draft state，点击 Search / Apply 后一次性写 URL。
+- 文本输入如要即时搜索必须 debounce，避免每次键入触发 summary / timeseries / breakdown 并发请求。
+- `placeholderData` 只复用同 endpoint 的 previousData。
+- 切换 `group_by` 或 `metric` 时可以保留旧图表但必须展示 fetching 状态，不能让标题 / 筛选与旧数据不一致。
+- HTTP 错误依赖全局 axios / React Query 错误处理。
+- 业务 `success=false` 只展示一次 toast，并在对应面板显示可重试错误态。
 
-### URL 状态
+### 图表数据语义
 
-筛选条件必须进入 URL search params：
-
-- `start_timestamp`
-- `end_timestamp`
-- `group_by`
-- `metric`
-- `granularity`
-- `token_ids`
-- `model_names`
-- `groups`
-
-这样从 API Keys 页面跳转时可以预选 Key，刷新后也能保留分析上下文。
+- VChart 的 `seriesField` 使用 `group_key`，tooltip / legend / title 展示 `group_label`；同名 Key、模型或分组不得合并成同一 series。
+- 颜色复用现有 dashboard / VChart 主题：组件使用现有 chart theme、`VCHART_OPTION`、主题定制和圆角 token；不要新增图表库或并行主题系统。
+- Top N 必须在整个筛选窗口内按当前排序指标确定，同一个时间序列请求中所有时间点使用同一组 Top N；其余项合并为同一个稳定 `Other` series。
+- `Other` 不参与日志钻取。
+- `share` 仅对 additive metric 返回。
+- additive metric（`request_count`、`total_tokens`、`quota`）可用堆叠面积图、堆叠柱状图、环图、Top N + Other。
+- rate / latency metric（`error_rate`、`avg_latency_ms`、`p95_latency_ms`）不得堆叠或求和；趋势图使用非堆叠折线，排行按值排序。
 
 ### 图表行为
 
@@ -696,62 +939,50 @@ web/default/src/routes/_authenticated/usage-analytics/index.tsx
 
 #### 主趋势图
 
-- 默认图表：堆叠面积图。
+- additive metric 默认图表：堆叠面积图。
+- rate / latency metric 默认图表：非堆叠折线图。
 - X 轴：时间。
 - Y 轴：当前 metric。
-- Series：当前 group_by。
-- 支持切换：面积图 / 折线图 / 堆叠柱状图。
-- Top N 之外合并为 `Other`。
+- Series：当前 group_by，对应 `group_key`。
+- Tooltip 展示 `group_label`、当前 metric、请求数、错误率、Tokens。
 
 #### 分布图
 
-- 默认环形图。
-- 展示当前维度的 Top N 占比。
+- additive metric 使用环形图。
+- rate / latency metric 不使用环形图，改用排行条形图或显示「该指标不支持占比图」空状态。
 - Tooltip 显示请求数、Tokens、额度、错误率、占比。
 
-#### 排行图
+#### 排行表
 
-- 横向条形图。
-- 默认按当前 metric 降序。
-- 可切换 metric。
+列：
 
-#### 错误率趋势图
+- 聚合项名称。
+- 请求数。
+- 成功数。
+- 错误数。
+- 错误率。
+- Tokens。
+- 额度。
+- 平均延迟。
+- P95 延迟。
+- 首次使用时间。
+- 最后使用时间。
+- 操作：查看日志。
 
-- 双轴图：请求数 + 错误率。
-- 错误率超过阈值时用 warning / destructive 色。
+API Key 维度额外列：
 
-#### 热力图
+- 掩码 Key。
+- 状态。
+- 分组。
+- 剩余额度。
+- Deleted 状态。
 
-第一版提供：
+### 格式化
 
-- API Key × 模型。
-- API Key × 端点（如果 endpoint 维度已实现）。
-
-指标可切换：
-
-- Tokens
-- 请求数
-- 额度
-- 错误率
-
-### 洞察卡片
-
-`lib/insights.ts` 根据聚合结果生成轻量提示。
-
-第一版建议：
-
-- 消耗最高的 API Key。
-- 错误率最高的模型。
-- 最近 24 小时增长最快的 API Key。
-- 长时间未使用的 API Key。
-- 只产生错误没有成功请求的 API Key。
-- P95 延迟最高的聚合项。
-
-洞察限制：
-
-- 不做推送或告警。
-- 不做复杂预测。
-- 不使用价格或余额类指标。
+- quota 使用现有 `formatQuota`。
+- tokens 使用 `formatTokens` 或分析页封装的等价函数，必须正确显示 0。
+- 延迟使用新增 `formatLatencyMs`。
+- 百分比保留 1–2 位小数，0 请求时显示 `0%`。
 
 ## 权限与安全
 
@@ -760,12 +991,13 @@ web/default/src/routes/_authenticated/usage-analytics/index.tsx
 - 所有 `/api/usage-analytics/*` 接口使用 `UserAuth`。
 - 后端强制 `WHERE logs.user_id = 当前用户 ID`。
 - 普通用户不能传入或影响 `user_id` / `username`。
-- `token_id` 过滤必须校验 token 归属。
+- `token_id` 过滤必须校验 token 归属或当前用户历史日志归属。
 - 返回 API Key 时只返回 `masked_key`。
+- 删除 API Key 时 `masked_key = null`，不得通过已删除 token 的 key 生成掩码。
 - 不返回完整 `key`。
 - 不返回 `Other.admin_info`、渠道密钥、上游密钥或内部调试字段。
 - 删除的 API Key 只显示历史 `token_name`，不能恢复密钥。
-- endpoint、billing_source 等从 `Other` 解析出的值必须作为普通字符串处理，前端不得以 HTML 注入方式渲染。
+- 所有从日志或 `Other` 得到的值必须作为普通字符串渲染，前端不得以 HTML 注入方式渲染。
 
 ## 三库兼容要求
 
@@ -773,30 +1005,41 @@ web/default/src/routes/_authenticated/usage-analytics/index.tsx
 - 原始 SQL 必须限制在三库通用表达式。
 - 不使用数据库 JSON 操作符。
 - 不使用 PostgreSQL 专属 `FILTER`、`PERCENTILE_CONT`、`DISTINCT ON`。
-- 不使用 MySQL 专属 JSON 函数或 `GROUP_CONCAT`。
+- 不使用 MySQL 专属 JSON 函数、`GROUP_CONCAT` 或 `IFNULL`。
 - 不使用 SQLite 不支持的 `ALTER COLUMN`。
+- 不使用数据库专属时间函数：`DATE_TRUNC`、`FROM_UNIXTIME`、`strftime` 等。
 - 保留 `group` 相关字段时使用现有 `logGroupCol` / `commonGroupCol` 风格，避免保留字问题。
+- SQLite 为必跑测试；MySQL / PostgreSQL DSN 测试可沿用仓库 env-gated 模式，但不能把「只在 SQLite 通过」作为三库兼容的唯一证据。
+- 结构化聚合 SQL 必须由白名单函数生成，并用单元测试断言不包含 JSON 操作符、库专属时间函数、percentile/window 函数、未引用的 `group` 字段。
 
 ## 性能设计
 
-### 初版策略
+### Phase 1 策略
 
-- 结构化维度使用 SQL 聚合。
-- JSON 扩展维度使用 Go 内解析。
+- 结构化维度使用 SQL 过滤和基础聚合。
+- P95 和时间 bucket 在 Go 层计算。
 - 用户侧查询窗口限制为 31 天。
 - 默认时间范围为 7 天。
 - Top N 默认 10，最大 50。
-- Matrix 默认限制 X/Y 各 Top 10。
+- Go 层候选日志硬上限为 50,000 条。
 
-### 后续优化触发条件
+### Phase 3 触发条件
 
-如果出现以下情况，应进入 Phase 3：
+如果出现以下情况，进入 Phase 3 前必须先定义目标数据集和验收阈值：
 
-- 单用户 7 天日志量导致接口 P95 超过可接受范围。
+- 单用户 31 天 50,000 条日志下 summary / timeseries / breakdown P95 超过目标阈值。
 - endpoint / billing_source 维度频繁查询超出候选日志上限。
 - Matrix 查询明显拖慢数据库或 Go 进程。
 
-优化方案：
+示例目标阈值只有在 Phase 3 计划中固定后才生效：
+
+- 单用户 31 天 50,000 条日志。
+- summary / timeseries / breakdown P95 < 1s。
+- matrix P95 < 2s。
+
+没有目标数据集和阈值时，不得把「稳定」作为自动验收项。
+
+Phase 3 优化方案：
 
 1. 在 `logs` 增加结构化列：
    - `request_path`
@@ -818,17 +1061,27 @@ web/default/src/i18n/locales/ja.json
 web/default/src/i18n/locales/vi.json
 ```
 
-新增 key 示例：
+动态常量和配置项的 labelKey 必须满足以下任一条件：
+
+1. 以 `t('...')` 字面量形式出现在组件中，可被同步脚本扫描；或
+2. 登记到 `web/default/src/i18n/static-keys.ts`。
+
+必须覆盖的文案包括：
 
 - `Usage Analytics`
-- `Analyze your API usage across keys, models, groups, and endpoints`
+- `Analyze your API usage across keys, models, groups, and request outcomes`
+- `View Usage Analytics`
+- `Analyze this Key`
 - `Group by`
 - `Metric`
+- `Apply filters`
+- `Reset filters`
+- `Time range`
+- `Granularity`
+- `Top N`
 - `API Key Usage`
 - `Model Usage`
 - `Group Usage`
-- `Endpoint Usage`
-- `Billing Source`
 - `Streaming`
 - `Non-streaming`
 - `Success Rate`
@@ -839,48 +1092,90 @@ web/default/src/i18n/locales/vi.json
 - `Usage Trend`
 - `Usage Breakdown`
 - `Usage Ranking`
-- `Usage Heatmap`
 - `View Logs`
+- `View logs for this item`
+- `This item cannot be drilled down`
 - `No usage data`
+- `No matching usage data`
 - `Try adjusting the time range or filters`
 - `Deleted API Key`
 - `Unknown Model`
-- `Unknown Billing Source`
+- `Unknown Group`
+- `Other`
+- `Retry`
+- `Failed to load usage analytics`
+
+新增或修改文案后运行 `bun run i18n:sync`，并检查 `web/default/src/i18n/locales/_reports/_sync-report.json`。新增 key 不得留在 untranslated 报告中。
 
 ## 测试计划
 
 ### 后端测试
 
-必须覆盖：
+新增 `model/usage_analytics_test.go`，必须覆盖：
+
+1. `metered_tokens = 0` 保留 0，不回退。
+2. `metered_tokens IS NULL` 回退到 `prompt_tokens + completion_tokens`。
+3. prompt / completion 或表达式结果为负时按 0 计入。
+4. 成功日志和错误日志分别进入 `success_count`、`error_count`。
+5. 错误日志 token / quota 按 0 计入。
+6. `status` 维度聚合正确。
+7. `group_by = token` 在同一 `token_id` 多个历史 `token_name` 时只产生一个组。
+8. 删除 token 时 `deleted = true` 且不返回 `masked_key`。
+9. hour / day 分桶边界正确。
+10. P95 使用 `ceil(0.95*n)-1` 算法，并同时覆盖消费日志和错误日志样本。
+11. RPM / TPM 语义正确：RPM 统计最近 60 秒消费 + 错误请求，TPM 只统计最近 60 秒消费日志 total_tokens。
+12. Top N / Other 合并正确，Other 不可钻取。
+13. 查询时间范围生效。
+14. 查询跨度超过 31 天时返回错误。
+15. 候选日志超过 50,000 条时返回明确错误。
+16. 不读取 `quota_data` 伪造 token 维度。
+17. GORM DryRun 或 SQL 构造测试分别以 sqlite / mysql / postgres 方言生成查询，断言不包含 JSON 操作符、`DATE_TRUNC`、`FROM_UNIXTIME`、`strftime`、`PERCENTILE_CONT`、窗口函数、裸 `group` 字段。
+
+新增 `controller/usage_analytics_test.go`，必须覆盖：
 
 1. 用户只能看到自己的日志聚合。
-2. `token_id` 筛选必须校验归属。
-3. `metered_tokens = 0` 保留 0，不回退。
-4. `metered_tokens IS NULL` 回退到 `prompt_tokens + completion_tokens`。
-5. 成功日志和错误日志分别进入 `success_count`、`error_count`。
-6. 错误率、成功率在 0 请求场景不产生 NaN。
-7. 已删除 API Key 仍能显示历史 `token_name`，且 `deleted = true`。
-8. `group_by = model`、`group`、`stream`、`status` 的聚合结果正确。
-9. endpoint / billing_source 从 `Other` 解析失败时归入 unknown，不导致接口失败。
-10. 查询时间范围生效。
-11. 查询跨度超过 31 天时返回错误。
-12. 日志钻取参数 `token_id`、`is_stream`、`status` 生效。
-13. SQLite 测试必须通过；SQL 不得使用单库专属语法。
+2. 外部 `token_id` 返回 400，且不泄露名称或 key。
+3. 当前用户 deleted token 的历史日志可钻取，`deleted = true`，`masked_key = null`。
+4. 同时省略 start/end 时默认最近 7 天。
+5. 只传 start 或只传 end 返回 400。
+6. Phase 1 传入 endpoint / billing_source / billing_tier / modality 返回 unsupported 错误。
+7. API 不接受 `user_id` / `username` 影响结果。
+
+增强 `controller/log.go` / `model/log.go` 对应测试，必须覆盖：
+
+1. `/api/log/self` 与 `/api/log/self/stat` 的 `token_id` 过滤一致。
+2. `is_stream` 过滤生效。
+3. `status=success` / `status=error` 映射正确。
+4. `type` 与 `status` 冲突时返回 400。
+5. self stat 改为按 `user_id` 过滤，结果与同筛选条件的列表一致。
+
+测试 fixture 使用 in-memory SQLite 和真实 GORM 数据，不 mock analytics 业务逻辑。
 
 ### 前端测试
 
-必须覆盖：
+当前 `web/default/package.json` 没有 `test` 脚本，新增测试使用 `node:test` 风格并通过 `bun test <具体文件>` 运行。除非本规格另行升级测试基础设施，不引入 `@testing-library/react`、`user-event`、`jsdom`、MSW 或 Vitest。
 
-1. URL search params 与筛选状态互相同步。
-2. 从 API Keys 跳转时预选 API Key。
-3. 空数据展示空状态。
-4. 总览卡片格式化正确。
-5. 图表数据转换正确处理 Top N 与 Other。
-6. API Key 掩码展示，不出现完整 Key。
-7. 点击「查看日志」生成正确 Usage Logs 跳转参数。
-8. group_by 切换后表格第一列与图表标题变化正确。
-9. 错误率、成功率、延迟格式化正确。
-10. i18n 文案通过同步检查。
+纯函数测试：
+
+- `web/default/src/features/usage-analytics/lib/format.test.ts`
+- `web/default/src/features/usage-analytics/lib/chart-data.test.ts`
+- `web/default/src/features/usage-analytics/lib/filters.test.ts`
+
+测试内容：
+
+1. `/usage-analytics` 空 search 归一化为最近 7 天默认筛选，并向 API 发送秒级 `start_timestamp` / `end_timestamp`。
+2. 多选 URL 参数去空、去重、排序，并序列化为后端参数。
+3. 从 API Keys 顶部按钮和行操作跳转时，只携带 token id，不请求或暴露完整 API Key。
+4. 筛选 draft 变化不会立即触发 API 参数提交；Apply 后 canonical filters 稳定。
+5. Usage Analytics「查看日志」跳到 `/usage-logs/common`，`tokenId`、`status`、`isStream`、`model`、`group`、`startTime`、`endTime` 在 Usage Logs route、filter bar 和 API params 中全部保留。
+6. additive metric 的 Top N / Other、share、tooltip 数据转换正确。
+7. rate / latency metric 不堆叠、不求和。
+8. `group_key` 相同 / 不同、`group_label` 重名时 series 不合并。
+9. 空数据、业务错误、background fetching 有明确状态数据。
+10. 删除 API Key 只展示 `Deleted API Key` 和历史名称，不展示完整 key，nullable token 字段不导致渲染崩溃。
+11. 常量驱动 labelKey 已进入 `static-keys.ts` 或可被 `i18n:sync` 扫描。
+
+图表测试只断言 chart spec 的 data、field、metric、Other 合并和空态，不做整份 snapshot。
 
 ### 验证命令
 
@@ -894,12 +1189,12 @@ go test ./model ./controller
 
 ```bash
 cd web/default
-bun run typecheck
-bun test usage-analytics
+bun test src/features/usage-analytics/lib/format.test.ts src/features/usage-analytics/lib/chart-data.test.ts src/features/usage-analytics/lib/filters.test.ts
 bun run i18n:sync
+bun run typecheck
 ```
 
-如果项目没有 `bun test usage-analytics` 精确脚本，则运行相关新增测试文件对应的 Vitest 命令或现有 test 脚本。
+新增 file route 后，必须运行能触发 TanStack Router 生成的命令，并确认 `web/default/src/routeTree.gen.ts` 包含 `/usage-analytics`。
 
 ## 分期实施计划
 
@@ -918,11 +1213,16 @@ bun run i18n:sync
 
 验收：
 
-- 用户可以默认看到最近 7 天按 API Key 聚合的用量。
+- 用户打开空 URL `/usage-analytics` 时，默认看到最近 7 天按 API Key 聚合的用量。
 - 用户可以切换到模型、分组、流式状态、调用结果维度。
-- 用户可以点击聚合项查看日志明细。
-- 不展示完整 API Key。
-- 不泄露其他用户数据。
+- 用户可以点击可钻取聚合项进入 `/usage-logs/common`，并保留对应筛选条件。
+- 页面展示请求数、Tokens、额度、成功率、错误率、平均延迟、P95 延迟、RPM、TPM。
+- 页面至少包含总览卡片、趋势图、分布图、排行表。
+- API Key 页面可以跳转到分析页并预选 Key。
+- 所有用户侧接口都只能访问当前用户数据。
+- 前端不展示完整 API Key。
+- i18n 覆盖所有新增用户可见文案。
+- 后端和前端相关测试通过。
 
 ### Phase 2：扩展维度与交叉分析
 
@@ -939,6 +1239,7 @@ bun run i18n:sync
 - 用户可以看到端点与计费来源构成。
 - 用户可以通过热力图识别 Key 与模型、端点之间的消耗关系。
 - endpoint / billing_source 在 `Other` 缺失时有稳定 unknown 归类。
+- 洞察卡片由 `lib/insights.ts` 的纯函数生成，并定义输入、最小样本数、并列排序和无数据返回空数组规则。
 
 ### Phase 3：性能优化
 
@@ -951,43 +1252,106 @@ bun run i18n:sync
 
 验收：
 
-- 常用查询在目标数据量下保持稳定。
+- 进入 Phase 3 前必须定义目标数据集和接口 P95 阈值。
+- 常用查询在目标数据量下达到阈值。
 - 旧日志仍可回退解析 `Other` 或显示 unknown，不破坏历史兼容。
 
-## 验收标准
+## 多子代理实施边界
 
-最终功能必须满足：
+后续实现计划应按低冲突边界拆分：
 
-- 用户侧有完整「用量分析」页面。
-- 默认按 API Key 聚合展示最近 7 天用量。
-- 至少支持 API Key、模型、分组、流式状态、调用结果 5 种聚合维度。
-- 展示请求数、Tokens、额度、成功率、错误率、平均延迟、P95 延迟、RPM、TPM。
-- 至少包含总览卡片、趋势图、分布图、排行表。
-- API Key 页面可以跳转到分析页并预选 Key。
-- 分析页可以跳转到 Usage Logs 明细。
-- 所有用户侧接口都只能访问当前用户数据。
-- 前端不展示完整 API Key。
-- 后端和前端相关测试通过。
-- i18n 覆盖所有新增用户可见文案。
+### 任务 A：后端 DTO / model / model 测试
+
+负责文件：
+
+- `dto/usage_analytics.go`
+- `model/usage_analytics.go`
+- `model/usage_analytics_test.go`
+
+不得修改：
+
+- `router/api-router.go`
+- `controller/log.go`
+- `model/log.go`
+- 前端文件
+
+### 任务 B：后端 controller / router / 日志钻取
+
+负责文件：
+
+- `controller/usage_analytics.go`
+- `controller/usage_analytics_test.go`
+- `controller/log.go`
+- `model/log.go`
+- `router/api-router.go`
+
+该任务触碰共享文件，必须串行执行或由单一子代理主改。
+
+### 任务 C：前端 API / types / lib / 纯函数测试
+
+负责文件：
+
+- `web/default/src/features/usage-analytics/api.ts`
+- `web/default/src/features/usage-analytics/types.ts`
+- `web/default/src/features/usage-analytics/constants.ts`
+- `web/default/src/features/usage-analytics/lib/*`
+
+不得修改：
+
+- 路由文件
+- i18n locale JSON
+- sidebar 文件
+- API Keys 页面
+- Usage Logs 页面
+
+### 任务 D：前端页面 / 组件 / 图表
+
+负责文件：
+
+- `web/default/src/features/usage-analytics/index.tsx`
+- `web/default/src/features/usage-analytics/components/*`
+
+依赖任务 C 的 API/types/lib 合同。不得修改 i18n locale JSON、routeTree、sidebar 配置。
+
+### 任务 E：入口 / 路由 / Usage Logs drilldown / i18n
+
+负责文件：
+
+- `web/default/src/routes/_authenticated/usage-analytics/index.tsx`
+- `web/default/src/routes/_authenticated/usage-logs/$section.tsx`
+- `web/default/src/hooks/use-sidebar-data.ts`
+- `web/default/src/hooks/use-sidebar-config.ts`
+- `web/default/src/features/keys/*`
+- `web/default/src/features/usage-logs/*`
+- `web/default/src/i18n/*`
+- `web/default/src/routeTree.gen.ts`
+
+该任务触碰多个共享入口文件，必须在前端 API/types 稳定后执行。
+
+主代理最终统一运行定向验证命令；子代理不运行项目级 build/lint/format。
 
 ## 风险与处理
 
-### 风险一：`Other` JSON 维度查询性能不足
+### 风险一：日志库与主库分离导致跨库 JOIN 失败
 
-处理：初版限制时间范围和候选日志数量；后续结构化 `request_path`、`billing_source`。
+处理：规格明确禁止 `LOG_DB` 与 `DB` 跨库 JOIN。日志聚合先在 `LOG_DB` 完成，token 补充信息再用 `DB` 批量查询。
 
 ### 风险二：日志缺失导致统计不完整
 
-处理：页面空状态说明「当前筛选范围暂无用量数据」；不回退到 `quota_data` 伪造 API Key 维度，因为 `quota_data` 没有 `token_id`。
+处理：页面空状态说明「当前筛选范围暂无用量数据」。不回退到 `quota_data` 伪造 API Key 维度，因为 `quota_data` 没有 `token_id`。
 
 ### 风险三：API Key 名称可变导致历史展示混淆
 
-处理：聚合主键使用 `token_id`；展示名称使用当前 token name。删除 Key 使用日志中的历史 `token_name` 并标记 deleted。
+处理：聚合主键只使用 `token_id`；展示名称优先使用当前 token name。删除 Key 使用日志中的历史 `token_name` 并标记 `deleted = true`。
 
 ### 风险四：P95 计算成本较高
 
-处理：初版在用户侧 31 天窗口内精确计算；数据量过大时先返回清晰错误或要求缩小范围。后续再做采样或聚合表。
+处理：Phase 1 在用户侧 31 天窗口和 50,000 候选日志上限内计算；数据量过大时返回清晰错误。后续再做采样或聚合表。
 
 ### 风险五：多数据库 SQL 差异
 
-处理：SQL 只用于基础过滤和通用聚合；JSON、P95、复杂维度在 Go 层处理。
+处理：SQL 只用于基础过滤和通用聚合；时间桶、P95、复杂维度在 Go 层处理；测试断言禁止单库函数。
+
+### 风险六：图表指标语义错误
+
+处理：明确 additive metric 与 rate / latency metric 的图表限制。错误率和延迟不得堆叠、求和或简单平均。

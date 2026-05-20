@@ -99,6 +99,11 @@ function getSubscriptionSourceLabel(
   return t('Unknown')
 }
 
+function formatUsedTokenCount(value: number, t: TranslationFn): string {
+  if (value <= 0) return `0 ${t('tokens')}`
+  return formatTokenLimit(value, t)
+}
+
 
 export function SubscriptionPlansCard({
   topupInfo,
@@ -483,7 +488,7 @@ export function SubscriptionPlansCard({
                             <TooltipTrigger
                               render={<span className='cursor-help' />}
                             >
-                              {formatTokenLimit(tokenUsed, t)}/
+                              {formatUsedTokenCount(tokenUsed, t)}/
                               {formatTokenLimit(tokenLimit, t)} · {t('Remaining')}{' '}
                               {formatTokenLimit(remainTokens, t)}
                             </TooltipTrigger>

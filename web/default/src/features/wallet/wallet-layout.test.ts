@@ -70,6 +70,12 @@ describe('wallet page layout', () => {
     assert.match(source, /Reset quota/)
   })
 
+  test('subscription usage display formats used zero as numeric tokens', () => {
+    const source = readSubscriptionPlansSource()
+    assert.match(source, /formatUsedTokenCount\(tokenUsed, t\)/)
+    assert.doesNotMatch(source, /formatTokenLimit\(tokenUsed, t\)/)
+  })
+
   test('affiliate card documents invitation reward rules near referral link', () => {
     const source = readAffiliateRewardsSource()
     assert.match(source, /Invitation reward rules/)

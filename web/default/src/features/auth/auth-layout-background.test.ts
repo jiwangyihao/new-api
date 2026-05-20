@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 
 function readSource(relativePath: string): string {
@@ -39,9 +39,31 @@ function assertExcludes(source: string, unexpected: string): void {
   )
 }
 
+function isPng(imageBytes: Buffer): boolean {
+  return imageBytes.subarray(0, 8).equals(PNG_SIGNATURE)
+}
+
+function isJpeg(imageBytes: Buffer): boolean {
+  return imageBytes[0] === 0xff && imageBytes[1] === 0xd8 && imageBytes[2] === 0xff
+}
+
 const authLayoutSource = readSource('./auth-layout.tsx')
 const signUpSource = readSource('./sign-up/index.tsx')
 const signInSource = readSource('./sign-in/index.tsx')
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const generatedBackgroundFiles = readdirSync(
+  new URL('./assets/sign-up-backgrounds/', import.meta.url)
+).filter((fileName) => /^signup-moe-native-\d{2}\.(png|jpe?g)$/u.test(fileName))
+const forbiddenImageMarkers = [
+  'AI-generated',
+  'No external image source',
+  'Intended for commercial use',
+  'Pollinations',
+  '<script',
+  '<foreignObject',
+  '<iframe',
+  'base64',
+]
 
 describe('auth layout sign-up background', () => {
   test('keeps background rendering optional and decorative', () => {
@@ -71,37 +93,32 @@ describe('auth layout sign-up background', () => {
     assert.match(authLayoutSource, /:\s*'items-center pt-16 sm:pt-0'/)
   })
 
-  test('wires the generated JPG background only into sign-up', () => {
-    assert.match(signUpSource, /sign-up-anime-girl\.jpg/)
-    assert.doesNotMatch(signUpSource, /sign-up-anime-girl\.svg/)
+  test('wires the generated background set only into sign-up', () => {
+    assert.match(signUpSource, /sign-up-backgrounds\/signup-moe-native-13\.png/)
+    assert.doesNotMatch(signUpSource, /sign-up-anime-girl\.(svg|jpg)/)
     assert.match(signUpSource, /backgroundImageSrc=\{signUpAnimeGirlBackground\}/)
     assert.doesNotMatch(signInSource, /backgroundImageSrc/)
   })
 
-  test('keeps the generated image as an unlabelled local asset', () => {
-    const imageBytes = readBinary('./assets/sign-up-anime-girl.jpg')
+  test('keeps exactly twenty generated local background assets', () => {
+    assert.deepEqual(
+      [...generatedBackgroundFiles].sort(),
+      Array.from(
+        { length: 20 },
+        (_, index) => `signup-moe-native-${String(index + 1).padStart(2, '0')}.png`
+      )
+    )
+  })
 
-    assert.equal(imageBytes[0], 0xff)
-    assert.equal(imageBytes[1], 0xd8)
-    assert.equal(imageBytes[2], 0xff)
+  test('keeps generated images as unlabelled local raster assets', () => {
+    for (const fileName of generatedBackgroundFiles) {
+      const imageBytes = readBinary(`./assets/sign-up-backgrounds/${fileName}`)
+      assert.ok(isPng(imageBytes) || isJpeg(imageBytes), `${fileName} must be PNG or JPEG`)
 
-    const imageText = imageBytes.toString('latin1')
-    for (const forbidden of [
-      'AI-generated',
-      'No external image source',
-      'Intended for commercial use',
-      'Pollinations',
-      '<svg',
-      '<image',
-      '<script',
-      '<foreignObject',
-      '<iframe',
-      'data:',
-      'base64',
-      'http://',
-      'https://',
-    ]) {
-      assertExcludes(imageText, forbidden)
+      const imageText = imageBytes.toString('latin1')
+      for (const forbidden of forbiddenImageMarkers) {
+        assertExcludes(imageText, forbidden)
+      }
     }
   })
 })

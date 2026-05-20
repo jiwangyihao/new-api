@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useStatus } from '@/hooks/use-status'
-import signUpAnimeGirlBackground from '../assets/sign-up-anime-girl.jpg'
+import signUpAnimeGirlBackground from '../assets/sign-up-backgrounds/signup-moe-native-13.png'
 import { AuthLayout } from '../auth-layout'
 import { TermsFooter } from '../components/terms-footer'
 import { SignUpForm } from './components/sign-up-form'

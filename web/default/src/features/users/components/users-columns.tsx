@@ -59,6 +59,32 @@ export function getUserQuotaDisplayState(
   }
 }
 
+export function getInvitationDisplayState(
+  user: Pick<
+    User,
+    | 'aff_count'
+    | 'direct_invite_count'
+    | 'qualified_paid_invite_count'
+    | 'invitation_reward_status'
+    | 'invitation_reward_plan_title'
+    | 'inviter_id'
+  >
+) {
+  const directInviteCount = user.direct_invite_count ?? user.aff_count ?? 0
+  const qualifiedPaidInviteCount = user.qualified_paid_invite_count ?? 0
+  const rewardText =
+    user.invitation_reward_status === 'qualified'
+      ? user.invitation_reward_plan_title || 'Granted'
+      : 'Not granted'
+
+  return {
+    directInviteCount,
+    qualifiedPaidInviteCount,
+    rewardText,
+    inviterId: user.inviter_id || 0,
+  }
+}
+
 export function useUsersColumns(): ColumnDef<User>[] {
   const { t } = useTranslation()
   return [
@@ -288,10 +314,7 @@ export function useUsersColumns(): ColumnDef<User>[] {
         <DataTableColumnHeader column={column} title={t('Invite Info')} />
       ),
       cell: ({ row }) => {
-        const user = row.original
-        const affCount = user.aff_count || 0
-        const affHistoryQuota = user.aff_history_quota || 0
-        const inviterId = user.inviter_id || 0
+        const invitationState = getInvitationDisplayState(row.original)
 
         return (
           <div className='flex items-center gap-1.5 text-xs font-medium'>
@@ -306,10 +329,12 @@ export function useUsersColumns(): ColumnDef<User>[] {
               <TooltipTrigger
                 render={<span className='text-muted-foreground cursor-help' />}
               >
-                {t('Invited')}: {affCount}
+                {t('Direct invites')}: {invitationState.directInviteCount}
               </TooltipTrigger>
               <TooltipContent>
-                <p className='text-xs'>{t('Number of users invited')}</p>
+                <p className='text-xs'>
+                  {t('Number of directly invited users')}
+                </p>
               </TooltipContent>
             </Tooltip>
             <span className='text-muted-foreground/30'>·</span>
@@ -317,13 +342,27 @@ export function useUsersColumns(): ColumnDef<User>[] {
               <TooltipTrigger
                 render={<span className='text-muted-foreground cursor-help' />}
               >
-                {t('Revenue')}: {formatQuota(affHistoryQuota)}
+                {t('Qualified paid invites')}:{' '}
+                {invitationState.qualifiedPaidInviteCount}
               </TooltipTrigger>
               <TooltipContent>
-                <p className='text-xs'>{t('Total invitation revenue')}</p>
+                <p className='text-xs'>
+                  {t('Direct invitees with active paid subscriptions')}
+                </p>
               </TooltipContent>
             </Tooltip>
-            {inviterId > 0 && (
+            <span className='text-muted-foreground/30'>·</span>
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className='text-muted-foreground cursor-help' />}
+              >
+                {t('Reward plan')}: {t(invitationState.rewardText)}
+              </TooltipTrigger>
+              <TooltipContent>
+                <p className='text-xs'>{t('Monthly invitation reward plan')}</p>
+              </TooltipContent>
+            </Tooltip>
+            {invitationState.inviterId > 0 && (
               <>
                 <span className='text-muted-foreground/30'>·</span>
                 <Tooltip>
@@ -332,17 +371,17 @@ export function useUsersColumns(): ColumnDef<User>[] {
                       <span className='text-muted-foreground cursor-help' />
                     }
                   >
-                    {t('Inviter')}: {inviterId}
+                    {t('Inviter')}: {invitationState.inviterId}
                   </TooltipTrigger>
                   <TooltipContent>
                     <p className='text-xs'>
-                      {t('Invited by user ID')} {inviterId}
+                      {t('Invited by user ID')} {invitationState.inviterId}
                     </p>
                   </TooltipContent>
                 </Tooltip>
               </>
             )}
-            {inviterId === 0 && (
+            {invitationState.inviterId === 0 && (
               <>
                 <span className='text-muted-foreground/30'>·</span>
                 <span className='text-muted-foreground'>{t('No Inviter')}</span>

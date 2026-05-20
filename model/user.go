@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -20,37 +21,41 @@ const UserNameMaxLength = 20
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id               int            `json:"id"`
-	Username         string         `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password         string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName      string         `json:"display_name" gorm:"index" validate:"max=20"`
-	Role             int            `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status           int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email            string         `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId         string         `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId        string         `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId           string         `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId         string         `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId       string         `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
-	AccessToken      *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota            int            `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota        int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount     int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group            string         `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode          string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount         int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota         int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota  int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId        int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	DeletedAt        gorm.DeletedAt `gorm:"index"`
-	LinuxDOId        string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting          string         `json:"setting" gorm:"type:text;column:setting"`
-	Remark           string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer   string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt        int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt      int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	Id                        int            `json:"id"`
+	Username                  string         `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password                  string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword          string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName               string         `json:"display_name" gorm:"index" validate:"max=20"`
+	Role                      int            `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status                    int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email                     string         `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId                  string         `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId                 string         `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId                    string         `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId                  string         `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId                string         `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode          string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
+	AccessToken               *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota                     int            `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota                 int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount              int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group                     string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	AffCode                   string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount                  int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota                  int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota           int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId                 int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	DeletedAt                 gorm.DeletedAt `gorm:"index"`
+	LinuxDOId                 string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting                   string         `json:"setting" gorm:"type:text;column:setting"`
+	Remark                    string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer            string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt                 int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt               int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	DirectInviteCount         int            `json:"direct_invite_count" gorm:"-:all"`
+	QualifiedPaidInviteCount  int            `json:"qualified_paid_invite_count" gorm:"-:all"`
+	InvitationRewardStatus    string         `json:"invitation_reward_status" gorm:"-:all"`
+	InvitationRewardPlanTitle string         `json:"invitation_reward_plan_title" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -218,6 +223,10 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 		tx.Rollback()
 		return nil, 0, err
 	}
+	if err = fillUserInvitationSummariesTx(tx, users); err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
 
 	// Commit transaction
 	if err = tx.Commit().Error; err != nil {
@@ -285,6 +294,10 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 		tx.Rollback()
 		return nil, 0, err
 	}
+	if err = fillUserInvitationSummariesTx(tx, users); err != nil {
+		tx.Rollback()
+		return nil, 0, err
+	}
 
 	// 提交事务
 	if err = tx.Commit().Error; err != nil {
@@ -292,6 +305,95 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	}
 
 	return users, total, nil
+}
+
+func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
+	if len(users) == 0 {
+		return nil
+	}
+	userIds := make([]int, 0, len(users))
+	for _, user := range users {
+		if user != nil {
+			userIds = append(userIds, user.Id)
+		}
+	}
+	if len(userIds) == 0 {
+		return nil
+	}
+	type inviteCountRow struct {
+		InviterId int
+		Count     int
+	}
+	var directRows []inviteCountRow
+	if err := tx.Model(&User{}).
+		Select("inviter_id, count(*) as count").
+		Where("inviter_id IN ?", userIds).
+		Group("inviter_id").
+		Scan(&directRows).Error; err != nil {
+		return err
+	}
+	directCounts := make(map[int]int, len(directRows))
+	for _, row := range directRows {
+		directCounts[row.InviterId] = row.Count
+	}
+
+	now := common.GetTimestamp()
+	var qualifiedRows []inviteCountRow
+	if err := tx.Model(&User{}).
+		Select("users.inviter_id, count(distinct users.id) as count").
+		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
+		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
+		Joins("JOIN subscription_orders ON subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id").
+		Where("users.inviter_id IN ?", userIds).
+		Where("user_subscriptions.status = ?", "active").
+		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
+		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", SubscriptionGrantOrder, "", SubscriptionGrantOrder).
+		Where("subscription_plans.reward_eligible = ?", true).
+		Where("subscription_orders.status = ?", common.TopUpStatusSuccess).
+		Where("subscription_orders.money > ?", 0).
+		Group("users.inviter_id").
+		Scan(&qualifiedRows).Error; err != nil {
+		return err
+	}
+	qualifiedCounts := make(map[int]int, len(qualifiedRows))
+	for _, row := range qualifiedRows {
+		qualifiedCounts[row.InviterId] = row.Count
+	}
+
+	type rewardRow struct {
+		InviterId int
+		Status    string
+		Title     string
+	}
+	var rewardRows []rewardRow
+	if err := tx.Table("invitation_monthly_entitlements").
+		Select("invitation_monthly_entitlements.inviter_id, invitation_monthly_entitlements.status, subscription_plans.title").
+		Joins("LEFT JOIN subscription_plans ON subscription_plans.id = invitation_monthly_entitlements.reward_plan_id").
+		Where("invitation_monthly_entitlements.inviter_id IN ?", userIds).
+		Where("invitation_monthly_entitlements.reward_month = ?", rewardMonthStringFromUnix(now)).
+		Scan(&rewardRows).Error; err != nil {
+		return err
+	}
+	rewards := make(map[int]rewardRow, len(rewardRows))
+	for _, row := range rewardRows {
+		rewards[row.InviterId] = row
+	}
+	for _, user := range users {
+		if user == nil {
+			continue
+		}
+		user.DirectInviteCount = directCounts[user.Id]
+		user.QualifiedPaidInviteCount = qualifiedCounts[user.Id]
+		if reward, ok := rewards[user.Id]; ok {
+			user.InvitationRewardStatus = reward.Status
+			user.InvitationRewardPlanTitle = reward.Title
+		}
+	}
+	return nil
+}
+
+func rewardMonthStringFromUnix(timestamp int64) string {
+	return time.Unix(timestamp, 0).UTC().Format("2006-01")
 }
 
 func GetUserById(id int, selectAll bool) (*User, error) {

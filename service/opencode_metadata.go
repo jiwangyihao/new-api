@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +20,14 @@ const (
 	ompProviderToolsNpmLatestURL = "https://registry.npmjs.org/omp-openai-provider-tools/latest"
 	ompProviderToolsTTL          = 15 * time.Minute
 )
+
+var openCodeCodexOAuthVersionIDPattern = regexp.MustCompile(`^gpt-(\d+)\.(\d+)$`)
+
+var openCodeGPT55CodexOAuthLimit = OpenCodeOpenAIModelLimit{
+	Context: 400000,
+	Input:   272000,
+	Output:  128000,
+}
 
 type OpenCodeOpenAIModel struct {
 	ID               string                        `json:"id"`
@@ -232,13 +242,17 @@ func (s *OpenCodeMetadataService) fetchOMPProviderToolsLatest(ctx context.Contex
 }
 
 func extractOpenCodeOpenAIModels(payload map[string]any) (map[string]OpenCodeOpenAIModel, error) {
-	providerModels := collectOpenCodeProviderModels(payload)
-	if len(providerModels) == 0 {
+	provider, ok := mapValue(payload, "openai")
+	if !ok {
+		return nil, fmt.Errorf("openai provider missing")
+	}
+	modelsRaw, ok := mapValue(provider, "models")
+	if !ok {
 		return nil, fmt.Errorf("openai models missing")
 	}
 
 	models := map[string]OpenCodeOpenAIModel{}
-	for id, raw := range providerModels {
+	for id, raw := range collectOpenCodeModelsFromMap(modelsRaw) {
 		if !shouldKeepOpenCodeOpenAIModel(id, raw) {
 			continue
 		}
@@ -246,41 +260,15 @@ func extractOpenCodeOpenAIModels(payload map[string]any) (map[string]OpenCodeOpe
 		if err != nil {
 			return nil, fmt.Errorf("convert %s: %w", id, err)
 		}
-		model.ID = id
+		if model.ID == "" {
+			model.ID = id
+		}
 		models[id] = model
 		for derivedID, derivedModel := range materializeOpenCodeOpenAIExperimentalModes(id, model, raw) {
 			models[derivedID] = derivedModel
 		}
 	}
-	return models, nil
-}
-
-func collectOpenCodeProviderModels(payload map[string]any) map[string]map[string]any {
-	if provider, ok := mapValue(payload, "openai"); ok {
-		if modelsRaw, ok := mapValue(provider, "models"); ok {
-			return collectOpenCodeModelsFromMap(modelsRaw)
-		}
-	}
-
-	models := map[string]map[string]any{}
-	for _, providerValue := range payload {
-		provider, ok := providerValue.(map[string]any)
-		if !ok {
-			continue
-		}
-		modelsRaw, ok := mapValue(provider, "models")
-		if !ok {
-			continue
-		}
-		for id, raw := range collectOpenCodeModelsFromMap(modelsRaw) {
-			modelID := canonicalOpenCodeModelID(id, raw)
-			if !isOpenCodeOpenAIModelID(modelID) {
-				continue
-			}
-			models[modelID] = raw
-		}
-	}
-	return models
+	return filterOpenCodeOpenAIModelsForCodexOAuth(models), nil
 }
 
 func collectOpenCodeModelsFromMap(modelsRaw map[string]any) map[string]map[string]any {
@@ -294,30 +282,74 @@ func collectOpenCodeModelsFromMap(modelsRaw map[string]any) map[string]map[strin
 	return models
 }
 
-func canonicalOpenCodeModelID(id string, raw map[string]any) string {
-	for _, candidate := range []string{id, stringValue(raw, "id")} {
-		candidate = strings.TrimSpace(candidate)
-		if strings.HasPrefix(candidate, "openai/") {
-			return strings.TrimPrefix(candidate, "openai/")
-		}
-		if isOpenCodeOpenAIModelID(candidate) {
-			return candidate
-		}
-	}
-	return strings.TrimSpace(id)
-}
-
-func isOpenCodeOpenAIModelID(id string) bool {
-	id = strings.TrimPrefix(strings.TrimSpace(id), "openai/")
-	return strings.HasPrefix(id, "gpt-") || strings.Contains(id, "codex")
-}
-
 func shouldKeepOpenCodeOpenAIModel(id string, raw map[string]any) bool {
 	status := strings.ToLower(strings.TrimSpace(stringValue(raw, "status")))
 	if id == "gpt-5-chat-latest" {
 		return false
 	}
 	return status != "alpha" && status != "deprecated"
+}
+
+func filterOpenCodeOpenAIModelsForCodexOAuth(src map[string]OpenCodeOpenAIModel) map[string]OpenCodeOpenAIModel {
+	if len(src) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{
+		"gpt-5.1-codex-max":  {},
+		"gpt-5.1-codex-mini": {},
+		"gpt-5.2":            {},
+		"gpt-5.4":            {},
+		"gpt-5.4-mini":       {},
+		"gpt-5.2-codex":      {},
+		"gpt-5.3-codex":      {},
+		"gpt-5.1-codex":      {},
+	}
+	out := map[string]OpenCodeOpenAIModel{}
+	for id, model := range src {
+		if shouldAllowOpenCodeOpenAIModelForCodexOAuth(id, allowed) {
+			out[id] = applyOpenCodeCodexOAuthModelOverrides(id, model)
+		}
+	}
+	return out
+}
+
+func applyOpenCodeCodexOAuthModelOverrides(id string, model OpenCodeOpenAIModel) OpenCodeOpenAIModel {
+	if strings.Contains(id, "gpt-5.5") {
+		model.Limit = openCodeGPT55CodexOAuthLimit
+	}
+	return model
+}
+
+func shouldAllowOpenCodeOpenAIModelForCodexOAuth(id string, allowed map[string]struct{}) bool {
+	if strings.Contains(id, "codex") {
+		return true
+	}
+	if _, ok := allowed[id]; ok {
+		return true
+	}
+	if strings.HasSuffix(id, "-fast") {
+		return shouldAllowOpenCodeOpenAIModelForCodexOAuth(strings.TrimSuffix(id, "-fast"), allowed)
+	}
+	return isOpenCodeCodexOAuthVersionAboveGPT54(id)
+}
+
+func isOpenCodeCodexOAuthVersionAboveGPT54(id string) bool {
+	matches := openCodeCodexOAuthVersionIDPattern.FindStringSubmatch(id)
+	if len(matches) != 3 {
+		return false
+	}
+	major, err := strconv.Atoi(matches[1])
+	if err != nil {
+		return false
+	}
+	minor, err := strconv.Atoi(matches[2])
+	if err != nil {
+		return false
+	}
+	if major != 5 {
+		return major > 5
+	}
+	return minor > 4
 }
 
 func convertOpenCodeOpenAIModel(raw map[string]any) (OpenCodeOpenAIModel, error) {

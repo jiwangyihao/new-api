@@ -99,7 +99,7 @@ export function SignUpForm({
       email: '',
       password: '',
       confirmPassword: '',
-      trial_code: '',
+      trial_code: getAffiliateCode(),
     },
   })
 
@@ -306,10 +306,10 @@ export function SignUpForm({
               name='trial_code'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Trial code')}</FormLabel>
+                  <FormLabel>{t('Trial or invitation code')}</FormLabel>
                   <FormControl>
                     <Input
-                      placeholder={t('Enter trial code if you have one')}
+                      placeholder={t('Enter trial or invitation code if you have one')}
                       {...field}
                     />
                   </FormControl>

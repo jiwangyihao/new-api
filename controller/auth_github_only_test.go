@@ -128,6 +128,34 @@ func TestPasswordRegister_TreatsTrialCodeFieldAsInviteCode(t *testing.T) {
 	assert.Equal(t, 7823, sub.GrantSourceUserId)
 }
 
+func TestPasswordRegister_IgnoresTrialCodeWhenItMatchesExplicitInviteCode(t *testing.T) {
+	setupPasswordRegisterTrialTest(t)
+	plan := seedControllerTrialPlan(t, 7824, "trial_invite_prefilled")
+	realTrial := model.TrialCode{Code: "Link42", PlanId: plan.Id, Enabled: true, MaxRedemptions: 1}
+	require.NoError(t, model.DB.Create(&realTrial).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 7825, Username: "inviter_prefilled", Status: common.UserStatusEnabled, AffCode: "Link42"}).Error)
+
+	recorder := performPasswordRegister(t, `{"username":"prefilledinvitee","password":"Passw0rd!","aff_code":"Link42","trial_code":" Link42 "}`)
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var user model.User
+	require.NoError(t, model.DB.Where("username = ?", "prefilledinvitee").First(&user).Error)
+	assert.Equal(t, 7825, user.InviterId)
+
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ?", user.Id).First(&sub).Error)
+	assert.Equal(t, "invite_trial", sub.GrantReason)
+	assert.Equal(t, plan.Id, sub.PlanId)
+	assert.Equal(t, 7825, sub.GrantSourceUserId)
+
+	var storedCode model.TrialCode
+	require.NoError(t, model.DB.Where("code = ?", "LINK42").First(&storedCode).Error)
+	assert.Equal(t, 0, storedCode.RedeemedCount)
+	var redemptionCount int64
+	require.NoError(t, model.DB.Model(&model.TrialRedemption{}).Where("trial_code_id = ?", storedCode.Id).Count(&redemptionCount).Error)
+	assert.Zero(t, redemptionCount)
+}
+
 func TestGitHubOnlySignupRejectsPasswordRegister(t *testing.T) {
 	setupPasswordRegisterTrialTest(t)
 	common.GitHubOnlySignupEnabled = true

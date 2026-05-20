@@ -24,7 +24,7 @@ describe('register API payload', () => {
     })
   })
 
-  test('uses trial code field as invite code when it matches the stored affiliate code', () => {
+  test('keeps prefilled invite code in trial code field when it matches affiliate code', () => {
     const body = buildRegisterRequestBody({
       username: 'bob',
       password: 'password123',
@@ -36,6 +36,7 @@ describe('register API payload', () => {
       username: 'bob',
       password: 'password123',
       aff_code: 'INVITE42',
+      trial_code: 'invite42',
     })
   })
 

@@ -4694,6 +4694,8 @@
     "{{value}}ms": "{{value}} ms",
     "{{value}}s": "{{value}} s",
     "| Based on": "| Basé sur",
-    "© 2025 Your Company. All rights reserved.": "© 2025 Votre entreprise. Tous droits réservés."
+    "© 2025 Your Company. All rights reserved.": "© 2025 Votre entreprise. Tous droits réservés.",
+    "Trial or invitation code": "Code d’essai ou d’invitation",
+    "Enter trial or invitation code if you have one": "Saisissez un code d’essai ou d’invitation si vous en avez un"
   }
 }

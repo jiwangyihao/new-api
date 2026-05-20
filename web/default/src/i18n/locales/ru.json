@@ -4694,6 +4694,8 @@
     "{{value}}ms": "{{value}} мс",
     "{{value}}s": "{{value}} с",
     "| Based on": "| На основе",
-    "© 2025 Your Company. All rights reserved.": "© 2025 Ваша Компания. Все права защищены."
+    "© 2025 Your Company. All rights reserved.": "© 2025 Ваша Компания. Все права защищены.",
+    "Trial or invitation code": "Пробный код или код приглашения",
+    "Enter trial or invitation code if you have one": "Введите пробный код или код приглашения, если он у вас есть"
   }
 }

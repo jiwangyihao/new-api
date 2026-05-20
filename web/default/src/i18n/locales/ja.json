@@ -4694,6 +4694,8 @@
     "{{value}}ms": "{{value}}ミリ秒",
     "{{value}}s": "{{value}}秒",
     "| Based on": "| に基づく",
-    "© 2025 Your Company. All rights reserved.": "© 2025 Your Company. 全著作権所有。"
+    "© 2025 Your Company. All rights reserved.": "© 2025 Your Company. 全著作権所有。",
+    "Trial or invitation code": "試用コードまたは招待コード",
+    "Enter trial or invitation code if you have one": "試用コードまたは招待コードをお持ちの場合は入力してください"
   }
 }

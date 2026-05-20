@@ -4694,6 +4694,8 @@
     "{{value}}ms": "{{value}} 毫秒",
     "{{value}}s": "{{value}} 秒",
     "| Based on": "| 基于",
-    "© 2025 Your Company. All rights reserved.": "© 2025 您的公司。保留所有权利。"
+    "© 2025 Your Company. All rights reserved.": "© 2025 您的公司。保留所有权利。",
+    "Trial or invitation code": "试用码或邀请码",
+    "Enter trial or invitation code if you have one": "如有试用码或邀请码，请输入"
   }
 }

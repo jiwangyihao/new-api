@@ -107,16 +107,11 @@ export function buildRegisterRequestBody(payload: RegisterPayload) {
   const { aff, trial_code, turnstile: _ignoredTurnstile, ...body } = payload
   const trimmedAff = aff?.trim()
   const trimmedTrialCode = trial_code?.trim()
-  const trialCodeMatchesAff =
-    trimmedTrialCode !== undefined &&
-    trimmedTrialCode.toLowerCase() === trimmedAff?.toLowerCase()
 
   return {
     ...body,
     ...(trimmedAff ? { aff_code: trimmedAff } : {}),
-    ...(trimmedTrialCode && !trialCodeMatchesAff
-      ? { trial_code: trimmedTrialCode }
-      : {}),
+    ...(trimmedTrialCode ? { trial_code: trimmedTrialCode } : {}),
   }
 }
 

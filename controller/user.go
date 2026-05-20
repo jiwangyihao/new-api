@@ -197,6 +197,9 @@ func Register(c *gin.Context) {
 			trialCode = ""
 		}
 	}
+	if trialCode != "" && affCode != "" && strings.EqualFold(trialCode, affCode) {
+		trialCode = ""
+	}
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,

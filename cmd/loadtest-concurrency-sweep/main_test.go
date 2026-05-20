@@ -10,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
+	"github.com/QuantumNous/new-api/pkg/loadtest/metrics"
 	"github.com/QuantumNous/new-api/pkg/loadtest/mockopenai"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func TestRunRejectsSweepWithoutRealInputs(t *testing.T) {
@@ -39,7 +43,7 @@ func TestRunRejectsSweepWithoutRealInputs(t *testing.T) {
 func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	rc := sweepTestRunContext()
-	seed := artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
+	seed := artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: 1, UserIDCompat: 2, TokenDBKeySubscription: "loadtestsub", TokenDBKeyCompat: "loadtestcompat", ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
 	seedHash, err := artifact.HashSeedOutput(seed)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +62,12 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	writeTestJSON(t, runContextPath, rc)
 	writeTestJSON(t, seedPath, seed)
 	writeSweepConfig(t, configPath)
+	db := openSweepCommandTestDB(t)
+	seedSweepBusinessRows(t, db, seed)
+	originalOpenSweepDB := openSweepDB
+	openSweepDB = func(string) (*gorm.DB, error) { return db, nil }
+	t.Cleanup(func() { openSweepDB = originalOpenSweepDB })
+	registerSweepRoundTripper(t, db, seed)
 
 	var stdout, stderr bytes.Buffer
 	exit := Run([]string{
@@ -92,11 +102,53 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	if point.SummaryExcerpt.Total != 3 || point.MockDelta.UpstreamAttemptsTotal != 3 {
 		t.Fatalf("point did not execute real requests: %#v", point)
 	}
+	assertPassedInvariant(t, point.Invariants, "subscription_token_used_matches_success_usage")
+	assertPassedInvariant(t, point.Invariants, "consume_logs_by_request")
 	if point.SummaryPath == "" || point.MetricsDiffPath == "" || point.MockDelta.Path == "" {
 		t.Fatalf("missing point artifacts: %#v", point)
 	}
 	if !strings.Contains(point.SummaryPath, "c2-summary.json") {
 		t.Fatalf("summary path should include point concurrency: %s", point.SummaryPath)
+	}
+}
+
+func TestRunPointUsesRealBusinessSnapshots(t *testing.T) {
+	db := openSweepCommandTestDB(t)
+	rc := sweepTestRunContext()
+	seed := artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: 910001, UserIDCompat: 910002, TokenDBKeySubscription: "loadtestsub", TokenDBKeyCompat: "loadtestcompat", ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
+	seedHash, err := artifact.HashSeedOutput(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.SeedOutputHash = seedHash
+	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
+	seedSweepBusinessRows(t, db, seed)
+	summary := artifact.Summary{RunContext: rc, Total: 1, Success: 1, Requests: []artifact.RequestRecord{{NewAPIRequestID: "rid-1", ClientRequestID: "client-1", UpstreamRequestID: "upstream-1", StatusCode: 200, Success: true}}}
+	before, err := metrics.LoadBusinessSnapshot(db, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&model.UserSubscription{}).Where("user_id = ?", seed.UserIDSubscription).Update("token_used", int64(28)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Log{RequestId: "rid-1", Type: model.LogTypeConsume, Quota: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.SubscriptionPreConsumeRecord{RequestId: "rid-1", UserId: seed.UserIDSubscription, PreConsumed: 28, Status: "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	after, err := metrics.LoadBusinessSnapshot(db, seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logRows, preRows, err := metrics.LoadBusinessRows(db, summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := artifact.MockStatsDelta{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Path: "mock-delta.json", Hash: "sha256:mockdelta", UpstreamAttemptsTotal: 1}
+	diff, inv := metrics.BuildDiff(metrics.DiffInputs{Before: artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Business: before}, After: artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Business: after}, Summary: summary, SeedOutput: seed, MockDelta: mock, RunContext: rc, ConsumeLogRows: logRows, PreConsumeRows: preRows, BusinessBefore: before, BusinessAfter: after})
+	if inv.Status != "passed" || diff.BusinessDelta.Status != "passed" {
+		t.Fatalf("business diff did not pass: inv=%#v diff=%#v", inv, diff.BusinessDelta)
 	}
 }
 
@@ -157,6 +209,85 @@ thresholds:
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func openSweepCommandTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.User{}, &model.UserSubscription{}, &model.Token{}, &model.Log{}, &model.SubscriptionPreConsumeRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func seedSweepBusinessRows(t *testing.T, db *gorm.DB, seed artifact.SeedOutput) {
+	t.Helper()
+	if err := db.Create(&model.User{Id: seed.UserIDSubscription, Username: "sweep-sub", Quota: 1_000_000, AffCode: "sweep-sub"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.User{Id: seed.UserIDCompat, Username: "sweep-compat", Quota: 1_000_000, AffCode: "sweep-compat"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserSubscription{Id: 910011, UserId: seed.UserIDSubscription, Status: "active", TokenUsed: 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.UserSubscription{Id: 910012, UserId: seed.UserIDCompat, Status: "active", TokenUsed: 0}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Token{UserId: seed.UserIDSubscription, Key: seed.TokenDBKeySubscription, RemainQuota: 1_000_000}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.Token{UserId: seed.UserIDCompat, Key: seed.TokenDBKeyCompat, RemainQuota: 1_000_000}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func registerSweepRoundTripper(t *testing.T, db *gorm.DB, seed artifact.SeedOutput) {
+	t.Helper()
+	original := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		resp, err := original.RoundTrip(req)
+		if err != nil || req.Method != http.MethodPost || req.URL.Path != "/v1/responses" {
+			return resp, err
+		}
+		requestID := resp.Header.Get("X-Oneapi-Request-Id")
+		if requestID == "" {
+			return resp, nil
+		}
+		usage := seed.ExpectedUsagePerSuccess.TotalTokens
+		if err := db.Model(&model.UserSubscription{}).Where("user_id = ?", seed.UserIDSubscription).Update("token_used", gorm.Expr("token_used + ?", usage)).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.Log{RequestId: requestID, Type: model.LogTypeConsume, Quota: usage}).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Create(&model.SubscriptionPreConsumeRecord{RequestId: requestID, UserId: seed.UserIDSubscription, PreConsumed: int64(usage), Status: "consumed"}).Error; err != nil {
+			t.Fatal(err)
+		}
+		return resp, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = original })
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func assertPassedInvariant(t *testing.T, invariants []artifact.Invariant, name string) {
+	t.Helper()
+	for _, inv := range invariants {
+		if inv.Name != name {
+			continue
+		}
+		if inv.Status != "passed" {
+			t.Fatalf("invariant %s = %s (%s)", name, inv.Status, inv.Reason)
+		}
+		return
+	}
+	t.Fatalf("missing invariant %s: %#v", name, invariants)
 }
 
 func ioDiscard() *bytes.Buffer { return &bytes.Buffer{} }

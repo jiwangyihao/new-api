@@ -126,6 +126,7 @@ cmd/loadtest-client
 cmd/loadtest-concurrency-sweep
 cmd/loadtest-seed
 cmd/loadtest-collect
+cmd/loadtest-run-new-api
 cmd/loadtest-report
 pkg/loadtest/localguard
 pkg/loadtest/mockopenai
@@ -486,7 +487,7 @@ X-Oneapi-Request-Id: upstream-loadtest-<attempt>
 --timeout 90s
 --input-bytes 1024
 --stream true
---run-context .loadtest/run-context.json
+--run-context .loadtest/s2-responses-subscription/run-context.json
 --out .loadtest/.../summary.json
 ```
 
@@ -876,7 +877,7 @@ before：
 loadtest-collect \
   --config .loadtest/config/config.yaml \
   --pid-file .loadtest/new-api.pid \
-  --run-context .loadtest/run-context.json \
+  --run-context .loadtest/s2-responses-subscription/run-context.json \
   --out-snapshot .loadtest/.../metrics-before.json
 ```
 
@@ -886,11 +887,12 @@ after + diff：
 loadtest-collect \
   --config .loadtest/config/config.yaml \
   --pid-file .loadtest/new-api.pid \
-  --run-context .loadtest/run-context.json \
+  --run-context .loadtest/s2-responses-subscription/run-context.json \
   --summary .loadtest/.../c100-summary.json \
   --before .loadtest/.../metrics-before.json \
   --out-snapshot .loadtest/.../metrics-after.json \
   --out-diff .loadtest/.../metrics-diff.json \
+  --mock-stats-delta .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats-delta.json \
   --wait-drain
 ```
 
@@ -900,6 +902,7 @@ loadtest-collect \
 - `--summary` 是计算请求级不变量的基准来源。
 - diff 以 `summary.requests[*].new_api_request_id` join DB 日志和预扣记录。
 - diff 需要读取当前并发点对应的 mock stats delta，S4 的 `actual_429`、`actual_502`、`upstream_attempts_total` 只来自该并发点窗口。
+- `--mock-stats-delta` 是当前并发点的 mock stats 差量文件；如果 S4 gate 由 sweep 计算，collector 仍必须把该路径写入 diff artifact。
 
 ### Snapshot JSON schema
 
@@ -968,6 +971,7 @@ loadtest-collect \
         "success": true,
         "log_quota": 28,
         "subscription_token_delta": 28,
+        "net_subscription_token_delta": 28,
         "compat_user_quota_delta": 0,
         "compat_token_remain_delta": 0,
         "pre_consume_status": "settled"
@@ -998,7 +1002,19 @@ loadtest-collect \
     "compat_user_quota_sum": 0,
     "compat_token_remain_quota_sum": 0,
     "perf_metrics_count": 0,
-    "charges_by_request": []
+    "charges_by_request": [
+      {
+        "new_api_request_id": "20260519120000-abcdef12",
+        "client_request_id": "client-loadtest-1",
+        "status_code": 200,
+        "success": true,
+        "subscription_token_delta": 28,
+        "net_subscription_token_delta": 28,
+        "compat_user_quota_delta": 0,
+        "compat_token_remain_delta": 0,
+        "pre_consume_status": "settled"
+      }
+    ]
   },
   "postgres_delta": {
     "writes_total": 0,
@@ -1395,7 +1411,8 @@ passed = actual_consume_logs_delta >= expected_consume_logs
 ```text
 for each failed request in summary.requests where success=false:
   key = request.new_api_request_id
-  passed = charges_by_request[key].subscription_token_delta == 0
+  passed = charges_by_request[key].pre_consume_status == "refunded"
+        && charges_by_request[key].net_subscription_token_delta == 0
         && charges_by_request[key].compat_user_quota_delta == 0
         && charges_by_request[key].compat_token_remain_delta == 0
 ```
@@ -1510,27 +1527,31 @@ loadtest-check-config --config .loadtest/config/config.yaml --out-env .loadtest/
 loadtest-mock-openai --addr 127.0.0.1:19080 --first-token-delay 150ms --stream-duration 3s --chunk-interval 100ms --output-bytes 128 --prompt-tokens 11 --completion-tokens 17 --stats-out .loadtest/mock-stats.json
 ```
 
-### 5. 启动 new-api
+### 5. 启动 new-api 执行 schema bootstrap
 
 必须使用 `.loadtest/config/new-api.env` 中的环境变量。
 
-启动器必须把 `new-api` 进程 ID 写入 `.loadtest/new-api.pid`；`loadtest-collect` 只通过该 pid file 采集进程指标。
-
-### 6. seed 前基础健康检查
-
 ```text
-GET http://127.0.0.1:<port>/api/status
-GET http://127.0.0.1:<port>/debug/loadtest/runtime
-GET http://127.0.0.1:8005/debug/pprof/goroutine?debug=1
+loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid --bootstrap-only
 ```
 
-### 7. Seed 数据
+`--bootstrap-only` 必须用干净环境启动 `new-api`，等待数据库迁移完成后退出或终止进程；该步骤只负责创建 schema，不做压测。
+
+### 6. Seed 数据
 
 运行：
 
 ```text
 loadtest-seed --config .loadtest/config/config.yaml --run-context .loadtest/run-context.base.json --out .loadtest/baseline/seed.json --out-run-context .loadtest/run-context.seeded.json
 ```
+
+### 7. 启动 new-api 压测实例
+
+```text
+loadtest-run-new-api --binary .loadtest/bin/new-api --env .loadtest/config/new-api.env --work-dir .loadtest/runtime/new-api --pid-file .loadtest/new-api.pid
+```
+
+启动器必须使用干净环境、避开生产 `.env`，并把 `new-api` 进程 ID 写入 `.loadtest/new-api.pid`；`loadtest-collect` 只通过该 pid file 采集进程指标。`--binary` 必须指向已构建的 `new-api` 可执行文件；启动器不得从 `PATH` 猜测二进制，不得在仓库根目录运行服务。
 
 ### 8. seed 后鉴权健康检查
 
@@ -1542,7 +1563,7 @@ POST http://127.0.0.1:<port>/v1/chat/completions Authorization: Bearer sk-loadte
 ### 9. 采集 before metrics
 
 ```text
-loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/run-context.json --out-snapshot .loadtest/baseline/metrics-before.json
+loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --out-snapshot .loadtest/baseline/metrics-before.json
 ```
 
 ### 10. 执行场景
@@ -1566,7 +1587,7 @@ BatchUpdateInterval + 2s
 ### 12. 采集 after metrics
 
 ```text
-loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/run-context.json --summary .loadtest/baseline/c100-summary.json --before .loadtest/baseline/metrics-before.json --out-snapshot .loadtest/baseline/metrics-after.json --out-diff .loadtest/baseline/metrics-diff.json --wait-drain
+loadtest-collect --config .loadtest/config/config.yaml --pid-file .loadtest/new-api.pid --run-context .loadtest/s2-responses-subscription/run-context.json --summary .loadtest/baseline/c100-summary.json --before .loadtest/baseline/metrics-before.json --mock-stats-delta .loadtest/concurrency-sweep/responses-subscription/c100-mock-stats-delta.json --out-snapshot .loadtest/baseline/metrics-after.json --out-diff .loadtest/baseline/metrics-diff.json --wait-drain
 ```
 
 额外保存：
@@ -1844,9 +1865,10 @@ Better 判定：
 5. `loadtest-concurrency-sweep`；
 6. `loadtest-seed`；
 7. `loadtest-collect`；
-8. `new-api` loopback bind 与 loadtest runtime stats route；
-9. `loadtest-report`；
-10. SOP 文档和报告模板。
+8. `loadtest-run-new-api`；
+9. `new-api` loopback bind 与 loadtest runtime stats route；
+10. `loadtest-report`；
+11. SOP 文档和报告模板。
 
 第一阶段必须可运行 S1、S2、S3、S4、S5；第一份最小 baseline 至少要求 S1、S2。未运行 S3、S4、S5 前，不能给出覆盖长连接、错误退款和大 payload 的完整优化排序。
 

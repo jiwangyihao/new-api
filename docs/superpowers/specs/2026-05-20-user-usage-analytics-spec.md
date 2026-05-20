@@ -341,7 +341,7 @@ type UsageAnalyticsQuery = {
 - `limit` 默认 10，最大 50。
 - `sort_by` 默认等于当前 `metric`。
 - `sort_order` 默认 `desc`。
-- 多选参数使用英文逗号分隔；后端负责 trim、去空、去重、排序。
+- 多选参数支持 repeated query params 与英文逗号分隔两种输入；后端解析时先读取 repeated params，若没有 repeated params 再兼容英文逗号分隔字符串。解析后必须 trim、去空、去重、排序。前端 API 层的 canonical wire format 必须使用 repeated query params，例如 `model_names=gpt-4&model_names=claude`、`groups=a%2Cb&groups=default`，不得用不可逆 comma join。后端保留 comma join 仅用于兼容手写 URL 或旧调用。
 - `streams` 只接受 `true,false` 形式的布尔字符串。
 - `statuses` 只接受 `success,error`。
 - `token_ids` 中的每个 ID 必须校验属于当前用户，或存在当前用户该 `token_id` 的历史日志；否则返回 400。
@@ -846,7 +846,7 @@ Phase 1 必须进入 URL 的字段：
 - `sort_by`
 - `sort_order`
 
-URL 层使用类型化数组保存多选，API 层再序列化为后端需要的英文逗号分隔字符串；外部链接传入单个字符串或逗号字符串时，`validateSearch` 也要 normalize 为数组并去空、去重、排序，保证 React Query key 稳定。若某个值本身包含逗号，URL 类型化数组是权威来源；API 序列化时应使用 `URLSearchParams` 多值或后端支持的安全编码，不得不可逆拆分。
+URL 层使用类型化数组保存多选，API 层再序列化为 repeated query params；外部链接传入单个字符串或逗号字符串时，`validateSearch` 也要 normalize 为数组并去空、去重、排序，保证 React Query key 稳定。若某个值本身包含逗号，URL 类型化数组和 repeated query params 是权威来源；API 层不得使用不可逆 comma join。
 
 从 API Keys 跳转使用类型安全导航：`/usage-analytics?group_by=token&token_ids=<id>`；前端不得把完整 API Key 放入 URL 或 state。
 
@@ -878,7 +878,7 @@ type UsageLogsDrilldownSearch = {
 映射规则：
 
 - `tokenId` → `/api/log/self?token_id=<id>`，后端校验归属。
-- `status='success'` → `type=LogTypeConsume`；`status='error'` → `type=LogTypeError`。
+- `status` → `/api/log/self?status=<success|error>` 与 `/api/log/self/stat?status=<success|error>`；前端钻取不得把 `status` 转换为 numeric `type`。现有 `type` 继续作为 Usage Logs 原有日志类型筛选；从 Usage Analytics 进入 `/usage-logs/common` 时只写入 `status`，不同时写入 `type`。
 - `isStream` → `/api/log/self?is_stream=<true|false>`。
 - `model` → 现有 `model_name`。
 - `group` → 现有 group 过滤。
@@ -1167,7 +1167,7 @@ web/default/src/i18n/locales/vi.json
 2. 多选 URL 参数去空、去重、排序，并序列化为后端参数。
 3. 从 API Keys 顶部按钮和行操作跳转时，只携带 token id，不请求或暴露完整 API Key。
 4. 筛选 draft 变化不会立即触发 API 参数提交；Apply 后 canonical filters 稳定。
-5. Usage Analytics「查看日志」跳到 `/usage-logs/common`，`tokenId`、`status`、`isStream`、`model`、`group`、`startTime`、`endTime` 在 Usage Logs route、filter bar 和 API params 中全部保留。
+5. Usage Analytics「查看日志」跳到 `/usage-logs/common`，`tokenId`、`status`、`isStream`、`model`、`group`、`startTime`、`endTime` 在 Usage Logs route、filter bar 和 API params 中全部保留；钻取 API params 发送 `status=success|error`，不得改写为 numeric `type`。
 6. additive metric 的 Top N / Other、share、tooltip 数据转换正确。
 7. rate / latency metric 不堆叠、不求和。
 8. `group_key` 相同 / 不同、`group_label` 重名时 series 不合并。
@@ -1194,7 +1194,7 @@ bun run i18n:sync
 bun run typecheck
 ```
 
-新增 file route 后，必须运行能触发 TanStack Router 生成的命令，并确认 `web/default/src/routeTree.gen.ts` 包含 `/usage-analytics`。
+新增 file route 后，必须运行 `cd web/default && bun run build` 触发 TanStack Router 插件生成 `web/default/src/routeTree.gen.ts`，并确认该文件包含 `/usage-analytics`。最终实现还必须运行 `bun run typecheck`；如果后续新增独立 route generation script，计划可用该脚本替代 build。
 
 ## 分期实施计划
 

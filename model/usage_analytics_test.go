@@ -8,6 +8,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -331,6 +333,7 @@ func TestUsageAnalyticsSQLAvoidsDatabaseSpecificFunctions(t *testing.T) {
 
 func buildUsageAnalyticsDryRunSQLForTest(t *testing.T, dialect string, groupBy UsageAnalyticsGroupBy) string {
 	t.Helper()
+	testDBs := setupUsageAnalyticsModelTestDBs(t)
 	oldSQLite := common.UsingSQLite
 	oldMySQL := common.UsingMySQL
 	oldPostgres := common.UsingPostgreSQL
@@ -342,32 +345,39 @@ func buildUsageAnalyticsDryRunSQLForTest(t *testing.T, dialect string, groupBy U
 		common.LogSqlType = oldLogSQLType
 		initCol()
 	})
-	setupUsageAnalyticsModelTestDBs(t)
+
+	var dialector gorm.Dialector
 	switch dialect {
 	case "sqlite":
 		common.UsingSQLite = true
 		common.UsingMySQL = false
 		common.UsingPostgreSQL = false
 		common.LogSqlType = common.DatabaseTypeSQLite
+		dialector = sqlite.Open("file:" + strings.ReplaceAll(t.Name(), "/", "_") + "_dryrun?mode=memory&cache=shared")
 	case "mysql":
 		common.UsingSQLite = false
 		common.UsingMySQL = true
 		common.UsingPostgreSQL = false
 		common.LogSqlType = common.DatabaseTypeMySQL
+		dialector = mysql.New(mysql.Config{DSN: "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local", Conn: testDBs.LogDB.ConnPool, SkipInitializeWithVersion: true})
 	case "postgres":
 		common.UsingSQLite = false
 		common.UsingMySQL = false
 		common.UsingPostgreSQL = true
 		common.LogSqlType = common.DatabaseTypePostgreSQL
+		dialector = postgres.New(postgres.Config{DSN: "host=localhost user=gorm password=gorm dbname=gorm port=9920 sslmode=disable TimeZone=UTC", Conn: testDBs.LogDB.ConnPool, PreferSimpleProtocol: true})
 	default:
 		t.Fatalf("unsupported dialect %s", dialect)
 	}
 	initCol()
 
+	dryRunDB, err := gorm.Open(dialector, &gorm.Config{DryRun: true})
+	require.NoError(t, err)
 	query := UsageAnalyticsQuery{UserID: 101, StartTimestamp: 1778716800, EndTimestamp: 1779321600, GroupBy: groupBy, Groups: []string{"default"}, Limit: 10}
 	groupExpr, ok := usageAnalyticsGroupExpr(groupBy)
 	require.True(t, ok)
-	stmt := usageAnalyticsBaseLogQuery(LOG_DB.Session(&gorm.Session{DryRun: true}), query, true).Select(groupExpr + " AS group_value").Group(groupExpr).Find(&[]struct{ GroupValue string }{}).Statement
+	stmt := usageAnalyticsBaseLogQuery(dryRunDB, query, true).Select(groupExpr + " AS group_value").Group(groupExpr).Find(&[]struct{ GroupValue string }{}).Statement
+	require.NoError(t, stmt.Error)
 	return stmt.SQL.String()
 }
 

@@ -69,8 +69,7 @@ func GetUsageAnalyticsSummary(query UsageAnalyticsQuery) (UsageAnalyticsSummaryR
 	usageAnalyticsFinalizeAccumulators(groups)
 	usageAnalyticsAttachTokenInfo(query.UserID, groups)
 	usageAnalyticsApplyShares(groups, query.SortBy)
-	usageAnalyticsSortGroups(groups, query.SortBy, query.SortOrder)
-	limitedGroups := usageAnalyticsLimitGroups(groups, query.Limit)
+	limitedGroups := usageAnalyticsLimitGroups(groups, query.Limit, query.SortBy, query.SortOrder)
 	recentLogs, err := usageAnalyticsLoadCandidateLogs(query, false)
 	if err != nil {
 		return UsageAnalyticsSummaryResponse{}, err
@@ -93,8 +92,7 @@ func GetUsageAnalyticsTimeseries(query UsageAnalyticsQuery) (UsageAnalyticsTimes
 	_, globalGroups := usageAnalyticsAggregate(logs, query.GroupBy)
 	usageAnalyticsFinalizeAccumulators(globalGroups)
 	usageAnalyticsAttachTokenInfo(query.UserID, globalGroups)
-	usageAnalyticsSortGroups(globalGroups, query.SortBy, query.SortOrder)
-	topKeys := usageAnalyticsTopKeySet(globalGroups, query.Limit)
+	topKeys := usageAnalyticsTopKeySet(globalGroups, query.Limit, query.SortBy, query.SortOrder)
 	bucketGroups := make(map[int64]map[string]*usageAnalyticsAccumulator)
 	for i := range logs {
 		log := logs[i]
@@ -660,8 +658,8 @@ func usageAnalyticsOrderedAccumulatorsBySort(groups map[string]*usageAnalyticsAc
 	return ordered
 }
 
-func usageAnalyticsLimitGroups(groups map[string]*usageAnalyticsAccumulator, limit int) []*usageAnalyticsAccumulator {
-	ordered := usageAnalyticsOrderedAccumulators(groups)
+func usageAnalyticsLimitGroups(groups map[string]*usageAnalyticsAccumulator, limit int, sortBy string, sortOrder string) []*usageAnalyticsAccumulator {
+	ordered := usageAnalyticsOrderedAccumulatorsBySort(groups, sortBy, sortOrder)
 	if limit > len(ordered) {
 		limit = len(ordered)
 	}
@@ -687,8 +685,8 @@ func usageAnalyticsAccumulatorToGroupPtr(acc *usageAnalyticsAccumulator) *UsageA
 	return &acc.UsageAnalyticsGroup
 }
 
-func usageAnalyticsTopKeySet(groups map[string]*usageAnalyticsAccumulator, limit int) map[string]bool {
-	ordered := usageAnalyticsOrderedAccumulators(groups)
+func usageAnalyticsTopKeySet(groups map[string]*usageAnalyticsAccumulator, limit int, sortBy string, sortOrder string) map[string]bool {
+	ordered := usageAnalyticsOrderedAccumulatorsBySort(groups, sortBy, sortOrder)
 	if limit > len(ordered) {
 		limit = len(ordered)
 	}

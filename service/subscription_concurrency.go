@@ -381,5 +381,5 @@ func AcquireSubscriptionConcurrency(ctx context.Context, relayInfo *relaycommon.
 	if errors.Is(err, ErrSubscriptionConcurrencyExceeded) {
 		return nil, SubscriptionConcurrencyAPIError(limit)
 	}
-	return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	return nil, types.NewErrorWithStatusCode(err, types.ErrorCodeUpdateDataError, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 }

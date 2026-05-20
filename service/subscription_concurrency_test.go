@@ -28,6 +28,7 @@ func resetSubscriptionConcurrencyForTest(t *testing.T) {
 	oldTTL := common.SubscriptionConcurrencyTTLSeconds
 	oldQueueCapacity := common.SubscriptionConcurrencyQueueCapacity
 	oldRedis := subscriptionConcurrencyRedis
+	oldRDB := common.RDB
 	oldMemory := subscriptionConcurrencyMemory
 	common.RedisEnabled = false
 	common.SubscriptionConcurrencyRequireRedis = false
@@ -35,6 +36,7 @@ func resetSubscriptionConcurrencyForTest(t *testing.T) {
 	common.SubscriptionConcurrencyTTLSeconds = 600
 	common.SubscriptionConcurrencyQueueCapacity = 10
 	subscriptionConcurrencyRedis = nil
+	common.RDB = nil
 	subscriptionConcurrencyMemory = newMemorySubscriptionConcurrencyLimiter()
 	t.Cleanup(func() {
 		common.RedisEnabled = oldRedisEnabled
@@ -43,6 +45,7 @@ func resetSubscriptionConcurrencyForTest(t *testing.T) {
 		common.SubscriptionConcurrencyTTLSeconds = oldTTL
 		common.SubscriptionConcurrencyQueueCapacity = oldQueueCapacity
 		subscriptionConcurrencyRedis = oldRedis
+		common.RDB = oldRDB
 		subscriptionConcurrencyMemory = oldMemory
 	})
 }

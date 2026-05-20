@@ -54,6 +54,10 @@ const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0
 const generatedBackgroundFiles = readdirSync(
   new URL('./assets/sign-up-backgrounds/', import.meta.url)
 ).filter((fileName) => /^signup-moe-native-\d{2}\.(png|jpe?g)$/u.test(fileName))
+const expectedBackgroundFiles = Array.from(
+  { length: 20 },
+  (_, index) => `signup-moe-native-${String(index + 1).padStart(2, '0')}.png`
+)
 const forbiddenImageMarkers = [
   'AI-generated',
   'No external image source',
@@ -93,21 +97,20 @@ describe('auth layout sign-up background', () => {
     assert.match(authLayoutSource, /:\s*'items-center pt-16 sm:pt-0'/)
   })
 
-  test('wires the generated background set only into sign-up', () => {
-    assert.match(signUpSource, /sign-up-backgrounds\/signup-moe-native-13\.png/)
+  test('wires the generated background pool only into sign-up', () => {
+    assertIncludes(signUpSource, 'const signUpAnimeGirlBackgrounds = [')
+    assertIncludes(signUpSource, 'Math.floor(Math.random() * signUpAnimeGirlBackgrounds.length)')
+    assert.match(signUpSource, /const\s+signUpAnimeGirlBackground\s*=\s*signUpAnimeGirlBackgrounds\[/)
+    for (const fileName of expectedBackgroundFiles) {
+      assert.match(signUpSource, new RegExp(`sign-up-backgrounds/${fileName}`))
+    }
     assert.doesNotMatch(signUpSource, /sign-up-anime-girl\.(svg|jpg)/)
     assert.match(signUpSource, /backgroundImageSrc=\{signUpAnimeGirlBackground\}/)
     assert.doesNotMatch(signInSource, /backgroundImageSrc/)
   })
 
   test('keeps exactly twenty generated local background assets', () => {
-    assert.deepEqual(
-      [...generatedBackgroundFiles].sort(),
-      Array.from(
-        { length: 20 },
-        (_, index) => `signup-moe-native-${String(index + 1).padStart(2, '0')}.png`
-      )
-    )
+    assert.deepEqual([...generatedBackgroundFiles].sort(), expectedBackgroundFiles)
   })
 
   test('keeps generated images as unlabelled local raster assets', () => {

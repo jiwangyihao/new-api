@@ -69,6 +69,8 @@ export interface UserProfile {
   created_time: number
   /** User settings (JSON string) */
   setting?: string
+  /** Public display name for rankings */
+  rankings_display_name?: string
   /** WeChat ID (OAuth) */
   wechat_id?: string
   /** GitHub ID (OAuth) */
@@ -118,6 +120,8 @@ export interface UserSettings {
   upstream_model_update_notify_enabled?: boolean
   /** Preferred interface/API response language */
   language?: string
+  /** Public display name for rankings */
+  rankings_display_name?: string
 }
 
 /**
@@ -127,6 +131,7 @@ export interface UpdateUserRequest {
   display_name?: string
   password?: string
   original_password?: string
+  rankings_display_name?: string
 }
 
 /**

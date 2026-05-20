@@ -415,31 +415,32 @@ func GetSelf(c *gin.Context) {
 
 	// 构建响应数据，包含用户信息和权限
 	responseData := map[string]interface{}{
-		"id":                user.Id,
-		"username":          user.Username,
-		"display_name":      user.DisplayName,
-		"role":              user.Role,
-		"status":            user.Status,
-		"email":             user.Email,
-		"github_id":         user.GitHubId,
-		"discord_id":        user.DiscordId,
-		"oidc_id":           user.OidcId,
-		"wechat_id":         user.WeChatId,
-		"telegram_id":       user.TelegramId,
-		"group":             user.Group,
-		"quota":             user.Quota,
-		"used_quota":        user.UsedQuota,
-		"request_count":     user.RequestCount,
-		"aff_code":          user.AffCode,
-		"aff_count":         user.AffCount,
-		"aff_quota":         user.AffQuota,
-		"aff_history_quota": user.AffHistoryQuota,
-		"inviter_id":        user.InviterId,
-		"linux_do_id":       user.LinuxDOId,
-		"setting":           user.Setting,
-		"stripe_customer":   user.StripeCustomer,
-		"sidebar_modules":   userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":       permissions,                // 新增权限字段
+		"id":                    user.Id,
+		"username":              user.Username,
+		"display_name":          user.DisplayName,
+		"role":                  user.Role,
+		"status":                user.Status,
+		"email":                 user.Email,
+		"github_id":             user.GitHubId,
+		"discord_id":            user.DiscordId,
+		"oidc_id":               user.OidcId,
+		"wechat_id":             user.WeChatId,
+		"telegram_id":           user.TelegramId,
+		"group":                 user.Group,
+		"quota":                 user.Quota,
+		"used_quota":            user.UsedQuota,
+		"request_count":         user.RequestCount,
+		"aff_code":              user.AffCode,
+		"aff_count":             user.AffCount,
+		"aff_quota":             user.AffQuota,
+		"aff_history_quota":     user.AffHistoryQuota,
+		"inviter_id":            user.InviterId,
+		"linux_do_id":           user.LinuxDOId,
+		"setting":               user.Setting,
+		"rankings_display_name": userSetting.RankingsDisplayName,
+		"stripe_customer":       user.StripeCustomer,
+		"sidebar_modules":       userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":           permissions,                // 新增权限字段
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -654,13 +655,13 @@ func AdminClearUserBinding(c *gin.Context) {
 
 func UpdateSelf(c *gin.Context) {
 	var requestData map[string]interface{}
-	err := json.NewDecoder(c.Request.Body).Decode(&requestData)
+	err := common.DecodeJson(c.Request.Body, &requestData)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
 
-	// 检查是否是用户设置更新请求 (sidebar_modules 或 language)
+	// 检查是否是用户设置更新请求 (sidebar_modules、rankings_display_name 或 language)
 	if sidebarModules, sidebarExists := requestData["sidebar_modules"]; sidebarExists {
 		userId := c.GetInt("id")
 		user, err := model.GetUserById(userId, false)
@@ -688,7 +689,38 @@ func UpdateSelf(c *gin.Context) {
 		return
 	}
 
+	// 检查是否是排行榜展示名称更新请求
+	if rawName, exists := requestData["rankings_display_name"]; exists {
+		userId := c.GetInt("id")
+		user, err := model.GetUserById(userId, false)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		name, ok := rawName.(string)
+		if !ok {
+			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+			return
+		}
+		name = strings.TrimSpace(name)
+		if len([]rune(name)) > model.UserNameMaxLength {
+			common.ApiErrorMsg(c, "排行榜展示名称不能超过20个字符")
+			return
+		}
+		currentSetting := user.GetSetting()
+		currentSetting.RankingsDisplayName = name
+		user.SetSetting(currentSetting)
+		if err := user.Update(false); err != nil {
+			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
+			return
+		}
+		service.FlushRankingsCache()
+		common.ApiSuccessI18n(c, i18n.MsgUpdateSuccess, nil)
+		return
+	}
+
 	// 检查是否是语言偏好更新请求
+
 	if language, langExists := requestData["language"]; langExists {
 		userId := c.GetInt("id")
 		user, err := model.GetUserById(userId, false)
@@ -718,12 +750,12 @@ func UpdateSelf(c *gin.Context) {
 
 	// 原有的用户信息更新逻辑
 	var user model.User
-	requestDataBytes, err := json.Marshal(requestData)
+	requestDataBytes, err := common.Marshal(requestData)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	err = json.Unmarshal(requestDataBytes, &user)
+	err = common.Unmarshal(requestDataBytes, &user)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -1263,6 +1295,7 @@ func UpdateUserSetting(c *gin.Context) {
 		UpstreamModelUpdateNotifyEnabled: upstreamModelUpdateNotifyEnabled,
 		AcceptUnsetRatioModel:            req.AcceptUnsetModelRatioModel,
 		RecordIpLog:                      req.RecordIpLog,
+		RankingsDisplayName:              existingSettings.RankingsDisplayName,
 	}
 
 	// 如果是webhook类型,添加webhook相关设置

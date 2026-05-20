@@ -44,6 +44,17 @@ func (user *UserBase) GetSetting() dto.UserSetting {
 	return setting
 }
 
+func ParseUserSettingString(raw string) (dto.UserSetting, error) {
+	setting := dto.UserSetting{}
+	if raw == "" {
+		return setting, nil
+	}
+	if err := common.Unmarshal([]byte(raw), &setting); err != nil {
+		return setting, err
+	}
+	return setting, nil
+}
+
 // getUserCacheKey returns the key for user cache
 func getUserCacheKey(userId int) string {
 	return fmt.Sprintf("user:%d", userId)

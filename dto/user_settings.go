@@ -17,6 +17,7 @@ type UserSetting struct {
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	ActiveSubscriptionId             int     `json:"active_subscription_id,omitempty"`               // ActiveSubscriptionId 当前激活订阅ID
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
+	RankingsDisplayName              string  `json:"rankings_display_name,omitempty"`                // RankingsDisplayName 排行榜展示名称
 }
 
 var (

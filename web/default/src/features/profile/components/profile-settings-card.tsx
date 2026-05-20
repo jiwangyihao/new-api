@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
-import { Link2, Settings } from 'lucide-react'
+import { Link2, Settings, Trophy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -26,6 +26,7 @@ import { TitledCard } from '@/components/ui/titled-card'
 import type { UserProfile } from '../types'
 import { AccountBindingsTab } from './tabs/account-bindings-tab'
 import { NotificationTab } from './tabs/notification-tab'
+import { RankingsDisplayTab } from './tabs/rankings-display-tab'
 
 // ============================================================================
 // Profile Settings Card Component
@@ -69,7 +70,7 @@ export function ProfileSettingsCard({
       icon={<Settings className='h-4 w-4' />}
     >
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className='grid h-10 w-full grid-cols-2 items-stretch gap-1 rounded-xl p-1'>
+        <TabsList className='grid h-10 w-full grid-cols-3 items-stretch gap-1 rounded-xl p-1'>
           <TabsTrigger
             value='bindings'
             className='h-full gap-2 rounded-lg px-3 py-0 leading-none'
@@ -77,6 +78,14 @@ export function ProfileSettingsCard({
             <Link2 className='h-4 w-4' />
             <span className='hidden sm:inline'>{t('Account Bindings')}</span>
             <span className='sm:hidden'>{t('Bindings')}</span>
+          </TabsTrigger>
+          <TabsTrigger
+            value='rankings'
+            className='h-full gap-2 rounded-lg px-3 py-0 leading-none'
+          >
+            <Trophy className='h-4 w-4' />
+            <span className='hidden sm:inline'>{t('Rankings')}</span>
+            <span className='sm:hidden'>{t('Rank')}</span>
           </TabsTrigger>
           <TabsTrigger
             value='settings'
@@ -92,6 +101,10 @@ export function ProfileSettingsCard({
 
         <TabsContent value='bindings' className='mt-4 sm:mt-6'>
           <AccountBindingsTab profile={profile} onUpdate={onProfileUpdate} />
+        </TabsContent>
+
+        <TabsContent value='rankings' className='mt-4 sm:mt-6'>
+          <RankingsDisplayTab profile={profile} onUpdate={onProfileUpdate} />
         </TabsContent>
 
         <TabsContent value='settings' className='mt-4 sm:mt-6'>

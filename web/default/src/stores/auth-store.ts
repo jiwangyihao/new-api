@@ -45,6 +45,7 @@ export interface AuthUser {
   telegram_id?: string
   linux_do_id?: string
   setting?: Record<string, unknown> | string
+  rankings_display_name?: string
   stripe_customer?: string
   sidebar_modules?: string
   permissions?: UserPermissions

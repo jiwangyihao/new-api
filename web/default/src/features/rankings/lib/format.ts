@@ -34,13 +34,6 @@ export function formatTokens(value: number): string {
   return value.toLocaleString()
 }
 
-/** Format a 0..1 share as a percentage with two decimals. */
-export function formatShare(share: number): string {
-  if (!Number.isFinite(share) || share <= 0) return '0%'
-  if (share < 0.001) return '<0.1%'
-  return `${(share * 100).toFixed(share < 0.01 ? 2 : 1)}%`
-}
-
 /** Format a release date like `Oct 12, 2025`. */
 export function formatReleaseDate(iso: string): string {
   const ts = Date.parse(iso)

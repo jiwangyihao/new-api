@@ -26,8 +26,8 @@ const (
 	configGuideJSONContentType = "application/json; charset=utf-8"
 	configGuideYAMLContentType = "application/yaml; charset=utf-8"
 	configGuideProviderID      = "new-api"
-	configGuideDefaultModelID  = "gpt-5"
-	configGuideSmallModelID    = "gpt-5-mini"
+	configGuideDefaultModelID  = "gpt-5.5"
+	configGuideSmallModelID    = "gpt-5.4-mini"
 )
 
 type configGuideClient string
@@ -144,10 +144,16 @@ func GetOMPConfigGuideModels(c *gin.Context) {
 func GetOMPConfigGuideConfig(c *gin.Context) {
 	setConfigGuideNoStore(c)
 
-	if _, _, ok := requireConfigGuideEffectiveModels(c, configGuideClientOMP); !ok {
+	_, models, ok := requireConfigGuideEffectiveModels(c, configGuideClientOMP)
+	if !ok {
 		return
 	}
-	c.Data(http.StatusOK, configGuideYAMLContentType, []byte(renderConfigGuideOMPSettings()))
+	content, err := renderConfigGuideOMPSettings(models)
+	if err != nil {
+		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")
+		return
+	}
+	c.Data(http.StatusOK, configGuideYAMLContentType, []byte(content))
 }
 
 func GetOpenCodeConfigGuideManifest(c *gin.Context) {
@@ -458,12 +464,6 @@ func buildConfigGuideEffectiveModels(input configGuideEffectiveModelsInput) (map
 		}
 	}
 
-	if _, ok := effective[configGuideDefaultModelID]; !ok {
-		return nil, fmt.Errorf("required model missing: %s", configGuideDefaultModelID)
-	}
-	if _, ok := effective[configGuideSmallModelID]; !ok {
-		return nil, fmt.Errorf("required model missing: %s", configGuideSmallModelID)
-	}
 	return effective, nil
 }
 
@@ -709,7 +709,11 @@ func configGuideYAMLDoubleQuotedScalar(value string) string {
 	return string(encoded)
 }
 
-func renderConfigGuideOMPSettings() string {
+func renderConfigGuideOMPSettings(models map[string]service.OpenCodeOpenAIModel) (string, error) {
+	defaultModelID, smallModelID, err := selectConfigGuideRecommendedModels(models)
+	if err != nil {
+		return "", err
+	}
 	return fmt.Sprintf(`defaultThinkingLevel: xhigh
 serviceTier: priority
 
@@ -728,15 +732,13 @@ task:
     explore: %s/%s:xhigh
     librarian: %s/%s:xhigh
     reviewer: %s/%s:xhigh
-    plan: %s/%s:xhigh`, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideSmallModelID, configGuideProviderID, configGuideDefaultModelID, configGuideProviderID, configGuideDefaultModelID)
+    plan: %s/%s:xhigh`, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID, configGuideProviderID, smallModelID, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID, configGuideProviderID, smallModelID, configGuideProviderID, smallModelID, configGuideProviderID, defaultModelID, configGuideProviderID, defaultModelID), nil
 }
 
 func renderConfigGuideOpenCode(baseURL string, apiKey string, models map[string]service.OpenCodeOpenAIModel) ([]byte, error) {
-	if !isConfigGuideOpenCodeTextModel(models[configGuideDefaultModelID]) {
-		return nil, fmt.Errorf("%s missing", configGuideDefaultModelID)
-	}
-	if !isConfigGuideOpenCodeTextModel(models[configGuideSmallModelID]) {
-		return nil, fmt.Errorf("%s missing", configGuideSmallModelID)
+	defaultModelID, smallModelID, err := selectConfigGuideRecommendedModels(models)
+	if err != nil {
+		return nil, err
 	}
 
 	openAIModels := buildConfigGuideOpenCodeBaseModels(models)
@@ -753,8 +755,8 @@ func renderConfigGuideOpenCode(baseURL string, apiKey string, models map[string]
 				"models": openAIModels,
 			},
 		},
-		"model":       configGuideProviderID + "/" + configGuideDefaultModelID,
-		"small_model": configGuideProviderID + "/" + configGuideSmallModelID,
+		"model":       configGuideProviderID + "/" + defaultModelID,
+		"small_model": configGuideProviderID + "/" + smallModelID,
 		"agent": map[string]any{
 			"build": map[string]any{
 				"options": map[string]any{"store": false},
@@ -788,6 +790,27 @@ func buildConfigGuideOpenCodeBaseModels(source map[string]service.OpenCodeOpenAI
 
 func isConfigGuideOpenCodeTextModel(model service.OpenCodeOpenAIModel) bool {
 	return containsConfigGuideString(model.Modalities.Output, "text") && configGuideOpenCodeRequiredPricingComplete(model)
+}
+
+func selectConfigGuideRecommendedModels(models map[string]service.OpenCodeOpenAIModel) (string, string, error) {
+	defaultModelID := firstConfigGuideOpenCodeTextModel(models, []string{configGuideDefaultModelID, "gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"})
+	if defaultModelID == "" {
+		return "", "", fmt.Errorf("default model missing")
+	}
+	smallModelID := firstConfigGuideOpenCodeTextModel(models, []string{configGuideSmallModelID, "gpt-5.5", "gpt-5.4", "gpt-5.3-codex-mini", "codex-mini-latest"})
+	if smallModelID == "" {
+		smallModelID = defaultModelID
+	}
+	return defaultModelID, smallModelID, nil
+}
+
+func firstConfigGuideOpenCodeTextModel(models map[string]service.OpenCodeOpenAIModel, candidates []string) string {
+	for _, id := range candidates {
+		if isConfigGuideOpenCodeTextModel(models[id]) {
+			return id
+		}
+	}
+	return ""
 }
 
 func configGuideOpenCodeRequiredPricingComplete(model service.OpenCodeOpenAIModel) bool {

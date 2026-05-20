@@ -72,8 +72,8 @@ type ApiHelpKey = {
   key: string
 }
 
-const REQUIRED_OPENCODE_MODEL_IDS = ['gpt-5'] as const
-const REQUIRED_OMP_MODEL_IDS = ['gpt-5', 'gpt-5-mini'] as const
+const REQUIRED_OPENCODE_MODEL_IDS = ['gpt-5.5'] as const
+const REQUIRED_OMP_MODEL_IDS = ['gpt-5.5'] as const
 
 type MetadataState = 'loading' | 'ready' | 'unavailable'
 

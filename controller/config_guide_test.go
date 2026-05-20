@@ -55,7 +55,7 @@ func setupConfigGuideTestDB(t *testing.T) *gorm.DB {
 		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
 	})
 	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"paid":1}`))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5":1,"gpt-5-mini":1,"gpt-5-fast":1}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.5":1,"gpt-5.4-mini":1,"gpt-5.5-fast":1}`))
 	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","paid":"Paid"}`))
 	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["default","paid"]`))
 	return db
@@ -85,15 +85,15 @@ func seedValidConfigGuideFixture(t *testing.T) *gorm.DB {
 	db := setupConfigGuideTestDB(t)
 	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
 	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
-	seedConfigGuideAbility(t, db, "default", "gpt-5")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
 	return db
 }
 func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 	return map[string]service.OpenCodeOpenAIModel{
-		"gpt-5": {
-			ID:               "gpt-5",
-			Name:             "GPT-5",
+		"gpt-5.5": {
+			ID:               "gpt-5.5",
+			Name:             "GPT-5.5",
 			Attachment:       true,
 			Reasoning:        true,
 			ToolCall:         true,
@@ -114,9 +114,9 @@ func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 				},
 			},
 		},
-		"gpt-5-fast": {
-			ID:               "gpt-5-fast",
-			Name:             "GPT-5 Fast",
+		"gpt-5.5-fast": {
+			ID:               "gpt-5.5-fast",
+			Name:             "GPT-5.5 Fast",
 			Attachment:       true,
 			Reasoning:        true,
 			ToolCall:         true,
@@ -126,9 +126,9 @@ func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 			Cost:             service.OpenCodeOpenAIModelCost{Input: 5, Output: 30},
 			Options:          map[string]any{"serviceTier": "priority"},
 		},
-		"gpt-5-text-incomplete": {
-			ID:               "gpt-5-text-incomplete",
-			Name:             "GPT-5 Text Incomplete",
+		"gpt-5.5-text-incomplete": {
+			ID:               "gpt-5.5-text-incomplete",
+			Name:             "GPT-5.5 Text Incomplete",
 			Attachment:       true,
 			Reasoning:        true,
 			ToolCall:         true,
@@ -137,9 +137,9 @@ func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 			Cost:             service.OpenCodeOpenAIModelCost{Input: 1},
 			Limit:            service.OpenCodeOpenAIModelLimit{Input: 128000},
 		},
-		"gpt-5-image-only": {
-			ID:               "gpt-5-image-only",
-			Name:             "GPT-5 Image Only",
+		"gpt-5.5-image-only": {
+			ID:               "gpt-5.5-image-only",
+			Name:             "GPT-5.5 Image Only",
 			Attachment:       true,
 			Reasoning:        false,
 			ToolCall:         false,
@@ -148,9 +148,9 @@ func configGuideTestModels() map[string]service.OpenCodeOpenAIModel {
 			Cost:             service.OpenCodeOpenAIModelCost{Input: 1},
 			Limit:            service.OpenCodeOpenAIModelLimit{Input: 128000},
 		},
-		"gpt-5-mini": {
-			ID:               "gpt-5-mini",
-			Name:             "GPT-5 mini",
+		"gpt-5.4-mini": {
+			ID:               "gpt-5.4-mini",
+			Name:             "GPT-5.4 Mini",
 			Attachment:       true,
 			Reasoning:        true,
 			ToolCall:         true,
@@ -218,8 +218,8 @@ func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 			t.Fatalf("OpenCode config must not generate unmapped -Sys model aliases, got keys %#v", models)
 		}
 	}
-	fast := models["gpt-5-fast"].(map[string]any)
-	gpt5 := models["gpt-5"].(map[string]any)
+	fast := models["gpt-5.5-fast"].(map[string]any)
+	gpt5 := models["gpt-5.5"].(map[string]any)
 	if options, ok := gpt5["options"].(map[string]any); !ok || options["metadata"] != nil || options["store"] != false {
 		t.Fatalf("OpenCode model options should only disable store and must not inject provider-native tools: %#v", gpt5["options"])
 	}
@@ -229,16 +229,16 @@ func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 	if _, ok := fast["structured_output"]; ok {
 		t.Fatalf("OpenCode schema does not accept structured_output: %#v", fast)
 	}
-	if _, ok := models["gpt-5-text-incomplete"]; ok {
+	if _, ok := models["gpt-5.5-text-incomplete"]; ok {
 		t.Fatalf("text models with incomplete cost/limit must not be emitted")
 	}
-	if _, ok := models["gpt-5-image-only"]; ok {
+	if _, ok := models["gpt-5.5-image-only"]; ok {
 		t.Fatalf("non-text-output OpenCode models must not be emitted")
 	}
-	if config["model"] != "new-api/gpt-5" {
+	if config["model"] != "new-api/gpt-5.5" {
 		t.Fatalf("expected OpenCode default model to target new-api, got %#v", config["model"])
 	}
-	if config["small_model"] != "new-api/gpt-5-mini" {
+	if config["small_model"] != "new-api/gpt-5.4-mini" {
 		t.Fatalf("expected OpenCode small model to target a real new-api model, got %#v", config["small_model"])
 	}
 	agents := config["agent"].(map[string]any)
@@ -263,15 +263,61 @@ func TestOpenCodeConfigGuideJSONDoesNotEmitProviderNativeTools(t *testing.T) {
 	require.Contains(t, body, `"serviceTier":"priority"`)
 }
 
-func TestOpenCodeConfigGuideJSONFailsWhenSmallModelMissing(t *testing.T) {
+func TestOpenCodeConfigGuideJSONFallsBackToDefaultForSmallModel(t *testing.T) {
 	models := configGuideTestModels()
-	delete(models, "gpt-5-mini")
+	delete(models, "gpt-5.4-mini")
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: models})
 	seedValidConfigGuideFixture(t)
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
 	GetOpenCodeConfigGuideJSON(ctx)
-	require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var config map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &config))
+	require.Equal(t, "new-api/gpt-5.5", config["small_model"])
+}
+
+func TestOpenCodeConfigGuideJSONDoesNotRequireDeprecatedGPT5(t *testing.T) {
+	models := map[string]service.OpenCodeOpenAIModel{
+		"gpt-5.5": {
+			ID:               "gpt-5.5",
+			Name:             "GPT-5.5",
+			Attachment:       true,
+			Reasoning:        true,
+			ToolCall:         true,
+			StructuredOutput: true,
+			Modalities:       service.OpenCodeOpenAIModelModalities{Input: []string{"text", "image"}, Output: []string{"text"}},
+			Cost:             service.OpenCodeOpenAIModelCost{Input: 6, Output: 36, CacheRead: 0.6},
+			Limit:            service.OpenCodeOpenAIModelLimit{Context: 400000, Input: 272000, Output: 128000},
+		},
+		"gpt-5.4-mini": {
+			ID:               "gpt-5.4-mini",
+			Name:             "GPT-5.4 Mini",
+			Attachment:       true,
+			Reasoning:        true,
+			ToolCall:         true,
+			StructuredOutput: true,
+			Modalities:       service.OpenCodeOpenAIModelModalities{Input: []string{"text"}, Output: []string{"text"}},
+			Cost:             service.OpenCodeOpenAIModelCost{Input: 0.75, Output: 4.5, CacheRead: 0.075},
+			Limit:            service.OpenCodeOpenAIModelLimit{Context: 272000, Input: 272000, Output: 128000},
+		},
+	}
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: models})
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var config map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &config))
+	require.Equal(t, "new-api/gpt-5.5", config["model"])
+	require.Equal(t, "new-api/gpt-5.4-mini", config["small_model"])
 }
 
 func TestOMPConfigGuideManifestAndFiles(t *testing.T) {
@@ -299,7 +345,7 @@ func TestOMPConfigGuideManifestAndFiles(t *testing.T) {
 		t.Fatalf("expected OMP models status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	for _, expected := range []string{"providers:", "new-api:", `apiKey: "sk-livetoken"`, "gpt-5", "gpt-5-mini"} {
+	for _, expected := range []string{"providers:", "new-api:", `apiKey: "sk-livetoken"`, "gpt-5.5", "gpt-5.4-mini"} {
 		require.Contains(t, body, expected)
 	}
 	for _, forbidden := range []string{"omp-openai-provider-tools", "new-api-image", "openaiProviderTools", "imageGeneration", "-Sys"} {
@@ -340,12 +386,12 @@ func TestOMPConfigGuideDoesNotRequireProviderToolsMetadata(t *testing.T) {
 
 func TestOMPConfigGuideModelsQuotesYAMLScalars(t *testing.T) {
 	models := configGuideTestModels()
-	defaultModel := models["gpt-5"]
-	defaultModel.Name = "OpenAI: GPT-5"
-	models["gpt-5"] = defaultModel
-	miniModel := models["gpt-5-mini"]
-	miniModel.Name = "OpenAI: GPT-5 Mini"
-	models["gpt-5-mini"] = miniModel
+	defaultModel := models["gpt-5.5"]
+	defaultModel.Name = "OpenAI: GPT-5.5"
+	models["gpt-5.5"] = defaultModel
+	miniModel := models["gpt-5.4-mini"]
+	miniModel.Name = "OpenAI: GPT-5.5 Mini"
+	models["gpt-5.4-mini"] = miniModel
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{
 		models: models,
 		plugin: service.OMPProviderToolsMetadata{Package: "omp-openai-provider-tools", LatestVersion: "9.9.9", Status: "ok"},
@@ -358,7 +404,7 @@ func TestOMPConfigGuideModelsQuotesYAMLScalars(t *testing.T) {
 		t.Fatalf("expected OMP models status 200, got %d: %s", recorder.Code, recorder.Body.String())
 	}
 	body := recorder.Body.String()
-	if !strings.Contains(body, `name: "OpenAI: GPT-5"`) {
+	if !strings.Contains(body, `name: "OpenAI: GPT-5.5"`) {
 		t.Fatalf("expected YAML string scalar to be quoted, got %s", body)
 	}
 	var parsed map[string]any
@@ -466,8 +512,8 @@ func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
 					token.RemainQuota = tc.remainQuota
 					require.NoError(t, db.Save(token).Error)
 				}
-				seedConfigGuideAbility(t, db, "default", "gpt-5")
-				seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+				seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+				seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
 			}
 			withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 			ctx, recorder := newAuthenticatedContext(t, http.MethodGet, tc.target, nil, 0)
@@ -484,9 +530,9 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
 	db := setupConfigGuideTestDB(t)
 	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
 	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
-	seedConfigGuideAbility(t, db, "default", "gpt-5")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-Sys")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5-Sys")
 	seedConfigGuideAbility(t, db, "default", "not-in-metadata")
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
@@ -499,9 +545,9 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
 	var cfg map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &cfg))
 	models := cfg["provider"].(map[string]any)["new-api"].(map[string]any)["models"].(map[string]any)
-	require.Contains(t, models, "gpt-5")
-	require.Contains(t, models, "gpt-5-mini")
-	require.Contains(t, models, "gpt-5-fast")
+	require.Contains(t, models, "gpt-5.5")
+	require.Contains(t, models, "gpt-5.4-mini")
+	require.Contains(t, models, "gpt-5.5-fast")
 	require.NotContains(t, models, "not-in-metadata")
 	for id := range models {
 		require.NotContains(t, id, "-Sys")
@@ -511,7 +557,7 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
 func TestConfigGuideTokenModelLimitsNormalizeSysBeforeBillingFilter(t *testing.T) {
 	db := setupConfigGuideTestDB(t)
 	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
-	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "gpt-5-Sys,gpt-5-mini", nil)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "gpt-5.5-Sys,gpt-5.4-mini", nil)
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
@@ -519,7 +565,7 @@ func TestConfigGuideTokenModelLimitsNormalizeSysBeforeBillingFilter(t *testing.T
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.NotContains(t, recorder.Body.String(), "-Sys")
-	require.Contains(t, recorder.Body.String(), "gpt-5")
+	require.Contains(t, recorder.Body.String(), "gpt-5.5")
 }
 
 func TestBuildConfigGuideEffectiveModels(t *testing.T) {
@@ -535,30 +581,30 @@ func TestBuildConfigGuideEffectiveModels(t *testing.T) {
 		{
 			name:            "token model limits normalize sys and intersect",
 			client:          configGuideClientOpenCode,
-			availableModels: []string{" gpt-5 ", "gpt-5-mini", "gpt-5-Sys", "not-in-metadata"},
+			availableModels: []string{" gpt-5.5 ", "gpt-5.4-mini", "gpt-5.5-Sys", "not-in-metadata"},
 			metadata:        baseModels,
-			want:            []string{"gpt-5", "gpt-5-fast", "gpt-5-mini"},
+			want:            []string{"gpt-5.5", "gpt-5.5-fast", "gpt-5.4-mini"},
 		},
 		{
 			name:            "auto group available list",
 			client:          configGuideClientOpenCode,
-			availableModels: []string{"gpt-5-mini", "gpt-5", "gpt-5", "not-in-metadata"},
+			availableModels: []string{"gpt-5.4-mini", "gpt-5.5", "gpt-5.5", "not-in-metadata"},
 			metadata:        baseModels,
-			want:            []string{"gpt-5", "gpt-5-fast", "gpt-5-mini"},
+			want:            []string{"gpt-5.5", "gpt-5.5-fast", "gpt-5.4-mini"},
 		},
 		{
 			name:            "omp does not synthesize fast",
 			client:          configGuideClientOMP,
-			availableModels: []string{"gpt-5", "gpt-5-mini"},
+			availableModels: []string{"gpt-5.5", "gpt-5.4-mini"},
 			metadata:        baseModels,
-			want:            []string{"gpt-5", "gpt-5-mini"},
+			want:            []string{"gpt-5.5", "gpt-5.4-mini"},
 		},
 		{
-			name:            "missing mini fails closed",
+			name:            "single recommended model still renders",
 			client:          configGuideClientOpenCode,
-			availableModels: []string{"gpt-5"},
+			availableModels: []string{"gpt-5.5"},
 			metadata:        baseModels,
-			wantErr:         true,
+			want:            []string{"gpt-5.5", "gpt-5.5-fast"},
 		},
 	}
 	for _, tc := range cases {

@@ -97,7 +97,7 @@ API key 校验：
 - 否则使用 token `Group`；token group 为空时使用用户 group。
 - 若最终 group 为 `auto`，按用户可用自动分组并集取模型；否则取该 group 启用模型。
 - 可用模型按现有 `ListModels` 语义过滤未配置计费的模型，除非用户设置允许 unset ratio model。
-- 默认模型选择固定优先级：默认模型优先 `gpt-5`，小模型优先 `gpt-5-mini`；对应模型不在 effective set 时 fail-closed，不用任意第一个模型静默替代。
+- 默认模型选择固定优先级：默认模型优先 `gpt-5.5`，小模型优先 `gpt-5.4-mini`；若小模型缺失则回退到默认模型；默认模型不在 effective set 时 fail-closed，不用任意第一个模型静默替代。
 - normalize available IDs：trim、strip `-Sys`、去重、排序。
 - 对 metadata 模型做交集匹配时也 strip `-Sys`。
 - OpenCode：若 available 包含 fast alias base，则扩展允许 `base-fast`。

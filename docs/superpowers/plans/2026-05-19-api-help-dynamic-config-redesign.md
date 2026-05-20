@@ -37,7 +37,7 @@
   - 新增 config-guide token 校验与 effective model resolver。
   - OpenCode / OMP handler 改为先校验 token，再用 effective models 渲染。
   - 移除 OMP provider-tools / plugin / image-generator 成功路径。
-  - OpenCode renderer 对 options 做 denylist，固定默认模型 `gpt-5` 和小模型 `gpt-5-mini`。
+  - OpenCode renderer 对 options 做 denylist，默认模型优先 `gpt-5.5`，小模型优先 `gpt-5.4-mini`，缺小模型时回退默认模型。
 - `controller/config_guide_test.go`
   - 覆盖 public key 校验、effective set、OpenCode denylist、OMP cleanup、no-store header、secret 不回显。
 - `controller/token.go`
@@ -105,7 +105,7 @@ func setupConfigGuideTestDB(t *testing.T) *gorm.DB {
         _ = ratio_setting.UpdateModelRatioByJSONString(originalModelRatio)
     })
     require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"paid":1}`))
-    require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5":1,"gpt-5-mini":1,"gpt-5-fast":1}`))
+    require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.5":1,"gpt-5.4-mini":1,"gpt-5.5-fast":1}`))
     return db
 }
 
@@ -170,8 +170,8 @@ func TestConfigGuidePublicAPIKeyValidationFailures(t *testing.T) {
                 }
                 seedConfigGuideUser(t, db, 10, userGroup, tc.userStatus)
                 seedConfigGuideToken(t, db, 10, "livetoken", tc.tokenStatus, tc.expiredTime, tc.group, true, "", tc.allowIps)
-                seedConfigGuideAbility(t, db, "default", "gpt-5")
-                seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+                seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+                seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
             withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
             ctx, recorder := newAuthenticatedContext(t, http.MethodGet, tc.target, nil, 0)
             GetOpenCodeConfigGuideManifest(ctx)
@@ -191,9 +191,9 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
     db := setupConfigGuideTestDB(t)
     seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
     seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
-    seedConfigGuideAbility(t, db, "default", "gpt-5")
-    seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
-    seedConfigGuideAbility(t, db, "default", "gpt-5-Sys")
+    seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+    seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
+    seedConfigGuideAbility(t, db, "default", "gpt-5.5-Sys")
     seedConfigGuideAbility(t, db, "default", "not-in-metadata")
     withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
@@ -206,9 +206,9 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
     var cfg map[string]any
     require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &cfg))
     models := cfg["provider"].(map[string]any)["new-api"].(map[string]any)["models"].(map[string]any)
-    require.Contains(t, models, "gpt-5")
-    require.Contains(t, models, "gpt-5-mini")
-    require.Contains(t, models, "gpt-5-fast")
+    require.Contains(t, models, "gpt-5.5")
+    require.Contains(t, models, "gpt-5.4-mini")
+    require.Contains(t, models, "gpt-5.5-fast")
     require.NotContains(t, models, "not-in-metadata")
     for id := range models {
         require.NotContains(t, id, "-Sys")
@@ -224,7 +224,7 @@ func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {
 func buildConfigGuideEffectiveModels(input configGuideEffectiveModelsInput) (map[string]service.OpenCodeOpenAIModel, error)
 ```
 
-测试覆盖 token limits、auto group、OMP 不合成 fast、缺小模型 fail-closed。测试可直接传 `availableModels`，避免每个 case 建 DB。
+测试覆盖 token limits、auto group、OMP 不合成 fast、小模型缺失回退默认模型。测试可直接传 `availableModels`，避免每个 case 建 DB。
 
 - [ ] **步骤 5：写 token endpoint 失败测试**
 
@@ -235,13 +235,13 @@ func TestGetOpenCodeOpenAIModelsRequiresOwnedTokenID(t *testing.T) {
     db := setupTokenControllerTestDB(t)
     require.NoError(t, db.AutoMigrate(&model.User{}, &model.Ability{}))
     require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1}`))
-    require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5":1,"gpt-5-mini":1,"gpt-5-fast":1}`))
+    require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.5":1,"gpt-5.4-mini":1,"gpt-5.5-fast":1}`))
     seedConfigGuideUser(t, db, 1, "default", common.UserStatusEnabled)
     seedConfigGuideUser(t, db, 2, "default", common.UserStatusEnabled)
     owned := seedConfigGuideToken(t, db, 1, "owned-token", common.TokenStatusEnabled, -1, "default", true, "", nil)
     foreign := seedConfigGuideToken(t, db, 2, "foreign-token", common.TokenStatusEnabled, -1, "default", true, "", nil)
-    seedConfigGuideAbility(t, db, "default", "gpt-5")
-    seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+    seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+    seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
     withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
     ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", owned.Id), nil, 1)
@@ -249,7 +249,7 @@ func TestGetOpenCodeOpenAIModelsRequiresOwnedTokenID(t *testing.T) {
     require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
     response := decodeAPIResponse(t, recorder)
     require.True(t, response.Success)
-    require.Contains(t, string(response.Data), "gpt-5")
+    require.Contains(t, string(response.Data), "gpt-5.5")
     require.NotContains(t, string(response.Data), "omp_openai_provider_tools")
 
     ctx, recorder = newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", foreign.Id), nil, 1)
@@ -306,7 +306,7 @@ type configGuideEffectiveModelsInput struct {
   - IP allowlist 用 `c.ClientIP()` + `common.IsIpInCIDRList`；解析失败/不匹配 -> 403。
   - 先计算最终 using group：token group 非空用 token group，否则用 user group；token group 非空时必须属于 `service.GetUserUsableGroups(user.Group)`；最终 using group 非 `auto` 时必须 `ratio_setting.ContainsGroupRatio(usingGroup)`，包括 token group 为空且用户分组已废弃的场景。
 - `availableConfigGuideModelsForToken(token, user)`：按规格复用 `ListModels` 语义。
-- `buildConfigGuideEffectiveModels(input)`：strip `-Sys`，按 metadata 交集；OpenCode 合成 `<base>-fast`；OMP 不合成 fast；必须包含 `gpt-5` / `gpt-5-mini`。
+- `buildConfigGuideEffectiveModels(input)`：strip `-Sys`，按 metadata 交集；OpenCode 合成 `<base>-fast`；OMP 不合成 fast；推荐默认模型在 renderer 阶段按 `gpt-5.5` 优先级选择。
 - `requireConfigGuideEffectiveModels(c, params, client)`：public config guide 统一入口。
 
 - [ ] **步骤 7：更新 token endpoint**
@@ -352,7 +352,7 @@ go test ./controller -run 'Test(ConfigGuidePublicAPIKeyValidation|ConfigGuidePub
 
 - [ ] **步骤 1：写 OpenCode denylist 失败测试**
 
-扩展 `configGuideTestModels()`，给 `gpt-5` 或 `gpt-5-fast` 加入污染 options：
+扩展 `configGuideTestModels()`，给 `gpt-5.5` 或 `gpt-5.5-fast` 加入污染 options：
 
 ```go
 Options: map[string]any{
@@ -383,14 +383,14 @@ func TestOpenCodeConfigGuideJSONDoesNotEmitProviderNativeTools(t *testing.T) {
 
 - [ ] **步骤 2：替换 small model fallback 测试**
 
-将 `TestOpenCodeConfigGuideJSONFallsBackWhenSmallModelMissing` 改为：
+将 small model 缺失测试改为：
 
 ```go
-func TestOpenCodeConfigGuideJSONFailsWhenSmallModelMissing(t *testing.T) {
+func TestOpenCodeConfigGuideJSONFallsBackToDefaultForSmallModel(t *testing.T) {
     models := configGuideTestModels()
-    delete(models, "gpt-5-mini")
+    delete(models, "gpt-5.4-mini")
     // seed valid token and abilities
-    // expected: http.StatusServiceUnavailable
+    // expected: http.StatusOK and small_model == new-api/gpt-5.5
 }
 ```
 
@@ -464,7 +464,7 @@ func TestOMPConfigGuidePluginAndImageGeneratorRoutesAreNotSuccessful(t *testing.
 
 - [ ] **步骤 6：实现 OpenCode sanitize**
 
-在 `mergeConfigGuideOpenCodeModelOptions` 中递归删除 forbidden keys：`metadata`、`builtin_tools`、`web_search`、`image_generation`、`imageGeneration`。保留 `store:false` 和 `serviceTier` 等普通 options。`renderConfigGuideOpenCode` 必须要求 `gpt-5` 和 `gpt-5-mini` 均为有效 text model，否则返回 error。
+在 `mergeConfigGuideOpenCodeModelOptions` 中递归删除 forbidden keys：`metadata`、`builtin_tools`、`web_search`、`image_generation`、`imageGeneration`。保留 `store:false` 和 `serviceTier` 等普通 options。`renderConfigGuideOpenCode` 必须要求选出的默认模型为有效 text model；小模型缺失时回退到默认模型。
 
 - [ ] **步骤 7：实现 OMP cleanup**
 
@@ -475,7 +475,7 @@ func TestOMPConfigGuidePluginAndImageGeneratorRoutesAreNotSuccessful(t *testing.
 - `GetOMPConfigGuideManifest` items 只保留 `models.yml`、`config.yml`。
 - `renderConfigGuideOMPModels(baseURL, apiKey, models)` 只输出 provider `new-api`。
 - 删除/不调用 `withConfigGuideOMPSysVariants`。
-- `renderConfigGuideOMPSettings` 使用 `new-api/gpt-5` 和 `new-api/gpt-5-mini`，不含 `-Sys`。
+- `renderConfigGuideOMPSettings` 使用推荐默认模型和小模型角色，不含 `-Sys`。
 
 - [ ] **步骤 8：注销旧路由**
 

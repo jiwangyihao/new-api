@@ -14,9 +14,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/stretchr/testify/require"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -547,9 +547,9 @@ func TestGetOpenCodeOpenAIModels(t *testing.T) {
 	seedConfigGuideUser(t, db, 2, "default", common.UserStatusEnabled)
 	owned := seedConfigGuideToken(t, db, 1, "ownedtoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
 	foreign := seedConfigGuideToken(t, db, 2, "foreigntoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
-	seedConfigGuideAbility(t, db, "default", "gpt-5")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-Sys")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5-Sys")
 	seedConfigGuideAbility(t, db, "default", "not-in-metadata")
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
@@ -559,9 +559,9 @@ func TestGetOpenCodeOpenAIModels(t *testing.T) {
 	response := decodeAPIResponse(t, recorder)
 	require.True(t, response.Success)
 	data := string(response.Data)
-	require.Contains(t, data, "gpt-5")
-	require.Contains(t, data, "gpt-5-mini")
-	require.Contains(t, data, "gpt-5-fast")
+	require.Contains(t, data, "gpt-5.5")
+	require.Contains(t, data, "gpt-5.4-mini")
+	require.Contains(t, data, "gpt-5.5-fast")
 	require.NotContains(t, data, "not-in-metadata")
 	require.NotContains(t, data, "-Sys")
 	require.NotContains(t, data, "omp_openai_provider_tools")
@@ -602,8 +602,8 @@ func TestGetOpenCodeOpenAIModelsReusesPublicTokenStatusCodes(t *testing.T) {
 			db := setupConfigGuideTestDB(t)
 			seedConfigGuideUser(t, db, 1, "default", tc.userStatus)
 			token := seedConfigGuideToken(t, db, 1, "ownedtoken", tc.tokenStatus, tc.expiredTime, tc.group, true, "", tc.allowIps)
-			seedConfigGuideAbility(t, db, "default", "gpt-5")
-			seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+			seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+			seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
 			withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 
 			ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", token.Id), nil, 1)
@@ -618,8 +618,8 @@ func TestGetOpenCodeOpenAIModelsMetadataUnavailable(t *testing.T) {
 	db := setupConfigGuideTestDB(t)
 	seedConfigGuideUser(t, db, 1, "default", common.UserStatusEnabled)
 	token := seedConfigGuideToken(t, db, 1, "ownedtoken", common.TokenStatusEnabled, -1, "default", true, "", nil)
-	seedConfigGuideAbility(t, db, "default", "gpt-5")
-	seedConfigGuideAbility(t, db, "default", "gpt-5-mini")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "default", "gpt-5.4-mini")
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{err: fmt.Errorf("metadata down")})
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, fmt.Sprintf("/api/token/opencode/openai-models?token_id=%d", token.Id), nil, 1)

@@ -1,0 +1,76 @@
+server:
+  host: "127.0.0.1"
+  port: 13080
+  pprof_addr: "127.0.0.1:8005"
+  runtime_stats_enabled: true
+  profile_block_rate: 1000
+  profile_mutex_fraction: 5
+postgres:
+  dsn: "postgresql://new_api_loadtest:loadtest@127.0.0.1:15432/new_api_loadtest?sslmode=disable"
+log_postgres:
+  dsn: ""
+redis:
+  addr: "redis://127.0.0.1:16379/0"
+mock_upstream:
+  base_url: "http://127.0.0.1:19080"
+loadtest:
+  model: "gpt-5.5"
+  group: "default"
+  subscription_key: "sk-loadtestsub"
+  compat_key: "sk-loadtestcompat"
+  invalid_key: "sk-loadtestinvalid"
+  token_db_key_subscription: "loadtestsub"
+  token_db_key_compat: "loadtestcompat"
+  pid_file: ".loadtest/new-api.pid"
+mock_profiles:
+  s1-smoke:
+    first_token_delay: 50ms
+    stream_duration: 500ms
+    chunk_interval: 50ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s2-short-stream:
+    first_token_delay: 100ms
+    stream_duration: 1s
+    chunk_interval: 100ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s3-long-stream:
+    first_token_delay: 150ms
+    stream_duration: 30s
+    chunk_interval: 250ms
+    output_bytes: 4096
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+  s4-error-refund:
+    first_token_delay: 100ms
+    stream_duration: 1s
+    chunk_interval: 100ms
+    output_bytes: 128
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0.05, 502: 0.01}
+    seed: 1
+  s5-large-payload:
+    first_token_delay: 150ms
+    stream_duration: 3s
+    chunk_interval: 100ms
+    output_bytes: 65536
+    prompt_tokens: 11
+    completion_tokens: 17
+    status_rate: {429: 0, 502: 0}
+    seed: 1
+retry:
+  retry_times: 0
+  automatic_retry_status_codes: []
+thresholds:
+  latency_p95_regression_ratio: 1.10
+  ttft_p95_regression_ratio: 1.10

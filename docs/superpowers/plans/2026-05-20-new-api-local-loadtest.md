@@ -757,13 +757,13 @@ go test ./pkg/loadtest/seed -count=1
 ```go
 func TestBuildDiffRequiresSeedAndMockContext(t *testing.T) {
     rc := testRunContext()
-    before := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Process: artifact.ProcessSnapshot{Statused: artifact.Statused{Status: "ok"}, RSSBytes: 100}}
-    after := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Process: artifact.ProcessSnapshot{Statused: artifact.Statused{Status: "ok"}, RSSBytes: 130}}
-    summary := artifact.Summary{RunContext: rc, Total: 100, Success: 94, Requests: []artifact.RequestRecord{{NewAPIRequestID: "rid-1", StatusCode: 200, Success: true, TotalTokens: 28}}}
     seed := artifact.SeedOutput{SchemaVersion: 1, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
     seedHash, _ := artifact.HashSeedOutput(seed)
     rc.SeedOutputHash = seedHash
     seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
+    before := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Process: artifact.ProcessSnapshot{Statused: artifact.Statused{Status: "ok"}, RSSBytes: 100}}
+    after := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Process: artifact.ProcessSnapshot{Statused: artifact.Statused{Status: "ok"}, RSSBytes: 130}}
+    summary := artifact.Summary{RunContext: rc, Total: 100, Success: 94, Requests: []artifact.RequestRecord{{NewAPIRequestID: "rid-1", StatusCode: 200, Success: true, TotalTokens: 28}}}
     mock := artifact.MockStatsDelta{SchemaVersion: 1, RunContext: rc, Path: "c100-mock-stats-delta.json", Hash: "sha256:mockdelta", Actual429: 5, Actual502: 1, UpstreamAttemptsTotal: 100}
     diff, inv := BuildDiff(DiffInputs{Before: before, After: after, Summary: summary, SeedOutput: seed, MockDelta: mock, RunContext: rc})
     if inv.Status != "passed" { t.Fatalf("invariant failed: %#v", inv) }
@@ -772,18 +772,24 @@ func TestBuildDiffRequiresSeedAndMockContext(t *testing.T) {
 
 func TestBuildDiffFailsOnRunContextMismatch(t *testing.T) {
     rc := testRunContext()
-    other := rc
-    other.Scenario = "s3-long-stream"
-    before := artifact.Snapshot{SchemaVersion: 1, RunContext: rc}
-    after := artifact.Snapshot{SchemaVersion: 1, RunContext: rc}
-    summary := artifact.Summary{RunContext: rc}
     seed := artifact.SeedOutput{SchemaVersion: 1, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash()}
     seedHash, _ := artifact.HashSeedOutput(seed)
     rc.SeedOutputHash = seedHash
     seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
-    mock := artifact.MockStatsDelta{SchemaVersion: 1, RunContext: other}
-    _, inv := BuildDiff(DiffInputs{Before: before, After: after, Summary: summary, SeedOutput: seed, MockDelta: mock, RunContext: rc})
-    if inv.Status != "failed" { t.Fatalf("context mismatch should fail: %#v", inv) }
+    other := rc
+    other.Scenario = "s3-long-stream"
+    cases := map[string]func(*DiffInputs){
+        "before": func(in *DiffInputs) { in.Before.RunContext = other },
+        "after": func(in *DiffInputs) { in.After.RunContext = other },
+        "summary": func(in *DiffInputs) { in.Summary.RunContext = other },
+        "mock_delta": func(in *DiffInputs) { in.MockDelta.RunContext = other },
+    }
+    for name, mutate := range cases {
+        input := DiffInputs{Before: artifact.Snapshot{SchemaVersion: 1, RunContext: rc}, After: artifact.Snapshot{SchemaVersion: 1, RunContext: rc}, Summary: artifact.Summary{RunContext: rc}, SeedOutput: seed, MockDelta: artifact.MockStatsDelta{SchemaVersion: 1, RunContext: rc}, RunContext: rc}
+        mutate(&input)
+        _, inv := BuildDiff(input)
+        if inv.Status != "failed" { t.Fatalf("%s context mismatch should fail: %#v", name, inv) }
+    }
 }
 
 func TestBuildDiffFailsOnSeedHashMismatch(t *testing.T) {

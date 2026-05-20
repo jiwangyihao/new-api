@@ -35,6 +35,24 @@ import (
 	_ "net/http/pprof"
 )
 
+func serverListenAddr() string {
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = strconv.Itoa(*common.Port)
+	}
+	if host := os.Getenv("HOST"); host != "" {
+		return host + ":" + port
+	}
+	return ":" + port
+}
+
+func pprofListenAddr() string {
+	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
+		return addr
+	}
+	return "0.0.0.0:8005"
+}
+
 //go:embed web/default/dist
 var buildFS embed.FS
 
@@ -147,7 +165,7 @@ func main() {
 
 	if os.Getenv("ENABLE_PPROF") == "true" {
 		gopool.Go(func() {
-			log.Println(http.ListenAndServe("0.0.0.0:8005", nil))
+			log.Println(http.ListenAndServe(pprofListenAddr(), nil))
 		})
 		go common.Monitor()
 		common.SysLog("pprof enabled")
@@ -189,13 +207,14 @@ func main() {
 	InjectUmamiAnalytics()
 	InjectGoogleAnalytics()
 
+	listenAddr := serverListenAddr()
 	// 设置路由
 	router.SetRouter(server, router.ThemeAssets{
 		DefaultBuildFS:   buildFS,
 		DefaultIndexPage: indexPage,
 		ClassicBuildFS:   classicBuildFS,
 		ClassicIndexPage: classicIndexPage,
-	})
+	}, listenAddr)
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
@@ -204,7 +223,7 @@ func main() {
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(":" + port)
+	err = server.Run(listenAddr)
 	if err != nil {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
 	}

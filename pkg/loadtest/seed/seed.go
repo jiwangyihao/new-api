@@ -1,0 +1,230 @@
+package seed
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
+	loadtestconfig "github.com/QuantumNous/new-api/pkg/loadtest/config"
+	"github.com/QuantumNous/new-api/pkg/loadtest/localguard"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type Config struct {
+	RunContext      artifact.RunContext
+	Model           string
+	Group           string
+	MockBaseURL     string
+	SubscriptionKey string
+	CompatKey       string
+}
+
+const (
+	subscriptionUserID   = 910001
+	compatUserID         = 910002
+	planID               = 910010
+	subscriptionID       = 910011
+	compatSubscriptionID = 910012
+	channelID            = 910020
+)
+
+func Apply(ctx context.Context, db *gorm.DB, cfg Config) (artifact.SeedOutput, error) {
+	cfg = cfg.withDefaults()
+	if err := cfg.Validate(); err != nil {
+		return artifact.SeedOutput{}, err
+	}
+	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := ensureUsers(tx); err != nil {
+			return err
+		}
+		if err := ensurePlanAndSubscriptions(tx, cfg); err != nil {
+			return err
+		}
+		if err := ensureTokens(tx, cfg); err != nil {
+			return err
+		}
+		if err := isolateRoute(tx, cfg); err != nil {
+			return err
+		}
+		return ensureOptions(tx)
+	}); err != nil {
+		return artifact.SeedOutput{}, err
+	}
+	return seedOutput(cfg), nil
+}
+
+func SeedOutputForTest() artifact.SeedOutput {
+	return seedOutput(Config{RunContext: artifact.RunContext{SchemaVersion: artifact.SchemaVersion, Role: "baseline", Commit: "abcdef0", ComparisonConfigHash: "sha256:cfg", CacheMode: "cold-fresh-role,warm-per-point", Model: "gpt-5.5"}, Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey})
+}
+
+func (c Config) withDefaults() Config {
+	if c.Model == "" {
+		c.Model = "gpt-5.5"
+	}
+	if c.Group == "" {
+		c.Group = "default"
+	}
+	if c.MockBaseURL == "" {
+		c.MockBaseURL = "http://127.0.0.1:19080"
+	}
+	if c.SubscriptionKey == "" {
+		c.SubscriptionKey = loadtestconfig.SubscriptionAPIKey
+	}
+	if c.CompatKey == "" {
+		c.CompatKey = loadtestconfig.CompatAPIKey
+	}
+	c.RunContext = c.RunContext.WithoutSeedOutputHash().WithoutMockHash()
+	if c.RunContext.SchemaVersion == 0 {
+		c.RunContext.SchemaVersion = artifact.SchemaVersion
+	}
+	if c.RunContext.Model == "" {
+		c.RunContext.Model = c.Model
+	}
+	return c
+}
+
+func (c Config) Validate() error {
+	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.Group) == "" {
+		return fmt.Errorf("model and group are required")
+	}
+	if err := localguard.ValidateURL(c.MockBaseURL); err != nil {
+		return fmt.Errorf("mock base url: %w", err)
+	}
+	if err := localguard.ValidateAPIKey(c.SubscriptionKey); err != nil {
+		return fmt.Errorf("subscription key: %w", err)
+	}
+	if c.SubscriptionKey != loadtestconfig.SubscriptionAPIKey {
+		return fmt.Errorf("subscription key must be %s", loadtestconfig.SubscriptionAPIKey)
+	}
+	if err := localguard.ValidateAPIKey(c.CompatKey); err != nil {
+		return fmt.Errorf("compat key: %w", err)
+	}
+	if c.CompatKey != loadtestconfig.CompatAPIKey {
+		return fmt.Errorf("compat key must be %s", loadtestconfig.CompatAPIKey)
+	}
+	return nil
+}
+
+func ensureUsers(tx *gorm.DB) error {
+	users := []model.User{
+		{Id: subscriptionUserID, Username: "loadtest_subscription", Password: "loadtest", DisplayName: "loadtest subscription", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "default", AffCode: "loadtestsub"},
+		{Id: compatUserID, Username: "loadtest_compat", Password: "loadtest", DisplayName: "loadtest compat", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "default", AffCode: "loadtestcompat"},
+	}
+	for _, user := range users {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"username", "display_name", "role", "status", "quota", "group", "aff_code"})}).Create(&user).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensurePlanAndSubscriptions(tx *gorm.DB, cfg Config) error {
+	businessCode := "loadtest_basic"
+	plan := model.SubscriptionPlan{Id: planID, Title: "Loadtest Basic", PriceAmount: 0, Currency: "USD", DurationUnit: "month", DurationValue: 1, Enabled: true, PublicVisible: false, TotalAmount: 1_000_000, MonthlyTokenLimit: 1_000_000, ConcurrencyLimit: 1000, BusinessCode: &businessCode, QuotaResetPeriod: "never"}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"title", "enabled", "public_visible", "total_amount", "monthly_token_limit", "concurrency_limit", "business_code"})}).Create(&plan).Error; err != nil {
+		return err
+	}
+	now := common.GetTimestamp()
+	subs := []model.UserSubscription{
+		{Id: subscriptionID, UserId: subscriptionUserID, PlanId: planID, AmountTotal: 1_000_000, TokenLimit: 1_000_000, TokenUsed: 0, ConcurrencyLimit: 1000, GrantReason: model.SubscriptionGrantOrder, StartTime: now - 3600, EndTime: now + 30*86400, Status: "active", Source: model.SubscriptionGrantOrder},
+		{Id: compatSubscriptionID, UserId: compatUserID, PlanId: planID, AmountTotal: 1_000_000, TokenLimit: 1_000_000, TokenUsed: 0, ConcurrencyLimit: 1000, GrantReason: model.SubscriptionGrantOrder, StartTime: now - 3600, EndTime: now + 30*86400, Status: "active", Source: model.SubscriptionGrantOrder},
+	}
+	for _, sub := range subs {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"user_id", "plan_id", "amount_total", "amount_used", "token_limit", "token_used", "concurrency_limit", "grant_reason", "start_time", "end_time", "status", "source"})}).Create(&sub).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureTokens(tx *gorm.DB, cfg Config) error {
+	tokens := []model.Token{
+		{UserId: subscriptionUserID, Key: loadtestconfig.SubscriptionDBKey, Status: common.TokenStatusEnabled, Name: "loadtest subscription", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: cfg.Group},
+		{UserId: compatUserID, Key: loadtestconfig.CompatDBKey, Status: common.TokenStatusEnabled, Name: "loadtest compat", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: cfg.Group},
+	}
+	for _, token := range tokens {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"user_id", "status", "name", "expired_time", "remain_quota", "unlimited_quota", "group"})}).Create(&token).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func isolateRoute(tx *gorm.DB, cfg Config) error {
+	if err := tx.Model(&model.Ability{}).Where(&model.Ability{Model: cfg.Model, Group: cfg.Group}).Where("channel_id <> ?", channelID).Update("enabled", false).Error; err != nil {
+		return err
+	}
+	var channels []model.Channel
+	if err := tx.Where("id <> ?", channelID).Find(&channels).Error; err != nil {
+		return err
+	}
+	for _, ch := range channels {
+		models := removeCSVValue(ch.Models, cfg.Model)
+		groups := removeCSVValue(ch.Group, cfg.Group)
+		updates := map[string]any{}
+		if models != ch.Models {
+			updates["models"] = models
+		}
+		if groups != ch.Group {
+			updates["group"] = groups
+		}
+		if len(updates) != 0 {
+			if err := tx.Model(&model.Channel{}).Where("id = ?", ch.Id).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+	}
+	baseURL := cfg.MockBaseURL
+	priority := int64(1000)
+	weight := uint(100)
+	channel := model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-loadtest-mock", Status: common.ChannelStatusEnabled, Name: "loadtest-loopback-openai", BaseURL: &baseURL, Models: cfg.Model, Group: cfg.Group, Priority: &priority, Weight: &weight}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "key", "status", "name", "base_url", "models", "group", "priority", "weight"})}).Create(&channel).Error; err != nil {
+		return err
+	}
+	ability := model.Ability{Group: cfg.Group, Model: cfg.Model, ChannelId: channelID, Enabled: true, Priority: &priority, Weight: weight}
+	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "group"}, {Name: "model"}, {Name: "channel_id"}}, DoUpdates: clause.AssignmentColumns([]string{"enabled", "priority", "weight"})}).Create(&ability).Error
+}
+
+func ensureOptions(tx *gorm.DB) error {
+	options := map[string]string{
+		"ModelRatio":                           "{\"gpt-5.5\":1}",
+		"CompletionRatio":                      "{\"gpt-5.5\":1}",
+		"GroupRatio":                           "{\"default\":1}",
+		"LogConsumeEnabled":                    "true",
+		"DataExportEnabled":                    "true",
+		"perf_metrics_setting.enabled":         "true",
+		"RetryTimes":                           "0",
+		"AutomaticRetryStatusCodes":            "",
+		"SubscriptionConcurrencyQueueCapacity": "1000",
+	}
+	for key, value := range options {
+		opt := model.Option{Key: key, Value: value}
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&opt).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func seedOutput(cfg Config) artifact.SeedOutput {
+	cfg = cfg.withDefaults()
+	return artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: cfg.RunContext.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: subscriptionUserID, UserIDCompat: compatUserID, TokenSubscription: cfg.SubscriptionKey, TokenCompat: cfg.CompatKey, TokenDBKeySubscription: loadtestconfig.SubscriptionDBKey, TokenDBKeyCompat: loadtestconfig.CompatDBKey, ChannelID: channelID, Model: cfg.Model, Group: cfg.Group, MockBaseURL: cfg.MockBaseURL, ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}, RatioConfig: map[string]any{"ModelRatio": map[string]any{cfg.Model: float64(1)}, "CompletionRatio": map[string]any{cfg.Model: float64(1)}, "GroupRatio": map[string]any{cfg.Group: float64(1)}}, FeatureOptions: map[string]any{"LogConsumeEnabled": true, "DataExportEnabled": true, "perf_metrics_setting.enabled": true, "RetryTimes": float64(0), "AutomaticRetryStatusCodes": ""}}
+}
+
+func removeCSVValue(raw, value string) string {
+	parts := strings.Split(raw, ",")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == value {
+			continue
+		}
+		kept = append(kept, part)
+	}
+	return strings.Join(kept, ",")
+}

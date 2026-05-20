@@ -20,6 +20,15 @@ const (
 	BatchUpdateTypeCount // if you add a new type, you need to add a new map and a new lock
 )
 
+type BatchUpdatePending struct {
+	ByType map[int]int `json:"by_type"`
+	Total  int         `json:"total"`
+}
+
+func (p BatchUpdatePending) String() string {
+	return "pending=" + common.GetJsonString(p.ByType)
+}
+
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
 
@@ -47,6 +56,18 @@ func addNewRecord(type_ int, id int, value int) {
 	} else {
 		batchUpdateStores[type_][id] += value
 	}
+}
+
+func BatchUpdatePendingSnapshot() BatchUpdatePending {
+	snapshot := BatchUpdatePending{ByType: make(map[int]int, BatchUpdateTypeCount)}
+	for i := 0; i < BatchUpdateTypeCount; i++ {
+		batchUpdateLocks[i].Lock()
+		count := len(batchUpdateStores[i])
+		batchUpdateLocks[i].Unlock()
+		snapshot.ByType[i] = count
+		snapshot.Total += count
+	}
+	return snapshot
 }
 
 func batchUpdate() {

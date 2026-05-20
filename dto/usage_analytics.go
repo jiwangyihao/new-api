@@ -22,8 +22,6 @@ const (
 	UsageAnalyticsMetricErrorRate     = "error_rate"
 	UsageAnalyticsMetricAvgLatencyMs  = "avg_latency_ms"
 	UsageAnalyticsMetricP95LatencyMs  = "p95_latency_ms"
-	UsageAnalyticsMetricLastUsedAt    = "last_used_at"
-	UsageAnalyticsMetricFirstUsedAt   = "first_used_at"
 	UsageAnalyticsStatusSuccess       = "success"
 	UsageAnalyticsStatusError         = "error"
 	UsageAnalyticsSortOrderAscending  = "asc"
@@ -128,9 +126,9 @@ type UsageAnalyticsTimeseriesResponse struct {
 }
 
 type UsageAnalyticsBreakdownResponse struct {
-	Groups     []UsageAnalyticsGroup  `json:"groups"`
+	Groups      []UsageAnalyticsGroup `json:"groups"`
 	TotalGroups int                   `json:"total_groups"`
-	Other      *UsageAnalyticsGroup   `json:"other"`
-	SortBy     string                 `json:"sort_by"`
-	SortOrder  string                 `json:"sort_order"`
+	Other       *UsageAnalyticsGroup  `json:"other"`
+	SortBy      string                `json:"sort_by"`
+	SortOrder   string                `json:"sort_order"`
 }

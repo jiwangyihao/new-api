@@ -46,8 +46,6 @@ const (
 	UsageAnalyticsMetricErrorRate    = dto.UsageAnalyticsMetricErrorRate
 	UsageAnalyticsMetricAvgLatencyMs = dto.UsageAnalyticsMetricAvgLatencyMs
 	UsageAnalyticsMetricP95LatencyMs = dto.UsageAnalyticsMetricP95LatencyMs
-	UsageAnalyticsMetricLastUsedAt   = dto.UsageAnalyticsMetricLastUsedAt
-	UsageAnalyticsMetricFirstUsedAt  = dto.UsageAnalyticsMetricFirstUsedAt
 
 	UsageAnalyticsStatusSuccess = dto.UsageAnalyticsStatusSuccess
 	UsageAnalyticsStatusError   = dto.UsageAnalyticsStatusError
@@ -56,8 +54,8 @@ const (
 type usageAnalyticsAccumulator struct {
 	UsageAnalyticsGroup
 	latencySamples []int
-	tokenName       string
-	tokenNameAt     int64
+	tokenName      string
+	tokenNameAt    int64
 }
 
 func GetUsageAnalyticsSummary(query UsageAnalyticsQuery) (UsageAnalyticsSummaryResponse, error) {
@@ -72,7 +70,7 @@ func GetUsageAnalyticsSummary(query UsageAnalyticsQuery) (UsageAnalyticsSummaryR
 	usageAnalyticsAttachTokenInfo(query.UserID, groups)
 	usageAnalyticsApplyShares(groups, query.SortBy)
 	usageAnalyticsSortGroups(groups, query.SortBy, query.SortOrder)
-	groups = usageAnalyticsLimitGroups(groups, query.Limit)
+	limitedGroups := usageAnalyticsLimitGroups(groups, query.Limit)
 	recentLogs, err := usageAnalyticsLoadCandidateLogs(query, false)
 	if err != nil {
 		return UsageAnalyticsSummaryResponse{}, err
@@ -82,7 +80,7 @@ func GetUsageAnalyticsSummary(query UsageAnalyticsQuery) (UsageAnalyticsSummaryR
 	totalMetrics.Rpm = rpm
 	totalMetrics.Tpm = tpm
 	totalMetrics.ActiveKeyCount = usageAnalyticsActiveKeyCount(logs)
-	return UsageAnalyticsSummaryResponse{Total: totalMetrics, Groups: usageAnalyticsAccumulatorsToGroups(groups), GroupBy: query.GroupBy}, nil
+	return UsageAnalyticsSummaryResponse{Total: totalMetrics, Groups: usageAnalyticsAccumulatorSliceToGroups(limitedGroups), GroupBy: query.GroupBy}, nil
 }
 
 func GetUsageAnalyticsTimeseries(query UsageAnalyticsQuery) (UsageAnalyticsTimeseriesResponse, error) {
@@ -158,7 +156,7 @@ func GetUsageAnalyticsBreakdown(query UsageAnalyticsQuery) (UsageAnalyticsBreakd
 	usageAnalyticsApplyShares(groups, query.SortBy)
 	usageAnalyticsSortGroups(groups, query.SortBy, query.SortOrder)
 	totalGroups := len(groups)
-	ordered := usageAnalyticsOrderedAccumulators(groups)
+	ordered := usageAnalyticsOrderedAccumulatorsBySort(groups, query.SortBy, query.SortOrder)
 	limit := query.Limit
 	if limit > len(ordered) {
 		limit = len(ordered)
@@ -618,9 +616,9 @@ func usageAnalyticsMetricValue(group UsageAnalyticsGroup, metric string) int {
 		return group.AvgLatencyMs
 	case UsageAnalyticsMetricP95LatencyMs:
 		return group.P95LatencyMs
-	case UsageAnalyticsMetricFirstUsedAt:
+	case "first_used_at":
 		return int(group.FirstUsedAt)
-	case UsageAnalyticsMetricLastUsedAt:
+	case "last_used_at":
 		return int(group.LastUsedAt)
 	case UsageAnalyticsMetricTotalTokens:
 		fallthrough
@@ -662,16 +660,12 @@ func usageAnalyticsOrderedAccumulatorsBySort(groups map[string]*usageAnalyticsAc
 	return ordered
 }
 
-func usageAnalyticsLimitGroups(groups map[string]*usageAnalyticsAccumulator, limit int) map[string]*usageAnalyticsAccumulator {
+func usageAnalyticsLimitGroups(groups map[string]*usageAnalyticsAccumulator, limit int) []*usageAnalyticsAccumulator {
 	ordered := usageAnalyticsOrderedAccumulators(groups)
 	if limit > len(ordered) {
 		limit = len(ordered)
 	}
-	limited := make(map[string]*usageAnalyticsAccumulator, limit)
-	for _, acc := range ordered[:limit] {
-		limited[acc.GroupKey] = acc
-	}
-	return limited
+	return ordered[:limit]
 }
 
 func usageAnalyticsAccumulatorsToGroups(groups map[string]*usageAnalyticsAccumulator) []UsageAnalyticsGroup {

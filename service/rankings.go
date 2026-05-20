@@ -3,27 +3,31 @@ package service
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 )
 
 const (
-	rankingCacheTTL         = 5 * time.Minute
-	rankingLeaderboardLimit = 20
-	rankingHistoryLimit     = 10
-	rankingFreeUserLimit    = 20
-	rankingOthersLabel      = "Others"
-	rankingUnknownVendor    = "Unknown"
+	rankingCacheTTL             = 5 * time.Minute
+	rankingLeaderboardLimit     = 20
+	rankingHistoryLimit         = 10
+	rankingFreeUserLimit        = 20
+	rankingFreeUserHistoryHours = 24
+	rankingOthersLabel          = "Others"
+	rankingUnknownVendor        = "Unknown"
 )
 
 type RankingsResponse struct {
-	Models              []RankedModel      `json:"models"`
-	ModelsHistory       ModelHistorySeries `json:"models_history"`
-	FreeUsers           []RankedFreeUser   `json:"free_users"`
-	FreeUserTotalTokens int64              `json:"free_user_total_tokens"`
+	Models              []RankedModel         `json:"models"`
+	ModelsHistory       ModelHistorySeries    `json:"models_history"`
+	FreeUsers           []RankedFreeUser      `json:"free_users"`
+	FreeUserTotalTokens int64                 `json:"free_user_total_tokens"`
+	FreeUserHistory     FreeUserHistorySeries `json:"free_user_history"`
 }
 
 type RankedModel struct {
@@ -40,6 +44,30 @@ type RankedFreeUser struct {
 	DisplayName string `json:"display_name"`
 	TotalTokens int64  `json:"total_tokens"`
 	Named       bool   `json:"named"`
+}
+
+type FreeUserHistoryPoint struct {
+	Rank             int    `json:"rank"`
+	DisplayName      string `json:"display_name"`
+	SeriesLabel      string `json:"series_label"`
+	Hour             int    `json:"hour"`
+	HourLabel        string `json:"hour_label"`
+	Tokens           int64  `json:"tokens"`
+	CumulativeTokens int64  `json:"cumulative_tokens"`
+}
+
+type FreeUserHistorySeries struct {
+	Points []FreeUserHistoryPoint `json:"points"`
+	Hours  int                    `json:"hours"`
+}
+
+type rankedFreeUserInternal struct {
+	UserID      int
+	Rank        int
+	DisplayName string
+	SeriesLabel string
+	TotalTokens int64
+	Named       bool
 }
 
 type ModelHistoryPoint struct {
@@ -157,13 +185,18 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 
 	meta := buildRankingModelMeta()
 	rankedModels := buildRankedModels(currentTotals, meta)
-	freeUsers, freeUserTotalTokens := buildRankedFreeUsers(freeUserTotals)
+	freeUserInternals, freeUserTotalTokens := buildRankedFreeUserInternals(freeUserTotals)
+	freeUserHistory, err := buildFreeUserHistory(freeUserInternals)
+	if err != nil {
+		return nil, err
+	}
 
 	return &RankingsResponse{
 		Models:              limitRankedModels(rankedModels, rankingLeaderboardLimit),
 		ModelsHistory:       buildModelHistory(currentBuckets, currentTotals, meta, config),
-		FreeUsers:           freeUsers,
+		FreeUsers:           publicRankedFreeUsers(freeUserInternals),
 		FreeUserTotalTokens: freeUserTotalTokens,
+		FreeUserHistory:     freeUserHistory,
 	}, nil
 }
 
@@ -293,20 +326,149 @@ func rankingBucketLabel(bucket int64, config rankingPeriodConfig) string {
 	return time.Unix(bucket, 0).Format(config.labelLayout)
 }
 
-func buildRankedFreeUsers(totals []model.RankingFreeUserTotal) ([]RankedFreeUser, int64) {
-	rows := make([]RankedFreeUser, 0, len(totals))
+func buildRankedFreeUserInternals(totals []model.RankingFreeUserTotal) ([]rankedFreeUserInternal, int64) {
+	rows := make([]rankedFreeUserInternal, 0, len(totals))
 	totalTokens := int64(0)
 	for idx, item := range totals {
+		rank := idx + 1
 		totalTokens += item.TotalTokens
-		displayName, named := rankingDisplayNameFromSetting(item.Setting, idx+1)
-		rows = append(rows, RankedFreeUser{
-			Rank:        idx + 1,
+		displayName, named := rankingDisplayNameFromSetting(item.Setting, rank)
+		rows = append(rows, rankedFreeUserInternal{
+			UserID:      item.UserID,
+			Rank:        rank,
 			DisplayName: displayName,
+			SeriesLabel: fmt.Sprintf("#%d · %s", rank, displayName),
 			TotalTokens: item.TotalTokens,
 			Named:       named,
 		})
 	}
 	return rows, totalTokens
+}
+
+func publicRankedFreeUsers(internal []rankedFreeUserInternal) []RankedFreeUser {
+	rows := make([]RankedFreeUser, 0, len(internal))
+	for _, item := range internal {
+		rows = append(rows, RankedFreeUser{
+			Rank:        item.Rank,
+			DisplayName: item.DisplayName,
+			TotalTokens: item.TotalTokens,
+			Named:       item.Named,
+		})
+	}
+	return rows
+}
+
+func buildFreeUserHistory(users []rankedFreeUserInternal) (FreeUserHistorySeries, error) {
+	series := FreeUserHistorySeries{Points: []FreeUserHistoryPoint{}, Hours: rankingFreeUserHistoryHours}
+	if len(users) == 0 {
+		return series, nil
+	}
+
+	userIDs := make([]int, 0, len(users))
+	for _, user := range users {
+		userIDs = append(userIDs, user.UserID)
+	}
+
+	subs, err := model.GetRankingFreeUserSubscriptions(userIDs)
+	if err != nil {
+		return series, err
+	}
+	if len(subs) == 0 {
+		return buildFreeUserHistoryPoints(users, map[int][]int64{}), nil
+	}
+
+	subsByID := make(map[int]model.RankingFreeUserSubscription, len(subs))
+	minStart := subs[0].StartTime
+	maxEnd := subs[0].StartTime + int64(rankingFreeUserHistoryHours*3600)
+	for _, sub := range subs {
+		subsByID[sub.ID] = sub
+		if sub.StartTime < minStart {
+			minStart = sub.StartTime
+		}
+		end := sub.StartTime + int64(rankingFreeUserHistoryHours*3600)
+		if end > maxEnd {
+			maxEnd = end
+		}
+	}
+
+	logs, err := model.GetRankingFreeUserLogCandidates(userIDs, minStart, maxEnd)
+	if err != nil {
+		return series, err
+	}
+
+	tokensByUserHour := make(map[int][]int64, len(users))
+	for _, user := range users {
+		tokensByUserHour[user.UserID] = make([]int64, rankingFreeUserHistoryHours)
+	}
+	for _, candidate := range logs {
+		var other map[string]interface{}
+		if err := common.UnmarshalJsonStr(candidate.Other, &other); err != nil {
+			continue
+		}
+		subID, ok := intFromOtherMapValue(other["subscription_id"])
+		if !ok {
+			continue
+		}
+		consumed, ok := intFromOtherMapValue(other["subscription_tokens_consumed"])
+		if !ok || consumed <= 0 {
+			continue
+		}
+		sub, ok := subsByID[subID]
+		if !ok || sub.UserID != candidate.UserID {
+			continue
+		}
+		if candidate.CreatedAt < sub.StartTime || candidate.CreatedAt >= sub.StartTime+int64(rankingFreeUserHistoryHours*3600) {
+			continue
+		}
+		hour := int((candidate.CreatedAt - sub.StartTime) / 3600)
+		if hour < 0 || hour >= rankingFreeUserHistoryHours {
+			continue
+		}
+		tokensByUserHour[candidate.UserID][hour] += int64(consumed)
+	}
+
+	return buildFreeUserHistoryPoints(users, tokensByUserHour), nil
+}
+
+func buildFreeUserHistoryPoints(users []rankedFreeUserInternal, tokensByUserHour map[int][]int64) FreeUserHistorySeries {
+	series := FreeUserHistorySeries{Points: []FreeUserHistoryPoint{}, Hours: rankingFreeUserHistoryHours}
+	for _, user := range users {
+		buckets := tokensByUserHour[user.UserID]
+		if len(buckets) != rankingFreeUserHistoryHours {
+			buckets = make([]int64, rankingFreeUserHistoryHours)
+		}
+		cumulative := int64(0)
+		for hour := 0; hour < rankingFreeUserHistoryHours; hour++ {
+			tokens := buckets[hour]
+			cumulative += tokens
+			series.Points = append(series.Points, FreeUserHistoryPoint{
+				Rank:             user.Rank,
+				DisplayName:      user.DisplayName,
+				SeriesLabel:      user.SeriesLabel,
+				Hour:             hour,
+				HourLabel:        fmt.Sprintf("%dh", hour),
+				Tokens:           tokens,
+				CumulativeTokens: cumulative,
+			})
+		}
+	}
+	return series
+}
+
+func intFromOtherMapValue(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func rankingDisplayNameFromSetting(setting string, rank int) (string, bool) {

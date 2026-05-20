@@ -91,7 +91,7 @@ func TestUpdateUserSettingPreservesRankingsDisplayName(t *testing.T) {
 
 func TestUpdateSelfRankingsDisplayNameFlushesRankingsCache(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.QuotaData{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.QuotaData{}, &model.Log{}))
 	service.FlushRankingsCacheForTest()
 	freeCode := "profile-cache-free"
 	plan := &model.SubscriptionPlan{Id: 9964, Title: "Profile Cache Free", Enabled: true, PriceAmount: 0, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, IsTrial: true, BusinessCode: &freeCode}

@@ -90,6 +90,7 @@ export function Rankings() {
               <FreeUsersSection
                 rows={snapshot.free_users}
                 totalTokens={snapshot.free_user_total_tokens}
+                history={snapshot.free_user_history}
               />
             </>
           )}

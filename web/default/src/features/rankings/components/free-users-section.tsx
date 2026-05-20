@@ -16,18 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { Trophy, UserRound } from 'lucide-react'
+import { useState } from 'react'
+import { BarChart3, LineChart, Trophy } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { cn } from '@/lib/utils'
 import { formatTokens } from '../lib/format'
-import type { FreeUserRanking } from '../types'
+import type { FreeUserHistorySeries, FreeUserRanking } from '../types'
+import { FreeUsersBarChart } from './free-users-bar-chart'
+import { FreeUsersLineChart, type FreeUserTrendMode } from './free-users-line-chart'
+import { FreeUsersList } from './free-users-list'
 
 type FreeUsersSectionProps = {
   rows: FreeUserRanking[]
   totalTokens: number
+  history: FreeUserHistorySeries
 }
+
+type FreeUsersView = 'bar' | 'trend'
 
 export function FreeUsersSection(props: FreeUsersSectionProps) {
   const { t } = useTranslation()
+  const [view, setView] = useState<FreeUsersView>('bar')
+  const [trendMode, setTrendMode] = useState<FreeUserTrendMode>('hourly')
 
   return (
     <section className='bg-card overflow-hidden rounded-lg border'>
@@ -51,40 +61,91 @@ export function FreeUsersSection(props: FreeUsersSectionProps) {
         </div>
       </header>
 
-      {props.rows.length === 0 ? (
-        <div className='text-muted-foreground/80 border-t px-5 py-10 text-center text-sm'>
-          {t('No free-plan ranking data available')}
+      <div className='border-t px-5 py-4'>
+        <div className='mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
+          <div>
+            <h3 className='text-foreground inline-flex items-center gap-2 text-sm font-semibold'>
+              {view === 'bar' ? (
+                <BarChart3 className='text-primary size-3.5' />
+              ) : (
+                <LineChart className='text-primary size-3.5' />
+              )}
+              {view === 'bar'
+                ? t('Usage after free-plan activation')
+                : t('24-hour trend')}
+            </h3>
+            <p className='text-muted-foreground/80 mt-0.5 text-xs'>
+              {t(
+                'Compare each ranked user within their first 24 hours of free-plan access'
+              )}
+            </p>
+          </div>
+          <div className='flex flex-wrap gap-2'>
+            <button
+              type='button'
+              onClick={() => setView('bar')}
+              className={cn(
+                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                view === 'bar'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-background text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {t('Bar chart')}
+            </button>
+            <button
+              type='button'
+              onClick={() => setView('trend')}
+              className={cn(
+                'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                view === 'trend'
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-background text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {t('24-hour trend')}
+            </button>
+          </div>
         </div>
-      ) : (
-        <ol className='divide-y border-t'>
-          {props.rows.map((row) => (
-            <li key={row.rank} className='flex items-center gap-3 px-5 py-3'>
-              <span className='text-muted-foreground/80 w-8 shrink-0 text-right font-mono text-sm tabular-nums'>
-                {row.rank}.
-              </span>
-              <span className='bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full'>
-                <UserRound className='size-4' />
-              </span>
-              <div className='min-w-0 flex-1'>
-                <div className='text-foreground truncate text-sm font-medium'>
-                  {row.display_name}
-                </div>
-                <div className='text-muted-foreground/80 text-xs'>
-                  {row.named ? t('Custom display name') : t('Anonymous entry')}
-                </div>
-              </div>
-              <div className='shrink-0 text-right'>
-                <div className='text-foreground font-mono text-sm font-semibold tabular-nums'>
-                  {formatTokens(row.total_tokens)}
-                </div>
-                <div className='text-muted-foreground/80 text-xs'>
-                  {t('tokens')}
-                </div>
-              </div>
-            </li>
-          ))}
-        </ol>
-      )}
+
+        {view === 'bar' ? (
+          <FreeUsersBarChart rows={props.rows} />
+        ) : (
+          <div className='space-y-4'>
+            <div className='flex flex-wrap gap-2'>
+              <button
+                type='button'
+                onClick={() => setTrendMode('hourly')}
+                className={cn(
+                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  trendMode === 'hourly'
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {t('Hourly usage')}
+              </button>
+              <button
+                type='button'
+                onClick={() => setTrendMode('cumulative')}
+                className={cn(
+                  'rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors',
+                  trendMode === 'cumulative'
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {t('Cumulative usage')}
+              </button>
+            </div>
+            <FreeUsersLineChart history={props.history} mode={trendMode} />
+          </div>
+        )}
+      </div>
+
+      <div className='border-t'>
+        <FreeUsersList rows={props.rows} />
+      </div>
     </section>
   )
 }

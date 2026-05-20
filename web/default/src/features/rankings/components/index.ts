@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export * from './entity-links'
 export * from './free-users-section'
+export * from './free-users-bar-chart'
+export * from './free-users-line-chart'
+export * from './free-users-list'
 export * from './model-leaderboard'
 export * from './models-section'
 export * from './rankings-hero'

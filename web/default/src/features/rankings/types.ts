@@ -55,6 +55,21 @@ export type FreeUserRanking = {
   named: boolean
 }
 
+export type FreeUserHistoryPoint = {
+  rank: number
+  display_name: string
+  series_label: string
+  hour: number
+  hour_label: string
+  tokens: number
+  cumulative_tokens: number
+}
+
+export type FreeUserHistorySeries = {
+  points: FreeUserHistoryPoint[]
+  hours: number
+}
+
 /**
  * One sample of a model's token usage at a given timestamp.
  * Flat shape ready to feed VChart's stacked-bar spec.
@@ -88,4 +103,5 @@ export type RankingsSnapshot = {
   free_users: FreeUserRanking[]
   /** Aggregate token usage represented by the free-plan leaderboard. */
   free_user_total_tokens: number
+  free_user_history: FreeUserHistorySeries
 }

@@ -26,11 +26,13 @@ func setupUsageAnalyticsModelTestDBs(t *testing.T) usageAnalyticsModelTestDBs {
 	oldRedis := common.RedisEnabled
 	oldLogSQLType := common.LogSqlType
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	if common.LogSqlType == "" {
+		common.LogSqlType = common.DatabaseTypeSQLite
+	}
+	common.UsingSQLite = common.LogSqlType == common.DatabaseTypeSQLite
+	common.UsingMySQL = common.LogSqlType == common.DatabaseTypeMySQL
+	common.UsingPostgreSQL = common.LogSqlType == common.DatabaseTypePostgreSQL
 	common.RedisEnabled = false
-	common.LogSqlType = common.DatabaseTypeSQLite
 	initCol()
 
 	safeName := strings.ReplaceAll(t.Name(), "/", "_")
@@ -361,10 +363,28 @@ func buildUsageAnalyticsDryRunSQLForTest(t *testing.T, dialect string, groupBy U
 	}
 	initCol()
 	setupUsageAnalyticsModelTestDBs(t)
+	switch dialect {
+	case "sqlite":
+		common.UsingSQLite = true
+		common.UsingMySQL = false
+		common.UsingPostgreSQL = false
+		common.LogSqlType = common.DatabaseTypeSQLite
+	case "mysql":
+		common.UsingSQLite = false
+		common.UsingMySQL = true
+		common.UsingPostgreSQL = false
+		common.LogSqlType = common.DatabaseTypeMySQL
+	case "postgres":
+		common.UsingSQLite = false
+		common.UsingMySQL = false
+		common.UsingPostgreSQL = true
+		common.LogSqlType = common.DatabaseTypePostgreSQL
+	}
+	initCol()
 	query := UsageAnalyticsQuery{UserID: 101, StartTimestamp: 1778716800, EndTimestamp: 1779321600, GroupBy: groupBy, Groups: []string{"default"}, Limit: 10}
 	groupExpr, ok := usageAnalyticsGroupExpr(groupBy)
 	require.True(t, ok)
-	stmt := usageAnalyticsBaseLogQuery(LOG_DB.Session(&gorm.Session{DryRun: true}), query, true).Select(groupExpr+" AS group_value").Group(groupExpr).Find(&[]struct{ GroupValue string }{}).Statement
+	stmt := usageAnalyticsBaseLogQuery(LOG_DB.Session(&gorm.Session{DryRun: true}), query, true).Select(groupExpr + " AS group_value").Group(groupExpr).Find(&[]struct{ GroupValue string }{}).Statement
 	return stmt.SQL.String()
 }
 

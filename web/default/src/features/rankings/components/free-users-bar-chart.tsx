@@ -124,14 +124,14 @@ export function FreeUsersBarChart(props: FreeUsersBarChartProps) {
 
   if (data.length === 0) {
     return (
-      <div className='text-muted-foreground/80 flex h-[300px] items-center justify-center p-1.5 text-xs sm:h-96 sm:p-2'>
+      <div className='text-muted-foreground/80 flex h-[380px] items-center justify-center p-1.5 text-xs sm:h-[520px] sm:p-2'>
         {t('No free-plan ranking data available')}
       </div>
     )
   }
 
   return (
-    <div className='h-[300px] p-1.5 sm:h-96 sm:p-2'>
+    <div className='h-[380px] p-1.5 sm:h-[520px] sm:p-2'>
       {themeReady && spec ? (
         <VChart
           key={`free-users-bar-${resolvedTheme}`}

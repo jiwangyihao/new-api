@@ -142,10 +142,10 @@ test('free-user chart blocks use dashboard user chart sizing and framing', () =>
   const line = readFreeUsersLineChartSource()
   assert.match(section, /rounded-lg border/)
   assert.match(section, /border-b px-3 py-2[\s\S]*sm:px-5 sm:py-3/)
-  assert.match(bar, /h-\[300px\] p-1\.5 sm:h-96 sm:p-2/)
-  assert.match(line, /h-\[300px\] p-1\.5 sm:h-96 sm:p-2/)
-  assert.doesNotMatch(bar, /h-64 sm:h-72/)
-  assert.doesNotMatch(line, /h-64 sm:h-72/)
+  assert.match(bar, /h-\[380px\] p-1\.5 sm:h-\[520px\] sm:p-2/)
+  assert.match(line, /h-\[380px\] p-1\.5 sm:h-\[520px\] sm:p-2/)
+  assert.doesNotMatch(bar, /h-\[300px\]|sm:h-96|h-64|sm:h-72/)
+  assert.doesNotMatch(line, /h-\[300px\]|sm:h-96|h-64|sm:h-72/)
 })
 
 test('free-user chart i18n keys exist in all supported locales', () => {

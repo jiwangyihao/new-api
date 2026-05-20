@@ -112,6 +112,7 @@ func TestGetLogsSelfStatReturnsTotalTokensAndTpm(t *testing.T) {
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/log/self/stat?type=2", nil)
 	ctx.Set("username", "self-log-stat-user")
+	ctx.Set("id", 5001)
 
 	GetLogsSelfStat(ctx)
 

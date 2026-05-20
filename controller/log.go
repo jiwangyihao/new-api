@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -33,10 +35,101 @@ func GetAllLogs(c *gin.Context) {
 	return
 }
 
+func writeLogBadRequest(c *gin.Context, message string) {
+	c.JSON(http.StatusBadRequest, gin.H{
+		"success": false,
+		"message": message,
+	})
+}
+
+func parseLogStatusType(c *gin.Context) (int, string, error) {
+	logType := model.LogTypeUnknown
+	if rawType := strings.TrimSpace(c.Query("type")); rawType != "" {
+		parsed, err := strconv.Atoi(rawType)
+		if err != nil {
+			return 0, "", err
+		}
+		logType = parsed
+	}
+	status := strings.TrimSpace(c.Query("status"))
+	if status == "" {
+		return logType, "", nil
+	}
+	var statusType int
+	switch status {
+	case model.UsageAnalyticsStatusSuccess:
+		statusType = model.LogTypeConsume
+	case model.UsageAnalyticsStatusError:
+		statusType = model.LogTypeError
+	default:
+		return 0, "", errors.New("invalid status")
+	}
+	if logType != model.LogTypeUnknown && logType != statusType {
+		return 0, "", errors.New("status conflicts with type")
+	}
+	return logType, status, nil
+}
+
+func parseOptionalBoolQuery(c *gin.Context, key string) (*bool, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	switch raw {
+	case "true":
+		value := true
+		return &value, nil
+	case "false":
+		value := false
+		return &value, nil
+	default:
+		return nil, errors.New("invalid " + key)
+	}
+}
+
+func parseOptionalPositiveIntQuery(c *gin.Context, key string) (*int, error) {
+	raw := strings.TrimSpace(c.Query(key))
+	if raw == "" {
+		return nil, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return nil, errors.New("invalid " + key)
+	}
+	return &value, nil
+}
+
+func validateSelfLogTokenFilter(userID int, tokenID int, startTimestamp int64, endTimestamp int64) error {
+	var token model.Token
+	err := model.DB.Where("id = ? AND user_id = ?", tokenID, userID).First(&token).Error
+	if err == nil {
+		return nil
+	}
+	var count int64
+	query := model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND token_id = ?", userID, tokenID)
+	if startTimestamp != 0 {
+		query = query.Where("created_at >= ?", startTimestamp)
+	}
+	if endTimestamp != 0 {
+		query = query.Where("created_at <= ?", endTimestamp)
+	}
+	if err := query.Limit(1).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return errors.New("invalid token_id")
+	}
+	return nil
+}
+
 func GetUserLogs(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	userId := c.GetInt("id")
-	logType, _ := strconv.Atoi(c.Query("type"))
+	logType, status, err := parseLogStatusType(c)
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
@@ -44,7 +137,24 @@ func GetUserLogs(c *gin.Context) {
 	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId, upstreamRequestId)
+	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	isStream, err := parseOptionalBoolQuery(c, "is_stream")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	if tokenID != nil {
+		if err := validateSelfLogTokenFilter(userId, *tokenID, startTimestamp, endTimestamp); err != nil {
+			writeLogBadRequest(c, "invalid token_id")
+			return
+		}
+	}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
+	logs, total, err := model.GetUserLogsWithFilter(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -124,30 +234,55 @@ func GetLogsStat(c *gin.Context) {
 }
 
 func GetLogsSelfStat(c *gin.Context) {
-	username := c.GetString("username")
-	logType, _ := strconv.Atoi(c.Query("type"))
+	userId := c.GetInt("id")
+	logType, status, err := parseLogStatusType(c)
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	isStream, err := parseOptionalBoolQuery(c, "is_stream")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	if tokenID != nil {
+		if err := validateSelfLogTokenFilter(userId, *tokenID, startTimestamp, endTimestamp); err != nil {
+			writeLogBadRequest(c, "invalid token_id")
+			return
+		}
+	}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Channel: channel, Group: group, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
+	quotaNum, err := model.SumUsedQuotaWithFilter(filter)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	//tokenNum := model.SumUsedToken(logType, startTimestamp, endTimestamp, modelName, username, tokenName)
+	data := gin.H{
+		"quota":        quotaNum.Quota,
+		"total_tokens": quotaNum.TotalTokens,
+		"rpm":          quotaNum.Rpm,
+		"tpm":          quotaNum.Tpm,
+		//"token": tokenNum,
+	}
+	if tokenID != nil {
+		data["token_id"] = *tokenID
+	}
 	c.JSON(200, gin.H{
 		"success": true,
 		"message": "",
-		"data": gin.H{
-			"quota":        quotaNum.Quota,
-			"total_tokens": quotaNum.TotalTokens,
-			"rpm":          quotaNum.Rpm,
-			"tpm":          quotaNum.Tpm,
-			//"token": tokenNum,
-		},
+		"data":    data,
 	})
 	return
 }

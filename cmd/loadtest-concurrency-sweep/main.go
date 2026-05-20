@@ -24,6 +24,10 @@ import (
 
 func main() { os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr)) }
 
+var openSweepDB = func(dsn string) (*gorm.DB, error) {
+	return gorm.Open(postgres.Open(dsn), &gorm.Config{})
+}
+
 func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("loadtest-concurrency-sweep", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -168,7 +172,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeErr(stderr, err)
 		return 1
 	}
-	db, err := gorm.Open(postgres.Open(cfg.Postgres.DSN), &gorm.Config{})
+	db, err := openSweepDB(cfg.Postgres.DSN)
 	if err != nil {
 		writeErr(stderr, err)
 		return 1
@@ -245,7 +249,12 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
 	}
-	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: artifact.BusinessSnapshot{Statused: artifact.Statused{Status: "unavailable", Reason: "sweep direct mode has no database collector"}}, Logs: metrics.ScanServerLogs("", "")}
+	beforeBusiness, err := metrics.LoadBusinessSnapshot(opts.DB, opts.Seed)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
+	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: beforeBusiness, Logs: metrics.ScanServerLogs("", "")}
 	if err := writeJSONFile(point.MetricsBeforePath, beforeSnapshot); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
@@ -281,12 +290,21 @@ func runPoint(opts runPointOptions) (artifact.PointResult, int) {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
 	}
-	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: businessAfterForDirectSweep(beforeSnapshot.Business, summary, opts.TokenProfile, opts.Seed.ExpectedUsagePerSuccess.TotalTokens), Logs: metrics.ScanServerLogs("", "")}
+	afterBusiness, err := metrics.LoadBusinessSnapshot(opts.DB, opts.Seed)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
+	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: afterBusiness, Logs: metrics.ScanServerLogs("", "")}
 	if err := writeJSONFile(point.MetricsAfterPath, afterSnapshot); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
 		return point, 1
 	}
-	logRows, preRows := syntheticBusinessRows(summary, opts.Seed.ExpectedUsagePerSuccess.TotalTokens)
+	logRows, preRows, err := metrics.LoadBusinessRows(opts.DB, summary)
+	if err != nil {
+		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
+		return point, 1
+	}
 	diff, inv := metrics.BuildDiff(metrics.DiffInputs{Before: beforeSnapshot, After: afterSnapshot, Summary: summary, SeedOutput: opts.Seed, MockDelta: delta, RunContext: opts.RunContext, ConsumeLogRows: logRows, PreConsumeRows: preRows, BusinessBefore: beforeSnapshot.Business, BusinessAfter: afterSnapshot.Business})
 	if err := writeJSONFile(point.MetricsDiffPath, diff); err != nil {
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}
@@ -327,40 +345,6 @@ func readMockStats(source string) (artifact.MockStats, error) {
 		return artifact.MockStats{}, err
 	}
 	return stats, nil
-}
-
-func businessAfterForDirectSweep(before artifact.BusinessSnapshot, summary artifact.Summary, tokenProfile string, tokensPerSuccess int) artifact.BusinessSnapshot {
-	after := before
-	after.Statused = artifact.Statused{Status: "ok", Reason: "synthetic direct sweep business snapshot"}
-	delta := int64(summary.Success * tokensPerSuccess)
-	switch tokenProfile {
-	case "subscription":
-		after.SubscriptionTokenUsed += delta
-	case "compat":
-		after.CompatSubscriptionTokenUsed += delta
-	}
-	return after
-}
-
-func syntheticBusinessRows(summary artifact.Summary, tokensPerSuccess int) ([]metrics.ConsumeLogRow, []metrics.PreConsumeRow) {
-	logs := make([]metrics.ConsumeLogRow, 0, len(summary.Requests))
-	records := make([]metrics.PreConsumeRow, 0, len(summary.Requests))
-	for _, req := range summary.Requests {
-		if req.NewAPIRequestID == "" {
-			continue
-		}
-		quota := tokensPerSuccess
-		if !req.Success {
-			quota = 0
-		}
-		logs = append(logs, metrics.ConsumeLogRow{RequestID: req.NewAPIRequestID, Quota: quota})
-		status := "consumed"
-		if !req.Success {
-			status = "refunded"
-		}
-		records = append(records, metrics.PreConsumeRow{RequestID: req.NewAPIRequestID, Status: status, PreConsumed: quota})
-	}
-	return logs, records
 }
 
 func summaryExcerpt(summary artifact.Summary, delta artifact.MockStatsDelta) artifact.SummaryExcerpt {

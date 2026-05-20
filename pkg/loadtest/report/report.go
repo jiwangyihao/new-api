@@ -16,6 +16,12 @@ type CompareReport struct {
 	Markdown string
 }
 
+type RegressionError struct {
+	Reason string
+}
+
+func (e RegressionError) Error() string { return e.Reason }
+
 func BuildCompareReport(baseline artifact.SweepResult, candidate artifact.SweepResult, thresholds Thresholds) (CompareReport, error) {
 	if err := compareContexts(baseline.RunContext, candidate.RunContext); err != nil {
 		return CompareReport{}, err
@@ -24,7 +30,7 @@ func BuildCompareReport(baseline artifact.SweepResult, candidate artifact.SweepR
 		base := firstPointLatency(baseline)
 		cand := firstPointLatency(candidate)
 		if base > 0 && cand > base*thresholds.LatencyP95RegressionRatio {
-			return CompareReport{}, fmt.Errorf("latency p95 regression: baseline %.2f candidate %.2f", base, cand)
+			return CompareReport{}, RegressionError{Reason: fmt.Sprintf("latency p95 regression: baseline %.2f candidate %.2f", base, cand)}
 		}
 	}
 	return CompareReport{Markdown: RenderSingleReport(candidate, nil)}, nil

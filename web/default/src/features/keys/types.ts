@@ -90,8 +90,8 @@ export interface ApiKeyFormData {
   model_limits_enabled: boolean
   model_limits: string
   allow_ips: string
-  group: string
-  cross_group_retry: boolean
+  group?: string
+  cross_group_retry?: boolean
 }
 
 // ============================================================================

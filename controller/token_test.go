@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -505,6 +506,119 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
 	}
+}
+
+func TestAddTokenDefaultsToDefaultGroupWhenPayloadOmitsGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	body := map[string]any{
+		"name":                 "default-group-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+	var inserted model.Token
+	require.NoError(t, db.First(&inserted, "name = ?", "default-group-token").Error)
+	require.Equal(t, "default", inserted.Group)
+	require.False(t, inserted.CrossGroupRetry)
+}
+
+func TestAddTokenFallsBackToBlankGroupWhenDefaultGroupUnavailable(t *testing.T) {
+	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
+	})
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"paid":1}`))
+	db := setupTokenControllerTestDB(t)
+	body := map[string]any{
+		"name":                 "blank-group-token",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+	var inserted model.Token
+	require.NoError(t, db.First(&inserted, "name = ?", "blank-group-token").Error)
+	require.Equal(t, "", inserted.Group)
+	require.False(t, inserted.CrossGroupRetry)
+}
+
+func TestUpdateTokenPreservesExistingGroupWhenPayloadOmitsGroup(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "preserve-group-token", "preserve1234token5678")
+	token.Group = "paid"
+	token.CrossGroupRetry = true
+	require.NoError(t, token.Update())
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "preserve-group-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+	var updated model.Token
+	require.NoError(t, db.First(&updated, token.Id).Error)
+	require.Equal(t, "paid", updated.Group)
+	require.True(t, updated.CrossGroupRetry)
+}
+
+func TestUpdateTokenAppliesExplicitGroupFields(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 1, "explicit-group-token", "explicit1234token5678")
+	token.Group = "default"
+	token.CrossGroupRetry = false
+	require.NoError(t, token.Update())
+	body := map[string]any{
+		"id":                   token.Id,
+		"name":                 "explicit-group-updated",
+		"expired_time":         -1,
+		"remain_quota":         100,
+		"unlimited_quota":      true,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"group":                "paid",
+		"cross_group_retry":    true,
+	}
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	if !response.Success {
+		t.Fatalf("expected success response, got message: %s", response.Message)
+	}
+	var updated model.Token
+	require.NoError(t, db.First(&updated, token.Id).Error)
+	require.Equal(t, "paid", updated.Group)
+	require.True(t, updated.CrossGroupRetry)
 }
 
 func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {

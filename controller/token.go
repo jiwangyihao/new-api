@@ -10,9 +10,23 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
+
+type tokenPayload struct {
+	model.Token
+	Group           *string `json:"group"`
+	CrossGroupRetry *bool   `json:"cross_group_retry"`
+}
+
+func defaultTokenGroup() string {
+	if ratio_setting.ContainsGroupRatio("default") {
+		return "default"
+	}
+	return ""
+}
 
 func buildMaskedTokenResponse(token *model.Token) *model.Token {
 	if token == nil {
@@ -259,7 +273,7 @@ func AddToken(c *gin.Context) {
 		ModelLimitsEnabled: token.ModelLimitsEnabled,
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
-		Group:              token.Group,
+		Group:              defaultTokenGroup(),
 		CrossGroupRetry:    token.CrossGroupRetry,
 	}
 	err = cleanToken.Insert()
@@ -290,8 +304,9 @@ func DeleteToken(c *gin.Context) {
 func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
-	token := model.Token{}
-	err := c.ShouldBindJSON(&token)
+	var req tokenPayload
+	err := c.ShouldBindJSON(&req)
+	token := req.Token
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -337,8 +352,12 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
-		cleanToken.Group = token.Group
-		cleanToken.CrossGroupRetry = token.CrossGroupRetry
+		if req.Group != nil {
+			cleanToken.Group = *req.Group
+		}
+		if req.CrossGroupRetry != nil {
+			cleanToken.CrossGroupRetry = *req.CrossGroupRetry
+		}
 	}
 	err = cleanToken.Update()
 	if err != nil {

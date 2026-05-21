@@ -26,6 +26,15 @@ import {
 
 const logTypeValues = ['0', '1', '2', '3', '4', '5', '6'] as const
 
+function optionalNumericSearchParam(value: unknown): number | undefined {
+  const candidate = Array.isArray(value) ? value[0] : value
+  if (typeof candidate !== 'number' || !Number.isFinite(candidate)) {
+    return undefined
+  }
+  return candidate
+}
+
+
 const usageLogsSearchSchema = z.object({
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(20),
@@ -36,15 +45,16 @@ const usageLogsSearchSchema = z.object({
   channel: z.string().optional().catch(''),
   group: z.string().optional().catch(''),
   username: z.string().optional().catch(''),
-  userId: z.number().optional(),
+  userId: z.unknown().transform(optionalNumericSearchParam).optional(),
   requestId: z.string().optional().catch(''),
   upstreamRequestId: z.string().optional().catch(''),
-  startTime: z.number().optional(),
-  endTime: z.number().optional(),
-  tokenId: z.number().optional(),
+  startTime: z.unknown().transform(optionalNumericSearchParam).optional(),
+  endTime: z.unknown().transform(optionalNumericSearchParam).optional(),
+  tokenId: z.unknown().transform(optionalNumericSearchParam).optional(),
   isStream: z.boolean().optional(),
   status: z.enum(['success', 'error']).optional(),
 })
+
 
 export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
   beforeLoad: ({ params, search }) => {
@@ -52,6 +62,7 @@ export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
       throw redirect({
         to: '/usage-logs/$section',
         params: { section: USAGE_LOGS_DEFAULT_SECTION },
+        search: {},
       })
     }
     // type 仅 common 使用，非 common 时清掉 URL 里的 type

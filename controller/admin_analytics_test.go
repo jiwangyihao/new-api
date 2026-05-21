@@ -63,6 +63,47 @@ func TestAdminAnalyticsRejectsInvalidSources(t *testing.T) {
 	require.Contains(t, recorder.Body.String(), "invalid source")
 }
 
+func TestAdminAnalyticsSnapshotAtUsesHistoricalRangeEnd(t *testing.T) {
+	setupAdminAnalyticsControllerTestDBs(t)
+	end := time.Now().Unix() - 24*60*60
+	start := end - 60
+	target := "/api/admin-analytics/overview?start_timestamp=" + strconv.FormatInt(start, 10) + "&end_timestamp=" + strconv.FormatInt(end, 10)
+	recorder := performAdminAnalyticsRequest(t, target, GetAdminAnalyticsOverview)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), `"snapshot_at":`+strconv.FormatInt(end, 10))
+}
+
+func TestAdminAnalyticsRejectsUnsupportedSortBy(t *testing.T) {
+	setupAdminAnalyticsControllerTestDBs(t)
+	recorder := performAdminAnalyticsRequest(t, "/api/admin-analytics/plan-distribution?sort_by=not_a_column", GetAdminAnalyticsPlanDistribution)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "unsupported sort_by")
+}
+
+func TestAdminAnalyticsDrilldownRejectsInvalidUserID(t *testing.T) {
+	setupAdminAnalyticsControllerTestDBs(t)
+	recorder := performAdminAnalyticsRequest(t, "/api/admin-analytics/drilldown/users?user_id=abc", GetAdminAnalyticsDrilldownUsers)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	require.Contains(t, recorder.Body.String(), "invalid user_id")
+}
+
+func TestAdminAnalyticsDrilldownUsersAcceptsRepeatedUserID(t *testing.T) {
+	setupAdminAnalyticsControllerTestDBs(t)
+	seedAdminAnalyticsControllerUsers(t, 3)
+
+	recorder := performAdminAnalyticsRequest(t, "/api/admin-analytics/drilldown/users?user_id=1&user_id=2", GetAdminAnalyticsDrilldownUsers)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := recorder.Body.String()
+	require.Contains(t, body, `"total":2`)
+	require.Contains(t, body, `"user_id":1`)
+	require.Contains(t, body, `"user_id":2`)
+	require.NotContains(t, body, `"user_id":3`)
+}
+
 func TestAdminAnalyticsDrilldownUsersClampsLimitTo100(t *testing.T) {
 	setupAdminAnalyticsControllerTestDBs(t)
 	seedAdminAnalyticsControllerUsers(t, 150)

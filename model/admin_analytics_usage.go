@@ -26,6 +26,7 @@ type AdminAnalyticsUsageQuery struct {
 	AdminAnalyticsQuery
 	GroupBy         dto.AdminUsageGroupBy
 	Metric          dto.AdminUsageMetric
+	SortMetric      dto.AdminUsageMetric
 	PlanAttribution dto.AdminPlanAttribution
 	TopN            int
 	SortByProvided  bool
@@ -61,6 +62,9 @@ func normalizeAdminUsageQuery(query AdminAnalyticsUsageQuery) AdminAnalyticsUsag
 	if query.Metric == "" {
 		query.Metric = dto.AdminUsageMetricTotalTokens
 	}
+	if query.SortMetric == "" {
+		query.SortMetric = query.Metric
+	}
 	if query.PlanAttribution == "" {
 		query.PlanAttribution = dto.AdminPlanAttributionCurrent
 	}
@@ -89,6 +93,11 @@ func ValidateAdminUsageQuery(query AdminAnalyticsUsageQuery, endpoint string) er
 	default:
 		return ErrAdminAnalyticsInvalidMetric
 	}
+	switch query.SortMetric {
+	case dto.AdminUsageMetricRequestCount, dto.AdminUsageMetricTotalTokens, dto.AdminUsageMetricQuota, dto.AdminUsageMetricErrorRate, dto.AdminUsageMetricAvgLatencyMs, dto.AdminUsageMetricP95LatencyMs, dto.AdminUsageMetricActiveUsers, dto.AdminUsageMetricActiveAPIKeys:
+	default:
+		return ErrAdminAnalyticsInvalidSortBy
+	}
 	switch query.PlanAttribution {
 	case dto.AdminPlanAttributionCurrent, dto.AdminPlanAttributionEventTime:
 	default:
@@ -105,6 +114,24 @@ func loadAdminUsageCandidateLogs(query AdminAnalyticsUsageQuery) ([]adminUsageCa
 	base := LOG_DB.Model(&Log{}).Where("type IN ?", []int{LogTypeConsume, LogTypeError}).Where("created_at >= ? AND created_at <= ?", query.StartTimestamp, query.EndTimestamp)
 	if len(query.RequestGroups) > 0 {
 		base = base.Where(logGroupCol+" IN ?", query.RequestGroups)
+	}
+	if len(query.UserIDs) > 0 {
+		base = base.Where("user_id IN ?", query.UserIDs)
+	}
+	if len(query.TokenIDs) > 0 {
+		base = base.Where("token_id IN ?", query.TokenIDs)
+	}
+	if len(query.ChannelIDs) > 0 {
+		base = base.Where("channel_id IN ?", query.ChannelIDs)
+	}
+	if len(query.LogStatuses) > 0 {
+		hasSuccess := adminStringInSet("success", query.LogStatuses)
+		hasError := adminStringInSet("error", query.LogStatuses)
+		if hasSuccess && !hasError {
+			base = base.Where("type = ?", LogTypeConsume)
+		} else if hasError && !hasSuccess {
+			base = base.Where("type = ?", LogTypeError)
+		}
 	}
 	var logs []Log
 	if err := base.Order("created_at asc").Limit(adminAnalyticsCandidateLogLimit + 1).Find(&logs).Error; err != nil {
@@ -313,10 +340,10 @@ func GetAdminUsageConsumptionSummary(query AdminAnalyticsUsageQuery) (dto.AdminA
 		return dto.AdminAnalyticsPanelResponse[dto.AdminUsageConsumptionSummaryResponse]{Warnings: warnings}, err
 	}
 	total, groups := aggregateAdminUsage(logs, query.GroupBy)
-	ordered := adminUsageOrderedGroups(groups, query.Metric, dto.AdminAnalyticsSortDesc)
+	ordered := adminUsageOrderedGroups(groups, query.SortMetric, query.SortOrder)
 	limited, other := adminUsageTopNWithOther(ordered, query.TopN)
 	paged, page := paginateAdminAnalyticsList(limited, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminUsageConsumptionSummaryResponse]{Range: adminAnalyticsRangeMeta(query.AdminAnalyticsQuery), Data: dto.AdminUsageConsumptionSummaryResponse{Total: total, Groups: dto.AdminAnalyticsList[dto.AdminUsageGroup]{Items: paged, Page: page, SortBy: string(query.Metric), SortOrder: dto.AdminAnalyticsSortDesc}, GroupBy: query.GroupBy, Other: other}, Warnings: warnings}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminUsageConsumptionSummaryResponse]{Range: adminAnalyticsRangeMeta(query.AdminAnalyticsQuery), Data: dto.AdminUsageConsumptionSummaryResponse{Total: total, Groups: dto.AdminAnalyticsList[dto.AdminUsageGroup]{Items: paged, Page: page, SortBy: string(query.SortMetric), SortOrder: query.SortOrder}, GroupBy: query.GroupBy, Other: other}, Warnings: warnings}, nil
 }
 
 func GetAdminUsageConsumptionTimeseries(query AdminAnalyticsUsageQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminUsageTimeseriesResponse], error) {
@@ -370,10 +397,10 @@ func GetAdminUsageConsumptionBreakdown(query AdminAnalyticsUsageQuery) (dto.Admi
 		return dto.AdminAnalyticsPanelResponse[dto.AdminUsageBreakdownResponse]{Warnings: warnings}, err
 	}
 	_, groups := aggregateAdminUsage(logs, query.GroupBy)
-	ordered := adminUsageOrderedGroups(groups, query.Metric, dto.AdminAnalyticsSortDesc)
+	ordered := adminUsageOrderedGroups(groups, query.SortMetric, query.SortOrder)
 	limited, other := adminUsageTopNWithOther(ordered, query.TopN)
 	paged, page := paginateAdminAnalyticsList(limited, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminUsageBreakdownResponse]{Range: adminAnalyticsRangeMeta(query.AdminAnalyticsQuery), Data: dto.AdminUsageBreakdownResponse{Groups: dto.AdminAnalyticsList[dto.AdminUsageGroup]{Items: paged, Page: page, SortBy: string(query.Metric), SortOrder: dto.AdminAnalyticsSortDesc}, GroupBy: query.GroupBy, Other: other}, Warnings: warnings}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminUsageBreakdownResponse]{Range: adminAnalyticsRangeMeta(query.AdminAnalyticsQuery), Data: dto.AdminUsageBreakdownResponse{Groups: dto.AdminAnalyticsList[dto.AdminUsageGroup]{Items: paged, Page: page, SortBy: string(query.SortMetric), SortOrder: query.SortOrder}, GroupBy: query.GroupBy, Other: other}, Warnings: warnings}, nil
 }
 
 func loadAndEnrichAdminUsageLogs(query AdminAnalyticsUsageQuery) ([]adminUsageCandidateLog, []dto.AdminAnalyticsAvailabilityWarning, error) {

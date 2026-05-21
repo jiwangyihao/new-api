@@ -155,9 +155,7 @@ export interface AdminAnalyticsUsersDrilldownList {
 
 export interface AdminAnalyticsUsersDrilldownResponse
   extends ApiResponse<{
-    data: {
-      users: AdminAnalyticsUsersDrilldownList
-    }
+    users: AdminAnalyticsUsersDrilldownList
   }> {}
 
 export interface UserFormData {

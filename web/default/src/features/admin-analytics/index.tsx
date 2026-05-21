@@ -10,9 +10,11 @@ import { SectionPageLayout } from '@/components/layout'
 import { adminAnalyticsApi } from './api'
 import { ADMIN_ANALYTICS_TABS } from './constants'
 import { formatAdminPercent, formatAdminTokens } from './lib/format'
+import { buildAdminAnalyticsDrilldown } from './lib/drilldown'
 import { buildAdminAnalyticsRequestDescriptors } from './lib/page-contract'
 import type {
   AdminAnalyticsCanonicalFilters,
+  AdminAnalyticsDrilldownTarget,
   AdminAnalyticsInvitationRewardsResponse,
   AdminAnalyticsOverviewResponse,
   AdminAnalyticsPanelResponse,
@@ -37,6 +39,7 @@ export interface AdminAnalyticsPageProps {
 
 type PanelApiResponse<TData> = ApiResponse<AdminAnalyticsPanelResponse<TData>>
 type UnknownPanelResponse = PanelApiResponse<unknown>
+type DrilldownHandler = (target: AdminAnalyticsDrilldownTarget | null | undefined) => void
 
 type UsagePanelResponses = {
   summary?: PanelApiResponse<AdminUsageConsumptionSummaryResponse>
@@ -123,6 +126,8 @@ export function AdminAnalyticsPage(
             responses={queries.map((query) => query.data)}
             loading={isLoading}
             error={hasNetworkError || hasResponseError}
+            filters={props.search}
+            onDrilldown={props.onDrilldown}
           />
         </div>
       </SectionPageLayout.Content>
@@ -283,7 +288,14 @@ function ActivePanel(props: {
   responses: Array<UnknownPanelResponse | undefined>
   loading: boolean
   error: boolean
+  filters: AdminAnalyticsCanonicalFilters
+  onDrilldown: (target: FrontendAdminAnalyticsDrilldownTarget) => void
 }): JSX.Element {
+  const handleDrilldown: DrilldownHandler = (target) => {
+    const frontendTarget = buildAdminAnalyticsDrilldown(props.filters, target)
+    if (frontendTarget) props.onDrilldown(frontendTarget)
+  }
+
   if (props.tab === 'usage') {
     const usageResponses: UsagePanelResponses = {
       summary: props.responses[0] as
@@ -302,7 +314,10 @@ function ActivePanel(props: {
         loading={props.loading}
         error={props.error}
       >
-        <UsagePanel responses={usageResponses} />
+        <UsagePanel
+          responses={usageResponses}
+          onDrilldown={handleDrilldown}
+        />
       </PanelCard>
     )
   }
@@ -313,7 +328,11 @@ function ActivePanel(props: {
       loading={props.loading}
       error={props.error}
     >
-      <SinglePanel tab={props.tab} response={response} />
+      <SinglePanel
+        tab={props.tab}
+        response={response}
+        onDrilldown={handleDrilldown}
+      />
     </PanelCard>
   )
 }
@@ -349,6 +368,7 @@ function PanelCard(props: {
 function SinglePanel(props: {
   tab: Exclude<AdminAnalyticsTab, 'usage'>
   response: UnknownPanelResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   switch (props.tab) {
     case 'plans':
@@ -357,6 +377,7 @@ function SinglePanel(props: {
           data={panelData(
             props.response as PanelApiResponse<AdminAnalyticsPlanDistributionResponse>
           )}
+          onDrilldown={props.onDrilldown}
         />
       )
     case 'quota':
@@ -365,6 +386,7 @@ function SinglePanel(props: {
           data={panelData(
             props.response as PanelApiResponse<AdminAnalyticsQuotaDistributionResponse>
           )}
+          onDrilldown={props.onDrilldown}
         />
       )
     case 'users':
@@ -373,6 +395,7 @@ function SinglePanel(props: {
           data={panelData(
             props.response as PanelApiResponse<AdminAnalyticsUserLifecycleResponse>
           )}
+          onDrilldown={props.onDrilldown}
         />
       )
     case 'conversion':
@@ -389,6 +412,7 @@ function SinglePanel(props: {
           data={panelData(
             props.response as PanelApiResponse<AdminAnalyticsInvitationRewardsResponse>
           )}
+          onDrilldown={props.onDrilldown}
         />
       )
     case 'risks':
@@ -397,6 +421,7 @@ function SinglePanel(props: {
           data={panelData(
             props.response as PanelApiResponse<AdminAnalyticsRisksResponse>
           )}
+          onDrilldown={props.onDrilldown}
         />
       )
     default:
@@ -446,6 +471,7 @@ function OverviewPanel(props: {
 
 function PlansPanel(props: {
   data: AdminAnalyticsPlanDistributionResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   if (!props.data || props.data.groups.items.length === 0) {
     return <EmptyAnalyticsPanel />
@@ -453,9 +479,11 @@ function PlansPanel(props: {
   return (
     <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
       {props.data.groups.items.map((group) => (
-        <div
+        <DrilldownCard
           key={`${group.plan_id}:${group.source}`}
-          className='rounded-md border p-3'
+          target={group.drilldown}
+          onDrilldown={props.onDrilldown}
+          className='rounded-md border p-3 text-left'
         >
           <div className='font-medium'>{group.plan_title}</div>
           <div className='text-muted-foreground text-sm'>
@@ -468,7 +496,7 @@ function PlansPanel(props: {
           <div className='text-muted-foreground text-xs'>
             {formatAdminPercent(group.usage_rate)} used
           </div>
-        </div>
+        </DrilldownCard>
       ))}
     </div>
   )
@@ -476,6 +504,7 @@ function PlansPanel(props: {
 
 function QuotaPanel(props: {
   data: AdminAnalyticsQuotaDistributionResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   if (!props.data || props.data.buckets.length === 0)
     return <EmptyAnalyticsPanel />
@@ -500,7 +529,9 @@ function QuotaPanel(props: {
           key: String(item.subscription_id),
           label: item.username,
           value: formatAdminPercent(item.usage_rate),
+          drilldown: item.drilldown,
         }))}
+        onDrilldown={props.onDrilldown}
       />
     </div>
   )
@@ -508,6 +539,7 @@ function QuotaPanel(props: {
 
 function UsersPanel(props: {
   data: AdminAnalyticsUserLifecycleResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   if (!props.data) return <EmptyAnalyticsPanel />
   return (
@@ -536,7 +568,9 @@ function UsersPanel(props: {
           key: String(item.user_id),
           label: item.username,
           value: item.active_plan_title || item.user_group,
+          drilldown: item.drilldown,
         }))}
+        onDrilldown={props.onDrilldown}
       />
     </div>
   )
@@ -570,6 +604,7 @@ function ConversionPanel(props: {
 
 function InvitationsPanel(props: {
   data: AdminAnalyticsInvitationRewardsResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   if (!props.data) return <EmptyAnalyticsPanel />
   return (
@@ -598,13 +633,18 @@ function InvitationsPanel(props: {
           key: String(item.inviter_id),
           label: item.inviter_username,
           value: formatAdminTokens(item.direct_invite_count),
+          drilldown: item.drilldown,
         }))}
+        onDrilldown={props.onDrilldown}
       />
     </div>
   )
 }
 
-function UsagePanel(props: { responses: UsagePanelResponses }): JSX.Element {
+function UsagePanel(props: {
+  responses: UsagePanelResponses
+  onDrilldown: DrilldownHandler
+}): JSX.Element {
   const summary = panelData(props.responses.summary)
   const timeseries = panelData(props.responses.timeseries)
   const breakdown = panelData(props.responses.breakdown)
@@ -636,8 +676,10 @@ function UsagePanel(props: { responses: UsagePanelResponses }): JSX.Element {
             key: group.group_key,
             label: group.group_label,
             value: formatAdminTokens(group.total_tokens),
+            drilldown: group.drilldown,
           })
         )}
+        onDrilldown={props.onDrilldown}
       />
       {timeseries ? (
         <div className='text-muted-foreground text-xs'>
@@ -650,6 +692,7 @@ function UsagePanel(props: { responses: UsagePanelResponses }): JSX.Element {
 
 function RisksPanel(props: {
   data: AdminAnalyticsRisksResponse | undefined
+  onDrilldown: DrilldownHandler
 }): JSX.Element {
   if (!props.data) return <EmptyAnalyticsPanel />
   const risks = [
@@ -662,9 +705,11 @@ function RisksPanel(props: {
   return (
     <div className='space-y-2'>
       {risks.map((risk) => (
-        <div
+        <DrilldownCard
           key={`${risk.category}:${risk.risk_key}`}
-          className='rounded-md border p-3'
+          target={risk.drilldown}
+          onDrilldown={props.onDrilldown}
+          className='rounded-md border p-3 text-left'
         >
           <div className='flex items-center justify-between gap-3'>
             <div className='font-medium'>{risk.title || risk.risk_key}</div>
@@ -674,7 +719,7 @@ function RisksPanel(props: {
             {risk.threshold}
           </div>
           <div className='mt-2 text-sm'>{risk.description}</div>
-        </div>
+        </DrilldownCard>
       ))}
     </div>
   )
@@ -707,7 +752,13 @@ function Metric(props: {
 
 function RankingList(props: {
   titleKey: string
-  items: Array<{ key: string; label: string; value: string }>
+  items: Array<{
+    key: string
+    label: string
+    value: string
+    drilldown?: AdminAnalyticsDrilldownTarget | null
+  }>
+  onDrilldown?: DrilldownHandler
 }): JSX.Element {
   const { t } = useTranslation()
   if (props.items.length === 0) return <EmptyAnalyticsPanel />
@@ -715,15 +766,51 @@ function RankingList(props: {
     <div className='space-y-2'>
       <div className='text-sm font-medium'>{t(props.titleKey)}</div>
       {props.items.slice(0, 10).map((item) => (
-        <div
+        <DrilldownCard
           key={item.key}
-          className='flex items-center justify-between gap-4 rounded-md border px-3 py-2 text-sm'
+          target={item.drilldown}
+          onDrilldown={props.onDrilldown}
+          className='flex items-center justify-between gap-4 rounded-md border px-3 py-2 text-left text-sm'
         >
           <span className='truncate'>{item.label || item.key}</span>
           <span className='text-muted-foreground shrink-0'>{item.value}</span>
-        </div>
+        </DrilldownCard>
       ))}
     </div>
+  )
+}
+
+function isSupportedDrilldownTarget(
+  target: AdminAnalyticsDrilldownTarget | null | undefined
+): target is AdminAnalyticsDrilldownTarget {
+  switch (target?.kind) {
+    case 'admin_users':
+    case 'admin_usage_logs':
+    case 'admin_subscriptions':
+    case 'admin_invitations':
+      return true
+    default:
+      return false
+  }
+}
+
+function DrilldownCard(props: {
+  target: AdminAnalyticsDrilldownTarget | null | undefined
+  onDrilldown: DrilldownHandler | undefined
+  className: string
+  children: React.ReactNode
+}): JSX.Element {
+  if (!isSupportedDrilldownTarget(props.target) || !props.onDrilldown) {
+    return <div className={props.className}>{props.children}</div>
+  }
+  return (
+    <button
+      type='button'
+      className={`${props.className} w-full cursor-pointer transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
+      onClick={() => props.onDrilldown?.(props.target)}
+    >
+      {props.children}
+    </button>
   )
 }
 

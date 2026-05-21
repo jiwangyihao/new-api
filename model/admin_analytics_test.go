@@ -96,7 +96,27 @@ func TestAdminAnalyticsNormalizesSubscriptionSourceAcrossDomains(t *testing.T) {
 	require.Equal(t, dto.AdminAnalyticsSourceAdmin, normalizeAdminSubscriptionSource("admin", "order"))
 	require.Equal(t, dto.AdminAnalyticsSourceOrder, normalizeAdminSubscriptionSource("", "order"))
 	require.Equal(t, dto.AdminAnalyticsSourceRedemption, normalizeAdminSubscriptionSource("", "redemption"))
+	require.Equal(t, dto.AdminAnalyticsSourceRedemption, normalizeAdminSubscriptionSource("redemption", ""))
+	require.Equal(t, dto.AdminAnalyticsSourceSystem, normalizeAdminSubscriptionSource("system", ""))
 	require.Equal(t, dto.AdminAnalyticsSourceUnknown, normalizeAdminSubscriptionSource("", "mystery"))
+}
+
+func TestAdminAnalyticsActiveSubscriptionFiltersUserStatusAndBusinessCode(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	basicCode := "basic"
+	proCode := "pro"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 1, Title: "Basic", Enabled: true, BusinessCode: &basicCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 2, Title: "Pro", Enabled: true, BusinessCode: &proCode}).Error)
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "enabled", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-enabled"}).Error)
+	require.NoError(t, DB.Create(&User{Id: 2, Username: "disabled", Status: common.UserStatusDisabled, Group: "default", AffCode: "aff-disabled"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 1, UserId: 1, PlanId: 1, Status: "active", StartTime: now - 60, EndTime: now + 60, TokenLimit: 100, TokenUsed: 10, GrantReason: "order"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 2, UserId: 2, PlanId: 2, Status: "active", StartTime: now - 60, EndTime: now + 60, TokenLimit: 100, TokenUsed: 10, GrantReason: "order"}).Error)
+
+	rows, err := loadAdminActiveSubscriptions(AdminAnalyticsQuery{SnapshotAt: now, Limit: 20, UserStatuses: []int{common.UserStatusEnabled}, BusinessCodes: []string{"basic"}})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, 1, rows[0].Subscription.UserId)
 }
 
 func TestAdminAnalyticsQuotaBucketsHandleZeroLimitUnlimitedAndOver100(t *testing.T) {

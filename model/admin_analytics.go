@@ -16,19 +16,39 @@ const (
 )
 
 type AdminAnalyticsQuery struct {
-	StartTimestamp int64
-	EndTimestamp   int64
-	SnapshotAt     int64
-	Granularity    dto.AdminAnalyticsGranularity
-	Limit          int
-	Offset         int
-	SortBy         string
-	SortOrder      dto.AdminAnalyticsSortOrder
-	UserGroups     []string
-	RequestGroups  []string
-	PlanIDs        []int
-	Sources        []dto.AdminAnalyticsSource
-	Statuses       []string
+	StartTimestamp             int64
+	EndTimestamp               int64
+	SnapshotAt                 int64
+	Granularity                dto.AdminAnalyticsGranularity
+	Limit                      int
+	Offset                     int
+	SortBy                     string
+	SortOrder                  dto.AdminAnalyticsSortOrder
+	UserGroups                 []string
+	RequestGroups              []string
+	PlanIDs                    []int
+	UserIDs                    []int
+	TokenIDs                   []int
+	ChannelIDs                 []int
+	Sources                    []dto.AdminAnalyticsSource
+	Statuses                   []string
+	SubscriptionStatuses       []string
+	UserStatuses               []int
+	LogStatuses                []string
+	GrantReasons               []string
+	BusinessCodes              []string
+	ResetStatuses              []string
+	Trial                      *bool
+	RewardEligible             *bool
+	HasInviter                 *bool
+	InviterID                  int
+	Username                   string
+	RegisteredStartTimestamp   int64
+	RegisteredEndTimestamp     int64
+	SubscriptionStartTimestamp int64
+	SubscriptionEndTimestamp   int64
+	NextResetStartTimestamp    int64
+	NextResetEndTimestamp      int64
 }
 
 func normalizeAdminAnalyticsQuery(query AdminAnalyticsQuery) AdminAnalyticsQuery {
@@ -64,6 +84,16 @@ func adminAnalyticsRangeMeta(query AdminAnalyticsQuery) dto.AdminAnalyticsRangeM
 
 func applyAdminActiveSubscriptionScope(tx *gorm.DB, snapshotAt int64) *gorm.DB {
 	return tx.Where("status = ? AND start_time <= ? AND end_time > ?", "active", snapshotAt, snapshotAt)
+}
+
+func adminActiveSubscriptionStatuses(query AdminAnalyticsQuery) []string {
+	if len(query.SubscriptionStatuses) > 0 {
+		return query.SubscriptionStatuses
+	}
+	if len(query.Statuses) > 0 {
+		return query.Statuses
+	}
+	return nil
 }
 
 func buildAdminAnalyticsPage(total int, limit int, offset int) dto.AdminAnalyticsPage {
@@ -102,6 +132,10 @@ func normalizeAdminSubscriptionSource(grantReason string, source string) dto.Adm
 		return dto.AdminAnalyticsSourceMonthlyInviteEntitlement
 	case SubscriptionGrantOrder:
 		return dto.AdminAnalyticsSourceOrder
+	case "redemption":
+		return dto.AdminAnalyticsSourceRedemption
+	case "system":
+		return dto.AdminAnalyticsSourceSystem
 	}
 	switch src {
 	case "":
@@ -177,9 +211,33 @@ type adminActiveSubscriptionRow struct {
 func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubscriptionRow, error) {
 	query = normalizeAdminAnalyticsQuery(query)
 	var subs []UserSubscription
-	db := applyAdminActiveSubscriptionScope(DB.Model(&UserSubscription{}), query.SnapshotAt)
+	statuses := adminActiveSubscriptionStatuses(query)
+	var db *gorm.DB
+	if len(statuses) > 0 {
+		db = DB.Model(&UserSubscription{}).Where("status IN ?", statuses)
+	} else {
+		db = applyAdminActiveSubscriptionScope(DB.Model(&UserSubscription{}), query.SnapshotAt)
+	}
 	if len(query.PlanIDs) > 0 {
 		db = db.Where("plan_id IN ?", query.PlanIDs)
+	}
+	if len(query.UserIDs) > 0 {
+		db = db.Where("user_id IN ?", query.UserIDs)
+	}
+	if len(query.GrantReasons) > 0 {
+		db = db.Where("grant_reason IN ?", query.GrantReasons)
+	}
+	if query.SubscriptionStartTimestamp > 0 {
+		db = db.Where("start_time >= ?", query.SubscriptionStartTimestamp)
+	}
+	if query.SubscriptionEndTimestamp > 0 {
+		db = db.Where("end_time <= ?", query.SubscriptionEndTimestamp)
+	}
+	if query.NextResetStartTimestamp > 0 {
+		db = db.Where("next_reset_time >= ?", query.NextResetStartTimestamp)
+	}
+	if query.NextResetEndTimestamp > 0 {
+		db = db.Where("next_reset_time <= ?", query.NextResetEndTimestamp)
 	}
 	if err := db.Find(&subs).Error; err != nil {
 		return nil, err
@@ -205,11 +263,33 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 		if len(query.UserGroups) > 0 && !adminStringInSet(user.Group, query.UserGroups) {
 			continue
 		}
+		if len(query.UserStatuses) > 0 && !adminIntInSet(user.Status, query.UserStatuses) {
+			continue
+		}
 		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
 		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
 			continue
 		}
-		rows = append(rows, adminActiveSubscriptionRow{Subscription: sub, Plan: plans[sub.PlanId], User: user, Source: source, Quota: classifyAdminSubscriptionQuota(sub.TokenLimit, sub.TokenUsed, source)})
+		plan := plans[sub.PlanId]
+		if len(query.BusinessCodes) > 0 && !adminStringInSet(subscriptionTierKey(&plan), query.BusinessCodes) {
+			continue
+		}
+		if query.Trial != nil && plan.IsTrial != *query.Trial && plan.InviteTrial != *query.Trial {
+			continue
+		}
+		if query.RewardEligible != nil && plan.RewardEligible != *query.RewardEligible {
+			continue
+		}
+		if query.HasInviter != nil && ((user.InviterId > 0) != *query.HasInviter) {
+			continue
+		}
+		if query.InviterID > 0 && user.InviterId != query.InviterID {
+			continue
+		}
+		if query.Username != "" && user.Username != query.Username {
+			continue
+		}
+		rows = append(rows, adminActiveSubscriptionRow{Subscription: sub, Plan: plan, User: user, Source: source, Quota: classifyAdminSubscriptionQuota(sub.TokenLimit, sub.TokenUsed, source)})
 	}
 	return rows, nil
 }
@@ -266,6 +346,15 @@ func adminUniquePositiveInts(values []int) []int {
 }
 
 func adminStringInSet(value string, set []string) bool {
+	for _, item := range set {
+		if value == item {
+			return true
+		}
+	}
+	return false
+}
+
+func adminIntInSet(value int, set []int) bool {
 	for _, item := range set {
 		if value == item {
 			return true
@@ -358,6 +447,9 @@ func GetAdminAnalyticsOverview(query AdminAnalyticsQuery) (dto.AdminAnalyticsPan
 
 func GetAdminAnalyticsPlanDistribution(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsPlanDistributionResponse], error) {
 	query = normalizeAdminAnalyticsQuery(query)
+	if !isAdminPlanDistributionSortBy(query.SortBy) {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsPlanDistributionResponse]{}, ErrAdminAnalyticsInvalidSortBy
+	}
 	rows, err := loadAdminActiveSubscriptions(query)
 	if err != nil {
 		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsPlanDistributionResponse]{}, err
@@ -611,6 +703,15 @@ func getAdminInvitationSummary(query AdminAnalyticsQuery) (dto.AdminAnalyticsOve
 		return dto.AdminAnalyticsOverviewInvitations{}, err
 	}
 	return dto.AdminAnalyticsOverviewInvitations{UsersWithInviter: int(usersWithInviter), InvitersCount: len(inviterIDs), DirectInviteCount: int(usersWithInviter), RewardUsers: int(rewardActive), RewardSubscriptions: int(rewardSubs), RewardActiveSubscriptionCount: int(rewardActive), RewardExpiredSubscriptionCount: int(rewardSubs - rewardActive)}, nil
+}
+
+func isAdminPlanDistributionSortBy(sortBy string) bool {
+	switch sortBy {
+	case "", "subscription_count", "user_count", "token_used", "usage_rate":
+		return true
+	default:
+		return false
+	}
 }
 
 func adminSortPlanGroups(groups []dto.AdminAnalyticsPlanGroup, sortBy string, order dto.AdminAnalyticsSortOrder) {

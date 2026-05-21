@@ -41,3 +41,18 @@ test('users target only maps whitelist search fields', () => {
   assert.equal(target?.search.inviterId, 3)
   assert.equal(target?.search.key, undefined)
 })
+
+test('users target preserves multiple user ids and omits unknown fields', () => {
+  const target = buildAdminAnalyticsDrilldown(filters, {
+    kind: 'admin_users',
+    user_ids: [2, 1],
+    token_id: 9,
+    channel_id: 3,
+    status: 'error',
+  })
+
+  assert.deepEqual(target?.search.userIds, [2, 1])
+  assert.equal(target?.search.tokenId, undefined)
+  assert.equal(target?.search.channel, undefined)
+  assert.equal(target?.search.status, undefined)
+})

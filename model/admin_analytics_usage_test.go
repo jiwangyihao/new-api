@@ -84,6 +84,38 @@ func TestAdminAnalyticsUsageEventTimeAttributionAmbiguousHistoryReturnsUnknownWa
 	require.Equal(t, "plan:unknown", res.Data.Groups.Items[0].GroupKey)
 }
 
+func TestAdminAnalyticsUsageAppliesCanonicalLogFilters(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "u1", CreatedAt: now - 10, Type: LogTypeConsume, TokenId: 10, ChannelId: 20, Group: "api", MeteredTokens: intPtrForAdminAnalyticsTest(11)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 2, Username: "u2", CreatedAt: now - 9, Type: LogTypeConsume, TokenId: 10, ChannelId: 20, Group: "api", MeteredTokens: intPtrForAdminAnalyticsTest(13)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "u1", CreatedAt: now - 8, Type: LogTypeConsume, TokenId: 11, ChannelId: 20, Group: "api", MeteredTokens: intPtrForAdminAnalyticsTest(17)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "u1", CreatedAt: now - 7, Type: LogTypeConsume, TokenId: 10, ChannelId: 21, Group: "api", MeteredTokens: intPtrForAdminAnalyticsTest(19)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "u1", CreatedAt: now - 6, Type: LogTypeError, TokenId: 10, ChannelId: 20, Group: "api"}).Error)
+
+	res, err := GetAdminUsageConsumptionSummary(AdminAnalyticsUsageQuery{AdminAnalyticsQuery: AdminAnalyticsQuery{StartTimestamp: now - 60, EndTimestamp: now, SnapshotAt: now, Limit: 20, UserIDs: []int{1}, TokenIDs: []int{10}, ChannelIDs: []int{20}, LogStatuses: []string{"success"}}, GroupBy: dto.AdminUsageGroupByUser, Metric: dto.AdminUsageMetricTotalTokens})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(11), res.Data.Total.TotalTokens)
+	require.Equal(t, 1, res.Data.Total.RequestCount)
+}
+
+func TestAdminAnalyticsUsageSortsByRequestedMetricAndOrder(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "one", CreatedAt: now - 10, Type: LogTypeConsume, MeteredTokens: intPtrForAdminAnalyticsTest(100)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 2, Username: "two", CreatedAt: now - 9, Type: LogTypeConsume, MeteredTokens: intPtrForAdminAnalyticsTest(1)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 2, Username: "two", CreatedAt: now - 8, Type: LogTypeConsume, MeteredTokens: intPtrForAdminAnalyticsTest(1)}).Error)
+
+	res, err := GetAdminUsageConsumptionSummary(AdminAnalyticsUsageQuery{AdminAnalyticsQuery: AdminAnalyticsQuery{StartTimestamp: now - 60, EndTimestamp: now, SnapshotAt: now, Limit: 20, SortOrder: dto.AdminAnalyticsSortAsc}, GroupBy: dto.AdminUsageGroupByUser, Metric: dto.AdminUsageMetricTotalTokens, SortMetric: dto.AdminUsageMetricRequestCount})
+
+	require.NoError(t, err)
+	require.Len(t, res.Data.Groups.Items, 2)
+	require.Equal(t, "1", res.Data.Groups.Items[0].GroupValue)
+	require.Equal(t, "request_count", res.Data.Groups.SortBy)
+	require.Equal(t, dto.AdminAnalyticsSortAsc, res.Data.Groups.SortOrder)
+}
+
 func TestAdminAnalyticsUsageQueryValidatesGroupByMetricAttributionAndTopN(t *testing.T) {
 	require.ErrorIs(t, ValidateAdminUsageQuery(AdminAnalyticsUsageQuery{GroupBy: "bad", Metric: dto.AdminUsageMetricTotalTokens, PlanAttribution: dto.AdminPlanAttributionCurrent}, "summary"), ErrAdminAnalyticsInvalidGroupBy)
 	require.ErrorIs(t, ValidateAdminUsageQuery(AdminAnalyticsUsageQuery{GroupBy: dto.AdminUsageGroupByUser, Metric: "bad", PlanAttribution: dto.AdminPlanAttributionCurrent}, "summary"), ErrAdminAnalyticsInvalidMetric)

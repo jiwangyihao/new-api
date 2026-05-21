@@ -116,15 +116,37 @@ func (b *adminRiskListBuckets) addInvitationRisks(query AdminAnalyticsQuery) err
 		return err
 	}
 	for _, row := range inviteRows {
-		if row.Count >= adminRiskInviteMinDirect {
-			rate := 0.0
-			if rate < adminRiskInviteQualifiedRate {
-				inviterID := row.InviterID
-				b.invitation = append(b.invitation, newAdminRisk("many_invites_low_qualified", dto.AdminAnalyticsRiskSeverityWarning, dto.AdminAnalyticsRiskCategoryInvitation, "direct invites >= 20 and qualified rate < 10%", row.Count, rate, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_invitations", InviterID: &inviterID}))
-			}
+		if row.Count < adminRiskInviteMinDirect {
+			continue
+		}
+		qualified, err := adminQualifiedInviteCount(query, row.InviterID)
+		if err != nil {
+			return err
+		}
+		rate := 0.0
+		if row.Count > 0 {
+			rate = float64(qualified) / float64(row.Count)
+		}
+		if rate < adminRiskInviteQualifiedRate {
+			inviterID := row.InviterID
+			b.invitation = append(b.invitation, newAdminRisk("many_invites_low_qualified", dto.AdminAnalyticsRiskSeverityWarning, dto.AdminAnalyticsRiskCategoryInvitation, "direct invites >= 20 and qualified rate < 10%", row.Count, rate, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_invitations", InviterID: &inviterID}))
 		}
 	}
 	return nil
+}
+
+func adminQualifiedInviteCount(query AdminAnalyticsQuery, inviterID int) (int64, error) {
+	rows, err := loadAdminActiveSubscriptions(AdminAnalyticsQuery{SnapshotAt: query.SnapshotAt, StartTimestamp: query.StartTimestamp, EndTimestamp: query.EndTimestamp, Limit: AdminAnalyticsMaxLimit, InviterID: inviterID})
+	if err != nil {
+		return 0, err
+	}
+	seen := make(map[int]struct{}, len(rows))
+	for _, row := range rows {
+		if row.Plan.RewardEligible && row.Source == dto.AdminAnalyticsSourceOrder && row.Subscription.UserId != 0 {
+			seen[row.Subscription.UserId] = struct{}{}
+		}
+	}
+	return int64(len(seen)), nil
 }
 
 func (b *adminRiskListBuckets) addUsageRisks(query AdminAnalyticsQuery) ([]dto.AdminAnalyticsAvailabilityWarning, error) {

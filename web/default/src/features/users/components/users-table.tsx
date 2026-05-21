@@ -166,7 +166,7 @@ export function UsersTable() {
           return { items: [], total: 0 }
         }
 
-        const users = result.data?.data.users
+        const users = result.data?.users
         return {
           items: users?.items.map(mapAdminAnalyticsDrilldownUser) || [],
           total: users?.page.total || 0,

@@ -53,10 +53,18 @@ export interface AdminAnalyticsSearch {
   start_timestamp: number
   end_timestamp: number
   granularity: AdminAnalyticsGranularity
+  user_ids: number[]
+  token_ids: number[]
+  channel_ids: number[]
   user_groups: string[]
   request_groups: string[]
   plan_ids: number[]
   sources: AdminAnalyticsSource[]
+  subscription_statuses: string[]
+  user_statuses: string[]
+  log_statuses: string[]
+  grant_reasons: string[]
+  business_codes: string[]
   statuses: string[]
   group_by: AdminUsageGroupBy
   metric: AdminUsageMetric

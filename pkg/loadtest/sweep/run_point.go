@@ -34,6 +34,7 @@ type RunPointOptions struct {
 	MockHash         string
 	MockStats        string
 	RequestsPerPoint int
+	RPS              float64
 	MaxRequests      int
 	RampStep         int
 	RampInterval     time.Duration
@@ -42,6 +43,7 @@ type RunPointOptions struct {
 	Transport        artifact.TransportProfile
 	Seed             artifact.SeedOutput
 	DB               *gorm.DB
+	InputBytes       int
 	StdoutLog        string
 	StderrLog        string
 }
@@ -80,7 +82,7 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 			return monitor.LoadRedisSnapshot(ctx, opts.Config.Redis.Addr)
 		},
 	}).Start()
-	summary, err := loadtestclient.RunLoad(ctx, loadtestclient.Options{BaseURL: opts.BaseURL, APIKey: opts.APIKey, TokenProfile: opts.TokenProfile, Path: opts.Path, Model: opts.Model, Scenario: opts.Scenario, Concurrency: opts.Concurrency, Duration: opts.Duration, MaxRequests: opts.MaxRequests, RampStep: opts.RampStep, RampInterval: opts.RampInterval, Timeout: opts.Timeout, Stream: true, RunContext: opts.RunContext, Transport: loadtestclient.TransportOptions{Mode: opts.Transport.Mode, MaxConnsPerHost: opts.Transport.MaxConnsPerHost, MaxIdleConns: opts.Transport.MaxIdleConns, MaxIdleConnsPerHost: opts.Transport.MaxIdleConnsPerHost}})
+	summary, err := loadtestclient.RunLoad(ctx, loadtestclient.Options{BaseURL: opts.BaseURL, APIKey: opts.APIKey, TokenProfile: opts.TokenProfile, Path: opts.Path, Model: opts.Model, Scenario: opts.Scenario, Concurrency: opts.Concurrency, RPS: opts.RPS, Duration: opts.Duration, MaxRequests: opts.MaxRequests, RampStep: opts.RampStep, RampInterval: opts.RampInterval, Timeout: opts.Timeout, InputBytes: opts.InputBytes, Stream: true, RunContext: opts.RunContext, Transport: loadtestclient.TransportOptions{Mode: opts.Transport.Mode, MaxConnsPerHost: opts.Transport.MaxConnsPerHost, MaxIdleConns: opts.Transport.MaxIdleConns, MaxIdleConnsPerHost: opts.Transport.MaxIdleConnsPerHost}})
 	if err != nil {
 		samples := resourceSamples(opts, stopSampler(), artifact.Statused{Status: "failed", Reason: err.Error()})
 		point.Gate = artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}

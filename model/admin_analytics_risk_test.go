@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -54,6 +55,25 @@ func TestAdminAnalyticsRiskManyInvitesLowQualified(t *testing.T) {
 	require.NoError(t, err)
 	_, ok := adminRiskKeySet(res.Data)["many_invites_low_qualified"]
 	require.True(t, ok, adminRiskDebugKeys(res.Data))
+}
+
+func TestAdminAnalyticsInvitationRiskUsesQualifiedInviteRate(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "qualified-inviter", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-qualified-inviter"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 1, Title: "Paid", Enabled: true, RewardEligible: true}).Error)
+	for i := 0; i < adminRiskInviteMinDirect; i++ {
+		inviteeID := 200 + i
+		require.NoError(t, DB.Create(&User{Id: inviteeID, Username: "qualified" + string(rune('a'+i)), Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-qualified" + string(rune('a'+i)), InviterId: 1}).Error)
+		require.NoError(t, DB.Create(&UserSubscription{Id: inviteeID, UserId: inviteeID, PlanId: 1, Status: "active", StartTime: now - 100, EndTime: now + 100, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+		require.NoError(t, DB.Create(&SubscriptionOrder{Id: inviteeID, UserId: inviteeID, PlanId: 1, Status: common.TopUpStatusSuccess, Money: 100, TradeNo: "qualified-order-" + strconv.Itoa(inviteeID)}).Error)
+	}
+
+	res, err := GetAdminAnalyticsRisks(AdminAnalyticsQuery{SnapshotAt: now, StartTimestamp: now - 100, EndTimestamp: now, Limit: 20})
+
+	require.NoError(t, err)
+	_, ok := adminRiskKeySet(res.Data)["many_invites_low_qualified"]
+	require.False(t, ok, adminRiskDebugKeys(res.Data))
 }
 
 func TestAdminAnalyticsRiskRewardSubscriptionNeverUsed(t *testing.T) {

@@ -153,6 +153,12 @@ func buildInvariants(in DiffInputs, chargeInv artifact.Invariant, logs artifact.
 		logInvariant("stdout_no_full_params", logs.StdoutFullParamsLines == 0, "consume stdout contains full params"),
 		{Name: "quota_data_pending_or_unavailable", Status: "passed", Reason: "quota data runtime pending counter unavailable in first-stage collector"},
 	}
+	if clientFailureInvariant := clientSideFailureInvariant(in.Summary); clientFailureInvariant != nil {
+		invariants = append(invariants, *clientFailureInvariant)
+		invariants = appendBillingInvariantsNotApplicable(invariants, in.RunContext.TokenProfile, "client-side loadtest failure")
+		invariants = append(invariants, artifact.Invariant{Name: "failure_refund_by_request", Status: "passed", Reason: "client-side loadtest failure; upstream returned HTTP 200"})
+		return invariants
+	}
 	expected := int64(in.Summary.Success) * int64(in.SeedOutput.ExpectedUsagePerSuccess.TotalTokens)
 	switch in.RunContext.TokenProfile {
 	case "subscription":
@@ -179,6 +185,41 @@ func buildInvariants(in DiffInputs, chargeInv artifact.Invariant, logs artifact.
 		invariants = append(invariants, failureRefundInvariant(in.PreConsumeRows))
 	}
 	return invariants
+}
+
+func clientSideFailureInvariant(summary artifact.Summary) *artifact.Invariant {
+	if summary.Total == 0 || summary.Errors == 0 || summary.Success != 0 {
+		return nil
+	}
+	for _, req := range summary.Requests {
+		if req.StatusCode < 200 || req.StatusCode >= 300 || req.ErrorReason == "" {
+			return nil
+		}
+	}
+	return &artifact.Invariant{Name: "client_side_loadtest_failure", Status: "failed", Reason: "all HTTP 200 requests were classified as client-side failures"}
+}
+
+func appendBillingInvariantsNotApplicable(invariants []artifact.Invariant, tokenProfile string, reason string) []artifact.Invariant {
+	switch tokenProfile {
+	case "subscription":
+		return append(invariants,
+			artifact.Invariant{Name: "subscription_token_used_matches_success_usage", Status: "passed", Reason: reason},
+			artifact.Invariant{Name: "compat_subscription_token_used_matches_success_usage", Status: "passed", Reason: "not applicable for subscription token profile"},
+			artifact.Invariant{Name: "compat_wallet_not_charged", Status: "passed", Reason: "not applicable for subscription token profile"},
+		)
+	case "compat":
+		return append(invariants,
+			artifact.Invariant{Name: "subscription_token_used_matches_success_usage", Status: "passed", Reason: "not applicable for compat token profile"},
+			artifact.Invariant{Name: "compat_subscription_token_used_matches_success_usage", Status: "passed", Reason: reason},
+			artifact.Invariant{Name: "compat_wallet_not_charged", Status: "passed", Reason: reason},
+		)
+	default:
+		return append(invariants,
+			artifact.Invariant{Name: "subscription_token_used_matches_success_usage", Status: "failed", Reason: "unknown token profile"},
+			artifact.Invariant{Name: "compat_subscription_token_used_matches_success_usage", Status: "failed", Reason: "unknown token profile"},
+			artifact.Invariant{Name: "compat_wallet_not_charged", Status: "failed", Reason: "unknown token profile"},
+		)
+	}
 }
 
 func tokenDeltaInvariant(name string, actual int64, expected int64) artifact.Invariant {

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -81,6 +82,48 @@ func TestBuildChargesByRequestJoinsOnlyNewAPIRequestID(t *testing.T) {
 	_, inv = BuildChargesByRequest(summary, wrongLogs, records)
 	if inv.Status != "failed" {
 		t.Fatalf("wrong id join should fail: %#v", inv)
+	}
+}
+
+func TestBuildDiffDoesNotTreatClientParserFailuresAsRefundableUpstreamFailures(t *testing.T) {
+	rc := testRunContext()
+	seed := artifact.SeedOutput{SchemaVersion: 1, RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}}
+	seedHash, err := artifact.HashSeedOutput(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc.SeedOutputHash = seedHash
+	seed.RunContext = rc.WithoutSeedOutputHash().WithoutMockHash()
+	before := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Business: artifact.BusinessSnapshot{Statused: artifact.Statused{Status: "ok"}, SubscriptionTokenUsed: 100}}
+	after := artifact.Snapshot{SchemaVersion: 1, RunContext: rc, Business: artifact.BusinessSnapshot{Statused: artifact.Statused{Status: "ok"}, SubscriptionTokenUsed: 128}}
+	summary := artifact.Summary{
+		RunContext: rc,
+		Total:      1,
+		Errors:     1,
+		Requests: []artifact.RequestRecord{{
+			NewAPIRequestID: "rid-1",
+			StatusCode:       http.StatusOK,
+			ErrorReason:      "missing_done",
+		}},
+	}
+	mock := artifact.MockStatsDelta{SchemaVersion: 1, RunContext: rc, Path: "c1-mock-stats-delta.json", Hash: "sha256:mockdelta", UpstreamAttemptsTotal: 1}
+	diff, inv := BuildDiff(DiffInputs{
+		Before:         before,
+		After:          after,
+		Summary:        summary,
+		SeedOutput:     seed,
+		MockDelta:      mock,
+		RunContext:     rc,
+		ConsumeLogRows: []ConsumeLogRow{{RequestID: "rid-1", Quota: 28}},
+		PreConsumeRows: []PreConsumeRow{{RequestID: "rid-1", Status: "consumed", PreConsumed: 28}},
+		BusinessBefore: before.Business,
+		BusinessAfter:  after.Business,
+	})
+	if inv.Status != "passed" {
+		t.Fatalf("context invariant failed: %#v", inv)
+	}
+	if diff.BusinessDelta.Status != "failed" || !strings.Contains(diff.BusinessDelta.Reason, "all HTTP 200 requests were classified as client-side failures") {
+		t.Fatalf("client parser failures must be isolated from billing mismatches: %#v", diff.BusinessDelta)
 	}
 }
 

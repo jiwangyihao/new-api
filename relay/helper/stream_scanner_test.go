@@ -453,6 +453,23 @@ func TestStreamScannerHandler_StreamStatus_DoneReason(t *testing.T) {
 	assert.False(t, info.StreamStatus.HasErrors())
 }
 
+func TestStreamScannerHandler_ForwardsDoneToDownstream(t *testing.T) {
+	t.Parallel()
+
+	body := buildSSEBody(2)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		_ = StringData(c, data)
+	})
+
+	assert.Contains(t, recorder.Body.String(), "data: [DONE]\n\n")
+}
+
 func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 	t.Parallel()
 
@@ -466,7 +483,7 @@ func TestStreamScannerHandler_StreamStatus_EOFWithoutDone(t *testing.T) {
 
 	require.NotNil(t, info.StreamStatus)
 	assert.Equal(t, relaycommon.StreamEndReasonEOF, info.StreamStatus.EndReason)
-	assert.True(t, info.StreamStatus.IsNormalEnd())
+	assert.False(t, info.StreamStatus.IsNormalEnd())
 }
 
 func TestStreamScannerHandler_StreamStatus_HandlerStop(t *testing.T) {

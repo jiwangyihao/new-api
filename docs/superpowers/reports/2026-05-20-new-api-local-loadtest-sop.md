@@ -6,6 +6,7 @@
 2. 若本机没有隔离 PostgreSQL 或 Redis，不运行 smoke，不伪造通过；在报告中记录：`未运行，原因：缺少本地 PostgreSQL/Redis 前置条件`。
 3. 不使用生产 `.env`，运行目录必须是 `.loadtest/runtime/new-api` 且不得包含 `.env`。
 
+4. `config.loadtest.yaml` 的 `client.max_idle_conns` / `client.max_idle_conns_per_host` 必须保持较小的 loopback 本机安全值；不得为了“压满”机器把 relay/client 连接池改成无界或数百上千级别，否则会耗尽 Windows 临时 TCP 端口。
 ## S0/S1 smoke 命令顺序
 
 S1 smoke 必须覆盖以下 4 个入口/用户组合，任一组合失败或未运行，报告必须标为失败/未运行，不得用其他组合结果替代：

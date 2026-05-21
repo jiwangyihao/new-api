@@ -32,6 +32,9 @@ func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	assertOptionValue(t, db, "RetryTimes", "0")
 	assertOptionValue(t, db, "AutomaticRetryStatusCodes", "")
 	assertOptionValue(t, db, "perf_metrics_setting.enabled", "true")
+	assertOptionValue(t, db, "performance_setting.monitor_enabled", "false")
+	assertOptionValue(t, db, "AutomaticDisableChannelEnabled", "false")
+	assertOptionValue(t, db, "AutomaticEnableChannelEnabled", "false")
 	assertSubscriptionConcurrencyPositive(t, db)
 }
 

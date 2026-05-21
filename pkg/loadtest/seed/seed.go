@@ -201,6 +201,9 @@ func ensureOptions(tx *gorm.DB) error {
 		"RetryTimes":                           "0",
 		"AutomaticRetryStatusCodes":            "",
 		"SubscriptionConcurrencyQueueCapacity": "1000",
+		"performance_setting.monitor_enabled":  "false",
+		"AutomaticDisableChannelEnabled":       "false",
+		"AutomaticEnableChannelEnabled":        "false",
 	}
 	for key, value := range options {
 		opt := model.Option{Key: key, Value: value}

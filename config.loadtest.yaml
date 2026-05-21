@@ -22,6 +22,9 @@ loadtest:
   token_db_key_subscription: "loadtestsub"
   token_db_key_compat: "loadtestcompat"
   pid_file: ".loadtest/new-api.pid"
+client:
+  max_idle_conns: 64
+  max_idle_conns_per_host: 16
 mock_profiles:
   s1-smoke:
     first_token_delay: 50ms

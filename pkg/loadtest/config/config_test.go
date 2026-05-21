@@ -17,13 +17,19 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := file.NewAPIEnv()
-	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "BATCH_UPDATE_ENABLED", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes"} {
+	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "BATCH_UPDATE_ENABLED", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
 		if _, ok := env[key]; !ok {
 			t.Fatalf("missing env %s", key)
 		}
 	}
 	if env["RetryTimes"] != "0" || env["AutomaticRetryStatusCodes"] != "" {
 		t.Fatalf("retry not disabled: %#v", env)
+	}
+	if env["MEMORY_CACHE_ENABLED"] != "true" {
+		t.Fatalf("loadtest runtime guard not set: %#v", env)
+	}
+	if env["RELAY_MAX_IDLE_CONNS"] != "64" || env["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
+		t.Fatalf("unsafe relay connection limits: %#v", env)
 	}
 	rc, err := file.BaseRunContext("abcdef0")
 	if err != nil {
@@ -70,6 +76,8 @@ func TestConfigRejectsUnsafeValues(t *testing.T) {
 		func(f *File) { f.Retry.RetryTimes = 1 },
 		func(f *File) { f.Retry.AutomaticRetryStatusCodes = []int{429} },
 		func(f *File) { f.LogPostgres.DSN = "postgresql://new_api:secret@example.com:5432/new_api_loadtest" },
+		func(f *File) { f.Client.MaxIdleConns = 129 },
+		func(f *File) { f.Client.MaxIdleConnsPerHost = 65 },
 	} {
 		f := validFile()
 		mutate(&f)
@@ -137,6 +145,9 @@ loadtest:
   token_db_key_subscription: "loadtestsub"
   token_db_key_compat: "loadtestcompat"
   pid_file: ".loadtest/new-api.pid"
+client:
+  max_idle_conns: 64
+  max_idle_conns_per_host: 16
 mock_profiles:
   s1-smoke:
     first_token_delay: 50ms
@@ -277,6 +288,10 @@ func validFile() File {
 		Thresholds: ThresholdsConfig{
 			LatencyP95RegressionRatio: 1.10,
 			TTFTP95RegressionRatio:    1.10,
+		},
+		Client: ClientConfig{
+			MaxIdleConns:        64,
+			MaxIdleConnsPerHost: 16,
 		},
 		MockProfiles: profiles,
 	}

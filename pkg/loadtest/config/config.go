@@ -50,6 +50,10 @@ var EnvKeys = []string{
 	"SYNC_UPSTREAM_BASE",
 	"RetryTimes",
 	"AutomaticRetryStatusCodes",
+	"MEMORY_CACHE_ENABLED",
+
+	"RELAY_MAX_IDLE_CONNS",
+	"RELAY_MAX_IDLE_CONNS_PER_HOST",
 }
 
 type File struct {
@@ -61,6 +65,7 @@ type File struct {
 	Loadtest     LoadtestConfig         `json:"loadtest" yaml:"loadtest"`
 	Retry        RetryConfig            `json:"retry" yaml:"retry"`
 	Thresholds   ThresholdsConfig       `json:"thresholds" yaml:"thresholds"`
+	Client       ClientConfig           `json:"client" yaml:"client"`
 	MockProfiles map[string]MockProfile `json:"mock_profiles" yaml:"mock_profiles"`
 }
 
@@ -99,6 +104,11 @@ type LoadtestConfig struct {
 type RetryConfig struct {
 	RetryTimes                int   `json:"retry_times" yaml:"retry_times"`
 	AutomaticRetryStatusCodes []int `json:"automatic_retry_status_codes" yaml:"automatic_retry_status_codes"`
+}
+
+type ClientConfig struct {
+	MaxIdleConns        int `json:"max_idle_conns" yaml:"max_idle_conns"`
+	MaxIdleConnsPerHost int `json:"max_idle_conns_per_host" yaml:"max_idle_conns_per_host"`
 }
 
 type ThresholdsConfig struct {
@@ -212,6 +222,12 @@ func (f File) Validate() error {
 	if len(f.Retry.AutomaticRetryStatusCodes) != 0 {
 		return fmt.Errorf("retry.automatic_retry_status_codes must be empty")
 	}
+	if f.Client.MaxIdleConns <= 0 || f.Client.MaxIdleConnsPerHost <= 0 {
+		return fmt.Errorf("client connection limits must be positive")
+	}
+	if f.Client.MaxIdleConns > 128 || f.Client.MaxIdleConnsPerHost > 64 {
+		return fmt.Errorf("client connection limits are too high for local loopback loadtest")
+	}
 	if err := validateMockProfiles(f.MockProfiles); err != nil {
 		return err
 	}
@@ -248,6 +264,9 @@ func (f File) NewAPIEnv() map[string]string {
 		"SYNC_UPSTREAM_BASE":                         "",
 		"RetryTimes":                                 "0",
 		"AutomaticRetryStatusCodes":                  "",
+		"MEMORY_CACHE_ENABLED":                       "true",
+		"RELAY_MAX_IDLE_CONNS":                       strconv.Itoa(f.Client.MaxIdleConns),
+		"RELAY_MAX_IDLE_CONNS_PER_HOST":              strconv.Itoa(f.Client.MaxIdleConnsPerHost),
 	}
 }
 
@@ -366,6 +385,12 @@ func (f File) withDefaults() File {
 	}
 	if f.Server.ProfileMutexFraction == 0 {
 		f.Server.ProfileMutexFraction = 5
+	}
+	if f.Client.MaxIdleConns == 0 {
+		f.Client.MaxIdleConns = 64
+	}
+	if f.Client.MaxIdleConnsPerHost == 0 {
+		f.Client.MaxIdleConnsPerHost = 16
 	}
 	return f
 }

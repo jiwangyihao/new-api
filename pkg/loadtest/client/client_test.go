@@ -6,6 +6,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
 )
 
 func TestParseResponsesSSEExtractsUsageAndDone(t *testing.T) {
@@ -83,6 +86,55 @@ func TestErrorSummaryRecordsRequestIDStatusAndReason(t *testing.T) {
 	rec := summary.Requests[0]
 	if rec.NewAPIRequestID != "rid-error" || rec.UpstreamRequestID != "upstream-error" || rec.StatusCode != http.StatusTooManyRequests || rec.ErrorReason != "status_non_2xx" || rec.Success {
 		t.Fatalf("bad error record: %#v", rec)
+	}
+}
+
+func TestRunLoadUsesBoundedTransportWhenClientNotInjected(t *testing.T) {
+	var maxObserved int
+	active := make(chan struct{}, 20)
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		active <- struct{}{}
+		if n := len(active); n > maxObserved {
+			maxObserved = n
+		}
+		<-done
+		<-active
+		w.Header().Set("X-Oneapi-Request-Id", "rid")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":11,\"output_tokens\":17,\"total_tokens\":28}}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	loadDone := make(chan struct{})
+	var summary artifact.Summary
+	var runErr error
+	go func() {
+		defer close(loadDone)
+		summary, runErr = RunLoad(context.Background(), Options{BaseURL: srv.URL, APIKey: "sk-loadtestsub", TokenProfile: "subscription", Path: DefaultPath, Model: DefaultModel, Scenario: "test", Concurrency: 20, MaxRequests: 20, Timeout: 5 * time.Second, Stream: true})
+	}()
+	started := make(chan struct{})
+	go func() {
+		for len(active) < 4 {
+			time.Sleep(10 * time.Millisecond)
+		}
+		close(started)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("load did not reach the bounded connection limit")
+	}
+	close(done)
+	<-loadDone
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if summary.Success != 20 {
+		t.Fatalf("summary success=%d total=%d errors=%#v", summary.Success, summary.Total, summary.ErrorReasons)
+	}
+	if maxObserved > 4 {
+		t.Fatalf("unbounded client opened %d simultaneous sockets", maxObserved)
 	}
 }
 

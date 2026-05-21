@@ -27,6 +27,8 @@ const (
 	DefaultModel = "gpt-5.5"
 )
 
+const defaultMaxClientConnsPerHost = 4
+
 var tokenProfiles = map[string]string{
 	"sk-loadtestsub":     "subscription",
 	"sk-loadtestcompat":  "compat",
@@ -359,8 +361,13 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 	}
 
 	httpClient := opts.HTTPClient
+	var ownedTransport *http.Transport
 	if httpClient == nil {
-		httpClient = &http.Client{}
+		ownedTransport = newBoundedTransport()
+		httpClient = &http.Client{Transport: ownedTransport}
+	}
+	if ownedTransport != nil {
+		defer ownedTransport.CloseIdleConnections()
 	}
 
 	runCtx, cancel := context.WithCancel(ctx)
@@ -678,6 +685,15 @@ func beginRequest(state *requestState) {
 
 func endRequest(state *requestState) {
 	state.inFlight.Add(-1)
+}
+
+func newBoundedTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = defaultMaxClientConnsPerHost
+	transport.MaxIdleConnsPerHost = defaultMaxClientConnsPerHost
+	transport.MaxConnsPerHost = defaultMaxClientConnsPerHost
+	transport.IdleConnTimeout = 5 * time.Second
+	return transport
 }
 
 func buildRequestBody(opts Options) ([]byte, error) {

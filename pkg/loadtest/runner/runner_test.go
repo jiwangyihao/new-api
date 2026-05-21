@@ -38,7 +38,7 @@ func TestBuildCommandUsesCleanAllowlistEnvironment(t *testing.T) {
 			t.Fatalf("leaked hostile env %q in %s", forbidden, joined)
 		}
 	}
-	for _, required := range []string{"CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED=false", "CHANNEL_UPDATE_FREQUENCY=0", "UPDATE_TASK=false", "CHANNEL_TEST_FREQUENCY=0", "PYROSCOPE_URL=", "SYNC_UPSTREAM_BASE=", "RetryTimes=0", "AutomaticRetryStatusCodes="} {
+	for _, required := range []string{"CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED=false", "CHANNEL_UPDATE_FREQUENCY=0", "UPDATE_TASK=false", "CHANNEL_TEST_FREQUENCY=0", "PYROSCOPE_URL=", "SYNC_UPSTREAM_BASE=", "RetryTimes=0", "AutomaticRetryStatusCodes=", "MEMORY_CACHE_ENABLED=true", "RELAY_MAX_IDLE_CONNS=64", "RELAY_MAX_IDLE_CONNS_PER_HOST=16"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing safe env %q in %s", required, joined)
 		}
@@ -58,5 +58,5 @@ func TestBuildCommandRejectsUnsafeEnvAndDotEnv(t *testing.T) {
 }
 
 func safeEnv() map[string]string {
-	return map[string]string{"HOST": "127.0.0.1", "PORT": "13080", "PPROF_ADDR": "127.0.0.1:8005", "SQL_DSN": "postgresql://new_api_loadtest:loadtest@127.0.0.1:15432/new_api_loadtest?sslmode=disable", "LOG_SQL_DSN": "", "REDIS_CONN_STRING": "redis://127.0.0.1:16379/0", "ENABLE_PPROF": "true", "LOADTEST_RUNTIME_STATS_ENABLED": "true", "LOADTEST_PROFILE_BLOCK_RATE": "1000", "LOADTEST_PROFILE_MUTEX_FRACTION": "5", "GOMAXPROCS": "2", "GOGC": "100", "BATCH_UPDATE_ENABLED": "true", "SQL_MAX_OPEN_CONNS": "10", "SQL_MAX_IDLE_CONNS": "5", "SQL_MAX_LIFETIME": "60", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED": "false", "CHANNEL_UPDATE_FREQUENCY": "0", "UPDATE_TASK": "false", "CHANNEL_TEST_FREQUENCY": "0", "PYROSCOPE_URL": "", "SYNC_UPSTREAM_BASE": "", "RetryTimes": "0", "AutomaticRetryStatusCodes": ""}
+	return map[string]string{"HOST": "127.0.0.1", "PORT": "13080", "PPROF_ADDR": "127.0.0.1:8005", "SQL_DSN": "postgresql://new_api_loadtest:loadtest@127.0.0.1:15432/new_api_loadtest?sslmode=disable", "LOG_SQL_DSN": "", "REDIS_CONN_STRING": "redis://127.0.0.1:16379/0", "ENABLE_PPROF": "true", "LOADTEST_RUNTIME_STATS_ENABLED": "true", "LOADTEST_PROFILE_BLOCK_RATE": "1000", "LOADTEST_PROFILE_MUTEX_FRACTION": "5", "GOMAXPROCS": "2", "GOGC": "100", "BATCH_UPDATE_ENABLED": "true", "SQL_MAX_OPEN_CONNS": "10", "SQL_MAX_IDLE_CONNS": "5", "SQL_MAX_LIFETIME": "60", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED": "false", "CHANNEL_UPDATE_FREQUENCY": "0", "UPDATE_TASK": "false", "CHANNEL_TEST_FREQUENCY": "0", "PYROSCOPE_URL": "", "SYNC_UPSTREAM_BASE": "", "RetryTimes": "0", "AutomaticRetryStatusCodes": "", "MEMORY_CACHE_ENABLED": "true", "RELAY_MAX_IDLE_CONNS": "64", "RELAY_MAX_IDLE_CONNS_PER_HOST": "16"}
 }

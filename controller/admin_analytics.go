@@ -20,7 +20,7 @@ const (
 )
 
 var (
-	adminAnalyticsNoSortBy = map[string]string{}
+	adminAnalyticsNoSortBy   = map[string]string{}
 	adminAnalyticsPlanSortBy = map[string]string{
 		"user_count":          "user_count",
 		"subscription_count":  "subscription_count",

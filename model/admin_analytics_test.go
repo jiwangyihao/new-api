@@ -119,6 +119,23 @@ func TestAdminAnalyticsActiveSubscriptionFiltersUserStatusAndBusinessCode(t *tes
 	require.Equal(t, 1, rows[0].Subscription.UserId)
 }
 
+
+func TestAdminAnalyticsActiveSubscriptionFiltersResetStatus(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 1, Title: "Basic", Enabled: true}).Error)
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "due", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-due"}).Error)
+	require.NoError(t, DB.Create(&User{Id: 2, Username: "not-due", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-not-due"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 1, UserId: 1, PlanId: 1, Status: "active", StartTime: now - 60, EndTime: now + 60, TokenLimit: 100, TokenUsed: 10, GrantReason: "order", NextResetTime: now - 10}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 2, UserId: 2, PlanId: 1, Status: "active", StartTime: now - 60, EndTime: now + 60, TokenLimit: 100, TokenUsed: 10, GrantReason: "order", NextResetTime: now + 10}).Error)
+
+	rows, err := loadAdminActiveSubscriptions(AdminAnalyticsQuery{SnapshotAt: now, Limit: 20, ResetStatuses: []string{"due"}})
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, 1, rows[0].Subscription.UserId)
+}
+
 func TestAdminAnalyticsQuotaBucketsHandleZeroLimitUnlimitedAndOver100(t *testing.T) {
 	trial := classifyAdminSubscriptionQuota(0, 0, dto.AdminAnalyticsSourceTrialCode)
 	require.True(t, trial.TokenUnlimited)

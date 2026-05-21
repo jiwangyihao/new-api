@@ -266,6 +266,12 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 		if len(query.UserStatuses) > 0 && !adminIntInSet(user.Status, query.UserStatuses) {
 			continue
 		}
+		if query.RegisteredStartTimestamp > 0 && user.CreatedAt < query.RegisteredStartTimestamp {
+			continue
+		}
+		if query.RegisteredEndTimestamp > 0 && user.CreatedAt > query.RegisteredEndTimestamp {
+			continue
+		}
 		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
 		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
 			continue
@@ -280,6 +286,9 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 		if query.RewardEligible != nil && plan.RewardEligible != *query.RewardEligible {
 			continue
 		}
+		if len(query.ResetStatuses) > 0 && !adminStringInSet(adminResetStatus(sub.NextResetTime, query.SnapshotAt), query.ResetStatuses) {
+			continue
+		}
 		if query.HasInviter != nil && ((user.InviterId > 0) != *query.HasInviter) {
 			continue
 		}
@@ -292,6 +301,16 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 		rows = append(rows, adminActiveSubscriptionRow{Subscription: sub, Plan: plan, User: user, Source: source, Quota: classifyAdminSubscriptionQuota(sub.TokenLimit, sub.TokenUsed, source)})
 	}
 	return rows, nil
+}
+
+func adminResetStatus(nextResetTime int64, snapshotAt int64) string {
+	if nextResetTime <= 0 {
+		return "none"
+	}
+	if nextResetTime <= snapshotAt {
+		return "due"
+	}
+	return "not_due"
 }
 
 func adminUsersByID(userIDs []int) (map[int]User, error) {

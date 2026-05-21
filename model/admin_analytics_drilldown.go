@@ -91,7 +91,9 @@ func GetAdminAnalyticsDrilldownSubscriptions(query AdminAnalyticsQuery, filter A
 		}
 		items = append(items, dto.AdminAnalyticsDrilldownSubscriptionItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate})
 	}
-	sort.Slice(items, func(i, j int) bool { return adminDrilldownSubscriptionLess(items[i], items[j], query.SortBy, query.SortOrder) })
+	sort.Slice(items, func(i, j int) bool {
+		return adminDrilldownSubscriptionLess(items[i], items[j], query.SortBy, query.SortOrder)
+	})
 	paged, page := paginateAdminAnalyticsList(items, query.Limit, query.Offset)
 	data := dto.AdminAnalyticsDrilldownSubscriptionsResponse{Subscriptions: dto.AdminAnalyticsList[dto.AdminAnalyticsDrilldownSubscriptionItem]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil
@@ -120,7 +122,9 @@ func GetAdminAnalyticsDrilldownInvitations(query AdminAnalyticsQuery, filter Adm
 		invitee := invitees[i]
 		items = append(items, dto.AdminAnalyticsDrilldownInvitationItem{InviterID: invitee.InviterId, InviterUsername: inviters[invitee.InviterId].Username, InviteeID: invitee.Id, InviteeUsername: invitee.Username, InviteeStatus: invitee.Status, CreatedAt: invitee.CreatedAt})
 	}
-	sort.Slice(items, func(i, j int) bool { return adminDrilldownInvitationLess(items[i], items[j], query.SortBy, query.SortOrder) })
+	sort.Slice(items, func(i, j int) bool {
+		return adminDrilldownInvitationLess(items[i], items[j], query.SortBy, query.SortOrder)
+	})
 	paged, page := paginateAdminAnalyticsList(items, query.Limit, query.Offset)
 	data := dto.AdminAnalyticsDrilldownInvitationsResponse{Invitations: dto.AdminAnalyticsList[dto.AdminAnalyticsDrilldownInvitationItem]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownInvitationsResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil

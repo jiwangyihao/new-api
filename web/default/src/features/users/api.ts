@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { normalizeAdminAnalyticsUsersDrilldownResponse } from './lib/admin-analytics-drilldown'
 import type {
   User,
   GetUsersParams,
@@ -24,6 +25,7 @@ import type {
   SearchUsersParams,
   AdminAnalyticsUsersDrilldownParams,
   AdminAnalyticsUsersDrilldownResponse,
+  AdminAnalyticsUsersDrilldownEnvelopeResponse,
   UserFormData,
   ManageUserAction,
   ManageUserQuotaPayload,
@@ -99,10 +101,10 @@ export async function getAdminAnalyticsUsersDrilldown(
   appendNumberParam(queryParams, 'offset', params.offset)
   appendStringParam(queryParams, 'sort_order', params.sort_order)
 
-  const res = await api.get<AdminAnalyticsUsersDrilldownResponse>(
+  const res = await api.get<AdminAnalyticsUsersDrilldownEnvelopeResponse>(
     `/api/admin-analytics/drilldown/users?${queryParams.toString()}`
   )
-  return res.data
+  return normalizeAdminAnalyticsUsersDrilldownResponse(res.data)
 }
 
 /**

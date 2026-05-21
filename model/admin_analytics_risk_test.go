@@ -76,6 +76,24 @@ func TestAdminAnalyticsInvitationRiskUsesQualifiedInviteRate(t *testing.T) {
 	require.False(t, ok, adminRiskDebugKeys(res.Data))
 }
 
+func TestAdminAnalyticsInvitationRiskRequiresSuccessfulPaidOrder(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, DB.Create(&User{Id: 1, Username: "unpaid-inviter", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-unpaid-inviter"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 1, Title: "Paid", Enabled: true, RewardEligible: true}).Error)
+	for i := 0; i < adminRiskInviteMinDirect; i++ {
+		inviteeID := 300 + i
+		require.NoError(t, DB.Create(&User{Id: inviteeID, Username: "unpaid" + string(rune('a'+i)), Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-unpaid" + string(rune('a'+i)), InviterId: 1}).Error)
+		require.NoError(t, DB.Create(&UserSubscription{Id: inviteeID, UserId: inviteeID, PlanId: 1, Status: "active", StartTime: now - 100, EndTime: now + 100, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+	}
+
+	res, err := GetAdminAnalyticsRisks(AdminAnalyticsQuery{SnapshotAt: now, StartTimestamp: now - 100, EndTimestamp: now, Limit: 20})
+
+	require.NoError(t, err)
+	_, ok := adminRiskKeySet(res.Data)["many_invites_low_qualified"]
+	require.True(t, ok, adminRiskDebugKeys(res.Data))
+}
+
 func TestAdminAnalyticsRiskRewardSubscriptionNeverUsed(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	now := time.Now().Unix()

@@ -157,6 +157,21 @@ export interface AdminAnalyticsUsersDrilldownResponse extends ApiResponse<{
   users: AdminAnalyticsUsersDrilldownList
 }> {}
 
+export interface AdminAnalyticsUsersDrilldownEnvelopeResponse extends ApiResponse<{
+  range: {
+    start_timestamp: number
+    end_timestamp: number
+    snapshot_at: number
+  }
+  data: {
+    users: AdminAnalyticsUsersDrilldownList
+  }
+  warnings?: Array<{
+    section: string
+    reason: string
+    message: string
+  }>
+}> {}
 export interface UserFormData {
   username: string
   display_name: string

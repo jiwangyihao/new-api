@@ -6,6 +6,8 @@ import (
 	"sort"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"github.com/QuantumNous/new-api/dto"
 )
 
@@ -136,17 +138,19 @@ func (b *adminRiskListBuckets) addInvitationRisks(query AdminAnalyticsQuery) err
 }
 
 func adminQualifiedInviteCount(query AdminAnalyticsQuery, inviterID int) (int64, error) {
-	rows, err := loadAdminActiveSubscriptions(AdminAnalyticsQuery{SnapshotAt: query.SnapshotAt, StartTimestamp: query.StartTimestamp, EndTimestamp: query.EndTimestamp, Limit: AdminAnalyticsMaxLimit, InviterID: inviterID})
-	if err != nil {
-		return 0, err
-	}
-	seen := make(map[int]struct{}, len(rows))
-	for _, row := range rows {
-		if row.Plan.RewardEligible && row.Source == dto.AdminAnalyticsSourceOrder && row.Subscription.UserId != 0 {
-			seen[row.Subscription.UserId] = struct{}{}
-		}
-	}
-	return int64(len(seen)), nil
+	var count int64
+	err := DB.Model(&User{}).
+		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
+		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
+		Where("users.inviter_id = ?", inviterID).
+		Where("user_subscriptions.status = ?", "active").
+		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", query.SnapshotAt, query.SnapshotAt).
+		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", SubscriptionGrantOrder, "", SubscriptionGrantOrder).
+		Where("subscription_plans.reward_eligible = ?", true).
+		Where("EXISTS (SELECT 1 FROM subscription_orders WHERE subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id AND subscription_orders.status = ? AND subscription_orders.money > ?)", common.TopUpStatusSuccess, 0).
+		Distinct("users.id").
+		Count(&count).Error
+	return count, err
 }
 
 func (b *adminRiskListBuckets) addUsageRisks(query AdminAnalyticsQuery) ([]dto.AdminAnalyticsAvailabilityWarning, error) {

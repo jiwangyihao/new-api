@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := file.NewAPIEnv()
-	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "BATCH_UPDATE_ENABLED", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
+	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "BATCH_UPDATE_ENABLED", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
 		if _, ok := env[key]; !ok {
 			t.Fatalf("missing env %s", key)
 		}
@@ -66,24 +67,163 @@ func TestDeterministicErrorCountsMatchesStatusHelper(t *testing.T) {
 }
 
 func TestConfigRejectsUnsafeValues(t *testing.T) {
-	for _, mutate := range []func(*File){
-		func(f *File) { f.Postgres.DSN = "host=127.0.0.1 dbname=new_api_loadtest" },
-		func(f *File) { f.Redis.Addr = "redis://10.0.0.2:6379/0" },
-		func(f *File) { f.MockUpstream.BaseURL = "https://api.openai.com" },
-		func(f *File) { f.Server.Host = "0.0.0.0" },
-		func(f *File) { f.Server.PprofAddr = "0.0.0.0:8005" },
-		func(f *File) { f.Loadtest.SubscriptionKey = "sk-loadtest-subscription" },
-		func(f *File) { f.Retry.RetryTimes = 1 },
-		func(f *File) { f.Retry.AutomaticRetryStatusCodes = []int{429} },
-		func(f *File) { f.LogPostgres.DSN = "postgresql://new_api:secret@example.com:5432/new_api_loadtest" },
-		func(f *File) { f.Client.MaxIdleConns = 129 },
-		func(f *File) { f.Client.MaxIdleConnsPerHost = 65 },
+	secretDSN := "postgresql://new_api:supersecret@example.com:5432/new_api_loadtest"
+	secretKey := "sk-realproductionkey"
+	for _, tc := range []struct {
+		name   string
+		mutate func(*File)
+	}{
+		{"postgres key-value dsn", func(f *File) { f.Postgres.DSN = "host=127.0.0.1 dbname=new_api_loadtest" }},
+		{"postgres default port", func(f *File) {
+			f.Postgres.DSN = "postgresql://new_api_loadtest:loadtest@127.0.0.1:5432/new_api_loadtest?sslmode=disable"
+		}},
+		{"postgres non-loadtest user", func(f *File) {
+			f.Postgres.DSN = "postgresql://new_api:loadtest@127.0.0.1:15432/new_api_loadtest?sslmode=disable"
+		}},
+		{"redis non-loopback", func(f *File) { f.Redis.Addr = "redis://10.0.0.2:16379/0" }},
+		{"redis default port", func(f *File) { f.Redis.Addr = "redis://127.0.0.1:6379/0" }},
+		{"mock upstream real url", func(f *File) { f.MockUpstream.BaseURL = "https://api.openai.com" }},
+		{"mock upstream non-loopback", func(f *File) { f.MockUpstream.BaseURL = "http://192.0.2.10:19080" }},
+		{"server wildcard", func(f *File) { f.Server.Host = "0.0.0.0" }},
+		{"pprof wildcard", func(f *File) { f.Server.PprofAddr = "0.0.0.0:8005" }},
+		{"subscription key", func(f *File) { f.Loadtest.SubscriptionKey = secretKey }},
+		{"compat key", func(f *File) { f.Loadtest.CompatKey = secretKey }},
+		{"invalid key", func(f *File) { f.Loadtest.InvalidKey = secretKey }},
+		{"retry", func(f *File) { f.Retry.RetryTimes = 1 }},
+		{"retry statuses", func(f *File) { f.Retry.AutomaticRetryStatusCodes = []int{429} }},
+		{"log postgres", func(f *File) { f.LogPostgres.DSN = secretDSN }},
+		{"top client max idle", func(f *File) { f.Client.MaxIdleConns = 129 }},
+		{"top client max per host", func(f *File) { f.Client.MaxIdleConnsPerHost = 65 }},
 	} {
 		f := validFile()
-		mutate(&f)
-		if err := f.Validate(); err == nil {
-			t.Fatalf("unsafe config accepted: %#v", f)
+		tc.mutate(&f)
+		err := f.Validate()
+		if err == nil {
+			t.Fatalf("unsafe config accepted for %s: %#v", tc.name, f)
 		}
+		msg := err.Error()
+		if strings.Contains(msg, "supersecret") || strings.Contains(msg, secretKey) || strings.Contains(msg, "example.com") || strings.Contains(msg, "api.openai.com") {
+			t.Fatalf("%s leaked secret in error: %v", tc.name, err)
+		}
+	}
+}
+
+func TestBenchmarkProfileAllowsExplicitHighCapacityConnectionLimits(t *testing.T) {
+	f := validFile()
+	f.Profiles = map[string]ProfileConfig{"benchmark": benchmarkProfileConfig()}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.Profile("benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Transport.MaxConnsPerHost != 1024 || p.Transport.MaxIdleConns != 1024 || p.Transport.MaxIdleConnsPerHost != 1024 {
+		t.Fatalf("benchmark transport limits = %#v", p.Transport)
+	}
+	if p.Relay.MaxIdleConns != 1024 || p.Relay.MaxIdleConnsPerHost != 1024 || p.ServerLimits.GOMEMLIMIT != "384MiB" {
+		t.Fatalf("benchmark relay/server limits = %#v %#v", p.Relay, p.ServerLimits)
+	}
+}
+
+func TestDefaultClientLimitsRemainSafeWithoutBenchmarkProfile(t *testing.T) {
+	f := validFile()
+	f.Client.MaxIdleConns = 129
+	if err := f.Validate(); err == nil {
+		t.Fatal("unsafe top-level client limit accepted")
+	}
+	f = validFile()
+	f.Profiles = nil
+	if _, err := f.Profile("benchmark"); err == nil {
+		t.Fatal("benchmark profile without explicit config accepted")
+	}
+}
+
+func TestNewAPIEnvForProfileOnlyRaisesRelayPoolForBenchmark(t *testing.T) {
+	f := validFile()
+	f.Profiles = map[string]ProfileConfig{"benchmark": benchmarkProfileConfig()}
+	base := f.NewAPIEnv()
+	profileEnv, err := f.NewAPIEnvForProfile("benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base["RELAY_MAX_IDLE_CONNS"] != "64" || base["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
+		t.Fatalf("base relay env unsafe: %#v", base)
+	}
+	if profileEnv["RELAY_MAX_IDLE_CONNS"] != "1024" || profileEnv["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "1024" || profileEnv["GOMEMLIMIT"] != "384MiB" {
+		t.Fatalf("benchmark env mismatch: %#v", profileEnv)
+	}
+	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
+		if profileEnv[key] != base[key] {
+			t.Fatalf("profile env changed safety key %s: %q != %q", key, profileEnv[key], base[key])
+		}
+	}
+	f.Profiles["benchmark"] = benchmarkProfileConfig()
+	cfg := f.Profiles["benchmark"]
+	cfg.Relay.MaxIdleConns = 2048
+	f.Profiles["benchmark"] = cfg
+	if _, err := f.NewAPIEnvForProfile("benchmark"); err == nil {
+		t.Fatal("profile env accepted relay limit above declared safety maximum")
+	}
+	f = validFile()
+	f.Profiles = map[string]ProfileConfig{"benchmark": benchmarkProfileConfig()}
+	cfg = f.Profiles["benchmark"]
+	cfg.Relay.MaxIdleConns = 512
+	f.Profiles["benchmark"] = cfg
+	if _, err := f.NewAPIEnvForProfile("benchmark"); err == nil {
+		t.Fatal("profile env accepted non-canonical relay limit")
+	}
+	if base["RELAY_MAX_IDLE_CONNS"] != "64" {
+		t.Fatalf("base env was mutated: %#v", base)
+	}
+}
+
+func TestBenchmarkProfileRejectsNonCanonicalValues(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*ProfileConfig)
+	}{
+		{"non increasing points", func(c *ProfileConfig) { c.Points = []int{250, 250} }},
+		{"zero requests", func(c *ProfileConfig) { c.RequestsPerPoint = 0 }},
+		{"zero ramp", func(c *ProfileConfig) { c.RampStep = 0 }},
+		{"zero duration", func(c *ProfileConfig) { c.Duration = Duration{} }},
+		{"zero timeout", func(c *ProfileConfig) { c.Timeout = Duration{} }},
+		{"bad transport", func(c *ProfileConfig) { c.Transport.Mode = "h2c_diagnostic" }},
+		{"wrong requests", func(c *ProfileConfig) { c.RequestsPerPoint = 2999 }},
+		{"wrong point", func(c *ProfileConfig) { c.Points = []int{250, 500, 750, 999} }},
+		{"wrong gomemlimit", func(c *ProfileConfig) { c.ServerLimits.GOMEMLIMIT = "512MiB" }},
+		{"wrong transport mode", func(c *ProfileConfig) { c.Transport.Mode = "h1_no_keepalive" }},
+	} {
+		f := validFile()
+		cfg := benchmarkProfileConfig()
+		tc.mutate(&cfg)
+		f.Profiles = map[string]ProfileConfig{"benchmark": cfg}
+		if err := f.Validate(); err == nil {
+			t.Fatalf("%s accepted", tc.name)
+		}
+	}
+}
+
+func TestH2CDiagnosticProfileRejectedInFirstStage(t *testing.T) {
+	f := validFile()
+	if _, err := f.Profile("h2c_diagnostic"); err == nil || !strings.Contains(err.Error(), "h2c diagnostic profile is not implemented in this phase") {
+		t.Fatalf("h2c_diagnostic profile error = %v", err)
+	}
+	f.Profiles = map[string]ProfileConfig{"h2c_diagnostic": benchmarkProfileConfig()}
+	if err := f.Validate(); err == nil || !strings.Contains(err.Error(), "h2c diagnostic profile is not implemented in this phase") {
+		t.Fatalf("h2c_diagnostic config error = %v", err)
+	}
+}
+
+func TestUnknownProfileErrorDoesNotEchoInput(t *testing.T) {
+	f := validFile()
+	f.Profiles = map[string]ProfileConfig{"sk-realproductionkey": benchmarkProfileConfig()}
+	err := f.Validate()
+	if err == nil {
+		t.Fatal("unsafe profile name accepted")
+	}
+	if strings.Contains(err.Error(), "sk-realproductionkey") {
+		t.Fatalf("profile error leaked input: %v", err)
 	}
 }
 
@@ -197,10 +337,68 @@ mock_profiles:
 retry:
   retry_times: 0
   automatic_retry_status_codes: []
+profiles:
+  benchmark:
+    points: [250, 500, 750, 1000]
+    requests_per_point: 3000
+    ramp_step: 25
+    ramp_interval: 200ms
+    duration: 45s
+    timeout: 120s
+    transport:
+      mode: h1_keepalive
+      max_conns_per_host: 1024
+      max_idle_conns: 1024
+      max_idle_conns_per_host: 1024
+    relay:
+      max_idle_conns: 1024
+      max_idle_conns_per_host: 1024
+    server_limits:
+      gomaxprocs: "2"
+      gogc: "100"
+      gomemlimit: "384MiB"
+      process_memory_limit_bytes: 536870912
+      cpu_affinity_cores: 2
 thresholds:
   latency_p95_regression_ratio: 1.10
   ttft_p95_regression_ratio: 1.10
 `
+}
+
+func mustDuration(value string) Duration {
+	d, err := ParseDuration(value)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func benchmarkProfileConfig() ProfileConfig {
+	return ProfileConfig{
+		Points:           []int{250, 500, 750, 1000},
+		RequestsPerPoint: 3000,
+		RampStep:         25,
+		RampInterval:     mustDuration("200ms"),
+		Duration:         mustDuration("45s"),
+		Timeout:          mustDuration("120s"),
+		Transport: TransportConfig{
+			Mode:                "h1_keepalive",
+			MaxConnsPerHost:     1024,
+			MaxIdleConns:        1024,
+			MaxIdleConnsPerHost: 1024,
+		},
+		Relay: RelayConfig{
+			MaxIdleConns:        1024,
+			MaxIdleConnsPerHost: 1024,
+		},
+		ServerLimits: ServerLimitsConfig{
+			GOMAXPROCS:              "2",
+			GOGC:                    "100",
+			GOMEMLIMIT:              "384MiB",
+			ProcessMemoryLimitBytes: 536870912,
+			CPUAffinityCores:        2,
+		},
+	}
 }
 
 func validFile() File {

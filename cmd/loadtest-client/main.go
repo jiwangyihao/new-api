@@ -32,6 +32,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	var rampInterval string
 	var timeoutValue string
 
+	transportMode := loadclient.TransportModeH1KeepAlive
 	fs.StringVar(&opts.BaseURL, "url", "", "loopback new-api base URL")
 	fs.StringVar(&opts.APIKey, "api-key", "", "loadtest API key")
 	fs.StringVar(&opts.TokenProfile, "token-profile", "", "subscription, compat, or invalid")
@@ -50,6 +51,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	fs.StringVar(&runContextPath, "run-context", "", "run context JSON path")
 	fs.StringVar(&outPath, "out", "", "output JSON path")
 
+	fs.StringVar(&transportMode, "transport", loadclient.TransportModeH1KeepAlive, "h1_keepalive, h1_no_keepalive, h2c_diagnostic")
+	fs.IntVar(&opts.Transport.MaxConnsPerHost, "max-conns-per-host", 0, "client max conns per host")
+	fs.IntVar(&opts.Transport.MaxIdleConns, "max-idle-conns", 0, "client max idle conns")
+	fs.IntVar(&opts.Transport.MaxIdleConnsPerHost, "max-idle-conns-per-host", 0, "client max idle conns per host")
 	fs.BoolVar(&healthCheck, "health-check", false, "run S0 health check")
 	fs.StringVar(&healthOpts.ValidAPIKey, "valid-api-key", "", "valid loadtest API key for S0")
 	fs.StringVar(&healthOpts.InvalidAPIKey, "invalid-api-key", "sk-loadtestinvalid", "invalid loadtest API key for S0")
@@ -84,8 +89,8 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 2
 	}
 
-	client := &http.Client{}
 	if healthCheck {
+		client := &http.Client{}
 		healthOpts.BaseURL = opts.BaseURL
 		if healthOpts.ValidAPIKey == "" {
 			healthOpts.ValidAPIKey = opts.APIKey
@@ -111,10 +116,14 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		return 0
 	}
 
+	opts.Transport.Mode = transportMode
+	if err := validateSmokeTransport(opts.Transport); err != nil {
+		writeErr(stderr, err)
+		return 2
+	}
 	opts.Duration = parsedDuration
 	opts.RampInterval = parsedRampInterval
 	opts.Timeout = parsedTimeout
-	opts.HTTPClient = client
 	if runContextPath != "" {
 		if err := readRunContext(runContextPath, &opts.RunContext); err != nil {
 			writeErr(stderr, err)
@@ -124,6 +133,12 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 	summary, err := loadclient.RunLoad(fsContext(), opts)
 	if err != nil {
+		if loadclient.IsRuntimeError(err) && summary.Total > 0 {
+			if jsonErr := writeJSON(outPath, stdout, summary); jsonErr != nil {
+				writeErr(stderr, jsonErr)
+				return 1
+			}
+		}
 		writeErr(stderr, err)
 		return exitCode(err)
 	}
@@ -136,6 +151,13 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 
 func fsContext() context.Context {
 	return context.Background()
+}
+
+func validateSmokeTransport(opts loadclient.TransportOptions) error {
+	if opts.MaxConnsPerHost > 16 || opts.MaxIdleConns > 16 || opts.MaxIdleConnsPerHost > 16 {
+		return fmt.Errorf("client transport limits exceed smoke safety maximum")
+	}
+	return nil
 }
 
 func parseOptionalDuration(value string) (time.Duration, error) {

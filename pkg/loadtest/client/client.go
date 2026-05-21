@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -25,6 +26,10 @@ import (
 const (
 	DefaultPath  = "/v1/responses"
 	DefaultModel = "gpt-5.5"
+
+	TransportModeH1KeepAlive   = "h1_keepalive"
+	TransportModeH1NoKeepAlive = "h1_no_keepalive"
+	TransportModeH2CDiagnostic = "h2c_diagnostic"
 )
 
 const defaultMaxClientConnsPerHost = 4
@@ -67,6 +72,13 @@ func IsRuntimeError(err error) bool {
 	return errors.As(err, &target)
 }
 
+type TransportOptions struct {
+	Mode                string
+	MaxConnsPerHost     int
+	MaxIdleConns        int
+	MaxIdleConnsPerHost int
+}
+
 type Options struct {
 	BaseURL      string
 	APIKey       string
@@ -83,6 +95,7 @@ type Options struct {
 	Timeout      time.Duration
 	InputBytes   int
 	Stream       bool
+	Transport    TransportOptions
 	RunContext   artifact.RunContext
 	HTTPClient   *http.Client
 }
@@ -363,7 +376,11 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 	httpClient := opts.HTTPClient
 	var ownedTransport *http.Transport
 	if httpClient == nil {
-		ownedTransport = newBoundedTransport()
+		var err error
+		ownedTransport, _, err = newTransport(opts.Transport)
+		if err != nil {
+			return artifact.Summary{}, err
+		}
 		httpClient = &http.Client{Transport: ownedTransport}
 	}
 	if ownedTransport != nil {
@@ -501,6 +518,9 @@ func normalizeAndValidateOptions(opts *Options) error {
 	if opts.RampStep < 0 {
 		return configErrorf("--ramp-step must be zero or greater")
 	}
+	if err := normalizeTransportOptions(&opts.Transport); err != nil {
+		return err
+	}
 	if opts.RunContext.SchemaVersion == 0 {
 		opts.RunContext.SchemaVersion = artifact.SchemaVersion
 	}
@@ -528,6 +548,8 @@ type requestResult struct {
 	record                artifact.RequestRecord
 	latencyMS             float64
 	ttftMS                float64
+	protocol              string
+	phase                 string
 	stream                StreamRecord
 	networkRuntimeFailure bool
 }
@@ -572,12 +594,12 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 	requestURL, err := joinBaseAndPath(opts.BaseURL, opts.Path)
 	if err != nil {
 		record.ErrorReason = "request_build_error"
-		return requestResult{record: record}
+		return requestResult{record: record, phase: "request_build"}
 	}
 	body, err := buildRequestBody(opts)
 	if err != nil {
 		record.ErrorReason = "request_build_error"
-		return requestResult{record: record}
+		return requestResult{record: record, phase: "request_build"}
 	}
 
 	ctx, cancel := context.WithTimeout(parent, opts.Timeout)
@@ -586,7 +608,7 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		record.ErrorReason = "request_build_error"
-		return requestResult{record: record}
+		return requestResult{record: record, phase: "request_build"}
 	}
 	req.Header.Set("Authorization", "Bearer "+opts.APIKey)
 	req.Header.Set("Content-Type", "application/json")
@@ -598,12 +620,9 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		endRequest(state)
-		reason := "http_client_do_error"
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			reason = "client_timeout"
-		}
+		reason := classifyHTTPError(err, ctx)
 		record.ErrorReason = reason
-		return requestResult{record: record, latencyMS: elapsedMS(startedAt), networkRuntimeFailure: true}
+		return requestResult{record: record, latencyMS: elapsedMS(startedAt), phase: "http_client_do", networkRuntimeFailure: true}
 	}
 	defer resp.Body.Close()
 
@@ -611,13 +630,14 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 	record.NewAPIRequestID = resp.Header.Get(common.RequestIdKey)
 	record.UpstreamRequestID = resp.Header.Get(common.UpstreamRequestIdKey)
 	record.MockRequestID = resp.Header.Get(common.UpstreamRequestIdKey)
+	protocol := resp.Proto
 
 	var firstTokenAt time.Time
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024*1024))
 		endRequest(state)
 		record.ErrorReason = "status_non_2xx"
-		return requestResult{record: record, latencyMS: elapsedMS(startedAt)}
+		return requestResult{record: record, latencyMS: elapsedMS(startedAt), protocol: protocol, phase: "status_code"}
 	}
 
 	if opts.Stream || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -631,12 +651,12 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 		endRequest(state)
 		latency := elapsedMS(startedAt)
 		if parseErr != nil {
-			record.ErrorReason = "stream_read_error"
-			return requestResult{record: record, latencyMS: latency, stream: streamRecord}
+			record.ErrorReason = classifyStreamParseError(parseErr)
+			return requestResult{record: record, latencyMS: latency, protocol: protocol, phase: "stream_parse", stream: streamRecord}
 		}
 		if !streamRecord.DoneReceived {
 			record.ErrorReason = "missing_done"
-			return requestResult{record: record, latencyMS: latency, stream: streamRecord}
+			return requestResult{record: record, latencyMS: latency, protocol: protocol, phase: "stream_parse", stream: streamRecord}
 		}
 		record.Success = true
 		record.PromptTokens = streamRecord.Usage.PromptTokens
@@ -646,22 +666,22 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 		if !firstTokenAt.IsZero() {
 			ttft = firstTokenAt.Sub(startedAt).Seconds() * 1000
 		}
-		return requestResult{record: record, latencyMS: latency, ttftMS: ttft, stream: streamRecord}
+		return requestResult{record: record, latencyMS: latency, ttftMS: ttft, protocol: protocol, stream: streamRecord}
 	}
 
 	bodyBytes, readErr := io.ReadAll(resp.Body)
 	endRequest(state)
 	latency := elapsedMS(startedAt)
 	if readErr != nil {
-		record.ErrorReason = "stream_read_error"
-		return requestResult{record: record, latencyMS: latency}
+		record.ErrorReason = "read_error"
+		return requestResult{record: record, latencyMS: latency, protocol: protocol, phase: "response_read"}
 	}
 	usage := parseUsageFromJSON(bodyBytes)
 	record.Success = true
 	record.PromptTokens = usage.PromptTokens
 	record.CompletionTokens = usage.CompletionTokens
 	record.TotalTokens = usage.TotalTokens
-	return requestResult{record: record, latencyMS: latency, ttftMS: latency}
+	return requestResult{record: record, latencyMS: latency, ttftMS: latency, protocol: protocol}
 }
 
 func hasNetworkRuntimeFailure(results []requestResult) bool {
@@ -687,13 +707,114 @@ func endRequest(state *requestState) {
 	state.inFlight.Add(-1)
 }
 
-func newBoundedTransport() *http.Transport {
+func newTransport(opts TransportOptions) (*http.Transport, artifact.TransportProfile, error) {
+	if err := normalizeTransportOptions(&opts); err != nil {
+		return nil, artifact.TransportProfile{}, err
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConns = defaultMaxClientConnsPerHost
-	transport.MaxIdleConnsPerHost = defaultMaxClientConnsPerHost
-	transport.MaxConnsPerHost = defaultMaxClientConnsPerHost
+	transport.MaxIdleConns = opts.MaxIdleConns
+	transport.MaxIdleConnsPerHost = opts.MaxIdleConnsPerHost
+	transport.MaxConnsPerHost = opts.MaxConnsPerHost
 	transport.IdleConnTimeout = 5 * time.Second
-	return transport
+	if opts.Mode == TransportModeH1NoKeepAlive {
+		transport.DisableKeepAlives = true
+	}
+	return transport, transportProfile(opts), nil
+}
+
+func normalizeTransportOptions(opts *TransportOptions) error {
+	if opts.Mode == "" {
+		opts.Mode = TransportModeH1KeepAlive
+	}
+	switch opts.Mode {
+	case TransportModeH1KeepAlive, TransportModeH1NoKeepAlive:
+	case TransportModeH2CDiagnostic:
+		return configErrorf("h2c diagnostic transport is not implemented in this phase")
+	default:
+		return configErrorf("unsupported transport mode %q", opts.Mode)
+	}
+	if opts.MaxConnsPerHost < 0 {
+		return configErrorf("--max-conns-per-host must be zero or greater")
+	}
+	if opts.MaxIdleConns < 0 {
+		return configErrorf("--max-idle-conns must be zero or greater")
+	}
+	if opts.MaxIdleConnsPerHost < 0 {
+		return configErrorf("--max-idle-conns-per-host must be zero or greater")
+	}
+	if opts.MaxConnsPerHost == 0 {
+		opts.MaxConnsPerHost = defaultMaxClientConnsPerHost
+	}
+	if opts.MaxIdleConns == 0 {
+		opts.MaxIdleConns = opts.MaxConnsPerHost
+	}
+	if opts.MaxIdleConnsPerHost == 0 {
+		opts.MaxIdleConnsPerHost = opts.MaxConnsPerHost
+	}
+	return nil
+}
+
+func transportProfile(opts TransportOptions) artifact.TransportProfile {
+	return artifact.TransportProfile{
+		Mode:                opts.Mode,
+		MaxConnsPerHost:     opts.MaxConnsPerHost,
+		MaxIdleConns:        opts.MaxIdleConns,
+		MaxIdleConnsPerHost: opts.MaxIdleConnsPerHost,
+	}
+}
+
+func classifyHTTPError(err error, ctx context.Context) string {
+	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "request_timeout"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "request_timeout"
+	}
+	if errorIsErrno(err, 111, 61, 10061) {
+		return "connect_refused"
+	}
+	if errorIsErrno(err, 104, 54, 10054) {
+		return "connection_reset"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && (opErr.Op == "dial" || opErr.Op == "connect") {
+			return "connect_timeout"
+		}
+		return "request_timeout"
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "connection refused") || strings.Contains(message, "actively refused") || strings.Contains(message, "no connection could be made") {
+		return "connect_refused"
+	}
+	if strings.Contains(message, "connection reset") || strings.Contains(message, "wsarecv") || strings.Contains(message, "forcibly closed") {
+		return "connection_reset"
+	}
+	return "http_client_do_error"
+}
+
+func errorIsErrno(err error, values ...syscall.Errno) bool {
+	for _, value := range values {
+		if errors.Is(err, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func classifyStreamParseError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, io.EOF) {
+		return "read_error"
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "read") || strings.Contains(message, "unexpected eof") {
+		return "read_error"
+	}
+	return "json_error"
 }
 
 func buildRequestBody(opts Options) ([]byte, error) {
@@ -771,6 +892,8 @@ func buildSummary(opts Options, results []requestResult, maxObservedInFlight int
 
 	statusCodes := make(map[string]int)
 	errorReasons := make(map[string]int)
+	protocolCounts := make(map[string]int)
+	errorSamples := make([]artifact.ErrorSample, 0, 10)
 	requests := make([]artifact.RequestRecord, 0, len(results))
 	latencies := make([]float64, 0, len(results))
 	ttfts := make([]float64, 0, len(results))
@@ -784,6 +907,9 @@ func buildSummary(opts Options, results []requestResult, maxObservedInFlight int
 		if result.record.StatusCode != 0 {
 			statusCodes[strconv.Itoa(result.record.StatusCode)]++
 		}
+		if result.protocol != "" {
+			protocolCounts[result.protocol]++
+		}
 		if result.record.Success {
 			success++
 			latencies = append(latencies, result.latencyMS)
@@ -792,6 +918,16 @@ func buildSummary(opts Options, results []requestResult, maxObservedInFlight int
 			}
 		} else if result.record.ErrorReason != "" {
 			errorReasons[result.record.ErrorReason]++
+			if len(errorSamples) < 10 {
+				errorSamples = append(errorSamples, artifact.ErrorSample{
+					RequestIndex: result.record.RequestIndex,
+					Phase:        result.phase,
+					Reason:       result.record.ErrorReason,
+					StatusCode:   result.record.StatusCode,
+					LatencyMS:    result.latencyMS,
+					RequestID:    result.record.NewAPIRequestID,
+				})
+			}
 		}
 		if result.stream.Bytes != 0 || result.stream.DoneReceived || result.stream.UsageEvents != 0 {
 			streamBytes += result.stream.Bytes
@@ -820,6 +956,7 @@ func buildSummary(opts Options, results []requestResult, maxObservedInFlight int
 		Errors:              len(results) - success,
 		StatusCodes:         statusCodes,
 		ErrorReasons:        errorReasons,
+		ProtocolCounts:      protocolCounts,
 		MaxObservedInFlight: int(maxObservedInFlight),
 		LatencyP95MS:        percentile(latencies, 0.95),
 		TTFTP95MS:           percentile(ttfts, 0.95),
@@ -829,8 +966,10 @@ func buildSummary(opts Options, results []requestResult, maxObservedInFlight int
 			UsageEvents:  streamUsageEvents,
 			Bytes:        streamBytes,
 		},
-		Requests:   requests,
-		StopReason: stopReason,
+		Requests:          requests,
+		FirstErrorSamples: errorSamples,
+		Transport:         transportProfile(opts.Transport),
+		StopReason:        stopReason,
 	}
 }
 

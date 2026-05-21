@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -89,6 +90,190 @@ func TestErrorSummaryRecordsRequestIDStatusAndReason(t *testing.T) {
 	}
 }
 
+func TestRunLoadRecordsProtocolCountsAndTransportProfile(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  2,
+		MaxRequests:  2,
+		Timeout:      5 * time.Second,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 2, MaxIdleConns: 2, MaxIdleConnsPerHost: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ProtocolCounts["HTTP/1.1"] != 2 {
+		t.Fatalf("protocol counts = %#v", summary.ProtocolCounts)
+	}
+	if summary.Transport.Mode != "h1_keepalive" || summary.Transport.MaxConnsPerHost != 2 || summary.Transport.MaxIdleConns != 2 || summary.Transport.MaxIdleConnsPerHost != 2 {
+		t.Fatalf("transport = %#v", summary.Transport)
+	}
+}
+
+func TestRunLoadClassifiesConnectionRefused(t *testing.T) {
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  1,
+		Timeout:      200 * time.Millisecond,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 1},
+	})
+	if err == nil {
+		t.Fatal("expected runtime error")
+	}
+	if summary.ErrorReasons["connect_refused"] != 1 {
+		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	}
+	if len(summary.FirstErrorSamples) != 1 || summary.FirstErrorSamples[0].Reason != "connect_refused" {
+		t.Fatalf("samples = %#v", summary.FirstErrorSamples)
+	}
+}
+
+func TestRunLoadClassifiesRequestTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(50 * time.Millisecond):
+		}
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  1,
+		Timeout:      time.Millisecond,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 1},
+	})
+	if err == nil {
+		t.Fatal("expected runtime error")
+	}
+	if summary.ErrorReasons["request_timeout"] != 1 {
+		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	}
+}
+
+func TestRunLoadRecordsNormalizedTransportForInjectedClient(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  1,
+		Timeout:      5 * time.Second,
+		Stream:       true,
+		HTTPClient:   server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Transport.Mode != "h1_keepalive" || summary.Transport.MaxConnsPerHost != defaultMaxClientConnsPerHost || summary.Transport.MaxIdleConns != defaultMaxClientConnsPerHost || summary.Transport.MaxIdleConnsPerHost != defaultMaxClientConnsPerHost {
+		t.Fatalf("transport = %#v", summary.Transport)
+	}
+}
+
+func TestRunLoadRejectsH2CDiagnosticTransport(t *testing.T) {
+	_, err := RunLoad(context.Background(), Options{
+		BaseURL:      "http://127.0.0.1:1",
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  1,
+		Timeout:      200 * time.Millisecond,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h2c_diagnostic"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "h2c diagnostic transport is not implemented in this phase") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestNewTransportHonorsH1NoKeepAlive(t *testing.T) {
+	transport, profile, err := newTransport(TransportOptions{Mode: TransportModeH1NoKeepAlive, MaxConnsPerHost: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !transport.DisableKeepAlives {
+		t.Fatal("h1_no_keepalive did not disable keepalives")
+	}
+	if profile.Mode != TransportModeH1NoKeepAlive || profile.MaxConnsPerHost != 2 || profile.MaxIdleConns != 2 || profile.MaxIdleConnsPerHost != 2 {
+		t.Fatalf("profile = %#v", profile)
+	}
+}
+
+func TestRunLoadRecordsStreamParseErrorAsHTTP200(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Oneapi-Request-Id", "rid-parse")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  1,
+		Timeout:      5 * time.Second,
+		Stream:       true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ErrorReasons["missing_done"] != 1 {
+		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	}
+	if len(summary.FirstErrorSamples) != 1 {
+		t.Fatalf("samples = %#v", summary.FirstErrorSamples)
+	}
+	sample := summary.FirstErrorSamples[0]
+	if sample.StatusCode != http.StatusOK || sample.Phase != "stream_parse" || sample.RequestID != "rid-parse" {
+		t.Fatalf("sample = %#v", sample)
+	}
+}
+
 func TestRunLoadUsesBoundedTransportWhenClientNotInjected(t *testing.T) {
 	var maxObserved int
 	active := make(chan struct{}, 20)
@@ -115,7 +300,7 @@ func TestRunLoadUsesBoundedTransportWhenClientNotInjected(t *testing.T) {
 	}()
 	started := make(chan struct{})
 	go func() {
-		for len(active) < 4 {
+		for len(active) < defaultMaxClientConnsPerHost {
 			time.Sleep(10 * time.Millisecond)
 		}
 		close(started)
@@ -133,8 +318,11 @@ func TestRunLoadUsesBoundedTransportWhenClientNotInjected(t *testing.T) {
 	if summary.Success != 20 {
 		t.Fatalf("summary success=%d total=%d errors=%#v", summary.Success, summary.Total, summary.ErrorReasons)
 	}
-	if maxObserved > 4 {
+	if maxObserved > defaultMaxClientConnsPerHost {
 		t.Fatalf("unbounded client opened %d simultaneous sockets", maxObserved)
+	}
+	if summary.Transport.Mode != "h1_keepalive" || summary.Transport.MaxConnsPerHost != defaultMaxClientConnsPerHost {
+		t.Fatalf("transport = %#v", summary.Transport)
 	}
 }
 

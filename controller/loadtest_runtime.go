@@ -5,8 +5,11 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
@@ -17,18 +20,133 @@ type runtimeStatus struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-type loadtestRuntimeResponse struct {
-	Goroutines           int           `json:"goroutines"`
-	HeapAllocBytes       uint64        `json:"heap_alloc_bytes"`
-	BlockProfileRate     int           `json:"block_profile_rate"`
-	MutexProfileFraction int           `json:"mutex_profile_fraction"`
-	BatchUpdate          runtimeStatus `json:"batch_update"`
-	QuotaData            runtimeStatus `json:"quota_data"`
-	PerfMetrics          runtimeStatus `json:"perf_metrics"`
-	Unavailable          []string      `json:"unavailable,omitempty"`
+const (
+	loadtestHTTPConnStateNew      = "new"
+	loadtestHTTPConnStateActive   = "active"
+	loadtestHTTPConnStateIdle     = "idle"
+	loadtestHTTPConnStateHijacked = "hijacked"
+	loadtestHTTPConnStateClosed   = "closed"
+)
+
+type LoadtestHTTPStats struct {
+	acceptTotal   atomic.Uint64
+	stateNew      atomic.Int64
+	stateActive   atomic.Int64
+	stateIdle     atomic.Int64
+	stateHijack   atomic.Int64
+	stateClosed   atomic.Int64
+	activeCurrent atomic.Int64
 }
 
-func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string) {
+func NewLoadtestHTTPStats() *LoadtestHTTPStats {
+	return &LoadtestHTTPStats{}
+}
+
+func (s *LoadtestHTTPStats) OnAccept() {
+	if s == nil {
+		return
+	}
+	s.acceptTotal.Add(1)
+}
+
+func (s *LoadtestHTTPStats) OnConnState(state http.ConnState) {
+	if s == nil {
+		return
+	}
+	switch state {
+	case http.StateNew:
+		s.stateNew.Add(1)
+	case http.StateActive:
+		s.stateActive.Add(1)
+		s.activeCurrent.Add(1)
+	case http.StateIdle:
+		s.stateIdle.Add(1)
+		s.decrementActiveCurrent()
+	case http.StateHijacked:
+		s.stateHijack.Add(1)
+		s.decrementActiveCurrent()
+	case http.StateClosed:
+		s.stateClosed.Add(1)
+		s.decrementActiveCurrent()
+	}
+}
+
+func (s *LoadtestHTTPStats) Snapshot() (map[string]int64, uint64, int64) {
+	if s == nil {
+		return loadtestHTTPConnStateSnapshot(0, 0, 0, 0, 0), 0, 0
+	}
+	return loadtestHTTPConnStateSnapshot(
+		s.stateNew.Load(),
+		s.stateActive.Load(),
+		s.stateIdle.Load(),
+		s.stateHijack.Load(),
+		s.stateClosed.Load(),
+	), s.acceptTotal.Load(), s.activeCurrent.Load()
+}
+
+func (s *LoadtestHTTPStats) decrementActiveCurrent() {
+	for {
+		current := s.activeCurrent.Load()
+		if current <= 0 {
+			return
+		}
+		if s.activeCurrent.CompareAndSwap(current, current-1) {
+			return
+		}
+	}
+}
+
+func loadtestHTTPConnStateSnapshot(newCount, active, idle, hijacked, closed int64) map[string]int64 {
+	return map[string]int64{
+		loadtestHTTPConnStateNew:      newCount,
+		loadtestHTTPConnStateActive:   active,
+		loadtestHTTPConnStateIdle:     idle,
+		loadtestHTTPConnStateHijacked: hijacked,
+		loadtestHTTPConnStateClosed:   closed,
+	}
+}
+
+type loadtestCountingListener struct {
+	net.Listener
+	stats *LoadtestHTTPStats
+}
+
+func NewLoadtestCountingListener(inner net.Listener, stats *LoadtestHTTPStats) net.Listener {
+	if stats == nil {
+		return inner
+	}
+	return &loadtestCountingListener{Listener: inner, stats: stats}
+}
+
+func (l *loadtestCountingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.stats.OnAccept()
+	return conn, nil
+}
+
+type loadtestRuntimeResponse struct {
+	Goroutines           int              `json:"goroutines"`
+	HeapAllocBytes       uint64           `json:"heap_alloc_bytes"`
+	GOMAXPROCS           int              `json:"gomaxprocs"`
+	GOMEMLimitBytes      int64            `json:"gomemlimit_bytes"`
+	GCCount              uint32           `json:"gc_count"`
+	LastGCUnixMS         uint64           `json:"last_gc_unix_ms"`
+	PauseTotalNS         uint64           `json:"pause_total_ns"`
+	HTTPConnState        map[string]int64 `json:"http_conn_state"`
+	HTTPAcceptTotal      uint64           `json:"http_accept_total"`
+	HTTPActiveCurrent    int64            `json:"http_active_current"`
+	BlockProfileRate     int              `json:"block_profile_rate"`
+	MutexProfileFraction int              `json:"mutex_profile_fraction"`
+	BatchUpdate          runtimeStatus    `json:"batch_update"`
+	QuotaData            runtimeStatus    `json:"quota_data"`
+	PerfMetrics          runtimeStatus    `json:"perf_metrics"`
+	Unavailable          []string         `json:"unavailable,omitempty"`
+}
+
+func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string, stats *LoadtestHTTPStats) {
 	if os.Getenv("LOADTEST_RUNTIME_STATS_ENABLED") != "true" || !listenAddrIsLoopback(listenAddr) {
 		return
 	}
@@ -40,10 +158,19 @@ func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string) {
 		}
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
+		httpConnState, httpAcceptTotal, httpActiveCurrent := stats.Snapshot()
 		batch := model.BatchUpdatePendingSnapshot()
 		resp := loadtestRuntimeResponse{
 			Goroutines:           runtime.NumGoroutine(),
 			HeapAllocBytes:       mem.HeapAlloc,
+			GOMAXPROCS:           runtime.GOMAXPROCS(0),
+			GOMEMLimitBytes:      debug.SetMemoryLimit(-1),
+			GCCount:              mem.NumGC,
+			LastGCUnixMS:         mem.LastGC / uint64(time.Millisecond),
+			PauseTotalNS:         mem.PauseTotalNs,
+			HTTPConnState:        httpConnState,
+			HTTPAcceptTotal:      httpAcceptTotal,
+			HTTPActiveCurrent:    httpActiveCurrent,
 			BlockProfileRate:     parseEnvInt("LOADTEST_PROFILE_BLOCK_RATE"),
 			MutexProfileFraction: parseEnvInt("LOADTEST_PROFILE_MUTEX_FRACTION"),
 			BatchUpdate:          runtimeStatus{Status: "ok", Reason: batch.String()},

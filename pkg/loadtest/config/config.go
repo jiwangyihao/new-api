@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
 	"github.com/QuantumNous/new-api/pkg/loadtest/localguard"
+	"github.com/QuantumNous/new-api/pkg/loadtest/profile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,6 +39,7 @@ var EnvKeys = []string{
 	"LOADTEST_PROFILE_MUTEX_FRACTION",
 	"GOMAXPROCS",
 	"GOGC",
+	"GOMEMLIMIT",
 	"BATCH_UPDATE_ENABLED",
 	"SQL_MAX_OPEN_CONNS",
 	"SQL_MAX_IDLE_CONNS",
@@ -57,16 +59,17 @@ var EnvKeys = []string{
 }
 
 type File struct {
-	Server       ServerConfig           `json:"server" yaml:"server"`
-	Postgres     PostgresConfig         `json:"postgres" yaml:"postgres"`
-	LogPostgres  PostgresConfig         `json:"log_postgres" yaml:"log_postgres"`
-	Redis        RedisConfig            `json:"redis" yaml:"redis"`
-	MockUpstream MockUpstreamConfig     `json:"mock_upstream" yaml:"mock_upstream"`
-	Loadtest     LoadtestConfig         `json:"loadtest" yaml:"loadtest"`
-	Retry        RetryConfig            `json:"retry" yaml:"retry"`
-	Thresholds   ThresholdsConfig       `json:"thresholds" yaml:"thresholds"`
-	Client       ClientConfig           `json:"client" yaml:"client"`
-	MockProfiles map[string]MockProfile `json:"mock_profiles" yaml:"mock_profiles"`
+	Server       ServerConfig             `json:"server" yaml:"server"`
+	Postgres     PostgresConfig           `json:"postgres" yaml:"postgres"`
+	LogPostgres  PostgresConfig           `json:"log_postgres" yaml:"log_postgres"`
+	Redis        RedisConfig              `json:"redis" yaml:"redis"`
+	MockUpstream MockUpstreamConfig       `json:"mock_upstream" yaml:"mock_upstream"`
+	Loadtest     LoadtestConfig           `json:"loadtest" yaml:"loadtest"`
+	Retry        RetryConfig              `json:"retry" yaml:"retry"`
+	Thresholds   ThresholdsConfig         `json:"thresholds" yaml:"thresholds"`
+	Client       ClientConfig             `json:"client" yaml:"client"`
+	MockProfiles map[string]MockProfile   `json:"mock_profiles" yaml:"mock_profiles"`
+	Profiles     map[string]ProfileConfig `json:"profiles" yaml:"profiles"`
 }
 
 type ServerConfig struct {
@@ -111,6 +114,42 @@ type ClientConfig struct {
 	MaxIdleConnsPerHost int `json:"max_idle_conns_per_host" yaml:"max_idle_conns_per_host"`
 }
 
+type Duration struct {
+	time.Duration
+}
+
+type TransportConfig struct {
+	Mode                string `json:"mode" yaml:"mode"`
+	MaxConnsPerHost     int    `json:"max_conns_per_host" yaml:"max_conns_per_host"`
+	MaxIdleConns        int    `json:"max_idle_conns" yaml:"max_idle_conns"`
+	MaxIdleConnsPerHost int    `json:"max_idle_conns_per_host" yaml:"max_idle_conns_per_host"`
+}
+
+type RelayConfig struct {
+	MaxIdleConns        int `json:"max_idle_conns" yaml:"max_idle_conns"`
+	MaxIdleConnsPerHost int `json:"max_idle_conns_per_host" yaml:"max_idle_conns_per_host"`
+}
+
+type ServerLimitsConfig struct {
+	GOMAXPROCS              string `json:"gomaxprocs" yaml:"gomaxprocs"`
+	GOGC                    string `json:"gogc" yaml:"gogc"`
+	GOMEMLIMIT              string `json:"gomemlimit" yaml:"gomemlimit"`
+	ProcessMemoryLimitBytes uint64 `json:"process_memory_limit_bytes" yaml:"process_memory_limit_bytes"`
+	CPUAffinityCores        int    `json:"cpu_affinity_cores" yaml:"cpu_affinity_cores"`
+}
+
+type ProfileConfig struct {
+	Points           []int              `json:"points" yaml:"points"`
+	RequestsPerPoint int                `json:"requests_per_point" yaml:"requests_per_point"`
+	RampStep         int                `json:"ramp_step" yaml:"ramp_step"`
+	RampInterval     Duration           `json:"ramp_interval" yaml:"ramp_interval"`
+	Duration         Duration           `json:"duration" yaml:"duration"`
+	Timeout          Duration           `json:"timeout" yaml:"timeout"`
+	Transport        TransportConfig    `json:"transport" yaml:"transport"`
+	Relay            RelayConfig        `json:"relay" yaml:"relay"`
+	ServerLimits     ServerLimitsConfig `json:"server_limits" yaml:"server_limits"`
+}
+
 type ThresholdsConfig struct {
 	LatencyP95RegressionRatio float64 `json:"latency_p95_regression_ratio" yaml:"latency_p95_regression_ratio"`
 	TTFTP95RegressionRatio    float64 `json:"ttft_p95_regression_ratio" yaml:"ttft_p95_regression_ratio"`
@@ -125,6 +164,48 @@ type MockProfile struct {
 	CompletionTokens int             `json:"completion_tokens" yaml:"completion_tokens"`
 	StatusRate       map[int]float64 `json:"status_rate" yaml:"status_rate"`
 	Seed             int64           `json:"seed" yaml:"seed"`
+}
+
+func ParseDuration(value string) (Duration, error) {
+	d, err := time.ParseDuration(strings.TrimSpace(value))
+	if err != nil {
+		return Duration{}, err
+	}
+	return Duration{Duration: d}, nil
+}
+
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	var raw string
+	if err := value.Decode(&raw); err != nil {
+		return err
+	}
+	parsed, err := ParseDuration(raw)
+	if err != nil {
+		return err
+	}
+	*d = parsed
+	return nil
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	raw, err := strconv.Unquote(string(data))
+	if err != nil {
+		return err
+	}
+	parsed, err := ParseDuration(raw)
+	if err != nil {
+		return err
+	}
+	*d = parsed
+	return nil
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.Quote(d.Duration.String())), nil
+}
+
+func (d Duration) String() string {
+	return d.Duration.String()
 }
 
 func (p *MockProfile) UnmarshalYAML(value *yaml.Node) error {
@@ -188,10 +269,10 @@ func (f File) Validate() error {
 		return fmt.Errorf("server.port is invalid")
 	}
 	if err := localguard.ValidateListenAddr(f.serverListenAddr()); err != nil {
-		return fmt.Errorf("server listen address: %w", err)
+		return fmt.Errorf("server listen address is not safe loopback")
 	}
 	if err := localguard.ValidateListenAddr(f.Server.PprofAddr); err != nil {
-		return fmt.Errorf("server.pprof_addr: %w", err)
+		return fmt.Errorf("server.pprof_addr is not safe loopback")
 	}
 	if f.Server.ProfileBlockRate <= 0 {
 		return fmt.Errorf("server.profile_block_rate must be positive")
@@ -200,18 +281,18 @@ func (f File) Validate() error {
 		return fmt.Errorf("server.profile_mutex_fraction must be positive")
 	}
 	if err := localguard.ValidatePostgresDSN(f.Postgres.DSN); err != nil {
-		return fmt.Errorf("postgres.dsn: %w", err)
+		return fmt.Errorf("postgres.dsn is not a safe loadtest PostgreSQL DSN")
 	}
 	if f.LogPostgres.DSN != "" {
 		if err := localguard.ValidatePostgresDSN(f.LogPostgres.DSN); err != nil {
-			return fmt.Errorf("log_postgres.dsn: %w", err)
+			return fmt.Errorf("log_postgres.dsn is not a safe loadtest PostgreSQL DSN")
 		}
 	}
 	if err := localguard.ValidateRedisAddr(f.Redis.Addr); err != nil {
-		return fmt.Errorf("redis.addr: %w", err)
+		return fmt.Errorf("redis.addr is not a safe loadtest Redis address")
 	}
 	if err := localguard.ValidateURL(f.MockUpstream.BaseURL); err != nil {
-		return fmt.Errorf("mock_upstream.base_url: %w", err)
+		return fmt.Errorf("mock_upstream.base_url is not a safe loopback URL")
 	}
 	if err := validateLoadtest(f.Loadtest); err != nil {
 		return err
@@ -227,6 +308,11 @@ func (f File) Validate() error {
 	}
 	if f.Client.MaxIdleConns > 128 || f.Client.MaxIdleConnsPerHost > 64 {
 		return fmt.Errorf("client connection limits are too high for local loopback loadtest")
+	}
+	for name, cfg := range f.Profiles {
+		if err := validateProfileConfig(name, cfg); err != nil {
+			return err
+		}
 	}
 	if err := validateMockProfiles(f.MockProfiles); err != nil {
 		return err
@@ -252,6 +338,7 @@ func (f File) NewAPIEnv() map[string]string {
 		"LOADTEST_PROFILE_MUTEX_FRACTION": strconv.Itoa(f.Server.ProfileMutexFraction),
 		"GOMAXPROCS":                      "2",
 		"GOGC":                            "100",
+		"GOMEMLIMIT":                      "384MiB",
 		"BATCH_UPDATE_ENABLED":            "true",
 		"SQL_MAX_OPEN_CONNS":              "10",
 		"SQL_MAX_IDLE_CONNS":              "5",
@@ -268,6 +355,52 @@ func (f File) NewAPIEnv() map[string]string {
 		"RELAY_MAX_IDLE_CONNS":                       strconv.Itoa(f.Client.MaxIdleConns),
 		"RELAY_MAX_IDLE_CONNS_PER_HOST":              strconv.Itoa(f.Client.MaxIdleConnsPerHost),
 	}
+}
+
+func (f File) Profile(name string) (profile.Profile, error) {
+	f = f.withDefaults()
+	name = strings.TrimSpace(name)
+	switch name {
+	case "benchmark":
+		cfg, ok := f.Profiles[name]
+		if !ok {
+			return profile.Profile{}, fmt.Errorf("benchmark profile must be explicitly configured")
+		}
+		if err := validateProfileConfig(name, cfg); err != nil {
+			return profile.Profile{}, err
+		}
+		return profileFromConfig(name, cfg), nil
+	case "smoke":
+		return profile.Smoke(), nil
+	case "h2c_diagnostic":
+		return profile.Profile{}, fmt.Errorf("h2c diagnostic profile is not implemented in this phase")
+	default:
+		return profile.Profile{}, fmt.Errorf("unknown loadtest profile")
+	}
+}
+
+func (f File) NewAPIEnvForProfile(name string) (map[string]string, error) {
+	p, err := f.Profile(name)
+	if err != nil {
+		return nil, err
+	}
+	env := f.NewAPIEnv()
+	if p.ServerLimits.GOMAXPROCS != "" {
+		env["GOMAXPROCS"] = p.ServerLimits.GOMAXPROCS
+	}
+	if p.ServerLimits.GOGC != "" {
+		env["GOGC"] = p.ServerLimits.GOGC
+	}
+	if p.ServerLimits.GOMEMLIMIT != "" {
+		env["GOMEMLIMIT"] = p.ServerLimits.GOMEMLIMIT
+	}
+	if p.Relay.MaxIdleConns > 0 {
+		env["RELAY_MAX_IDLE_CONNS"] = strconv.Itoa(p.Relay.MaxIdleConns)
+	}
+	if p.Relay.MaxIdleConnsPerHost > 0 {
+		env["RELAY_MAX_IDLE_CONNS_PER_HOST"] = strconv.Itoa(p.Relay.MaxIdleConnsPerHost)
+	}
+	return env, nil
 }
 
 func (f File) BaseRunContext(commit string) (artifact.RunContext, error) {
@@ -429,27 +562,150 @@ func validateLoadtest(loadtest LoadtestConfig) error {
 	if loadtest.Group == "" {
 		return fmt.Errorf("loadtest.group is required")
 	}
-	if loadtest.SubscriptionKey != SubscriptionAPIKey {
-		return fmt.Errorf("loadtest.subscription_key must be %s", SubscriptionAPIKey)
-	}
-	if loadtest.CompatKey != CompatAPIKey {
-		return fmt.Errorf("loadtest.compat_key must be %s", CompatAPIKey)
-	}
-	if loadtest.InvalidKey != InvalidAPIKey {
-		return fmt.Errorf("loadtest.invalid_key must be %s", InvalidAPIKey)
-	}
 	for _, key := range []string{loadtest.SubscriptionKey, loadtest.CompatKey, loadtest.InvalidKey} {
 		if err := localguard.ValidateAPIKey(key); err != nil {
 			return fmt.Errorf("loadtest api key: %w", err)
 		}
 	}
+	if loadtest.SubscriptionKey != SubscriptionAPIKey {
+		return fmt.Errorf("loadtest.subscription_key must be the fixed loadtest subscription key")
+	}
+	if loadtest.CompatKey != CompatAPIKey {
+		return fmt.Errorf("loadtest.compat_key must be the fixed loadtest compat key")
+	}
+	if loadtest.InvalidKey != InvalidAPIKey {
+		return fmt.Errorf("loadtest.invalid_key must be the fixed loadtest invalid key")
+	}
 	if loadtest.TokenDBKeySubscription != SubscriptionDBKey {
-		return fmt.Errorf("loadtest.token_db_key_subscription must be %s", SubscriptionDBKey)
+		return fmt.Errorf("loadtest.token_db_key_subscription must be the fixed loadtest subscription db key")
 	}
 	if loadtest.TokenDBKeyCompat != CompatDBKey {
-		return fmt.Errorf("loadtest.token_db_key_compat must be %s", CompatDBKey)
+		return fmt.Errorf("loadtest.token_db_key_compat must be the fixed loadtest compat db key")
 	}
 	return nil
+}
+
+func validateProfileConfig(name string, cfg ProfileConfig) error {
+	name = strings.TrimSpace(name)
+	if name == "h2c_diagnostic" || cfg.Transport.Mode == "h2c_diagnostic" {
+		return fmt.Errorf("h2c diagnostic profile is not implemented in this phase")
+	}
+	if name != "benchmark" {
+		return fmt.Errorf("loadtest profile is not implemented in this phase")
+	}
+	if err := validateProfileConfigPositive(name, cfg); err != nil {
+		return err
+	}
+	if !profileConfigMatchesProfile(cfg, profile.Benchmark()) {
+		return fmt.Errorf("profiles.benchmark must match the canonical benchmark profile")
+	}
+	return nil
+}
+
+func validateProfileConfigPositive(name string, cfg ProfileConfig) error {
+	if len(cfg.Points) == 0 {
+		return fmt.Errorf("profiles.%s.points is required", name)
+	}
+	last := 0
+	for _, point := range cfg.Points {
+		if point <= 0 || point <= last {
+			return fmt.Errorf("profiles.%s.points must be positive and strictly increasing", name)
+		}
+		last = point
+	}
+	if cfg.RequestsPerPoint <= 0 || cfg.RampStep <= 0 || cfg.RampInterval.Duration <= 0 || cfg.Duration.Duration <= 0 || cfg.Timeout.Duration <= 0 {
+		return fmt.Errorf("profiles.%s requests, ramp, duration, and timeout must be positive", name)
+	}
+	switch cfg.Transport.Mode {
+	case profile.TransportH1KeepAlive, profile.TransportH1NoKeepAlive:
+	case "":
+		return fmt.Errorf("profiles.%s.transport.mode is required", name)
+	default:
+		return fmt.Errorf("profiles.%s.transport.mode is not implemented", name)
+	}
+	if cfg.Transport.MaxConnsPerHost <= 0 || cfg.Transport.MaxIdleConns <= 0 || cfg.Transport.MaxIdleConnsPerHost <= 0 {
+		return fmt.Errorf("profiles.%s transport connection limits must be positive", name)
+	}
+	if cfg.Relay.MaxIdleConns <= 0 || cfg.Relay.MaxIdleConnsPerHost <= 0 {
+		return fmt.Errorf("profiles.%s relay connection limits must be positive", name)
+	}
+	if cfg.Transport.MaxConnsPerHost > 1024 || cfg.Transport.MaxIdleConns > 1024 || cfg.Transport.MaxIdleConnsPerHost > 1024 || cfg.Relay.MaxIdleConns > 1024 || cfg.Relay.MaxIdleConnsPerHost > 1024 {
+		return fmt.Errorf("profiles.%s connection limits exceed benchmark maximum", name)
+	}
+	if cfg.ServerLimits.GOMAXPROCS == "" || cfg.ServerLimits.GOGC == "" || cfg.ServerLimits.GOMEMLIMIT == "" || cfg.ServerLimits.ProcessMemoryLimitBytes == 0 || cfg.ServerLimits.CPUAffinityCores <= 0 {
+		return fmt.Errorf("profiles.%s server limits must be fully specified", name)
+	}
+	return nil
+}
+
+func profileConfigMatchesProfile(cfg ProfileConfig, want profile.Profile) bool {
+	if !sameIntSlice(cfg.Points, want.Points) {
+		return false
+	}
+	if cfg.RequestsPerPoint != want.RequestsPerPoint ||
+		cfg.RampStep != want.RampStep ||
+		cfg.RampInterval.Duration != want.RampInterval ||
+		cfg.Duration.Duration != want.Duration ||
+		cfg.Timeout.Duration != want.Timeout {
+		return false
+	}
+	if cfg.Transport.Mode != want.Transport.Mode ||
+		cfg.Transport.MaxConnsPerHost != want.Transport.MaxConnsPerHost ||
+		cfg.Transport.MaxIdleConns != want.Transport.MaxIdleConns ||
+		cfg.Transport.MaxIdleConnsPerHost != want.Transport.MaxIdleConnsPerHost {
+		return false
+	}
+	if cfg.Relay.MaxIdleConns != want.Relay.MaxIdleConns ||
+		cfg.Relay.MaxIdleConnsPerHost != want.Relay.MaxIdleConnsPerHost {
+		return false
+	}
+	return cfg.ServerLimits.GOMAXPROCS == want.ServerLimits.GOMAXPROCS &&
+		cfg.ServerLimits.GOGC == want.ServerLimits.GOGC &&
+		cfg.ServerLimits.GOMEMLIMIT == want.ServerLimits.GOMEMLIMIT &&
+		cfg.ServerLimits.ProcessMemoryLimitBytes == want.ServerLimits.ProcessMemoryLimitBytes &&
+		cfg.ServerLimits.CPUAffinityCores == want.ServerLimits.CPUAffinityCores
+}
+
+func sameIntSlice(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func profileFromConfig(name string, cfg ProfileConfig) profile.Profile {
+	points := append([]int(nil), cfg.Points...)
+	return profile.Profile{
+		Name:             name,
+		Points:           points,
+		RequestsPerPoint: cfg.RequestsPerPoint,
+		RampStep:         cfg.RampStep,
+		RampInterval:     cfg.RampInterval.Duration,
+		Duration:         cfg.Duration.Duration,
+		Timeout:          cfg.Timeout.Duration,
+		Transport: profile.Transport{
+			Mode:                cfg.Transport.Mode,
+			MaxConnsPerHost:     cfg.Transport.MaxConnsPerHost,
+			MaxIdleConns:        cfg.Transport.MaxIdleConns,
+			MaxIdleConnsPerHost: cfg.Transport.MaxIdleConnsPerHost,
+		},
+		Relay: profile.Relay{
+			MaxIdleConns:        cfg.Relay.MaxIdleConns,
+			MaxIdleConnsPerHost: cfg.Relay.MaxIdleConnsPerHost,
+		},
+		ServerLimits: profile.ServerLimits{
+			GOMAXPROCS:              cfg.ServerLimits.GOMAXPROCS,
+			GOGC:                    cfg.ServerLimits.GOGC,
+			GOMEMLIMIT:              cfg.ServerLimits.GOMEMLIMIT,
+			ProcessMemoryLimitBytes: cfg.ServerLimits.ProcessMemoryLimitBytes,
+			CPUAffinityCores:        cfg.ServerLimits.CPUAffinityCores,
+		},
+	}
 }
 
 func validateMockProfiles(profiles map[string]MockProfile) error {

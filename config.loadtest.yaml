@@ -25,6 +25,28 @@ loadtest:
 client:
   max_idle_conns: 64
   max_idle_conns_per_host: 16
+profiles:
+  benchmark:
+    points: [250, 500, 750, 1000]
+    requests_per_point: 3000
+    ramp_step: 25
+    ramp_interval: 200ms
+    duration: 45s
+    timeout: 120s
+    transport:
+      mode: h1_keepalive
+      max_conns_per_host: 1024
+      max_idle_conns: 1024
+      max_idle_conns_per_host: 1024
+    relay:
+      max_idle_conns: 1024
+      max_idle_conns_per_host: 1024
+    server_limits:
+      gomaxprocs: "2"
+      gogc: "100"
+      gomemlimit: "384MiB"
+      process_memory_limit_bytes: 536870912
+      cpu_affinity_cores: 2
 mock_profiles:
   s1-smoke:
     first_token_delay: 50ms

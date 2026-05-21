@@ -13,13 +13,13 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func SetRouter(router *gin.Engine, assets ThemeAssets, listenAddr string) {
+func SetRouter(router *gin.Engine, assets ThemeAssets, listenAddr string, loadtestStats *controller.LoadtestHTTPStats) {
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)
 	SetVideoRouter(router)
 	SetConfigGuideRouter(router)
-	controller.RegisterLoadtestRuntimeRoute(router, listenAddr)
+	controller.RegisterLoadtestRuntimeRoute(router, listenAddr, loadtestStats)
 	frontendBaseUrl := os.Getenv("FRONTEND_BASE_URL")
 	if common.IsMasterNode && frontendBaseUrl != "" {
 		frontendBaseUrl = ""

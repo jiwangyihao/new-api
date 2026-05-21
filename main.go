@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -208,13 +209,14 @@ func main() {
 	InjectGoogleAnalytics()
 
 	listenAddr := serverListenAddr()
+	loadtestHTTPStats := controller.NewLoadtestHTTPStats()
 	// 设置路由
 	router.SetRouter(server, router.ThemeAssets{
 		DefaultBuildFS:   buildFS,
 		DefaultIndexPage: indexPage,
 		ClassicBuildFS:   classicBuildFS,
 		ClassicIndexPage: classicIndexPage,
-	}, listenAddr)
+	}, listenAddr, loadtestHTTPStats)
 	var port = os.Getenv("PORT")
 	if port == "" {
 		port = strconv.Itoa(*common.Port)
@@ -223,7 +225,25 @@ func main() {
 	// Log startup success message
 	common.LogStartupSuccess(startTime, port)
 
-	err = server.Run(listenAddr)
+	listener, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		common.FatalLog("failed to start HTTP server: " + err.Error())
+	}
+	defer listener.Close()
+
+	httpServer := &http.Server{
+		Addr:    listenAddr,
+		Handler: server.Handler(),
+		ConnState: func(_ net.Conn, state http.ConnState) {
+			loadtestHTTPStats.OnConnState(state)
+		},
+	}
+	if gin.IsDebugging() {
+		common.LogWriterMu.RLock()
+		fmt.Fprintf(gin.DefaultWriter, "[GIN-debug] Listening and serving HTTP on %s\n", listenAddr)
+		common.LogWriterMu.RUnlock()
+	}
+	err = httpServer.Serve(controller.NewLoadtestCountingListener(listener, loadtestHTTPStats))
 	if err != nil {
 		common.FatalLog("failed to start HTTP server: " + err.Error())
 	}

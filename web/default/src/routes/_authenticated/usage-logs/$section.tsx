@@ -19,20 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import z from 'zod'
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { UsageLogs } from '@/features/usage-logs'
+import { optionalNumericSearchParam } from '@/features/usage-logs/lib/search'
 import {
   isUsageLogsSectionId,
   USAGE_LOGS_DEFAULT_SECTION,
 } from '@/features/usage-logs/section-registry'
 
 const logTypeValues = ['0', '1', '2', '3', '4', '5', '6'] as const
-
-function optionalNumericSearchParam(value: unknown): number | undefined {
-  const candidate = Array.isArray(value) ? value[0] : value
-  if (typeof candidate !== 'number' || !Number.isFinite(candidate)) {
-    return undefined
-  }
-  return candidate
-}
 
 const usageLogsSearchSchema = z.object({
   page: z.number().optional().catch(1),

@@ -56,3 +56,18 @@ test('users target preserves multiple user ids and omits unknown fields', () => 
   assert.equal(target?.search.channel, undefined)
   assert.equal(target?.search.status, undefined)
 })
+
+test('admin analytics targets keep canonical repeated filters', () => {
+  const target = buildAdminAnalyticsDrilldown(filters, {
+    kind: 'admin_subscriptions',
+    user_id: 3,
+    plan_id: 4,
+  })
+
+  assert.equal(target?.to, '/admin-analytics')
+  assert.equal(target?.search.tab, 'plans')
+  assert.deepEqual(target?.search.user_ids, [3])
+  assert.deepEqual(target?.search.plan_ids, [4])
+  assert.equal(target?.search.user_id, undefined)
+  assert.equal(target?.search.plan_id, undefined)
+})

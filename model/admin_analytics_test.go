@@ -119,7 +119,6 @@ func TestAdminAnalyticsActiveSubscriptionFiltersUserStatusAndBusinessCode(t *tes
 	require.Equal(t, 1, rows[0].Subscription.UserId)
 }
 
-
 func TestAdminAnalyticsActiveSubscriptionFiltersResetStatus(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	now := time.Now().Unix()

@@ -53,8 +53,10 @@ export function buildAdminAnalyticsDrilldown(
         search: {
           ...filters,
           tab: target.kind === 'admin_subscriptions' ? 'plans' : 'invitations',
-          user_id: target.user_id,
-          plan_id: target.plan_id,
+          user_ids:
+            target.user_id !== undefined ? [target.user_id] : filters.user_ids,
+          plan_ids:
+            target.plan_id !== undefined ? [target.plan_id] : filters.plan_ids,
           inviter_id: target.inviter_id,
         },
       }

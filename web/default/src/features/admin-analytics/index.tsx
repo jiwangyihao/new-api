@@ -1,4 +1,4 @@
-import { useMemo, type JSX } from 'react'
+import { useMemo, type JSX, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -9,8 +9,8 @@ import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { adminAnalyticsApi } from './api'
 import { ADMIN_ANALYTICS_TABS } from './constants'
-import { formatAdminPercent, formatAdminTokens } from './lib/format'
 import { buildAdminAnalyticsDrilldown } from './lib/drilldown'
+import { formatAdminPercent, formatAdminTokens } from './lib/format'
 import { buildAdminAnalyticsRequestDescriptors } from './lib/page-contract'
 import type {
   AdminAnalyticsCanonicalFilters,
@@ -39,7 +39,9 @@ export interface AdminAnalyticsPageProps {
 
 type PanelApiResponse<TData> = ApiResponse<AdminAnalyticsPanelResponse<TData>>
 type UnknownPanelResponse = PanelApiResponse<unknown>
-type DrilldownHandler = (target: AdminAnalyticsDrilldownTarget | null | undefined) => void
+type DrilldownHandler = (
+  target: AdminAnalyticsDrilldownTarget | null | undefined
+) => void
 
 type UsagePanelResponses = {
   summary?: PanelApiResponse<AdminUsageConsumptionSummaryResponse>
@@ -314,10 +316,7 @@ function ActivePanel(props: {
         loading={props.loading}
         error={props.error}
       >
-        <UsagePanel
-          responses={usageResponses}
-          onDrilldown={handleDrilldown}
-        />
+        <UsagePanel responses={usageResponses} onDrilldown={handleDrilldown} />
       </PanelCard>
     )
   }
@@ -341,7 +340,7 @@ function PanelCard(props: {
   titleKey: string
   loading: boolean
   error: boolean
-  children: React.ReactNode
+  children: ReactNode
 }): JSX.Element {
   const { t } = useTranslation()
   return (
@@ -725,7 +724,7 @@ function RisksPanel(props: {
   )
 }
 
-function MetricGrid(props: { children: React.ReactNode }): JSX.Element {
+function MetricGrid(props: { children: ReactNode }): JSX.Element {
   return (
     <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-4'>
       {props.children}
@@ -798,7 +797,7 @@ function DrilldownCard(props: {
   target: AdminAnalyticsDrilldownTarget | null | undefined
   onDrilldown: DrilldownHandler | undefined
   className: string
-  children: React.ReactNode
+  children: ReactNode
 }): JSX.Element {
   if (!isSupportedDrilldownTarget(props.target) || !props.onDrilldown) {
     return <div className={props.className}>{props.children}</div>
@@ -806,7 +805,7 @@ function DrilldownCard(props: {
   return (
     <button
       type='button'
-      className={`${props.className} w-full cursor-pointer transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2`}
+      className={`${props.className} hover:bg-muted/50 focus-visible:ring-ring w-full cursor-pointer transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none`}
       onClick={() => props.onDrilldown?.(props.target)}
     >
       {props.children}

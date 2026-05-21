@@ -34,7 +34,6 @@ function optionalNumericSearchParam(value: unknown): number | undefined {
   return candidate
 }
 
-
 const usageLogsSearchSchema = z.object({
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(20),
@@ -54,7 +53,6 @@ const usageLogsSearchSchema = z.object({
   isStream: z.boolean().optional(),
   status: z.enum(['success', 'error']).optional(),
 })
-
 
 export const Route = createFileRoute('/_authenticated/usage-logs/$section')({
   beforeLoad: ({ params, search }) => {

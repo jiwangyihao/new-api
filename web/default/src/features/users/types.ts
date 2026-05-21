@@ -153,10 +153,9 @@ export interface AdminAnalyticsUsersDrilldownList {
   sort_order: AdminAnalyticsUsersDrilldownSortOrder
 }
 
-export interface AdminAnalyticsUsersDrilldownResponse
-  extends ApiResponse<{
-    users: AdminAnalyticsUsersDrilldownList
-  }> {}
+export interface AdminAnalyticsUsersDrilldownResponse extends ApiResponse<{
+  users: AdminAnalyticsUsersDrilldownList
+}> {}
 
 export interface UserFormData {
   username: string

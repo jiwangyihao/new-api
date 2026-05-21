@@ -62,7 +62,10 @@ test('canonical filters preserve repeated params and serialize repeated api keys
   assert.deepEqual(filters.subscription_statuses, ['active', 'expired'])
   assert.deepEqual(filters.user_statuses, ['1', '2'])
   assert.deepEqual(filters.log_statuses, ['error', 'success'])
-  assert.deepEqual(filters.grant_reasons, ['monthly_invite_entitlement', 'order'])
+  assert.deepEqual(filters.grant_reasons, [
+    'monthly_invite_entitlement',
+    'order',
+  ])
   assert.deepEqual(filters.business_codes, ['basic', 'pro'])
   assert.deepEqual(filters.statuses, ['active', 'legacy'])
 
@@ -90,6 +93,16 @@ test('canonical filters preserve repeated params and serialize repeated api keys
   assert.equal(params.has('token_id'), false)
   assert.equal(params.has('channel_id'), false)
   assert.equal(params.has('plan_id'), false)
+})
+
+test('canonical filters preserve user status enum values', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    user_statuses: ['enabled', 'disabled', 'enabled'],
+  })
+
+  assert.deepEqual(filters.user_statuses, ['disabled', 'enabled'])
+  const params = buildAdminAnalyticsApiParams(filters)
+  assert.deepEqual(params.getAll('user_statuses'), ['disabled', 'enabled'])
 })
 
 test('usage params omit sort unless requested', () => {

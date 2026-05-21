@@ -18,9 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo } from 'react'
 import { useAuthStore } from '@/stores/auth-store'
+import { ROLE } from '@/lib/roles'
 import { useStatus } from '@/hooks/use-status'
 import type { NavGroup, NavItem } from '@/components/layout/types'
-import { ROLE } from '@/lib/roles'
 
 export type SidebarSectionConfig = {
   enabled: boolean
@@ -64,6 +64,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     user: true,
     setting: true,
     subscription: true,
+    analytics: true,
   },
 }
 
@@ -74,13 +75,15 @@ const REMOVED_SIDEBAR_MODULES: Record<string, readonly string[]> = {
 function removeRemovedSidebarModules(
   config: SidebarModulesAdminConfig
 ): SidebarModulesAdminConfig {
-  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(([sectionKey, moduleKeys]) => {
-    const section = config[sectionKey]
-    if (!section) return
-    moduleKeys.forEach((moduleKey) => {
-      delete section[moduleKey]
-    })
-  })
+  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(
+    ([sectionKey, moduleKeys]) => {
+      const section = config[sectionKey]
+      if (!section) return
+      moduleKeys.forEach((moduleKey) => {
+        delete section[moduleKey]
+      })
+    }
+  )
   return config
 }
 
@@ -120,6 +123,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/dashboard/users': { section: 'console', module: 'detail' },
   '/keys': { section: 'console', module: 'token' },
   '/usage-analytics': { section: 'console', module: 'log' },
+  '/admin-analytics': { section: 'admin', module: 'analytics' },
   '/usage-logs': { section: 'console', module: 'log' },
   '/usage-logs/common': { section: 'console', module: 'log' },
   '/usage-logs/drawing': { section: 'console', module: 'midjourney' },

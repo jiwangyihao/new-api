@@ -118,6 +118,49 @@ func TestAdminLogsFiltersByTokenIDStreamAndStatus(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), "777")
 }
 
+func TestAdminLogsFiltersByUserID(t *testing.T) {
+	setupUsageAnalyticsControllerTestDBs(t)
+	now := usageAnalyticsControllerNow()
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 301, CreatedAt: now - 10, Type: model.LogTypeConsume, TokenId: 31, Quota: 30, MeteredTokens: intPtrForUsageAnalyticsControllerTest(30)})
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 302, CreatedAt: now - 9, Type: model.LogTypeConsume, TokenId: 32, Quota: 999, MeteredTokens: intPtrForUsageAnalyticsControllerTest(999)})
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/log?user_id=301", nil, 1)
+	GetAllLogs(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"user_id":301`)
+	require.NotContains(t, recorder.Body.String(), `"user_id":302`)
+	require.NotContains(t, recorder.Body.String(), `"token_id":32`)
+	require.NotContains(t, recorder.Body.String(), "999")
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/log/stat?user_id=301", nil, 1)
+	GetLogsStat(ctx)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Contains(t, recorder.Body.String(), `"quota":30`)
+	require.Contains(t, recorder.Body.String(), `"total_tokens":30`)
+	require.NotContains(t, recorder.Body.String(), "999")
+}
+
+func TestSelfLogsIgnoreForeignUserIDQuery(t *testing.T) {
+	setupUsageAnalyticsControllerTestDBs(t)
+	now := usageAnalyticsControllerNow()
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 101, CreatedAt: now - 10, Type: model.LogTypeConsume, TokenId: 41, TokenName: "self-token", Quota: 40, MeteredTokens: intPtrForUsageAnalyticsControllerTest(40)})
+	seedUsageAnalyticsControllerLog(t, &model.Log{UserId: 202, CreatedAt: now - 9, Type: model.LogTypeConsume, TokenId: 42, TokenName: "foreign-token", Quota: 999, MeteredTokens: intPtrForUsageAnalyticsControllerTest(999)})
+
+	list := performSelfLogRequest(t, 101, "/api/log/self?user_id=202")
+	require.Equal(t, http.StatusOK, list.Code)
+	require.Contains(t, list.Body.String(), `"user_id":101`)
+	require.Contains(t, list.Body.String(), `"token_id":41`)
+	require.NotContains(t, list.Body.String(), `"user_id":202`)
+	require.NotContains(t, list.Body.String(), "foreign-token")
+	require.NotContains(t, list.Body.String(), "999")
+
+	stat := performSelfLogRequest(t, 101, "/api/log/self/stat?user_id=202")
+	require.Equal(t, http.StatusOK, stat.Code)
+	require.Contains(t, stat.Body.String(), `"quota":40`)
+	require.Contains(t, stat.Body.String(), `"total_tokens":40`)
+	require.NotContains(t, stat.Body.String(), "999")
+}
+
 func TestAdminLogsStatusConflictsWithType(t *testing.T) {
 	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/log?status=success&type="+strconv.Itoa(model.LogTypeError), nil, 1)
 	GetAllLogs(ctx)

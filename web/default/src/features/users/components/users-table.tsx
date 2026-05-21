@@ -39,14 +39,14 @@ import {
   DISABLED_ROW_MOBILE,
   DataTablePage,
 } from '@/components/data-table'
-import { getUsers, searchUsers } from '../api'
+import { getAdminAnalyticsUsersDrilldown, getUsers, searchUsers } from '../api'
 import {
   USER_STATUS,
   getUserStatusOptions,
   getUserRoleOptions,
   isUserDeleted,
 } from '../constants'
-import type { User } from '../types'
+import type { AdminAnalyticsUsersDrilldownItem, User } from '../types'
 import { DataTableBulkActions } from './data-table-bulk-actions'
 import { useUsersColumns } from './users-columns'
 import { useUsers } from './users-provider'
@@ -57,6 +57,47 @@ function isDisabledUserRow(user: User) {
   return isUserDeleted(user) || user.status === USER_STATUS.DISABLED
 }
 
+function hasAdminAnalyticsUsersDrilldown(search: {
+  userId?: number
+  userIds?: number[]
+  planId?: number
+  inviterId?: number
+}): boolean {
+  return (
+    search.userId !== undefined ||
+    (Array.isArray(search.userIds) && search.userIds.length > 0) ||
+    search.planId !== undefined ||
+    search.inviterId !== undefined
+  )
+}
+
+function userStatusFilterValue(status: unknown): string | undefined {
+  if (!Array.isArray(status) || status.length !== 1) return undefined
+  const value = status[0]
+  return typeof value === 'string' ? value : undefined
+}
+
+function mapAdminAnalyticsDrilldownUser(
+  user: AdminAnalyticsUsersDrilldownItem
+): User {
+  return {
+    id: user.user_id,
+    username: user.username,
+    display_name: user.display_name,
+    email: user.email,
+    quota: 0,
+    used_quota: 0,
+    request_count: 0,
+    group: user.user_group,
+    inviter_id: user.inviter_id,
+    status: user.status,
+    role: user.role,
+    created_at: user.created_at,
+    last_login_at: user.last_login_at,
+    DeletedAt: null,
+  }
+}
+
 export function UsersTable() {
   const { t } = useTranslation()
   const columns = useUsersColumns()
@@ -65,6 +106,7 @@ export function UsersTable() {
   const [rowSelection, setRowSelection] = useState({})
   const [sorting, setSorting] = useState<SortingState>([])
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({})
+  const searchParams = route.useSearch()
 
   const {
     globalFilter,
@@ -75,7 +117,7 @@ export function UsersTable() {
     onPaginationChange,
     ensurePageInRange,
   } = useTableUrlState({
-    search: route.useSearch(),
+    search: searchParams,
     navigate: route.useNavigate(),
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 10 : 20 },
     globalFilter: { enabled: true, key: 'filter' },
@@ -87,6 +129,8 @@ export function UsersTable() {
   })
 
   // Fetch data with React Query
+  const hasDrilldown = hasAdminAnalyticsUsersDrilldown(searchParams)
+  const statusFilter = userStatusFilterValue(searchParams.status)
   const { data, isLoading, isFetching } = useQuery({
     queryKey: [
       'users',
@@ -94,9 +138,41 @@ export function UsersTable() {
       pagination.pageSize,
       globalFilter,
       refreshTrigger,
+      hasDrilldown,
+      searchParams.userId,
+      searchParams.userIds,
+      searchParams.planId,
+      searchParams.inviterId,
+      searchParams.group,
+      statusFilter,
     ],
     queryFn: async () => {
       const hasFilter = globalFilter?.trim()
+
+      if (hasDrilldown) {
+        const result = await getAdminAnalyticsUsersDrilldown({
+          user_id: searchParams.userIds ?? searchParams.userId,
+          plan_id: searchParams.planId,
+          inviter_id: searchParams.inviterId,
+          user_group: searchParams.group || undefined,
+          user_status: statusFilter,
+          limit: pagination.pageSize,
+          offset: pagination.pageIndex * pagination.pageSize,
+          sort_order: 'asc',
+        })
+
+        if (!result.success) {
+          toast.error(result.message || t('Failed to load users'))
+          return { items: [], total: 0 }
+        }
+
+        const users = result.data?.data.users
+        return {
+          items: users?.items.map(mapAdminAnalyticsDrilldownUser) || [],
+          total: users?.page.total || 0,
+        }
+      }
+
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
@@ -160,7 +236,8 @@ export function UsersTable() {
     onPaginationChange,
     onGlobalFilterChange,
     onColumnFiltersChange,
-    manualPagination: !globalFilter,
+    manualPagination: hasDrilldown || !globalFilter,
+    manualFiltering: hasDrilldown,
     pageCount: Math.ceil((data?.total || 0) / pagination.pageSize),
   })
 

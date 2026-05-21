@@ -22,6 +22,8 @@ import type {
   GetUsersParams,
   GetUsersResponse,
   SearchUsersParams,
+  AdminAnalyticsUsersDrilldownParams,
+  AdminAnalyticsUsersDrilldownResponse,
   UserFormData,
   ManageUserAction,
   ManageUserQuotaPayload,
@@ -52,6 +54,53 @@ export async function searchUsers(
   const { keyword = '', group = '', p = 1, page_size = 10 } = params
   const res = await api.get(
     `/api/user/search?keyword=${keyword}&group=${group}&p=${p}&page_size=${page_size}`
+  )
+  return res.data
+}
+
+function appendNumberParam(
+  queryParams: URLSearchParams,
+  key: string,
+  value: number | undefined
+): void {
+  if (value !== undefined) queryParams.append(key, String(value))
+}
+
+function appendStringParam(
+  queryParams: URLSearchParams,
+  key: string,
+  value: string | undefined
+): void {
+  const normalized = value?.trim()
+  if (normalized) queryParams.append(key, normalized)
+}
+
+function appendUserIdsParam(
+  queryParams: URLSearchParams,
+  value: number | number[] | undefined
+): void {
+  if (Array.isArray(value)) {
+    for (const userId of value) queryParams.append('user_id', String(userId))
+    return
+  }
+  appendNumberParam(queryParams, 'user_id', value)
+}
+
+export async function getAdminAnalyticsUsersDrilldown(
+  params: AdminAnalyticsUsersDrilldownParams
+): Promise<AdminAnalyticsUsersDrilldownResponse> {
+  const queryParams = new URLSearchParams()
+  appendUserIdsParam(queryParams, params.user_id)
+  appendNumberParam(queryParams, 'plan_id', params.plan_id)
+  appendNumberParam(queryParams, 'inviter_id', params.inviter_id)
+  appendStringParam(queryParams, 'user_group', params.user_group)
+  appendStringParam(queryParams, 'user_status', params.user_status)
+  appendNumberParam(queryParams, 'limit', params.limit)
+  appendNumberParam(queryParams, 'offset', params.offset)
+  appendStringParam(queryParams, 'sort_order', params.sort_order)
+
+  const res = await api.get<AdminAnalyticsUsersDrilldownResponse>(
+    `/api/admin-analytics/drilldown/users?${queryParams.toString()}`
   )
   return res.data
 }

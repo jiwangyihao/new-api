@@ -144,6 +144,9 @@ func TestRunExecutesClientAndWritesPointArtifacts(t *testing.T) {
 	if point.SummaryExcerpt.StatusCodes["200"] != 3 || point.SummaryExcerpt.StreamUsageEvents != 3 || point.SummaryExcerpt.StreamDoneReceived != 3 {
 		t.Fatalf("point did not record required stream/status fields: %#v", point.SummaryExcerpt)
 	}
+	if point.SummaryExcerpt.StopReason != "max_requests" {
+		t.Fatalf("stop reason = %q", point.SummaryExcerpt.StopReason)
+	}
 	if got, err := artifact.HashCanonical(artifact.MockStatsDelta{SchemaVersion: point.MockDelta.SchemaVersion, RunContext: point.MockDelta.RunContext, Path: point.MockDelta.Path, Actual429: point.MockDelta.Actual429, Actual502: point.MockDelta.Actual502, UpstreamAttemptsTotal: point.MockDelta.UpstreamAttemptsTotal}); err != nil || got != point.MockDelta.Hash {
 		t.Fatalf("mock delta hash mismatch got=%s want=%s err=%v", got, point.MockDelta.Hash, err)
 	}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
+	"github.com/QuantumNous/new-api/pkg/loadtest/monitor"
 	"gorm.io/gorm"
 )
 
@@ -110,6 +111,30 @@ func LoadBusinessSnapshot(db *gorm.DB, seed artifact.SeedOutput) (artifact.Busin
 		}
 	}
 	return snapshot, nil
+}
+
+func BusinessDrainSample(db *gorm.DB, tokenProfile string) (monitor.DrainSample, error) {
+	if db == nil {
+		return monitor.DrainSample{}, fmt.Errorf("database is not configured")
+	}
+	switch tokenProfile {
+	case "subscription", "compat":
+	case "":
+		return monitor.DrainSample{}, fmt.Errorf("token profile is required")
+	default:
+		return monitor.DrainSample{}, fmt.Errorf("unsupported token profile %q", tokenProfile)
+	}
+	var sample monitor.DrainSample
+	if err := db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&sample.ConsumeLogs).Error; err != nil {
+		return monitor.DrainSample{}, err
+	}
+	if err := db.Model(&model.SubscriptionPreConsumeRecord{}).Count(&sample.PreConsumeRecords).Error; err != nil {
+		return monitor.DrainSample{}, err
+	}
+	if err := db.Model(&model.UserSubscription{}).Select("COALESCE(SUM(token_used), 0)").Where("status = ?", "active").Scan(&sample.SubscriptionTokenUsed).Error; err != nil {
+		return monitor.DrainSample{}, err
+	}
+	return sample, nil
 }
 
 func BuildDiff(in DiffInputs) (artifact.Diff, artifact.Invariant) {

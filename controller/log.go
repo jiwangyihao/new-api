@@ -38,7 +38,12 @@ func GetAllLogs(c *gin.Context) {
 		writeLogBadRequest(c, err.Error())
 		return
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status}
+	userID, err := parseOptionalPositiveIntQuery(c, "user_id")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
 	logs, total, err := model.GetAllLogsWithFilter(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
@@ -243,7 +248,12 @@ func GetLogsStat(c *gin.Context) {
 		writeLogBadRequest(c, err.Error())
 		return
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, TokenId: tokenID, IsStream: isStream, Status: status}
+	userID, err := parseOptionalPositiveIntQuery(c, "user_id")
+	if err != nil {
+		writeLogBadRequest(c, err.Error())
+		return
+	}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
 	stat, err := model.SumUsedQuotaWithFilter(filter)
 	if err != nil {
 		common.ApiError(c, err)

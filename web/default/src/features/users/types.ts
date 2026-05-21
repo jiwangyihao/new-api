@@ -111,6 +111,55 @@ export interface SearchUsersParams {
   page_size?: number
 }
 
+export type AdminAnalyticsUsersDrilldownSortOrder = 'asc' | 'desc'
+
+export interface AdminAnalyticsUsersDrilldownParams {
+  user_id?: number | number[]
+  plan_id?: number
+  inviter_id?: number
+  user_group?: string
+  user_status?: string
+  limit?: number
+  offset?: number
+  sort_order?: AdminAnalyticsUsersDrilldownSortOrder
+}
+
+export interface AdminAnalyticsUsersDrilldownItem {
+  user_id: number
+  username: string
+  display_name: string
+  email: string
+  user_group: string
+  status: number
+  role: number
+  created_at: number
+  last_login_at: number
+  inviter_id: number
+  active_plan_id: number
+  active_plan_title: string
+}
+
+export interface AdminAnalyticsUsersDrilldownPage {
+  limit: number
+  offset: number
+  total: number
+  has_more: boolean
+}
+
+export interface AdminAnalyticsUsersDrilldownList {
+  items: AdminAnalyticsUsersDrilldownItem[]
+  page: AdminAnalyticsUsersDrilldownPage
+  sort_by?: string
+  sort_order: AdminAnalyticsUsersDrilldownSortOrder
+}
+
+export interface AdminAnalyticsUsersDrilldownResponse
+  extends ApiResponse<{
+    data: {
+      users: AdminAnalyticsUsersDrilldownList
+    }
+  }> {}
+
 export interface UserFormData {
   username: string
   display_name: string

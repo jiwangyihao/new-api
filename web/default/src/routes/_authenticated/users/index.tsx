@@ -22,19 +22,42 @@ import { useAuthStore } from '@/stores/auth-store'
 import { ROLE } from '@/lib/roles'
 import { Users } from '@/features/users'
 
+const positiveIntSearchValue = z.coerce.number().int().positive()
+const optionalPositiveIntSearchParam = positiveIntSearchValue
+  .optional()
+  .catch(undefined)
+const optionalPositiveIntArraySearchParam = z
+  .union([
+    z.array(positiveIntSearchValue),
+    positiveIntSearchValue.transform((value) => [value]),
+  ])
+  .optional()
+  .catch(undefined)
+const userStatusSearchValue = z.coerce.string().refine((value) => {
+  return value === '1' || value === '2'
+})
+const userStatusSearchParam = z
+  .union([
+    z.array(userStatusSearchValue),
+    userStatusSearchValue.transform((value) => [value]),
+  ])
+  .optional()
+  .catch([])
+
 const usersSearchSchema = z.object({
   page: z.number().optional().catch(1),
   pageSize: z.number().optional().catch(10),
   filter: z.string().optional().catch(''),
-  status: z
-    .array(z.enum(['1', '2']))
-    .optional()
-    .catch([]),
+  status: userStatusSearchParam,
   role: z
     .array(z.enum(['1', '10', '100']))
     .optional()
     .catch([]),
   group: z.string().optional().catch(''),
+  userId: optionalPositiveIntSearchParam,
+  userIds: optionalPositiveIntArraySearchParam,
+  planId: optionalPositiveIntSearchParam,
+  inviterId: optionalPositiveIntSearchParam,
 })
 
 export const Route = createFileRoute('/_authenticated/users/')({

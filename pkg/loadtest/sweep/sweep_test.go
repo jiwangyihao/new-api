@@ -118,3 +118,65 @@ func TestS3S5GateRequiresRequestsAndResourceSamples(t *testing.T) {
 		t.Fatalf("resource leak gate passed: %#v", gate)
 	}
 }
+
+func TestEvaluateGateBenchmarkRequiresExactMaxRequests(t *testing.T) {
+	point := benchmarkPassingPoint()
+	gate := EvaluateGate("benchmark", point, GateOptions{MaxRequests: 3000, MockOutputBytes: 128, RequiredInvariantNames: benchmarkRequiredInvariantNames(), RequireResourceSamples: true})
+	if !gate.Passed {
+		t.Fatalf("benchmark gate failed: %#v", gate)
+	}
+
+	for _, tc := range []struct {
+		name string
+		edit func(*artifact.PointResult)
+	}{
+		{name: "total below max requests", edit: func(p *artifact.PointResult) { p.SummaryExcerpt.Total = 2999 }},
+		{name: "stop reason not max requests", edit: func(p *artifact.PointResult) { p.SummaryExcerpt.StopReason = "duration" }},
+		{name: "observed in-flight below concurrency", edit: func(p *artifact.PointResult) { p.SummaryExcerpt.MaxObservedInFlight = 249 }},
+		{name: "success not total", edit: func(p *artifact.PointResult) { p.SummaryExcerpt.Success = 2999 }},
+		{name: "missing resource peaks", edit: func(p *artifact.PointResult) { p.ResourcePeaks = artifact.ResourcePeaks{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			point := benchmarkPassingPoint()
+			tc.edit(&point)
+			gate := EvaluateGate("benchmark", point, GateOptions{MaxRequests: 3000, MockOutputBytes: 128, RequiredInvariantNames: benchmarkRequiredInvariantNames(), RequireResourceSamples: true})
+			if gate.Passed {
+				t.Fatalf("benchmark gate passed: %#v", gate)
+			}
+		})
+	}
+}
+
+func benchmarkPassingPoint() artifact.PointResult {
+	return artifact.PointResult{
+		Concurrency: 250,
+		SummaryExcerpt: artifact.SummaryExcerpt{
+			Total:                 3000,
+			Success:               3000,
+			Errors:                0,
+			StopReason:            "max_requests",
+			MaxObservedInFlight:   250,
+			StatusCodes:           map[string]int{"200": 3000},
+			StreamDoneReceived:    3000,
+			StreamUsageEvents:     3000,
+			StreamBytes:           384000,
+			UpstreamAttemptsTotal: 3000,
+		},
+		MockDelta:     artifact.MockStatsDelta{Actual429: 0, Actual502: 0, UpstreamAttemptsTotal: 3000},
+		Invariants:    benchmarkPassedInvariants(),
+		ResourcePeaks: artifact.ResourcePeaks{RSSPeakBytes: 128 * 1024 * 1024, GoroutinesPeak: 600, HeapAllocPeakBytes: 48 * 1024 * 1024},
+	}
+}
+
+func benchmarkPassedInvariants() []artifact.Invariant {
+	names := benchmarkRequiredInvariantNames()
+	invariants := make([]artifact.Invariant, 0, len(names))
+	for _, name := range names {
+		invariants = append(invariants, artifact.Invariant{Name: name, Status: "passed"})
+	}
+	return invariants
+}
+
+func benchmarkRequiredInvariantNames() []string {
+	return []string{"subscription_token_used_matches_success_usage", "compat_subscription_token_used_matches_success_usage", "compat_wallet_not_charged", "failure_refund_by_request"}
+}

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import type { NavGroup } from '@/components/layout/types'
 import {
   filterNavGroupsByRole,
   filterSidebarNavGroupsForConfig,
   getDefaultSidebarModulesForTest,
 } from './use-sidebar-config'
-import type { NavGroup } from '@/components/layout/types'
 
 const navGroups: NavGroup[] = [
   {
@@ -41,6 +41,56 @@ describe('sidebar config defaults', () => {
     )
 
     assert.equal(filtered[0]?.items[0]?.url, '/trial-codes')
+  })
+
+  test('keeps admin analytics visible by default and mapped to admin module', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Operations Analytics',
+            url: '/admin-analytics',
+          },
+        ],
+      },
+    ]
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, null)
+
+    assert.equal(filtered[0]?.items[0]?.url, '/admin-analytics')
+  })
+
+  test('lets user config explicitly hide admin analytics', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Operations Analytics',
+            url: '/admin-analytics',
+          },
+        ],
+      },
+    ]
+    const userConfig = {
+      admin: {
+        enabled: true,
+        analytics: false,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig
+    )
+
+    assert.equal(filtered.length, 0)
   })
 
   test('lets user config explicitly hide trial-code management', () => {

@@ -143,6 +143,11 @@ export function useSidebarData(): SidebarData {
             icon: Users,
           },
           {
+            title: t('adminAnalytics.title'),
+            url: '/admin-analytics',
+            icon: BarChart3,
+          },
+          {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,

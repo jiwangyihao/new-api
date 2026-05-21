@@ -18,6 +18,7 @@ type DeriveOptions struct {
 
 type GateOptions struct {
 	MockOutputBytes              int
+	MaxRequests                  int
 	RequiredInvariantNames       []string
 	Seed                         int64
 	StatusRate                   map[int]float64
@@ -70,6 +71,8 @@ func EvaluateGate(scenario string, point artifact.PointResult, opts GateOptions)
 	switch scenario {
 	case "s1-smoke", "s2-short-stream":
 		failed = append(failed, successStreamGateFailures(point, opts)...)
+	case "benchmark":
+		failed = append(failed, benchmarkGateFailures(point, opts)...)
 	case "s4-error-refund":
 		if point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.UpstreamAttemptsTotal || point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.Total {
 			failed = append(failed, "mock delta must describe current point only")
@@ -88,7 +91,7 @@ func EvaluateGate(scenario string, point artifact.PointResult, opts GateOptions)
 		}
 	case "s3-long-stream", "s5-large-payload":
 		failed = append(failed, successStreamGateFailures(point, opts)...)
-		if opts.RequireResourceSamples && point.ResourcePeaks.RSSPeakBytes == 0 && point.ResourcePeaks.GoroutinesPeak == 0 && point.ResourcePeaks.HeapAllocPeakBytes == 0 {
+		if opts.RequireResourceSamples && !resourcePeaksPresent(point.ResourcePeaks) {
 			failed = append(failed, "resource samples are required")
 		}
 		if opts.MaxRSSBytes > 0 && point.ResourcePeaks.RSSPeakBytes > opts.MaxRSSBytes {
@@ -129,6 +132,61 @@ func successStreamGateFailures(point artifact.PointResult, opts GateOptions) []s
 		failed = append(failed, "stream bytes below expected mock output")
 	}
 	return failed
+}
+
+func benchmarkGateFailures(point artifact.PointResult, opts GateOptions) []string {
+	failed := make([]string, 0)
+	if opts.MaxRequests <= 0 {
+		failed = append(failed, "max requests must be configured")
+	}
+	if point.SummaryExcerpt.Total != opts.MaxRequests {
+		failed = append(failed, "total requests must equal max requests")
+	}
+	if point.SummaryExcerpt.Success != opts.MaxRequests || point.SummaryExcerpt.Success != point.SummaryExcerpt.Total {
+		failed = append(failed, "all requests must succeed")
+	}
+	if point.SummaryExcerpt.Errors != 0 {
+		failed = append(failed, "errors must be zero")
+	}
+	if point.SummaryExcerpt.StopReason != "max_requests" {
+		failed = append(failed, "stop reason must be max_requests")
+	}
+	if point.Concurrency > 0 && point.SummaryExcerpt.MaxObservedInFlight < point.Concurrency {
+		failed = append(failed, "max observed in-flight below target")
+	}
+	if len(point.SummaryExcerpt.StatusCodes) != 1 || point.SummaryExcerpt.StatusCodes["200"] != point.SummaryExcerpt.Total {
+		failed = append(failed, "status codes must contain only 200")
+	}
+	if point.SummaryExcerpt.StreamDoneReceived != point.SummaryExcerpt.Success {
+		failed = append(failed, "stream done events must match successes")
+	}
+	if point.SummaryExcerpt.StreamUsageEvents != point.SummaryExcerpt.Success {
+		failed = append(failed, "stream usage events must match successes")
+	}
+	if point.SummaryExcerpt.StreamBytes < int64(opts.MockOutputBytes*point.SummaryExcerpt.Success) {
+		failed = append(failed, "stream bytes below expected mock output")
+	}
+	if mockDeltaMismatch(point) {
+		failed = append(failed, "mock delta must describe current point only")
+	}
+	if opts.RequireResourceSamples && !resourcePeaksPresent(point.ResourcePeaks) {
+		failed = append(failed, "resource samples are required")
+	}
+	return failed
+}
+
+func mockDeltaMismatch(point artifact.PointResult) bool {
+	if point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.UpstreamAttemptsTotal || point.MockDelta.UpstreamAttemptsTotal != point.SummaryExcerpt.Total || point.MockDelta.Actual429 != point.SummaryExcerpt.Actual429 || point.MockDelta.Actual502 != point.SummaryExcerpt.Actual502 {
+		return true
+	}
+	if point.SummaryExcerpt.StatusCodes["429"] != point.MockDelta.Actual429 || point.SummaryExcerpt.StatusCodes["502"] != point.MockDelta.Actual502 {
+		return true
+	}
+	return false
+}
+
+func resourcePeaksPresent(peaks artifact.ResourcePeaks) bool {
+	return peaks.RSSPeakBytes != 0 || peaks.CPUPercentPeak != 0 || peaks.CPUTimeSecondsPeak != 0 || peaks.ThreadCountPeak != 0 || peaks.HandleCountPeak != 0 || peaks.OpenTCPSocketsPeak != 0 || peaks.GoroutinesPeak != 0 || peaks.HeapAllocPeakBytes != 0 || peaks.HeapSysPeakBytes != 0 || peaks.GCCountPeak != 0 || peaks.PauseTotalNSPeak != 0 || peaks.HTTPAcceptTotalPeak != 0 || peaks.HTTPActiveCurrentPeak != 0 || peaks.RedisConnectedClientsPeak != 0 || peaks.RedisUsedMemoryPeakBytes != 0 || peaks.RedisUsedMemoryRSSPeakBytes != 0 || peaks.RedisInstantaneousOpsPeak != 0 || peaks.RedisTotalCommandsProcessedPeak != 0 || peaks.PostgresActiveConnectionsPeak != 0 || peaks.PostgresIdleConnectionsPeak != 0 || peaks.PostgresWaitingLocksPeak != 0 || peaks.PostgresDatabaseSizePeakBytes != 0
 }
 
 func missingOrFailedInvariants(invariants []artifact.Invariant, required []string) []string {

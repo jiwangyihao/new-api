@@ -517,6 +517,7 @@ type LogFilter struct {
 	IsStream          *bool
 	Status            string
 	SelfUserId        *int
+	UserId            *int
 }
 
 func applyLogFilters(tx *gorm.DB, filter LogFilter, qualify bool) (*gorm.DB, error) {
@@ -528,6 +529,8 @@ func applyLogFilters(tx *gorm.DB, filter LogFilter, qualify bool) (*gorm.DB, err
 	}
 	if filter.SelfUserId != nil {
 		tx = tx.Where(col("user_id")+" = ?", *filter.SelfUserId)
+	} else if filter.UserId != nil {
+		tx = tx.Where(col("user_id")+" = ?", *filter.UserId)
 	} else if filter.Username != "" {
 		tx = tx.Where(col("username")+" = ?", filter.Username)
 	}

@@ -448,7 +448,7 @@ func readMockStats(source string) (artifact.MockStats, error) {
 }
 
 func summaryExcerpt(summary artifact.Summary, delta artifact.MockStatsDelta) artifact.SummaryExcerpt {
-	return artifact.SummaryExcerpt{Total: summary.Total, Success: summary.Success, Errors: summary.Errors, StatusCodes: summary.StatusCodes, LatencyP95MS: summary.LatencyP95MS, TTFTP95MS: summary.TTFTP95MS, RequestsPerSecond: summary.RequestsPerSecond, MaxObservedInFlight: summary.MaxObservedInFlight, StreamDoneReceived: boolCount(summary.Stream.DoneReceived, summary.Success), StreamUsageEvents: summary.Stream.UsageEvents, StreamBytes: summary.Stream.Bytes, Actual429: delta.Actual429, Actual502: delta.Actual502, UpstreamAttemptsTotal: delta.UpstreamAttemptsTotal, NonInjectedErrors: nonInjectedErrors(summary, delta)}
+	return artifact.SummaryExcerpt{Total: summary.Total, Success: summary.Success, Errors: summary.Errors, StatusCodes: summary.StatusCodes, LatencyP95MS: summary.LatencyP95MS, TTFTP95MS: summary.TTFTP95MS, RequestsPerSecond: summary.RequestsPerSecond, MaxObservedInFlight: summary.MaxObservedInFlight, StreamDoneReceived: boolCount(summary.Stream.DoneReceived, summary.Success), StreamUsageEvents: summary.Stream.UsageEvents, StreamBytes: summary.Stream.Bytes, StopReason: summary.StopReason, Actual429: delta.Actual429, Actual502: delta.Actual502, UpstreamAttemptsTotal: delta.UpstreamAttemptsTotal, NonInjectedErrors: nonInjectedErrors(summary, delta)}
 }
 
 func boolCount(ok bool, value int) int {
@@ -476,7 +476,7 @@ func gateOptions(opts runPointOptions) sweep.GateOptions {
 			seed = profile.Seed
 		}
 	}
-	return sweep.GateOptions{MockOutputBytes: opts.OutputBytes, RequiredInvariantNames: sweep.RequiredInvariantNames(), Seed: seed, StatusRate: statusRate, RequireResourceSamples: opts.Scenario == "s3-long-stream" || opts.Scenario == "s5-large-payload"}
+	return sweep.GateOptions{MockOutputBytes: opts.OutputBytes, MaxRequests: opts.MaxRequests, RequiredInvariantNames: sweep.RequiredInvariantNames(), Seed: seed, StatusRate: statusRate, RequireResourceSamples: opts.Scenario == "benchmark" || opts.Scenario == "s3-long-stream" || opts.Scenario == "s5-large-payload"}
 }
 
 func sanitizeName(value string) string {

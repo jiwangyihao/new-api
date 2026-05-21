@@ -167,7 +167,7 @@ export function buildBaseParams(config: {
   }
 }
 
-function normalizeTokenId(value: unknown): number | undefined {
+function normalizeSafePositiveInteger(value: unknown): number | undefined {
   const id = Number(value)
   return Number.isSafeInteger(id) && id > 0 ? id : undefined
 }
@@ -192,7 +192,8 @@ export function buildApiParams(config: {
     return undefined
   }
   // Build base params from search params
-  const tokenId = normalizeTokenId(searchParams.tokenId)
+  const tokenId = normalizeSafePositiveInteger(searchParams.tokenId)
+  const userId = normalizeSafePositiveInteger(searchParams.userId)
 
   const params: GetLogsParams = {
     p: page,
@@ -214,6 +215,7 @@ export function buildApiParams(config: {
       ? { upstream_request_id: String(searchParams.upstreamRequestId) }
       : {}),
     ...(tokenId !== undefined ? { token_id: tokenId } : {}),
+    ...(isAdmin && userId !== undefined ? { user_id: userId } : {}),
     ...(searchParams.isStream !== undefined
       ? { is_stream: Boolean(searchParams.isStream) }
       : {}),

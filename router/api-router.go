@@ -184,6 +184,24 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.DELETE("/user_subscriptions/:id", controller.AdminDeleteUserSubscription)
 		}
 
+		adminAnalyticsRoute := apiRouter.Group("/admin-analytics")
+		adminAnalyticsRoute.Use(middleware.AdminAuth())
+		{
+			adminAnalyticsRoute.GET("/overview", controller.GetAdminAnalyticsOverview)
+			adminAnalyticsRoute.GET("/plan-distribution", controller.GetAdminAnalyticsPlanDistribution)
+			adminAnalyticsRoute.GET("/quota-distribution", controller.GetAdminAnalyticsQuotaDistribution)
+			adminAnalyticsRoute.GET("/user-lifecycle", controller.GetAdminAnalyticsUserLifecycle)
+			adminAnalyticsRoute.GET("/subscription-conversion", controller.GetAdminAnalyticsSubscriptionConversion)
+			adminAnalyticsRoute.GET("/invitation-rewards", controller.GetAdminAnalyticsInvitationRewards)
+			adminAnalyticsRoute.GET("/usage-consumption/summary", controller.GetAdminUsageConsumptionSummary)
+			adminAnalyticsRoute.GET("/usage-consumption/timeseries", controller.GetAdminUsageConsumptionTimeseries)
+			adminAnalyticsRoute.GET("/usage-consumption/breakdown", controller.GetAdminUsageConsumptionBreakdown)
+			adminAnalyticsRoute.GET("/risks", controller.GetAdminAnalyticsRisks)
+			adminAnalyticsRoute.GET("/drilldown/users", controller.GetAdminAnalyticsDrilldownUsers)
+			adminAnalyticsRoute.GET("/drilldown/subscriptions", controller.GetAdminAnalyticsDrilldownSubscriptions)
+			adminAnalyticsRoute.GET("/drilldown/invitations", controller.GetAdminAnalyticsDrilldownInvitations)
+		}
+
 		trialCodeAdminRoute := apiRouter.Group("/trial-codes/admin")
 		trialCodeAdminRoute.Use(middleware.AdminAuth())
 		{

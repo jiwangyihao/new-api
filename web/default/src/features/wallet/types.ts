@@ -228,6 +228,17 @@ export interface InvitationEntitlement {
   entitled: boolean
   entitlement_end_time: number
   reward_subscription_id?: number
+  reward_plan_id?: number
+  reward_plan_title?: string
+  reward_plan_business_code?: string
+  reward_tier_rank?: number
+  reward_tier_qualified_count?: number
+  downgrade_reward_plan_id?: number
+  downgrade_reward_plan_title?: string
+  downgrade_reward_plan_business_code?: string
+  downgrade_reward_tier_rank?: number
+  downgrade_reward_tier_qualified_count?: number
+  downgrade_entitlement_end_time?: number
 }
 
 /**

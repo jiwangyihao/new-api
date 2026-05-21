@@ -50,7 +50,6 @@ func InitOptionMap() {
 	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
 	common.OptionMap["SubscriptionConcurrencyFailOpen"] = strconv.FormatBool(common.SubscriptionConcurrencyFailOpen)
 	common.OptionMap["SubscriptionConcurrencyRequireRedis"] = strconv.FormatBool(common.SubscriptionConcurrencyRequireRedis)
-	common.OptionMap["MonthlyInvitationRewardPlanCode"] = "basic_monthly"
 	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
 	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
 	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)

@@ -17,7 +17,7 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 		seedInvitationRewardUsers(t, 1001, 1002, 1003)
-		basicPlan := seedInvitationRewardPlan(t, 2001, "basic_monthly", true)
+		seedInvitationRewardPlan(t, 2001, "basic_monthly", true)
 		paidPlan := seedInvitationRewardPlan(t, 2002, "standard_monthly", true)
 		seedPaidInviteeSubscription(t, 1002, paidPlan.Id, at)
 		seedPaidInviteeSubscription(t, 1003, paidPlan.Id, at)
@@ -33,7 +33,7 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		assert.Equal(t, at.Add(24*time.Hour).Unix(), status.EntitlementEndTime)
 		var sub model.UserSubscription
 		require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
-		assert.Equal(t, basicPlan.Id, sub.PlanId)
+		assert.Equal(t, paidPlan.Id, sub.PlanId)
 		assert.Equal(t, "monthly_invite_entitlement", sub.GrantReason)
 		assert.Equal(t, 1001, sub.GrantSourceUserId)
 		assert.Equal(t, at.Add(24*time.Hour).Unix(), sub.EndTime)
@@ -160,33 +160,61 @@ func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *test
 	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), readStatus.EntitlementEndTime)
 }
 
-func TestMonthlyInvitationEntitlementUsesConfiguredRewardPlanCode(t *testing.T) {
+func TestMonthlyInvitationEntitlementSelectsHighestQualifiedPaidTierAndDowngrade(t *testing.T) {
 	truncate(t)
-	restore := setInvitationRewardPlanCodeForTest("invite_reward_monthly")
-	t.Cleanup(restore)
 	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-	seedInvitationRewardUsers(t, 1701, 1702, 1703)
-	basicPlan := seedInvitationRewardPlan(t, 2701, "basic_monthly", true)
-	rewardPlan := seedInvitationRewardPlan(t, 2702, "invite_reward_monthly", true)
-	paidPlan := seedInvitationRewardPlan(t, 2703, "standard_monthly", true)
-	seedPaidInviteeSubscription(t, 1702, paidPlan.Id, at)
-	seedPaidInviteeSubscription(t, 1703, paidPlan.Id, at)
+	seedInvitationRewardUsers(t, 1701, 1702, 1703, 1704, 1705)
+	basicPlan := seedInvitationRewardPlanWithRank(t, 2701, "basic_monthly", true, 4, 40)
+	proPlan := seedInvitationRewardPlanWithRank(t, 2702, "pro_monthly", true, 2, 80)
+	maxPlan := seedInvitationRewardPlanWithRank(t, 2703, "max_monthly", true, 0, 160)
+	seedPaidInviteeSubscriptionWithEnd(t, 1702, basicPlan.Id, at, at.Add(90*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1703, basicPlan.Id, at, at.Add(80*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1704, proPlan.Id, at, at.Add(20*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1705, proPlan.Id, at, at.Add(30*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1702, maxPlan.Id, at, at.Add(10*24*time.Hour).Unix())
 
 	status, err := EnsureMonthlyInvitationEntitlement(1701, at)
 
 	require.NoError(t, err)
 	require.True(t, status.Entitled)
+	assert.Equal(t, proPlan.Id, status.RewardPlanId)
+	assert.Equal(t, "pro_monthly", status.RewardPlanBusinessCode)
+	assert.Equal(t, "pro_monthly", status.RewardPlanTitle)
+	assert.Equal(t, 2, status.RewardTierQualifiedCount)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), status.EntitlementEndTime)
+	assert.Equal(t, basicPlan.Id, status.DowngradeRewardPlanId)
+	assert.Equal(t, "basic_monthly", status.DowngradeRewardPlanBusinessCode)
+	assert.Equal(t, "basic_monthly", status.DowngradeRewardPlanTitle)
+	assert.Equal(t, at.Add(80*24*time.Hour).Unix(), status.DowngradeEntitlementEndTime)
 	var sub model.UserSubscription
 	require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
-	assert.Equal(t, rewardPlan.Id, sub.PlanId)
-	assert.NotEqual(t, basicPlan.Id, sub.PlanId)
+	assert.Equal(t, proPlan.Id, sub.PlanId)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), sub.EndTime)
+
+	afterProExpires, err := EnsureMonthlyInvitationEntitlement(1701, at.Add(21*24*time.Hour))
+	require.NoError(t, err)
+	require.True(t, afterProExpires.Entitled)
+	assert.Equal(t, basicPlan.Id, afterProExpires.RewardPlanId)
+	assert.Equal(t, at.Add(80*24*time.Hour).Unix(), afterProExpires.EntitlementEndTime)
+	assert.Zero(t, afterProExpires.DowngradeRewardPlanId)
+	sub = model.UserSubscription{}
+	require.NoError(t, model.DB.First(&sub, afterProExpires.RewardSubscriptionId).Error)
+	assert.Equal(t, basicPlan.Id, sub.PlanId)
+	assert.Equal(t, at.Add(80*24*time.Hour).Unix(), sub.EndTime)
 }
 
-func TestMonthlyInvitationEntitlementRequiresConfiguredRewardPlan(t *testing.T) {
+func TestMonthlyInvitationEntitlementDoesNotRequireConfiguredRewardPlanCode(t *testing.T) {
 	truncate(t)
-	restore := setInvitationRewardPlanCodeForTest("missing_reward_monthly")
-	t.Cleanup(restore)
+	common.OptionMapRWMutex.Lock()
+	oldMap := common.OptionMap
+	common.OptionMap = map[string]string{"MonthlyInvitationRewardPlanCode": "missing_reward_monthly"}
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap = oldMap
+		common.OptionMapRWMutex.Unlock()
+	})
 	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	seedInvitationRewardUsers(t, 1801, 1802, 1803)
@@ -197,34 +225,12 @@ func TestMonthlyInvitationEntitlementRequiresConfiguredRewardPlan(t *testing.T) 
 
 	status, err := EnsureMonthlyInvitationEntitlement(1801, at)
 
-	require.Error(t, err)
-	assert.Nil(t, status)
-	assert.Contains(t, err.Error(), "missing_reward_monthly")
-	var count int64
-	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", 1801).Count(&count).Error)
-	assert.Equal(t, int64(0), count)
+	require.NoError(t, err)
+	require.True(t, status.Entitled)
+	assert.Equal(t, paidPlan.Id, status.RewardPlanId)
+	assert.NotZero(t, status.RewardSubscriptionId)
 }
 
-func setInvitationRewardPlanCodeForTest(code string) func() {
-	common.OptionMapRWMutex.Lock()
-	oldMap := common.OptionMap
-	if oldMap == nil {
-		common.OptionMap = map[string]string{}
-	} else {
-		cloned := make(map[string]string, len(oldMap)+1)
-		for key, value := range oldMap {
-			cloned[key] = value
-		}
-		common.OptionMap = cloned
-	}
-	common.OptionMap["MonthlyInvitationRewardPlanCode"] = code
-	common.OptionMapRWMutex.Unlock()
-	return func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = oldMap
-		common.OptionMapRWMutex.Unlock()
-	}
-}
 func seedPaidInviteeSubscriptionWithEnd(t *testing.T, userId int, planId int, at time.Time, end int64) {
 	t.Helper()
 	start := at.Add(-24 * time.Hour).Unix()
@@ -246,6 +252,18 @@ func seedInvitationRewardPlan(t *testing.T, id int, businessCode string, rewardE
 	code := businessCode
 	plan := &model.SubscriptionPlan{Id: id, Title: businessCode, Enabled: true, PriceAmount: 10, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1_000_000, ConcurrencyLimit: 1, RewardEligible: rewardEligible, BusinessCode: &code}
 	require.NoError(t, model.DB.Create(plan).Error)
+	return plan
+}
+
+func seedInvitationRewardPlanWithRank(t *testing.T, id int, businessCode string, rewardEligible bool, sortOrder int, priceAmount float64) *model.SubscriptionPlan {
+	t.Helper()
+	plan := seedInvitationRewardPlan(t, id, businessCode, rewardEligible)
+	require.NoError(t, model.DB.Model(plan).Updates(map[string]interface{}{
+		"sort_order":   sortOrder,
+		"price_amount": priceAmount,
+	}).Error)
+	plan.SortOrder = sortOrder
+	plan.PriceAmount = priceAmount
 	return plan
 }
 

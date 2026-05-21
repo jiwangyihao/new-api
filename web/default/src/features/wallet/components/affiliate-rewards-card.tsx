@@ -59,6 +59,13 @@ export function AffiliateRewardsCard({
   }
 
   const hasRewards = (user?.aff_quota ?? 0) > 0
+  const currentRewardTitle = entitlement?.entitled
+    ? entitlement.reward_plan_title || t('Granted')
+    : t('Not granted')
+  const hasDowngradeReward =
+    (entitlement?.downgrade_reward_plan_id ?? 0) > 0 &&
+    (entitlement?.downgrade_entitlement_end_time ?? 0) >
+      (entitlement?.entitlement_end_time ?? 0)
 
   return (
     <Card className='bg-muted/20 py-0'>
@@ -96,14 +103,14 @@ export function AffiliateRewardsCard({
           ))}
         </div>
 
-        <div className='grid grid-cols-2 gap-2 text-xs lg:col-span-3 lg:grid-cols-5'>
-          <div className='rounded-lg border bg-background/60 p-2'>
+        <div className='grid grid-cols-2 gap-2 text-xs lg:col-span-3 lg:grid-cols-6'>
+          <div className='bg-background/60 rounded-lg border p-2'>
             <div className='text-muted-foreground'>{t('Direct invites')}</div>
             <div className='mt-1 font-semibold tabular-nums'>
               {entitlement?.direct_invite_count ?? user?.aff_count ?? 0}
             </div>
           </div>
-          <div className='rounded-lg border bg-background/60 p-2'>
+          <div className='bg-background/60 rounded-lg border p-2'>
             <div className='text-muted-foreground'>
               {t('Qualified paid invites')}
             </div>
@@ -111,27 +118,42 @@ export function AffiliateRewardsCard({
               {entitlement?.qualified_active_count ?? 0}
             </div>
           </div>
-          <div className='rounded-lg border bg-background/60 p-2'>
-            <div className='text-muted-foreground'>{t('Monthly Basic reward')}</div>
+          <div className='bg-background/60 rounded-lg border p-2'>
+            <div className='text-muted-foreground'>{t('Monthly reward')}</div>
             <div className='mt-1 flex items-center gap-1 font-semibold'>
               <CalendarCheck className='size-3.5' />
-              {entitlement?.entitled ? t('Granted') : t('Not granted')}
+              {currentRewardTitle}
             </div>
           </div>
-          <div className='rounded-lg border bg-background/60 p-2'>
+          <div className='bg-background/60 rounded-lg border p-2'>
             <div className='text-muted-foreground'>{t('Reward month')}</div>
             <div className='mt-1 font-semibold tabular-nums'>
               {entitlement?.reward_month || '-'}
             </div>
           </div>
-          <div className='rounded-lg border bg-background/60 p-2'>
-            <div className='text-muted-foreground'>{t('Reward valid until')}</div>
+          <div className='bg-background/60 rounded-lg border p-2'>
+            <div className='text-muted-foreground'>
+              {t('Reward valid until')}
+            </div>
             <div className='mt-1 font-semibold tabular-nums'>
               {formatAffiliateEntitlementEndTime(
                 entitlement?.entitlement_end_time ?? 0
               )}
             </div>
           </div>
+          {hasDowngradeReward && (
+            <div className='bg-background/60 rounded-lg border p-2'>
+              <div className='text-muted-foreground'>{t('Downgrades to')}</div>
+              <div className='mt-1 font-semibold'>
+                {entitlement?.downgrade_reward_plan_title}
+              </div>
+              <div className='text-muted-foreground mt-0.5 tabular-nums'>
+                {formatAffiliateEntitlementEndTime(
+                  entitlement?.downgrade_entitlement_end_time ?? 0
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className='flex items-center gap-2 lg:col-span-3'>
@@ -159,14 +181,14 @@ export function AffiliateRewardsCard({
           )}
         </div>
 
-        <div className='rounded-lg border bg-background/60 p-3 text-xs lg:col-span-3'>
+        <div className='bg-background/60 rounded-lg border p-3 text-xs lg:col-span-3'>
           <h4 className='text-foreground font-semibold'>
             {t('Invitation reward rules')}
           </h4>
           <ul className='text-muted-foreground mt-2 list-disc space-y-1 pl-4'>
             <li>
               {t(
-                'Invite at least two direct users with active paid subscriptions to receive a Basic reward plan.'
+                'Invite at least two direct users with active paid subscriptions to receive the highest qualified matching reward plan.'
               )}
             </li>
             <li>

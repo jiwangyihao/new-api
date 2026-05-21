@@ -277,6 +277,8 @@ func TestGetAllUsersReportsInviteCountsFromRelationships(t *testing.T) {
 				QualifiedPaidInviteCount  int    `json:"qualified_paid_invite_count"`
 				InvitationRewardStatus    string `json:"invitation_reward_status"`
 				InvitationRewardPlanTitle string `json:"invitation_reward_plan_title"`
+				RewardPlanTitle           string `json:"reward_plan_title"`
+				RewardPlanBusinessCode    string `json:"reward_plan_business_code"`
 			} `json:"items"`
 		} `json:"data"`
 	}
@@ -290,6 +292,8 @@ func TestGetAllUsersReportsInviteCountsFromRelationships(t *testing.T) {
 		QualifiedPaidInviteCount  int    `json:"qualified_paid_invite_count"`
 		InvitationRewardStatus    string `json:"invitation_reward_status"`
 		InvitationRewardPlanTitle string `json:"invitation_reward_plan_title"`
+		RewardPlanTitle           string `json:"reward_plan_title"`
+		RewardPlanBusinessCode    string `json:"reward_plan_business_code"`
 	}
 	for i := range payload.Data.Items {
 		if payload.Data.Items[i].Id == 9801 {
@@ -304,4 +308,6 @@ func TestGetAllUsersReportsInviteCountsFromRelationships(t *testing.T) {
 	assert.Equal(t, 1, inviter.QualifiedPaidInviteCount)
 	assert.Equal(t, model.InvitationEntitlementStatusQualified, inviter.InvitationRewardStatus)
 	assert.Equal(t, "Reward Basic", inviter.InvitationRewardPlanTitle)
+	assert.Equal(t, "Reward Basic", inviter.RewardPlanTitle)
+	assert.Equal(t, rewardCode, inviter.RewardPlanBusinessCode)
 }

@@ -67,6 +67,7 @@ export function getInvitationDisplayState(
     | 'qualified_paid_invite_count'
     | 'invitation_reward_status'
     | 'invitation_reward_plan_title'
+    | 'reward_plan_title'
     | 'inviter_id'
   >
 ) {
@@ -74,7 +75,7 @@ export function getInvitationDisplayState(
   const qualifiedPaidInviteCount = user.qualified_paid_invite_count ?? 0
   const rewardText =
     user.invitation_reward_status === 'qualified'
-      ? user.invitation_reward_plan_title || 'Granted'
+      ? user.reward_plan_title || user.invitation_reward_plan_title || 'Granted'
       : 'Not granted'
 
   return {

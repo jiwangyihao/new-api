@@ -52,7 +52,7 @@ const (
 	subscriptionPlanInfoCacheNamespace = "new-api:subscription_plan_info:v1"
 )
 
-const primaryBillableSubscriptionOrder = "CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 ELSE 0 END asc, end_time asc, id asc"
+const primaryBillableSubscriptionOrder = "CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 WHEN grant_reason = 'admin' AND token_limit = 0 THEN 2 ELSE 0 END asc, end_time asc, id asc"
 
 var (
 	subscriptionPlanCacheOnce     sync.Once
@@ -879,7 +879,7 @@ func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage
 	now := common.GetTimestamp()
 	var subs []UserSubscription
 	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-		Order("CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 ELSE 0 END asc, end_time desc, id desc").
+		Order(primaryBillableSubscriptionOrder).
 		Find(&subs).Error; err != nil {
 		return nil, err
 	}
@@ -888,7 +888,7 @@ func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage
 		if err != nil {
 			return nil, err
 		}
-		if isUnlimitedTrialSubscription(&sub) {
+		if isUnlimitedTrialSubscription(&sub, plan) {
 			return &ActiveSubscriptionUsage{TokenLimit: sub.TokenLimit, TokenUsed: sub.TokenUsed, EndTime: sub.EndTime, Unlimited: true}, nil
 		}
 		if isDistributorSubscription(&sub, plan) {
@@ -1259,12 +1259,15 @@ func isDistributorSubscription(sub *UserSubscription, plan *SubscriptionPlan) bo
 	return false
 }
 
-func isUnlimitedTrialSubscription(sub *UserSubscription) bool {
+func isUnlimitedTrialSubscription(sub *UserSubscription, plan *SubscriptionPlan) bool {
 	if sub == nil || sub.TokenLimit != 0 {
 		return false
 	}
 	reason := strings.TrimSpace(sub.GrantReason)
-	return reason == "trial_code" || reason == "invite_trial"
+	if reason == "trial_code" || reason == "invite_trial" {
+		return true
+	}
+	return reason == "admin" && plan != nil && plan.IsTrial
 }
 
 func isPaidSubscription(sub *UserSubscription) bool {
@@ -1326,14 +1329,14 @@ func oneMonthSecondsFrom(now int64) int64 {
 	return 30 * 86400
 }
 
-func isBillableSubscriptionCandidate(sub *UserSubscription, requiredTokens int64) (bool, bool) {
+func isBillableSubscriptionCandidate(sub *UserSubscription, plan *SubscriptionPlan, requiredTokens int64) (bool, bool) {
 	if sub == nil {
 		return false, false
 	}
 	if sub.TokenLimit > 0 {
 		return sub.TokenLimit-sub.TokenUsed >= requiredTokens, false
 	}
-	if isUnlimitedTrialSubscription(sub) {
+	if isUnlimitedTrialSubscription(sub, plan) {
 		return true, true
 	}
 	return false, false
@@ -1404,7 +1407,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 			continue
 		}
 		sawDistributorSubscription = true
-		ok, unlimited := isBillableSubscriptionCandidate(&sub, requiredTokens)
+		ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens)
 		if !ok {
 			continue
 		}

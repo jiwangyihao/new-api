@@ -359,10 +359,15 @@ func TestRefundUserSubscription_UsesRequestIDForDistributor(t *testing.T) {
 	assert.Equal(t, int64(0), sub.TokenUsed)
 }
 
-func TestPreConsumeUserSubscription_TokenLimitZeroOnlyTrialIsUnlimited(t *testing.T) {
+func TestPreConsumeUserSubscription_TokenLimitZeroUnlimitedTrials(t *testing.T) {
 	truncateTables(t)
-	require.NoError(t, DB.Create(&User{Id: 7431, Username: "legacy_admin", Status: common.UserStatusEnabled, AffCode: "aff7431"}).Error)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_pre_consume_records").Error)
+	require.NoError(t, DB.Exec("DELETE FROM user_subscriptions").Error)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_plans").Error)
+	require.NoError(t, DB.Exec("DELETE FROM users").Error)
+
+	require.NoError(t, DB.Create(&User{Id: 7431, Username: "legacy_admin", Status: common.UserStatusEnabled, AffCode: "aff7431"}).Error)
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7432, Title: "Legacy", Enabled: true, TotalAmount: 1}).Error)
 	seedUserSubscriptionForDistributorTest(t, 7433, 7431, 7432, 0, 0, 1, "admin")
 
@@ -380,6 +385,23 @@ func TestPreConsumeUserSubscription_TokenLimitZeroOnlyTrialIsUnlimited(t *testin
 	var sub UserSubscription
 	require.NoError(t, DB.First(&sub, 7443).Error)
 	assert.Equal(t, int64(6), sub.TokenUsed)
+
+	require.NoError(t, DB.Create(&User{Id: 7481, Username: "admin_trial_user", Status: common.UserStatusEnabled, AffCode: "aff7481"}).Error)
+	adminTrialCode := "admin_trial_24h"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7482, Title: "Admin Trial", Enabled: true, IsTrial: true, BusinessCode: &adminTrialCode}).Error)
+	seedUserSubscriptionForDistributorTest(t, 7483, 7481, 7482, 0, 0, 0, "admin")
+
+	_, err = PreConsumeUserSubscription("admin-trial-unlimited", 7481, "gpt-4o", 0, 6)
+	require.NoError(t, err)
+
+	var adminTrial UserSubscription
+	require.NoError(t, DB.First(&adminTrial, 7483).Error)
+	assert.Equal(t, int64(6), adminTrial.TokenUsed)
+
+	usage, err := GetActiveDistributorSubscriptionUsage(7481)
+	require.NoError(t, err)
+	require.NotNil(t, usage)
+	assert.True(t, usage.Unlimited)
 }
 
 func TestPreConsumeUserSubscriptionPrefersPaidDistributorBeforeUnlimitedTrial(t *testing.T) {
@@ -400,6 +422,29 @@ func TestPreConsumeUserSubscriptionPrefersPaidDistributorBeforeUnlimitedTrial(t 
 	assert.Equal(t, int64(0), trial.TokenUsed)
 	var paid UserSubscription
 	require.NoError(t, DB.First(&paid, 7449).Error)
+	assert.Equal(t, int64(6), paid.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionPrefersPaidBeforeAdminUnlimitedTrial(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Exec("DELETE FROM subscription_pre_consume_records").Error)
+	require.NoError(t, DB.Create(&User{Id: 7491, Username: "paid_before_admin_trial", Status: common.UserStatusEnabled, AffCode: "aff7491"}).Error)
+	adminTrialCode := "admin-trial-first"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7492, Title: "Admin Trial", Enabled: true, IsTrial: true, BusinessCode: &adminTrialCode}).Error)
+	seedUserSubscriptionForDistributorTest(t, 7493, 7491, 7492, 0, 0, 0, "admin")
+	seedDistributorSubscriptionPlanForTest(t, 7494, "paid-after-admin-trial", 100)
+	seedUserSubscriptionForDistributorTest(t, 7495, 7491, 7494, 100, 0, 1, "order")
+
+	pre, err := PreConsumeUserSubscription("paid-before-admin-trial", 7491, "gpt-4o", 0, 6)
+	require.NoError(t, err)
+	assert.Equal(t, 7495, pre.UserSubscriptionId)
+
+	var adminTrial UserSubscription
+	require.NoError(t, DB.First(&adminTrial, 7493).Error)
+	assert.Equal(t, int64(0), adminTrial.TokenUsed)
+	var paid UserSubscription
+	require.NoError(t, DB.First(&paid, 7495).Error)
 	assert.Equal(t, int64(6), paid.TokenUsed)
 }
 

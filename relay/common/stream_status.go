@@ -29,11 +29,11 @@ type StreamErrorEntry struct {
 }
 
 type StreamStatus struct {
-	EndReason  StreamEndReason
-	EndError   error
-	endOnce    sync.Once
+	mu sync.Mutex
 
-	mu         sync.Mutex
+	EndReason StreamEndReason
+	EndError  error
+
 	Errors     []StreamErrorEntry
 	ErrorCount int
 }
@@ -46,10 +46,34 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	if s == nil {
 		return
 	}
-	s.endOnce.Do(func() {
-		s.EndReason = reason
-		s.EndError = err
-	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.EndReason != StreamEndReasonNone {
+		if s.EndReason == StreamEndReasonEOF && reason == StreamEndReasonDone {
+			s.EndReason = reason
+			s.EndError = err
+		}
+		return
+	}
+	s.EndReason = reason
+	s.EndError = err
+}
+
+// FinalizeEOF records transport EOF only when no protocol-level or error end
+// reason has already been observed. Because scanning and handler processing are
+// asynchronous, SetEndReason still permits a later protocol completion to
+// upgrade EOF to done.
+func (s *StreamStatus) FinalizeEOF() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.EndReason == StreamEndReasonNone {
+		s.EndReason = StreamEndReasonEOF
+	}
 }
 
 func (s *StreamStatus) RecordError(msg string) {

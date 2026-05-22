@@ -181,7 +181,7 @@ func TestMonthlyInvitationEntitlementSelectsHighestQualifiedPaidTierAndDowngrade
 	assert.Equal(t, proPlan.Id, status.RewardPlanId)
 	assert.Equal(t, "pro_monthly", status.RewardPlanBusinessCode)
 	assert.Equal(t, "pro_monthly", status.RewardPlanTitle)
-	assert.Equal(t, 2, status.RewardTierQualifiedCount)
+	assert.Equal(t, 3, status.RewardTierQualifiedCount)
 	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), status.EntitlementEndTime)
 	assert.Equal(t, basicPlan.Id, status.DowngradeRewardPlanId)
 	assert.Equal(t, "basic_monthly", status.DowngradeRewardPlanBusinessCode)
@@ -202,6 +202,29 @@ func TestMonthlyInvitationEntitlementSelectsHighestQualifiedPaidTierAndDowngrade
 	require.NoError(t, model.DB.First(&sub, afterProExpires.RewardSubscriptionId).Error)
 	assert.Equal(t, basicPlan.Id, sub.PlanId)
 	assert.Equal(t, at.Add(80*24*time.Hour).Unix(), sub.EndTime)
+}
+
+func TestMonthlyInvitationEntitlementCountsHigherTierTowardLowerTier(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 1901, 1902, 1903)
+	seedInvitationRewardPlanWithRank(t, 2901, "basic_monthly", true, 4, 40)
+	proPlan := seedInvitationRewardPlanWithRank(t, 2902, "pro_monthly", true, 2, 80)
+	maxPlan := seedInvitationRewardPlanWithRank(t, 2903, "max_monthly", true, 0, 160)
+	seedPaidInviteeSubscriptionWithEnd(t, 1902, maxPlan.Id, at, at.Add(30*24*time.Hour).Unix())
+	seedPaidInviteeSubscriptionWithEnd(t, 1903, proPlan.Id, at, at.Add(20*24*time.Hour).Unix())
+
+	status, err := EnsureMonthlyInvitationEntitlement(1901, at)
+
+	require.NoError(t, err)
+	require.True(t, status.Entitled)
+	assert.Equal(t, proPlan.Id, status.RewardPlanId)
+	assert.Equal(t, "pro_monthly", status.RewardPlanBusinessCode)
+	assert.Equal(t, 2, status.RewardTierQualifiedCount)
+	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), status.EntitlementEndTime)
+	assert.Zero(t, status.DowngradeRewardPlanId)
+	assert.Zero(t, status.DowngradeEntitlementEndTime)
 }
 
 func TestMonthlyInvitationEntitlementDoesNotRequireConfiguredRewardPlanCode(t *testing.T) {

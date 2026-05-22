@@ -246,23 +246,39 @@ func listInvitationRewardCandidatesTx(tx *gorm.DB, inviterId int, now int64) ([]
 	for idx, plan := range planOrder {
 		rankByPlanId[plan.Id] = len(planOrder) - idx
 	}
-	endTimesByPlan := make(map[int][]int64, len(planOrder))
+	inviteeEndTimesByPlan := make(map[int]map[int]int64, len(planOrder))
 	for _, row := range rows {
-		endTimesByPlan[row.PlanId] = append(endTimesByPlan[row.PlanId], row.EndTime)
+		endTimesByInvitee, ok := inviteeEndTimesByPlan[row.PlanId]
+		if !ok {
+			endTimesByInvitee = make(map[int]int64)
+			inviteeEndTimesByPlan[row.PlanId] = endTimesByInvitee
+		}
+		endTimesByInvitee[row.InviteeId] = row.EndTime
 	}
-	candidates := make([]invitationRewardCandidate, 0, len(endTimesByPlan))
-	for planId, endTimes := range endTimesByPlan {
-		if len(endTimes) < monthlyInviteQualifiedCount {
+	candidates := make([]invitationRewardCandidate, 0, len(planOrder))
+	for _, plan := range planOrder {
+		endTimeByInvitee := make(map[int]int64)
+		for _, purchasedPlan := range planOrder {
+			if compareSubscriptionPlanTier(purchasedPlan, plan) < 0 {
+				continue
+			}
+			for inviteeId, endTime := range inviteeEndTimesByPlan[purchasedPlan.Id] {
+				if existingEndTime, ok := endTimeByInvitee[inviteeId]; !ok || endTime > existingEndTime {
+					endTimeByInvitee[inviteeId] = endTime
+				}
+			}
+		}
+		if len(endTimeByInvitee) < monthlyInviteQualifiedCount {
 			continue
+		}
+		endTimes := make([]int64, 0, len(endTimeByInvitee))
+		for _, endTime := range endTimeByInvitee {
+			endTimes = append(endTimes, endTime)
 		}
 		sort.Slice(endTimes, func(i, j int) bool { return endTimes[i] > endTimes[j] })
-		plan, ok := planById[planId]
-		if !ok || plan.Id == 0 {
-			continue
-		}
 		candidates = append(candidates, invitationRewardCandidate{
 			Plan:           plan,
-			TierRank:       rankByPlanId[planId],
+			TierRank:       rankByPlanId[plan.Id],
 			QualifiedCount: len(endTimes),
 			EndTime:        endTimes[monthlyInviteQualifiedCount-1],
 		})

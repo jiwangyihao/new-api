@@ -1,6 +1,9 @@
 package model
 
 import (
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -341,6 +344,90 @@ func TestPostConsumeUserSubscriptionDeltaOnlyChangesTokenUsed(t *testing.T) {
 	assert.Equal(t, "trial_code", got.GrantReason)
 	assert.Equal(t, "trial_code", got.Source)
 	assert.Equal(t, int64(0), got.TokenLimit)
+}
+
+func TestPostConsumeUserSubscriptionDeltaSQLUsesAtomicIncrement(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7481, Username: "delta_sql_user", Status: common.UserStatusEnabled, AffCode: "aff7481"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7482, "delta-sql", 100)
+	seedUserSubscriptionForDistributorTest(t, 7483, 7481, 7482, 100, 10, 1, "order")
+
+	stmt := DB.Session(&gorm.Session{DryRun: true}).Model(&UserSubscription{}).
+		Where("id = ?", 7483).
+		Updates(map[string]interface{}{
+			"token_used": tokenUsedDeltaExpr(7),
+			"updated_at": 123,
+		}).Statement
+	require.NoError(t, stmt.Error)
+	sql := stmt.SQL.String()
+	if !strings.Contains(sql, "token_used") || !strings.Contains(sql, "+") {
+		t.Fatalf("token delta SQL must increment existing token_used atomically, got SQL: %s", sql)
+	}
+}
+
+func TestPreConsumeUserSubscriptionDoesNotClobberConcurrentPostDelta(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&User{Id: 7487, Username: "preconsume_atomic_user", Status: common.UserStatusEnabled, AffCode: "aff7487"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7488, "preconsume-atomic", 1000)
+	seedUserSubscriptionForDistributorTest(t, 7489, 7487, 7488, 1000, 0, 1, "order")
+
+	const callbackName = "loadtest:inject_post_delta_before_preconsume_update"
+	var injected atomic.Bool
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" {
+			return
+		}
+		if !injected.CompareAndSwap(false, true) {
+			return
+		}
+		_ = tx.Exec("UPDATE user_subscriptions SET token_used = token_used + ? WHERE id = ?", 26, 7489).Error
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+	_, err := PreConsumeUserSubscriptionByUnits("preconsume-atomic", 7487, "gpt-4o", 0, 0, 2)
+	require.NoError(t, err)
+	require.True(t, injected.Load(), "test callback did not exercise the stale update window")
+
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7489).Error)
+	assert.Equal(t, int64(28), got.TokenUsed)
+}
+
+func TestPostConsumeUserSubscriptionDeltaConcurrentSettlePreservesEveryIncrement(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&User{Id: 7484, Username: "delta_concurrent_user", Status: common.UserStatusEnabled, AffCode: "aff7484"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7485, "delta-concurrent", 1000)
+	seedUserSubscriptionForDistributorTest(t, 7486, 7484, 7485, 1000, 0, 1, "order")
+
+	const requests = 10
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	errs := make(chan error, requests)
+	for i := 0; i < requests; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- DB.Transaction(func(tx *gorm.DB) error {
+				if err := postConsumeUserSubscriptionDeltaTx(tx, 7486, 2); err != nil {
+					return err
+				}
+				return postConsumeUserSubscriptionDeltaTx(tx, 7486, 26)
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7486).Error)
+	assert.Equal(t, int64(280), got.TokenUsed)
 }
 
 func TestRefundUserSubscription_UsesRequestIDForDistributor(t *testing.T) {

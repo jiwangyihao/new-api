@@ -54,6 +54,20 @@ func pprofListenAddr() string {
 	return "0.0.0.0:8005"
 }
 
+func channelUpdateFrequencyFromEnv(value string) (int, bool, error) {
+	if value == "" {
+		return 0, false, nil
+	}
+	frequency, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false, err
+	}
+	if frequency <= 0 {
+		return 0, false, nil
+	}
+	return frequency, true, nil
+}
+
 //go:embed web/default/dist
 var buildFS embed.FS
 
@@ -122,11 +136,11 @@ func main() {
 	// 数据看板
 	go model.UpdateQuotaData()
 
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
-		if err != nil {
-			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
-		}
+	frequency, channelUpdaterEnabled, err := channelUpdateFrequencyFromEnv(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
+	if err != nil {
+		common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
+	}
+	if channelUpdaterEnabled {
 		go controller.AutomaticallyUpdateChannels(frequency)
 	}
 

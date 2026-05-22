@@ -29,7 +29,7 @@ type ExpectedLimits struct {
 }
 
 var allowedEnvKeys = map[string]struct{}{
-	"HOST": {}, "PORT": {}, "PPROF_ADDR": {}, "SQL_DSN": {}, "LOG_SQL_DSN": {}, "REDIS_CONN_STRING": {}, "ENABLE_PPROF": {}, "LOADTEST_RUNTIME_STATS_ENABLED": {}, "LOADTEST_PROFILE_BLOCK_RATE": {}, "LOADTEST_PROFILE_MUTEX_FRACTION": {}, "GOMAXPROCS": {}, "GOGC": {}, "GOMEMLIMIT": {}, "BATCH_UPDATE_ENABLED": {}, "SQL_MAX_OPEN_CONNS": {}, "SQL_MAX_IDLE_CONNS": {}, "SQL_MAX_LIFETIME": {}, "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED": {}, "CHANNEL_UPDATE_FREQUENCY": {}, "UPDATE_TASK": {}, "CHANNEL_TEST_FREQUENCY": {}, "PYROSCOPE_URL": {}, "SYNC_UPSTREAM_BASE": {}, "RetryTimes": {}, "AutomaticRetryStatusCodes": {}, "MEMORY_CACHE_ENABLED": {}, "RELAY_MAX_IDLE_CONNS": {}, "RELAY_MAX_IDLE_CONNS_PER_HOST": {},
+	"HOST": {}, "PORT": {}, "PPROF_ADDR": {}, "SQL_DSN": {}, "LOG_SQL_DSN": {}, "REDIS_CONN_STRING": {}, "ENABLE_PPROF": {}, "LOADTEST_RUNTIME_STATS_ENABLED": {}, "LOADTEST_PROFILE_BLOCK_RATE": {}, "LOADTEST_PROFILE_MUTEX_FRACTION": {}, "GOMAXPROCS": {}, "GOGC": {}, "GOMEMLIMIT": {}, "NODE_TYPE": {}, "BATCH_UPDATE_ENABLED": {}, "BATCH_UPDATE_INTERVAL": {}, "SQL_MAX_OPEN_CONNS": {}, "SQL_MAX_IDLE_CONNS": {}, "SQL_MAX_LIFETIME": {}, "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED": {}, "CHANNEL_UPDATE_FREQUENCY": {}, "UPDATE_TASK": {}, "CHANNEL_TEST_FREQUENCY": {}, "PYROSCOPE_URL": {}, "SYNC_UPSTREAM_BASE": {}, "RetryTimes": {}, "AutomaticRetryStatusCodes": {}, "MEMORY_CACHE_ENABLED": {}, "RELAY_MAX_IDLE_CONNS": {}, "RELAY_MAX_IDLE_CONNS_PER_HOST": {},
 }
 
 func BuildCommand(cfg Config) (*exec.Cmd, error) {
@@ -115,6 +115,8 @@ func validateEnv(env map[string]string, expected ExpectedLimits) error {
 		"RetryTimes":                                 "0",
 		"AutomaticRetryStatusCodes":                  "",
 		"MEMORY_CACHE_ENABLED":                       "true",
+		"BATCH_UPDATE_ENABLED":                       "false",
+		"NODE_TYPE":                                  "slave",
 		"RELAY_MAX_IDLE_CONNS":                       wantRelayMaxIdle,
 		"RELAY_MAX_IDLE_CONNS_PER_HOST":              wantRelayMaxIdlePerHost,
 		"GOMEMLIMIT":                                 wantGOMEMLIMIT,

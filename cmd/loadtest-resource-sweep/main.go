@@ -9,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +28,14 @@ import (
 func main() { os.Exit(Run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func Run(args []string, stdout io.Writer, stderr io.Writer) int {
-	return RunWithDeps(args, stdout, stderr, orchestrator.DefaultDependencies())
+	return RunWithDeps(args, stdout, stderr, commandDependencies())
+}
+
+func commandDependencies() orchestrator.Dependencies {
+	deps := orchestrator.DefaultDependencies()
+	deps.StartMock = startMock
+	deps.StartServer = startServer
+	return deps
 }
 
 func RunWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps orchestrator.Dependencies) int {
@@ -53,7 +62,9 @@ func RunWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps orchest
 	}
 	var capturedErr error
 	deps = captureDependencyErrors(deps, &capturedErr)
-	result, code := orchestrator.Run(context.Background(), opts, deps)
+	ctx, cancel := runContext(opts)
+	defer cancel()
+	result, code := orchestrator.Run(ctx, opts, deps)
 	if opts.ArtifactDir != "" && result.SchemaVersion != 0 {
 		if err := writeJSONFile(filepath.Join(opts.ArtifactDir, "resource-sweep.json"), result); err != nil && code == 0 {
 			writeErr(stderr, err)
@@ -70,6 +81,10 @@ func RunWithDeps(args []string, stdout io.Writer, stderr io.Writer, deps orchest
 	}
 	_, _ = fmt.Fprintf(stdout, "resource sweep written %s\n", filepath.Join(opts.ArtifactDir, "resource-sweep.json"))
 	return 0
+}
+
+func runContext(orchestrator.Options) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt)
 }
 
 func parseOptions(args []string) (orchestrator.Options, error) {
@@ -93,6 +108,7 @@ func parseOptions(args []string) (orchestrator.Options, error) {
 	fs.DurationVar(&opts.RampInterval, "ramp-interval", 0, "ramp interval")
 	fs.DurationVar(&opts.Duration, "duration", 0, "duration")
 	fs.DurationVar(&opts.Timeout, "timeout", 0, "timeout")
+	fs.DurationVar(&opts.StartupTimeout, "startup-timeout", 0, "startup timeout")
 	fs.BoolVar(&opts.ExternalIsolatedInfra, "external-isolated-infra", false, "use externally started isolated infra")
 	if err := fs.Parse(args); err != nil {
 		return orchestrator.Options{}, err
@@ -261,7 +277,11 @@ func parsePoints(raw string) ([]int, error) {
 	return out, nil
 }
 
-type commandProcess struct{ cmd *exec.Cmd }
+type commandProcess struct {
+	cmd    *exec.Cmd
+	stdout *os.File
+	stderr *os.File
+}
 
 func (p *commandProcess) PID() int {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
@@ -274,8 +294,33 @@ func (p *commandProcess) Stop(context.Context) error {
 	if p == nil || p.cmd == nil || p.cmd.Process == nil {
 		return nil
 	}
-	_ = p.cmd.Process.Kill()
-	return p.cmd.Wait()
+	err := terminateProcessTree(p.cmd.Process.Pid)
+	waitErr := p.cmd.Wait()
+	if p.stdout != nil {
+		_ = p.stdout.Close()
+	}
+	if p.stderr != nil {
+		_ = p.stderr.Close()
+	}
+	if err != nil {
+		return err
+	}
+	return waitErr
+}
+
+func terminateProcessTree(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	defer process.Release()
+	return process.Kill()
 }
 
 func startMock(ctx context.Context, opts orchestrator.Options, rc artifact.RunContext) (orchestrator.Process, error) {
@@ -297,7 +342,7 @@ func startMock(ctx context.Context, opts orchestrator.Options, rc artifact.RunCo
 	if err := writeJSONFile(runContextPath, rc); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, binary,
+	cmd := exec.Command(binary,
 		"--addr", addr,
 		"--run-context", runContextPath,
 		"--first-token-delay", profileCfg.FirstTokenDelay.String(),
@@ -328,7 +373,7 @@ func startMock(ctx context.Context, opts orchestrator.Options, rc artifact.RunCo
 		_ = stderr.Close()
 		return nil, err
 	}
-	return &commandProcess{cmd: cmd}, nil
+	return &commandProcess{cmd: cmd, stdout: stdout, stderr: stderr}, nil
 }
 
 func startServer(ctx context.Context, opts orchestrator.Options, env map[string]string) (orchestrator.Process, error) {
@@ -355,7 +400,7 @@ func startServer(ctx context.Context, opts orchestrator.Options, env map[string]
 		_ = stderr.Close()
 		return nil, err
 	}
-	return &commandProcess{cmd: cmd}, nil
+	return &commandProcess{cmd: cmd, stdout: stdout, stderr: stderr}, nil
 }
 
 func orchestratorServerCommand(opts orchestrator.Options, env map[string]string, p profile.Profile) (*exec.Cmd, error) {

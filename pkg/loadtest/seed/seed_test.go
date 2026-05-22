@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
+	loadtestconfig "github.com/QuantumNous/new-api/pkg/loadtest/config"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -81,6 +82,7 @@ func openSeedTestDB(t *testing.T) *gorm.DB {
 	model.DB = db
 	model.LOG_DB = db
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Option{}, &model.Model{}))
+
 	t.Cleanup(func() {
 		model.DB = oldDB
 		model.LOG_DB = oldLogDB
@@ -91,6 +93,52 @@ func openSeedTestDB(t *testing.T) *gorm.DB {
 		}
 	})
 	return db
+}
+
+func TestApplyMigratesRequiredLoadtestTables(t *testing.T) {
+	db := openSeedTestDB(t)
+	for _, table := range []any{&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Option{}, &model.Model{}} {
+		if err := db.Migrator().DropTable(table); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := Apply(context.Background(), db, Config{RunContext: artifact.RunContext{SchemaVersion: artifact.SchemaVersion}, MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithDatabaseFlagsRestoresGlobals(t *testing.T) {
+	oldSQLite := common.UsingSQLite
+	oldMySQL := common.UsingMySQL
+	oldPostgreSQL := common.UsingPostgreSQL
+	oldLogType := common.LogSqlType
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.LogSqlType = common.DatabaseTypeSQLite
+	t.Cleanup(func() {
+		common.UsingSQLite = oldSQLite
+		common.UsingMySQL = oldMySQL
+		common.UsingPostgreSQL = oldPostgreSQL
+		common.LogSqlType = oldLogType
+	})
+
+	called := false
+	if err := withDatabaseFlags(common.DatabaseTypePostgreSQL, func() error {
+		called = true
+		if common.UsingSQLite || common.UsingMySQL || !common.UsingPostgreSQL || common.LogSqlType != common.DatabaseTypePostgreSQL {
+			t.Fatalf("postgres flags not applied: sqlite=%v mysql=%v postgres=%v log=%s", common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL, common.LogSqlType)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("callback was not called")
+	}
+	if !common.UsingSQLite || common.UsingMySQL || common.UsingPostgreSQL || common.LogSqlType != common.DatabaseTypeSQLite {
+		t.Fatalf("database flags not restored: sqlite=%v mysql=%v postgres=%v log=%s", common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL, common.LogSqlType)
+	}
 }
 
 func assertCount(t *testing.T, db *gorm.DB, value any, want int64) {

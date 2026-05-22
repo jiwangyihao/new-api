@@ -7,6 +7,8 @@ import (
 
 const serverOnlyScope = "new-api server process only; load generator, mock upstream, PostgreSQL, Redis, and orchestrator remain uncapped except normal OS scheduling"
 
+const nestedJobAssignmentDeniedReason = "job object assignment denied by current Windows job; env limits and CPU affinity still applied"
+
 // ApplyResult records the platform resource-limit operations that actually took
 // effect for the tested new-api server process.
 type ApplyResult struct {
@@ -17,6 +19,22 @@ type ApplyResult struct {
 	CPUAffinityMask         uintptr
 	ProcessMemoryLimitBytes uint64
 	CPUAffinityCores        int
+}
+
+func (r ApplyResult) ShouldFailOrchestrator() bool {
+	switch r.Status {
+	case "applied", "best_effort", "ok":
+		return false
+	case "partial":
+		return r.Reason != nestedJobAssignmentDeniedReason
+	default:
+		return true
+	}
+}
+
+func (r *ApplyResult) markNestedJobAssignmentDenied() {
+	r.Status = "partial"
+	r.Reason = nestedJobAssignmentDeniedReason
 }
 
 func ServerEnv(limits profile.ServerLimits) map[string]string {

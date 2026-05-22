@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/loadtest/runner"
 	"github.com/QuantumNous/new-api/pkg/loadtest/seed"
 	"github.com/QuantumNous/new-api/pkg/loadtest/sweep"
+	redis "github.com/go-redis/redis/v8"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -34,6 +36,94 @@ const (
 	managedPostgresPort = 15432
 	managedRedisPort    = 16379
 )
+
+var startManagedInfra = startManagedInfraProcesses
+
+var startupTimeout = 60 * time.Second
+
+var cleanupPortsTimeout = 30 * time.Second
+var cleanupPortsPollInterval = 100 * time.Millisecond
+
+const (
+	postgresLoadtestUser     = "new_api_loadtest"
+	postgresLoadtestPassword = "loadtest"
+	postgresLoadtestDatabase = "new_api_loadtest"
+)
+
+type managedInfraProcess struct {
+	postgres Process
+	redis    Process
+}
+
+func (p *managedInfraProcess) PID() int {
+	if p == nil || p.postgres == nil {
+		return 0
+	}
+	return p.postgres.PID()
+}
+
+func (p *managedInfraProcess) Stop(ctx context.Context) error {
+	var first error
+	if p == nil {
+		return nil
+	}
+	if p.postgres != nil {
+		if err := p.postgres.Stop(ctx); err != nil && first == nil {
+			first = err
+		}
+		p.postgres = nil
+	}
+	if p.redis != nil {
+		if err := p.redis.Stop(ctx); err != nil && first == nil {
+			first = err
+		}
+		p.redis = nil
+	}
+	return first
+}
+
+type redisManagedProcess struct {
+	cmd    *exec.Cmd
+	stdout *os.File
+	stderr *os.File
+}
+
+func (p *redisManagedProcess) PID() int {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return 0
+	}
+	return p.cmd.Process.Pid
+}
+
+func (p *redisManagedProcess) Stop(ctx context.Context) error {
+	if p == nil || p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
+	_ = p.cmd.Process.Kill()
+	err := p.cmd.Wait()
+	if p.stdout != nil {
+		_ = p.stdout.Close()
+	}
+	if p.stderr != nil {
+		_ = p.stderr.Close()
+	}
+	return err
+}
+
+type pgCtlProcess struct {
+	pgCtl   string
+	dataDir string
+}
+
+func (p *pgCtlProcess) PID() int { return 0 }
+
+func (p *pgCtlProcess) Stop(ctx context.Context) error {
+	if p == nil || p.pgCtl == "" || p.dataDir == "" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, p.pgCtl, "stop", "-D", p.dataDir, "-m", "fast", "-w", "-t", "30")
+	return runCommandRedacted(cmd)
+}
 
 type Process interface {
 	PID() int
@@ -58,6 +148,7 @@ type Options struct {
 	RampInterval          time.Duration
 	Duration              time.Duration
 	Timeout               time.Duration
+	StartupTimeout        time.Duration
 	ExternalIsolatedInfra bool
 	RunContext            artifact.RunContext
 	Commit                string
@@ -87,6 +178,7 @@ type PointOptions struct {
 	Transport        artifact.TransportProfile
 	Seed             artifact.SeedOutput
 	DB               *gorm.DB
+	ServerPID        int
 }
 
 type Dependencies struct {
@@ -194,8 +286,12 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 			_ = deps.StopInfra(ctx, infra)
 			infra = nil
 		}
-		checkPorts := portsForConfig(cfg)
-		ports = deps.CheckPorts(rc, checkPorts)
+		checkPorts, err := cleanupPortsForConfig(cfg, opts.ExternalIsolatedInfra)
+		if err != nil {
+			ports = failedPortsArtifact(rc, err)
+		} else {
+			ports = waitCleanupPortsClosed(ctx, deps, rc, checkPorts, cleanupPortsTimeout)
+		}
 		if opts.ArtifactDir != "" {
 			_ = deps.WriteJSON(filepath.Join(opts.ArtifactDir, "ports-closed.json"), ports)
 		}
@@ -205,11 +301,14 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 		return code
 	}
 
-	infra, err = deps.StartInfra(ctx, opts, cfg)
+	startupCtx, cancelStartup := context.WithTimeout(ctx, effectiveStartupTimeout(opts))
+	defer cancelStartup()
+
+	infra, err = deps.StartInfra(startupCtx, opts, cfg)
 	if err != nil {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: baseRC}, cleanup(baseRC, 1)
 	}
-	seedOut, err := deps.BootstrapAndSeed(ctx, opts, baseRC)
+	seedOut, err := deps.BootstrapAndSeed(startupCtx, opts, baseRC)
 	if err != nil {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: baseRC}, cleanup(baseRC, 1)
 	}
@@ -220,7 +319,7 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 	rc := baseRC
 	rc.SeedOutputHash = seedHash
 
-	mock, err = deps.StartMock(ctx, opts, rc)
+	mock, err = deps.StartMock(startupCtx, opts, rc)
 	if err != nil {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 	}
@@ -228,12 +327,12 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 	if err != nil {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 2)
 	}
-	server, err = deps.StartServer(ctx, opts, env)
+	server, err = deps.StartServer(startupCtx, opts, env)
 	if err != nil {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 	}
-	limitResult, err := deps.ApplyLimits(server.PID(), p.ServerLimits)
-	if err != nil {
+	limitResult, limitErr := deps.ApplyLimits(server.PID(), p.ServerLimits)
+	if limitErr != nil || limitResult.ShouldFailOrchestrator() {
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 	}
 	limitsArtifact = resource.BuildLimitsArtifact(rc, p.ServerLimits, limitResult)
@@ -247,7 +346,7 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 	analyses := make([]artifact.PointAnalysis, 0, len(opts.Points))
 	resources := make([]artifact.ResourceSamplesArtifact, 0, len(opts.Points))
 	for _, c := range opts.Points {
-		point, analysis, samples, err := deps.RunPoint(ctx, pointOptions(opts, cfg, p, rc, seedOut, c))
+		point, analysis, samples, err := deps.RunPoint(ctx, pointOptions(opts, cfg, p, rc, seedOut, c, server.PID()))
 		if err != nil {
 			point = artifact.PointResult{Concurrency: c, Passed: false, Gate: artifact.GateResult{Passed: false, FailedReasons: []string{err.Error()}}}
 		}
@@ -399,6 +498,13 @@ func applyProfileDefaults(opts *Options, p profile.Profile) {
 	}
 }
 
+func effectiveStartupTimeout(opts Options) time.Duration {
+	if opts.StartupTimeout > 0 {
+		return opts.StartupTimeout
+	}
+	return startupTimeout
+}
+
 func baseRunContext(opts Options, cfg loadtestconfig.File) (artifact.RunContext, error) {
 	if opts.RunContext != (artifact.RunContext{}) {
 		return opts.RunContext, nil
@@ -406,7 +512,7 @@ func baseRunContext(opts Options, cfg loadtestconfig.File) (artifact.RunContext,
 	return cfg.BaseRunContext(opts.Commit)
 }
 
-func pointOptions(opts Options, cfg loadtestconfig.File, p profile.Profile, rc artifact.RunContext, seed artifact.SeedOutput, c int) PointOptions {
+func pointOptions(opts Options, cfg loadtestconfig.File, p profile.Profile, rc artifact.RunContext, seed artifact.SeedOutput, c int, serverPID int) PointOptions {
 	return PointOptions{
 		Concurrency:      c,
 		BaseURL:          baseURL(cfg),
@@ -431,15 +537,62 @@ func pointOptions(opts Options, cfg loadtestconfig.File, p profile.Profile, rc a
 		Transport:        artifact.TransportProfile{Mode: p.Transport.Mode, MaxConnsPerHost: p.Transport.MaxConnsPerHost, MaxIdleConns: p.Transport.MaxIdleConns, MaxIdleConnsPerHost: p.Transport.MaxIdleConnsPerHost},
 		Seed:             seed,
 		DB:               openDBUnchecked(cfg.Postgres.DSN),
+		ServerPID:        serverPID,
 	}
 }
 
-func portsForConfig(cfg loadtestconfig.File) []int {
+func portsForConfig(cfg loadtestconfig.File) ([]int, error) {
+	return cleanupPortsForConfig(cfg, false)
+}
+
+func cleanupPortsForConfig(cfg loadtestconfig.File, externalInfra bool) ([]int, error) {
 	ports, err := resource.PortsFromConfig(cfg)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	return ports
+	if !externalInfra {
+		return ports, nil
+	}
+	out := ports[:0]
+	for _, port := range ports {
+		if port == managedPostgresPort || port == managedRedisPort {
+			continue
+		}
+		out = append(out, port)
+	}
+	return out, nil
+}
+
+func waitCleanupPortsClosed(ctx context.Context, deps Dependencies, rc artifact.RunContext, ports []int, timeout time.Duration) artifact.PortsClosedArtifact {
+	if timeout <= 0 {
+		return deps.CheckPorts(rc, ports)
+	}
+	deadline, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	ticker := time.NewTicker(cleanupPortsPollInterval)
+	defer ticker.Stop()
+	latest := deps.CheckPorts(rc, ports)
+	stableClosedChecks := 0
+	for {
+		if latest.Passed {
+			stableClosedChecks++
+			if stableClosedChecks >= 3 {
+				return latest
+			}
+		} else {
+			stableClosedChecks = 0
+		}
+		select {
+		case <-deadline.Done():
+			return latest
+		case <-ticker.C:
+			latest = deps.CheckPorts(rc, ports)
+		}
+	}
+}
+
+func failedPortsArtifact(rc artifact.RunContext, err error) artifact.PortsClosedArtifact {
+	return artifact.PortsClosedArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Ports: map[string]string{"config": "invalid: " + err.Error()}, Passed: false}
 }
 
 func baseURL(cfg loadtestconfig.File) string {
@@ -447,7 +600,7 @@ func baseURL(cfg loadtestconfig.File) string {
 }
 
 func runtimeURL(cfg loadtestconfig.File) string {
-	return (&url.URL{Scheme: "http", Host: cfg.Server.PprofAddr, Path: "/debug/loadtest/runtime"}).String()
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)), Path: "/debug/loadtest/runtime"}).String()
 }
 
 func openDBUnchecked(dsn string) *gorm.DB {
@@ -506,13 +659,154 @@ func validateManagedPorts(cfg loadtestconfig.File) error {
 }
 
 func startInfra(ctx context.Context, opts Options, cfg loadtestconfig.File) (Process, error) {
-	return noopProcess{}, nil
+	if strings.TrimSpace(opts.ArtifactDir) == "" {
+		return nil, fmt.Errorf("artifact-dir is required for isolated infra")
+	}
+	if opts.ExternalIsolatedInfra {
+		if err := verifyExternalIsolatedInfra(ctx, cfg); err != nil {
+			return nil, err
+		}
+		return noopProcess{}, nil
+	}
+	return startManagedInfra(ctx, opts, cfg)
 }
 
 type noopProcess struct{}
 
 func (noopProcess) PID() int                   { return 0 }
 func (noopProcess) Stop(context.Context) error { return nil }
+
+func verifyExternalIsolatedInfra(ctx context.Context, cfg loadtestconfig.File) error {
+	if err := verifyPostgresMarker(ctx, cfg.Postgres.DSN); err != nil {
+		return err
+	}
+	return verifyRedisMarker(ctx, cfg.Redis.Addr)
+}
+
+func verifyPostgresMarker(ctx context.Context, dsn string) error {
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("postgres marker unavailable: %w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("postgres marker unavailable: %w", err)
+	}
+	defer sqlDB.Close()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	row := sqlDB.QueryRowContext(ctx, "SELECT current_database(), current_user")
+	var database, user string
+	if err := row.Scan(&database, &user); err != nil {
+		return fmt.Errorf("postgres marker unavailable: %w", err)
+	}
+	if database != "new_api_loadtest" || user != "new_api_loadtest" {
+		return fmt.Errorf("postgres marker mismatch: current database/user must be new_api_loadtest")
+	}
+	return nil
+}
+
+func verifyRedisMarker(ctx context.Context, addr string) error {
+	opt, err := redis.ParseURL(redisURL(addr))
+	if err != nil {
+		return fmt.Errorf("redis marker unavailable: %w", err)
+	}
+	client := redis.NewClient(opt)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis marker unavailable: %w", err)
+	}
+	keys, err := scanRedisKeys(ctx, client)
+	if err != nil {
+		return fmt.Errorf("redis marker unavailable: %w", err)
+	}
+	for _, key := range keys {
+		if !isLoadtestRedisKey(key) {
+			return fmt.Errorf("redis marker mismatch: non-loadtest key exists")
+		}
+	}
+	return nil
+}
+
+func isLoadtestRedisKey(key string) bool {
+	if key == "loadtest:marker" || strings.HasPrefix(key, "loadtest:") {
+		return true
+	}
+	if strings.HasPrefix(key, "new-api:subscription_plan:v1:") || strings.HasPrefix(key, "new-api:subscription_plan_info:v1:") {
+		return true
+	}
+	if strings.HasPrefix(key, "token:") {
+		return isHexDigest(strings.TrimPrefix(key, "token:"), 64)
+	}
+	if strings.HasPrefix(key, "user:") {
+		_, err := strconv.Atoi(strings.TrimPrefix(key, "user:"))
+		return err == nil
+	}
+	if strings.HasPrefix(key, "notify_limit:") {
+		return true
+	}
+	if strings.HasPrefix(key, "rateLimit:") {
+		return len(key) > len("rateLimit:")
+	}
+	if strings.HasPrefix(key, "subscription:concurrency:user:") {
+		tail := strings.TrimPrefix(key, "subscription:concurrency:user:")
+		tail = strings.TrimSuffix(tail, ":queue")
+		_, err := strconv.Atoi(tail)
+		return err == nil
+	}
+	if strings.HasPrefix(key, "perf:") {
+		return validPerfRedisKey(key)
+	}
+	return false
+}
+
+func isHexDigest(value string, length int) bool {
+	if len(value) != length {
+		return false
+	}
+	for _, r := range value {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validPerfRedisKey(key string) bool {
+	parts := strings.Split(key, ":")
+	if len(parts) != 4 || parts[1] == "" || parts[2] == "" {
+		return false
+	}
+	_, err := strconv.ParseInt(parts[3], 10, 64)
+	return err == nil
+}
+
+func scanRedisKeys(ctx context.Context, client *redis.Client) ([]string, error) {
+	var cursor uint64
+	keys := make([]string, 0)
+	for {
+		batch, next, err := client.Scan(ctx, cursor, "*", 100).Result()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, batch...)
+		if next == 0 {
+			sort.Strings(keys)
+			return keys, nil
+		}
+		cursor = next
+	}
+}
+
+func redisURL(addr string) string {
+	if strings.Contains(addr, "://") {
+		return addr
+	}
+	return "redis://" + addr + "/0"
+}
 
 func startMock(ctx context.Context, opts Options, rc artifact.RunContext) (Process, error) {
 	return nil, fmt.Errorf("managed mock process startup is only available through loadtest-resource-sweep integration")
@@ -541,6 +835,10 @@ func bootstrapAndSeed(ctx context.Context, opts Options, rc artifact.RunContext)
 	if err != nil {
 		return artifact.SeedOutput{}, err
 	}
+	common.UsingSQLite = false
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = true
+	common.LogSqlType = common.DatabaseTypePostgreSQL
 	model.DB = db
 	model.LOG_DB = db
 	return seed.Apply(ctx, db, seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: opts.Config.Loadtest.Model, Group: opts.Config.Loadtest.Group, MockBaseURL: opts.Config.MockUpstream.BaseURL, SubscriptionKey: opts.Config.Loadtest.SubscriptionKey, CompatKey: opts.Config.Loadtest.CompatKey})
@@ -571,6 +869,7 @@ func runPoint(ctx context.Context, opts PointOptions) (artifact.PointResult, art
 		Transport:        opts.Transport,
 		Seed:             opts.Seed,
 		DB:               opts.DB,
+		ServerPID:        opts.ServerPID,
 	})
 }
 
@@ -578,7 +877,7 @@ func renderReport(ctx context.Context, opts Options, sweepResult artifact.SweepR
 	if opts.ArtifactDir == "" {
 		return nil
 	}
-	md := report.RenderSingleReport(sweepResult, nil)
+	md := report.RenderResourceSweep(report.ResourceSweepReportInput{Sweep: sweepResult, Analyses: analyses, ResourceSamples: resources, Limits: limits, Ports: ports})
 	path := filepath.Join(opts.ArtifactDir, "reports", "resource-sweep.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

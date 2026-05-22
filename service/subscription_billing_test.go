@@ -318,6 +318,42 @@ func TestSubscriptionBillingSettlesNativeGeminiTextRelay(t *testing.T) {
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not consume token key quota")
 }
 
+func TestPostTextConsumeQuotaResponsesAndChatSettleUsageTotalTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		mode int
+		path string
+	}{
+		{name: "chat", mode: relayconstant.RelayModeChatCompletions, path: "/v1/chat/completions"},
+		{name: "responses", mode: relayconstant.RelayModeResponses, path: "/v1/responses"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 8121
+			const tokenID = 8122
+			const planID = 8123
+			const subID = 8124
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, "sk-usage-"+tc.name, 10_000)
+			seedDistributorPlan(t, planID, "plan-usage-"+tc.name, 1_000)
+			seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+			ctx := newBillingTestContext(t)
+			ctx.Request = httptest.NewRequest("POST", tc.path, nil)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-usage-"+tc.name, "req-usage-"+tc.name, "subscription_only")
+			relayInfo.RelayMode = tc.mode
+			relayInfo.RequestURLPath = tc.path
+			relayInfo.SetEstimatePromptTokens(11)
+
+			preConsumeForBillingTest(t, ctx, relayInfo, 11)
+			require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}, nil))
+
+			assert.Equal(t, int64(28), getSubscriptionTokenUsed(t, subID))
+		})
+	}
+}
+
+
 func TestSubscriptionBillingRejectsNativeGeminiEmbeddingRelay(t *testing.T) {
 	truncate(t)
 	const userID = 8106

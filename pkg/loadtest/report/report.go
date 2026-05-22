@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
@@ -16,6 +17,14 @@ type CompareReport struct {
 	Markdown string
 }
 
+type ResourceSweepReportInput struct {
+	Sweep           artifact.SweepResult
+	Analyses        []artifact.PointAnalysis
+	ResourceSamples []artifact.ResourceSamplesArtifact
+	Limits          artifact.ResourceLimitsArtifact
+	Ports           artifact.PortsClosedArtifact
+}
+
 type RegressionError struct {
 	Reason string
 }
@@ -23,6 +32,7 @@ type RegressionError struct {
 func (e RegressionError) Error() string { return e.Reason }
 
 func BuildCompareReport(baseline artifact.SweepResult, candidate artifact.SweepResult, thresholds Thresholds) (CompareReport, error) {
+
 	if err := compareContexts(baseline.RunContext, candidate.RunContext); err != nil {
 		return CompareReport{}, err
 	}
@@ -74,6 +84,140 @@ func RenderSingleReport(sweep artifact.SweepResult, diffs []artifact.Diff) strin
 		}
 	}
 	return b.String()
+}
+
+func RenderResourceSweep(input ResourceSweepReportInput) string {
+	analysisByConcurrency := make(map[int]artifact.PointAnalysis, len(input.Analyses))
+	for _, analysis := range input.Analyses {
+		analysisByConcurrency[analysis.Concurrency] = analysis
+	}
+	resourceByConcurrency := make(map[int]artifact.ResourceSamplesArtifact, len(input.ResourceSamples))
+	for _, samples := range input.ResourceSamples {
+		resourceByConcurrency[samples.Concurrency] = samples
+	}
+
+	var b strings.Builder
+	b.WriteString("# Resource Sweep Report\n\n")
+	b.WriteString(fmt.Sprintf("- scenario: %s\n", input.Sweep.RunContext.Scenario))
+	b.WriteString(fmt.Sprintf("- path: %s\n", input.Sweep.RunContext.Path))
+	b.WriteString(fmt.Sprintf("- token_profile: %s\n", input.Sweep.RunContext.TokenProfile))
+	b.WriteString(fmt.Sprintf("- 最高通过并发: %d\n", input.Sweep.HighestPassedConcurrency))
+	if input.Sweep.FirstFailedConcurrency != nil {
+		b.WriteString(fmt.Sprintf("- 第一失败并发: %d\n", *input.Sweep.FirstFailedConcurrency))
+	} else {
+		b.WriteString("- 第一失败并发: none\n")
+	}
+
+	b.WriteString("\n## Resource Limits\n\n")
+	if input.Limits.Status != "" && input.Limits.Status != "ok" {
+		b.WriteString(statusLine("limits", input.Limits.Statused))
+	} else {
+		gomem := input.Limits.ServerEnv["GOMEMLIMIT"]
+		if gomem != "" {
+			b.WriteString(fmt.Sprintf("- GOMEMLIMIT=%s\n", gomem))
+		}
+		if input.Limits.ServerProcessMemoryLimitBytes > 0 {
+			b.WriteString(fmt.Sprintf("- process_memory_limit_bytes: %d\n", input.Limits.ServerProcessMemoryLimitBytes))
+		}
+		if input.Limits.ServerCPUAffinityCores > 0 {
+			b.WriteString(fmt.Sprintf("- cpu_affinity_cores: %d\n", input.Limits.ServerCPUAffinityCores))
+		}
+	}
+
+	b.WriteString("\n## Points\n\n")
+	b.WriteString("| concurrency | passed | failure_class | RSS peak | CPU peak | runtime heap | Redis used_memory | PostgreSQL active |\n")
+	b.WriteString("|---:|:---:|---|---:|---:|---:|---:|---:|\n")
+	for _, point := range input.Sweep.Points {
+		analysis := analysisByConcurrency[point.Concurrency]
+		failureClass := analysis.FailureClass
+		if failureClass == "" && point.Passed {
+			failureClass = "passed"
+		}
+		peaks := point.ResourcePeaks
+		if samples, ok := resourceByConcurrency[point.Concurrency]; ok {
+			peaks = samples.Peaks
+		}
+		b.WriteString(fmt.Sprintf("| %d | %t | %s | %s | %s | %s | %s | %s |\n",
+			point.Concurrency,
+			point.Passed,
+			valueOrUnavailable(failureClass),
+			bytesOrUnavailable(peaks.RSSPeakBytes),
+			floatOrUnavailable(peaks.CPUPercentPeak),
+			bytesOrUnavailable(peaks.HeapAllocPeakBytes),
+			bytesOrUnavailable(peaks.RedisUsedMemoryPeakBytes),
+			intOrUnavailable(peaks.PostgresActiveConnectionsPeak),
+		))
+	}
+
+	b.WriteString("\n## Resource Status\n\n")
+	for _, samples := range input.ResourceSamples {
+		if samples.Drain.Status != "" && samples.Drain.Status != "passed" && samples.Drain.Status != "ok" {
+			b.WriteString(fmt.Sprintf("- c%d drain: %s", samples.Concurrency, samples.Drain.Status))
+			if samples.Drain.Reason != "" {
+				b.WriteString(" - ")
+				b.WriteString(samples.Drain.Reason)
+			}
+			b.WriteByte('\n')
+		}
+		if len(samples.Samples) == 0 && samples.Peaks == (artifact.ResourcePeaks{}) {
+			b.WriteString(fmt.Sprintf("- c%d resources: unavailable\n", samples.Concurrency))
+		}
+	}
+
+	b.WriteString("\n## Ports\n\n")
+	if input.Ports.Passed {
+		b.WriteString("- ports closed: true\n")
+	} else {
+		b.WriteString("- ports closed: false\n")
+	}
+	for _, port := range sortedPortKeys(input.Ports.Ports) {
+		b.WriteString(fmt.Sprintf("  - %s: %s\n", port, input.Ports.Ports[port]))
+	}
+	return b.String()
+}
+
+func statusLine(name string, status artifact.Statused) string {
+	if status.Reason != "" {
+		return fmt.Sprintf("- %s: %s - %s\n", name, status.Status, status.Reason)
+	}
+	return fmt.Sprintf("- %s: %s\n", name, status.Status)
+}
+
+func valueOrUnavailable(value string) string {
+	if value == "" {
+		return "unavailable"
+	}
+	return value
+}
+
+func bytesOrUnavailable(value uint64) string {
+	if value == 0 {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d", value)
+}
+
+func intOrUnavailable(value int) string {
+	if value == 0 {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d", value)
+}
+
+func floatOrUnavailable(value float64) string {
+	if value == 0 {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%.2f", value)
+}
+
+func sortedPortKeys(ports map[string]string) []string {
+	keys := make([]string, 0, len(ports))
+	for key := range ports {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func compareContexts(a, b artifact.RunContext) error {

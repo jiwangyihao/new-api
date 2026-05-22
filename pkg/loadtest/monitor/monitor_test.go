@@ -145,6 +145,38 @@ func TestDrainStatusUsesDeltaFromFirstSample(t *testing.T) {
 	}
 }
 
+func TestDrainStatusRequiresTokenDeltaEvenWhenRowsAlreadyObserved(t *testing.T) {
+	got := EvaluateDrain([]DrainSample{
+		{ConsumeLogs: 100, PreConsumeRecords: 100, SubscriptionTokenUsed: 1000},
+		{ConsumeLogs: 110, PreConsumeRecords: 110, SubscriptionTokenUsed: 1000},
+	}, DrainExpectations{Success: 10, Tokens: 280})
+	if got.Status != "failed" || !strings.Contains(got.Reason, "user_subscriptions") {
+		t.Fatalf("token delta must be required independently from log/preconsume rows: %#v", got)
+	}
+}
+
+func TestWaitDrainDoesNotTreatBaselineAsProgress(t *testing.T) {
+	samples := []DrainSample{
+		{ConsumeLogs: 100, PreConsumeRecords: 100, SubscriptionTokenUsed: 1000},
+		{ConsumeLogs: 110, PreConsumeRecords: 110, SubscriptionTokenUsed: 1000},
+		{ConsumeLogs: 110, PreConsumeRecords: 110, SubscriptionTokenUsed: 1280},
+	}
+	var calls atomic.Int64
+	gotSamples, status := WaitDrain(context.Background(), time.Millisecond, func() DrainSample {
+		idx := int(calls.Add(1)) - 1
+		if idx >= len(samples) {
+			idx = len(samples) - 1
+		}
+		return samples[idx]
+	}, DrainExpectations{Success: 10, Tokens: 280})
+	if status.Status != "passed" {
+		t.Fatalf("status = %#v", status)
+	}
+	if len(gotSamples) < 3 {
+		t.Fatalf("baseline was treated as completed drain: samples=%#v", gotSamples)
+	}
+}
+
 func TestSamplerCollectsAtLeastTwoSamples(t *testing.T) {
 	var count atomic.Int64
 	sam := NewSampler(SamplerOptions{

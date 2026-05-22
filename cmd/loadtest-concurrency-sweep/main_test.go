@@ -13,6 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
+	loadtestconfig "github.com/QuantumNous/new-api/pkg/loadtest/config"
 	"github.com/QuantumNous/new-api/pkg/loadtest/metrics"
 	"github.com/QuantumNous/new-api/pkg/loadtest/mockopenai"
 	"github.com/glebarez/sqlite"
@@ -307,6 +308,17 @@ retry:
 thresholds:
   latency_p95_regression_ratio: 1.10
   ttft_p95_regression_ratio: 1.10
+profiles:
+  benchmark:
+    points: [250, 500, 750, 1000]
+    requests_per_point: 3000
+    ramp_step: 25
+    ramp_interval: "200ms"
+    duration: "45s"
+    timeout: "120s"
+    transport: {mode: "h1_keepalive", max_conns_per_host: 1024, max_idle_conns: 1024, max_idle_conns_per_host: 1024}
+    relay: {max_idle_conns: 1024, max_idle_conns_per_host: 1024}
+    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2}
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -366,7 +378,7 @@ func newSweepHarnessHandler(rc artifact.RunContext, db *gorm.DB, seed artifact.S
 		if r.URL.Path == "/debug/loadtest/runtime" {
 			w.Header().Set("Content-Type", "application/json")
 			if runtimeSamples {
-				_, _ = w.Write([]byte(`{"goroutines":5,"heap_alloc_bytes":2048,"batch_update":{"status":"ok"},"quota_data":{"status":"unavailable"},"perf_metrics":{"status":"unavailable"}}`))
+				_, _ = w.Write([]byte(`{"goroutines":5,"heap_alloc_bytes":2048,"heap_sys_bytes":4096,"batch_update":{"status":"ok"},"quota_data":{"status":"unavailable"},"perf_metrics":{"status":"unavailable"}}`))
 				return
 			}
 			_, _ = w.Write([]byte(`{"goroutines":0,"heap_alloc_bytes":0}`))
@@ -405,6 +417,34 @@ func assertPassedInvariant(t *testing.T, invariants []artifact.Invariant, name s
 		return
 	}
 	t.Fatalf("missing invariant %s: %#v", name, invariants)
+}
+
+func benchmarkProfileConfig() loadtestconfig.ProfileConfig {
+	return loadtestconfig.ProfileConfig{
+		Points:           []int{250, 500, 750, 1000},
+		RequestsPerPoint: 3000,
+		RampStep:         25,
+		RampInterval:     loadtestconfig.Duration{Duration: 200 * time.Millisecond},
+		Duration:         loadtestconfig.Duration{Duration: 45 * time.Second},
+		Timeout:          loadtestconfig.Duration{Duration: 120 * time.Second},
+		Transport: loadtestconfig.TransportConfig{
+			Mode:                "h1_keepalive",
+			MaxConnsPerHost:     1024,
+			MaxIdleConns:        1024,
+			MaxIdleConnsPerHost: 1024,
+		},
+		Relay: loadtestconfig.RelayConfig{
+			MaxIdleConns:        1024,
+			MaxIdleConnsPerHost: 1024,
+		},
+		ServerLimits: loadtestconfig.ServerLimitsConfig{
+			GOMAXPROCS:              "2",
+			GOGC:                    "100",
+			GOMEMLIMIT:              "384MiB",
+			ProcessMemoryLimitBytes: 536870912,
+			CPUAffinityCores:        2,
+		},
+	}
 }
 
 func containsReason(reasons []string, needle string) bool {

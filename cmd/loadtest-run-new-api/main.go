@@ -246,9 +246,24 @@ func terminateProcess(cmd *exec.Cmd) {
 		return
 	}
 	if cmd.Process != nil {
-		_ = cmd.Process.Kill()
+		_ = terminateProcessTree(cmd.Process.Pid)
 	}
 	_ = cmd.Wait()
+}
+
+func terminateProcessTree(pid int) error {
+	if pid <= 0 {
+		return nil
+	}
+	if runtime.GOOS == "windows" {
+		return exec.Command("taskkill", "/PID", strconv.Itoa(pid), "/T", "/F").Run()
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	defer process.Release()
+	return process.Kill()
 }
 
 func openLog(path string) (*os.File, error) {

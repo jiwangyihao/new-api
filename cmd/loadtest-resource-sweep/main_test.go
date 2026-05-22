@@ -3,10 +3,15 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/pkg/loadtest/artifact"
 	loadtestconfig "github.com/QuantumNous/new-api/pkg/loadtest/config"
@@ -128,6 +133,23 @@ func TestRunRejectsProductionEnvAndRealAPIKey(t *testing.T) {
 	}
 }
 
+func TestCommandDependenciesUseCLIProcessStarters(t *testing.T) {
+	deps := commandDependencies()
+	defaults := orchestrator.DefaultDependencies()
+	if reflect.ValueOf(deps.StartMock).Pointer() == reflect.ValueOf(defaults.StartMock).Pointer() {
+		t.Fatal("command dependencies kept orchestrator placeholder StartMock")
+	}
+	if reflect.ValueOf(deps.StartServer).Pointer() == reflect.ValueOf(defaults.StartServer).Pointer() {
+		t.Fatal("command dependencies kept orchestrator StartServer")
+	}
+	if reflect.ValueOf(deps.BuildOrVerifyBinary).Pointer() != reflect.ValueOf(defaults.BuildOrVerifyBinary).Pointer() {
+		t.Fatal("command dependencies unexpectedly replaced non-process orchestrator defaults")
+	}
+	if reflect.ValueOf(deps.StartInfra).Pointer() != reflect.ValueOf(defaults.StartInfra).Pointer() {
+		t.Fatal("command dependencies unexpectedly replaced infra default")
+	}
+}
+
 func TestRunWritesPortsClosedOnInjectedFailure(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := writeResourceSweepConfig(t, dir, nil)
@@ -184,6 +206,39 @@ func TestRunWritesPortsClosedOnInjectedFailure(t *testing.T) {
 		t.Fatal("ports-closed artifact was not written")
 	}
 }
+func TestStartMockProcessOutlivesStartupContextCancellation(t *testing.T) {
+	dir := t.TempDir()
+	ext := ""
+	if strings.HasSuffix(strings.ToLower(os.Args[0]), ".exe") {
+		ext = ".exe"
+	}
+	mockBinary := filepath.Join(dir, "loadtest-mock-openai"+ext)
+	copyCurrentExecutable(t, mockBinary)
+	t.Setenv("GO_WANT_RESOURCE_SWEEP_MOCK_HELPER", "1")
+	baseURL := freeLoopbackBaseURL(t)
+	opts := orchestrator.Options{
+		Binary:      filepath.Join(dir, "new-api"+ext),
+		ArtifactDir: dir,
+		MockProfile: "s2-short-stream",
+		Config: loadtestconfig.File{
+			MockUpstream: loadtestconfig.MockUpstreamConfig{BaseURL: baseURL},
+			MockProfiles: map[string]loadtestconfig.MockProfile{
+				"s2-short-stream": {FirstTokenDelay: time.Millisecond, StreamDuration: time.Millisecond, ChunkInterval: time.Millisecond, OutputBytes: 1, PromptTokens: 1, CompletionTokens: 1},
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	proc, err := startMock(ctx, opts, artifact.RunContext{SchemaVersion: artifact.SchemaVersion})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proc.Stop(context.Background()) }()
+	cancel()
+	time.Sleep(200 * time.Millisecond)
+	if err := waitHTTP(context.Background(), strings.TrimRight(baseURL, "/")+"/v1/models", 2*time.Second); err != nil {
+		t.Fatalf("mock process did not survive startup context cancellation: %v", err)
+	}
+}
 
 func minimalArgs(t *testing.T, cfgPath string, profileName string) []string {
 	t.Helper()
@@ -221,6 +276,63 @@ type fakeResourceSweepProcess struct{ pid int }
 
 func (p fakeResourceSweepProcess) PID() int                   { return p.pid }
 func (p fakeResourceSweepProcess) Stop(context.Context) error { return nil }
+
+func copyCurrentExecutable(t *testing.T, path string) {
+	t.Helper()
+	b, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func freeLoopbackBaseURL(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return "http://" + addr
+}
+
+func init() {
+	if os.Getenv("GO_WANT_RESOURCE_SWEEP_MOCK_HELPER") == "1" {
+		runResourceSweepMockHelper()
+		os.Exit(0)
+	}
+}
+
+func runResourceSweepMockHelper() {
+	fs := flag.NewFlagSet("loadtest-mock-openai-helper", flag.ExitOnError)
+	addr := fs.String("addr", "", "addr")
+	fs.String("run-context", "", "run context")
+	fs.String("first-token-delay", "", "first token delay")
+	fs.String("stream-duration", "", "stream duration")
+	fs.String("chunk-interval", "", "chunk interval")
+	fs.Int("output-bytes", 0, "output bytes")
+	fs.Int("prompt-tokens", 0, "prompt tokens")
+	fs.Int("completion-tokens", 0, "completion tokens")
+	fs.String("status-rate", "", "status rate")
+	fs.Int64("seed", 0, "seed")
+	fs.String("stats-out", "", "stats out")
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		os.Exit(2)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/models", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	})
+	if err := http.ListenAndServe(*addr, mux); err != nil {
+		os.Exit(1)
+	}
+}
 
 func writeResourceSweepConfig(t *testing.T, dir string, edit func(string) string) string {
 	t.Helper()

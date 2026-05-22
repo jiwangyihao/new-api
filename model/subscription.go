@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/samber/hot"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Subscription duration units
@@ -1762,9 +1763,19 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			}
 			return err
 		}
-		sub.TokenUsed += consumeAmount
-		if err := tx.Save(&sub).Error; err != nil {
+		updates := map[string]interface{}{"updated_at": common.GetTimestamp()}
+		if distributor {
+			updates["token_used"] = tokenUsedDeltaExpr(consumeAmount)
+		} else {
+			updates["amount_used"] = amountUsedDeltaExpr(consumeAmount)
+		}
+		if err := tx.Model(&UserSubscription{}).Where("id = ?", sub.Id).Updates(updates).Error; err != nil {
 			return err
+		}
+		if distributor {
+			sub.TokenUsed += consumeAmount
+		} else {
+			sub.AmountUsed += consumeAmount
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		return nil
@@ -1882,6 +1893,19 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 	_ = getSubscriptionPlanInfoCache().SetWithTTL(cacheKey, *info, subscriptionPlanInfoCacheTTL())
 	return info, nil
 }
+func tokenUsedDeltaExpr(delta int64) clause.Expr {
+	if delta < 0 {
+		return gorm.Expr("CASE WHEN ? + ? < 0 THEN 0 ELSE ? + ? END", clause.Column{Name: "token_used"}, delta, clause.Column{Name: "token_used"}, delta)
+	}
+	return gorm.Expr("? + ?", clause.Column{Name: "token_used"}, delta)
+}
+
+func amountUsedDeltaExpr(delta int64) clause.Expr {
+	if delta < 0 {
+		return gorm.Expr("CASE WHEN ? + ? < 0 THEN 0 ELSE ? + ? END", clause.Column{Name: "amount_used"}, delta, clause.Column{Name: "amount_used"}, delta)
+	}
+	return gorm.Expr("? + ?", clause.Column{Name: "amount_used"}, delta)
+}
 
 // Update subscription used amount by delta (positive consume more, negative refund).
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
@@ -1922,7 +1946,7 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 		return tx.Model(&UserSubscription{}).
 			Where("id = ?", userSubscriptionId).
 			Updates(map[string]interface{}{
-				"token_used": newUsed,
+				"token_used": tokenUsedDeltaExpr(delta),
 				"updated_at": updatedAt,
 			}).Error
 	}
@@ -1936,7 +1960,7 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	return tx.Model(&UserSubscription{}).
 		Where("id = ?", userSubscriptionId).
 		Updates(map[string]interface{}{
-			"amount_used": newUsed,
+			"amount_used": amountUsedDeltaExpr(delta),
 			"updated_at":  updatedAt,
 		}).Error
 }

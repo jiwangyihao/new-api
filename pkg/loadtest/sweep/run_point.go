@@ -15,6 +15,7 @@ import (
 	loadtestconfig "github.com/QuantumNous/new-api/pkg/loadtest/config"
 	"github.com/QuantumNous/new-api/pkg/loadtest/metrics"
 	"github.com/QuantumNous/new-api/pkg/loadtest/monitor"
+	"github.com/QuantumNous/new-api/pkg/loadtest/resource"
 	"gorm.io/gorm"
 )
 
@@ -46,6 +47,7 @@ type RunPointOptions struct {
 	InputBytes       int
 	StdoutLog        string
 	StderrLog        string
+	ServerPID        int
 }
 
 func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, artifact.PointAnalysis, artifact.ResourceSamplesArtifact, error) {
@@ -66,13 +68,15 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 		return failedRunPoint(point, opts, err)
 	}
 	beforeRuntime := monitor.ReadRuntimeSnapshot(ctx, opts.RuntimeURL)
-	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: beforeBusiness, Runtime: beforeRuntime, Logs: metrics.ScanServerLogs(readText(opts.StdoutLog), readText(opts.StderrLog))}
+	beforeProcess := resource.SampleProcess(opts.ServerPID)
+	beforeSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: beforeBusiness, Process: beforeProcess, Runtime: beforeRuntime, Logs: metrics.ScanServerLogs(readText(opts.StdoutLog), readText(opts.StderrLog))}
 	if err := writeJSONFile(point.MetricsBeforePath, beforeSnapshot); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
 	drainBaseline, _ := metrics.BusinessDrainSample(opts.DB, opts.TokenProfile)
 	stopSampler := monitor.NewSampler(monitor.SamplerOptions{
 		Interval: 200 * time.Millisecond,
+		Process:  func() artifact.ProcessSnapshot { return resource.SampleProcess(opts.ServerPID) },
 		Runtime:  func() artifact.RuntimeSnapshot { return monitor.ReadRuntimeSnapshot(ctx, opts.RuntimeURL) },
 		Postgres: func() artifact.PostgresSnapshot { return monitor.LoadPostgresSnapshot(opts.DB, nil) },
 		Redis: func() artifact.RedisSnapshot {
@@ -92,8 +96,13 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 	if err := writeJSONFile(point.SummaryPath, summary); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
-	drainSamples, drainStatus := waitDrain(ctx, opts, drainBaseline, summary)
-	_ = drainSamples
+	drainCtx, cancelDrain := drainContext(ctx, opts)
+	drainSamples, drainStatus := waitDrain(drainCtx, opts, drainBaseline, summary)
+	cancelDrain()
+	afterBusiness := beforeBusiness
+	if len(drainSamples) > 0 {
+		afterBusiness = businessSnapshotAfterDrain(opts, drainSamples[len(drainSamples)-1], beforeBusiness)
+	}
 	samples := resourceSamples(opts, stopSampler(), drainStatus)
 	if err := writeJSONFile(prefix+"-resource-samples.json", samples); err != nil {
 		return failedRunPoint(point, opts, err)
@@ -123,12 +132,16 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 	if err := writeJSONFile(deltaPath, delta); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
-	afterBusiness, err := metrics.LoadBusinessSnapshot(opts.DB, opts.Seed)
-	if err != nil {
-		return failedRunPoint(point, opts, err)
+	if afterBusiness.Status != "ok" {
+		var err error
+		afterBusiness, err = metrics.LoadBusinessSnapshot(opts.DB, opts.Seed)
+		if err != nil {
+			return failedRunPoint(point, opts, err)
+		}
 	}
 	afterRuntime := monitor.ReadRuntimeSnapshot(ctx, opts.RuntimeURL)
-	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: afterBusiness, Runtime: afterRuntime, Logs: metrics.ScanServerLogs(readText(opts.StdoutLog), readText(opts.StderrLog))}
+	afterProcess := resource.SampleProcess(opts.ServerPID)
+	afterSnapshot := artifact.Snapshot{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Business: afterBusiness, Process: afterProcess, Runtime: afterRuntime, Logs: metrics.ScanServerLogs(readText(opts.StdoutLog), readText(opts.StderrLog))}
 	if err := writeJSONFile(point.MetricsAfterPath, afterSnapshot); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
@@ -161,6 +174,13 @@ func failedRunPoint(point artifact.PointResult, opts RunPointOptions, err error)
 	return point, analysis.EvaluateBenchmarkPoint(analysis.Inputs{Point: point, ResourceSamples: samples, MaxRequests: opts.MaxRequests}), samples, err
 }
 
+func drainContext(ctx context.Context, opts RunPointOptions) (context.Context, context.CancelFunc) {
+	if opts.Timeout > 0 {
+		return context.WithTimeout(ctx, opts.Timeout)
+	}
+	return ctx, func() {}
+}
+
 func waitDrain(ctx context.Context, opts RunPointOptions, baseline monitor.DrainSample, summary artifact.Summary) ([]monitor.DrainSample, artifact.Statused) {
 	first := true
 	return monitor.WaitDrain(ctx, 200*time.Millisecond, func() monitor.DrainSample {
@@ -178,6 +198,22 @@ func waitDrain(ctx context.Context, opts RunPointOptions, baseline monitor.Drain
 
 func resourceSamples(opts RunPointOptions, samples []artifact.ResourceSample, drain artifact.Statused) artifact.ResourceSamplesArtifact {
 	return artifact.ResourceSamplesArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: opts.RunContext, Concurrency: opts.Concurrency, Samples: samples, Peaks: monitor.Peaks(samples), Drain: drain}
+}
+
+func businessSnapshotAfterDrain(opts RunPointOptions, sample monitor.DrainSample, fallback artifact.BusinessSnapshot) artifact.BusinessSnapshot {
+	if fallback.Status != "ok" {
+		return fallback
+	}
+	if opts.TokenProfile != "subscription" && opts.TokenProfile != "compat" {
+		return fallback
+	}
+	snapshot := fallback
+	if opts.TokenProfile == "subscription" {
+		snapshot.SubscriptionTokenUsed = sample.SubscriptionTokenUsed
+	} else {
+		snapshot.CompatSubscriptionTokenUsed = sample.SubscriptionTokenUsed
+	}
+	return snapshot
 }
 
 func gateOptions(opts RunPointOptions) GateOptions {

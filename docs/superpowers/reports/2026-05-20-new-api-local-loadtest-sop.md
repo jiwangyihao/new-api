@@ -50,6 +50,20 @@ kill "$(cat .loadtest/mock-openai.pid)"
 .loadtest/bin/loadtest-report --sweep .loadtest/baseline/s1-chat-compat-sweep.json --out .loadtest/reports/s1-chat-compat-smoke.md
 ```
 
+## 资源矩阵 benchmark
+
+运行资源矩阵前，必须先确认本机 loadtest 端口全部关闭：PostgreSQL `15432`、Redis `16379`、`new-api` `13080`、mock upstream `19080`、runtime/pprof `8005`。任一端口仍开放时，不得启动下一轮 benchmark。
+
+```bash
+.loadtest/bin/loadtest-resource-sweep --config .loadtest/local-run/config/config.yaml --profile benchmark --binary .loadtest/bin/new-api.exe --work-dir .loadtest/local-run/runtime/new-api --artifact-dir .loadtest/local-run/benchmark --scenario benchmark --path /v1/responses --token-profile subscription --api-key sk-loadtestsub --mock-profile s2-short-stream
+.loadtest/bin/loadtest-report --resource-sweep .loadtest/local-run/benchmark/resource-sweep.json --analysis-dir .loadtest/local-run/benchmark/points --resource-samples-dir .loadtest/local-run/benchmark/points --resource-limits .loadtest/local-run/benchmark/resource-limits.json --ports-closed .loadtest/local-run/benchmark/ports-closed.json --out .loadtest/local-run/benchmark/reports/resource-sweep.md
+```
+
+`benchmark` 结束后必须检查 `.loadtest/local-run/benchmark/ports-closed.json`。若 `passed=false` 或任一端口不是 `closed`，本轮结果只能用于排障，不能作为容量结论。
+
+H2C diagnostic 是后续扩展；第一阶段 `loadtest-resource-sweep` 不接受 `h2c_diagnostic` profile，也不能用 H2C 结果替代 benchmark hard gate。
+
+
 ## 清理
 
 smoke 结束后停止 `new-api`、mock upstream、PostgreSQL 和 Redis，并确认 15432、16379、13080/18081、19080、8005 端口关闭。若任一端口仍开放，不得开始下一轮对比。

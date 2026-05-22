@@ -38,6 +38,9 @@ func Apply(ctx context.Context, db *gorm.DB, cfg Config) (artifact.SeedOutput, e
 	if err := cfg.Validate(); err != nil {
 		return artifact.SeedOutput{}, err
 	}
+	if err := migrateRequiredTables(ctx, db); err != nil {
+		return artifact.SeedOutput{}, err
+	}
 	if err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := ensureUsers(tx); err != nil {
 			return err
@@ -108,6 +111,58 @@ func (c Config) Validate() error {
 		return fmt.Errorf("compat key must be %s", loadtestconfig.CompatAPIKey)
 	}
 	return nil
+}
+
+func migrateRequiredTables(ctx context.Context, db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("db is nil")
+	}
+	db = db.WithContext(ctx)
+	if db.Dialector != nil && db.Dialector.Name() == "postgres" {
+		return withDatabaseFlags(common.DatabaseTypePostgreSQL, func() error {
+			return db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Option{}, &model.Model{})
+		})
+	}
+	for _, table := range []any{&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.Option{}, &model.Model{}} {
+		if db.Migrator().HasTable(table) {
+			continue
+		}
+		if err := db.AutoMigrate(table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func withDatabaseFlags(sqlType string, fn func() error) error {
+	oldSQLite := common.UsingSQLite
+	oldMySQL := common.UsingMySQL
+	oldPostgreSQL := common.UsingPostgreSQL
+	oldLogType := common.LogSqlType
+	switch sqlType {
+	case common.DatabaseTypePostgreSQL:
+		common.UsingSQLite = false
+		common.UsingMySQL = false
+		common.UsingPostgreSQL = true
+		common.LogSqlType = common.DatabaseTypePostgreSQL
+	case common.DatabaseTypeMySQL:
+		common.UsingSQLite = false
+		common.UsingMySQL = true
+		common.UsingPostgreSQL = false
+		common.LogSqlType = common.DatabaseTypeMySQL
+	default:
+		common.UsingSQLite = true
+		common.UsingMySQL = false
+		common.UsingPostgreSQL = false
+		common.LogSqlType = common.DatabaseTypeSQLite
+	}
+	defer func() {
+		common.UsingSQLite = oldSQLite
+		common.UsingMySQL = oldMySQL
+		common.UsingPostgreSQL = oldPostgreSQL
+		common.LogSqlType = oldLogType
+	}()
+	return fn()
 }
 
 func ensureUsers(tx *gorm.DB) error {

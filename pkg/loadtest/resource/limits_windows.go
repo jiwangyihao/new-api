@@ -63,7 +63,11 @@ func ApplyServerLimits(pid int, limits profile.ServerLimits) (ApplyResult, error
 			if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation, uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
 				failures = append(failures, fmt.Sprintf("set job object memory limit: %v", err))
 			} else if err := windows.AssignProcessToJobObject(job, process); err != nil {
-				failures = append(failures, fmt.Sprintf("assign process to job object: %v", err))
+				if err == windows.ERROR_ACCESS_DENIED {
+					result.markNestedJobAssignmentDenied()
+				} else {
+					failures = append(failures, fmt.Sprintf("assign process to job object: %v", err))
+				}
 			} else {
 				result.MemoryLimitEnforced = true
 				if mask != 0 {

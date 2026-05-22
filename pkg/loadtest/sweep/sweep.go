@@ -186,7 +186,7 @@ func mockDeltaMismatch(point artifact.PointResult) bool {
 }
 
 func resourcePeaksPresent(peaks artifact.ResourcePeaks) bool {
-	return peaks.RSSPeakBytes != 0 || peaks.CPUPercentPeak != 0 || peaks.CPUTimeSecondsPeak != 0 || peaks.ThreadCountPeak != 0 || peaks.HandleCountPeak != 0 || peaks.OpenTCPSocketsPeak != 0 || peaks.GoroutinesPeak != 0 || peaks.HeapAllocPeakBytes != 0 || peaks.HeapSysPeakBytes != 0 || peaks.GCCountPeak != 0 || peaks.PauseTotalNSPeak != 0 || peaks.HTTPAcceptTotalPeak != 0 || peaks.HTTPActiveCurrentPeak != 0 || peaks.RedisConnectedClientsPeak != 0 || peaks.RedisUsedMemoryPeakBytes != 0 || peaks.RedisUsedMemoryRSSPeakBytes != 0 || peaks.RedisInstantaneousOpsPeak != 0 || peaks.RedisTotalCommandsProcessedPeak != 0 || peaks.PostgresActiveConnectionsPeak != 0 || peaks.PostgresIdleConnectionsPeak != 0 || peaks.PostgresWaitingLocksPeak != 0 || peaks.PostgresDatabaseSizePeakBytes != 0
+	return peaks.RSSPeakBytes != 0 || peaks.CPUPercentPeak != 0 || peaks.CPUTimeSecondsPeak != 0 || peaks.ThreadCountPeak != 0 || peaks.HandleCountPeak != 0 || peaks.OpenTCPSocketsPeak != 0 || peaks.GoroutinesPeak != 0 || peaks.HeapAllocPeakBytes != 0 || peaks.HeapSysPeakBytes != 0 || peaks.GCCountPeak != 0 || peaks.PauseTotalNSPeak != 0 || peaks.HTTPAcceptTotalPeak != 0 || peaks.HTTPActiveCurrentPeak != 0
 }
 
 func missingOrFailedInvariants(invariants []artifact.Invariant, required []string) []string {

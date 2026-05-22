@@ -53,11 +53,8 @@ func WaitDrain(ctx context.Context, interval time.Duration, sample func() DrainS
 	if interval <= 0 {
 		interval = time.Second
 	}
-	samples := make([]DrainSample, 0, 1)
+	samples := make([]DrainSample, 0, 2)
 	samples = append(samples, sample())
-	if status := EvaluateDrain(samples, expect); status.Status == "passed" {
-		return samples, status
-	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {

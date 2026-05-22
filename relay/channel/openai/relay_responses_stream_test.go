@@ -50,6 +50,8 @@ func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing
 	assert.Equal(t, 3, usage.PromptTokens)
 	assert.Equal(t, 2, usage.CompletionTokens)
 	assert.Equal(t, 5, usage.TotalTokens)
+	assert.Equal(t, 3, usage.InputTokens)
+	assert.Equal(t, 2, usage.OutputTokens)
 	require.NotNil(t, info.StreamStatus)
 	assert.Eventually(t, func() bool {
 		return info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone

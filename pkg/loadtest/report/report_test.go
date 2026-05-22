@@ -54,6 +54,39 @@ func TestReportRendersUnavailableAsUnavailableNotZero(t *testing.T) {
 	}
 }
 
+func TestRenderResourceSweepReportIncludesCapacityAndResources(t *testing.T) {
+	rc := testRunContext()
+	firstFailed := 500
+	input := ResourceSweepReportInput{
+		Sweep: artifact.SweepResult{
+			SchemaVersion:            artifact.SchemaVersion,
+			RunContext:               rc,
+			HighestPassedConcurrency: 250,
+			FirstFailedConcurrency:   &firstFailed,
+			Points: []artifact.PointResult{
+				{Concurrency: 250, Passed: true, SummaryExcerpt: artifact.SummaryExcerpt{Total: 3000, Success: 3000}},
+				{Concurrency: 500, Passed: false, SummaryExcerpt: artifact.SummaryExcerpt{Total: 3000, Success: 2800, Errors: 200}},
+			},
+		},
+		Analyses: []artifact.PointAnalysis{
+			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 250, FailureClass: "passed", HardGate: artifact.GateResult{Passed: true}},
+			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 500, FailureClass: "capacity_limit", HardGate: artifact.GateResult{Passed: false, FailedReasons: []string{"latency"}}},
+		},
+		ResourceSamples: []artifact.ResourceSamplesArtifact{
+			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 250, Peaks: artifact.ResourcePeaks{RSSPeakBytes: 128 << 20, CPUPercentPeak: 95.5, HeapAllocPeakBytes: 48 << 20, RedisUsedMemoryPeakBytes: 12 << 20, PostgresActiveConnectionsPeak: 7}},
+			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 500, Peaks: artifact.ResourcePeaks{RSSPeakBytes: 256 << 20, CPUPercentPeak: 99.9, HeapAllocPeakBytes: 96 << 20, RedisUsedMemoryPeakBytes: 18 << 20, PostgresActiveConnectionsPeak: 10}},
+		},
+		Limits: artifact.ResourceLimitsArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, ServerEnv: map[string]string{"GOMEMLIMIT": "384MiB"}, ServerProcessMemoryLimitBytes: 512 << 20, ServerCPUAffinityCores: 2, Statused: artifact.Statused{Status: "ok"}},
+		Ports:  artifact.PortsClosedArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Ports: map[string]string{"13080": "closed", "15432": "closed"}, Passed: true},
+	}
+	md := RenderResourceSweep(input)
+	for _, want := range []string{"最高通过并发", "第一失败并发", "failure_class", "GOMEMLIMIT=384MiB", "RSS peak", "CPU peak", "runtime heap", "Redis used_memory", "PostgreSQL active", "ports closed", "capacity_limit"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("report missing %q:\n%s", want, md)
+		}
+	}
+}
+
 func sweepWithContext(rc artifact.RunContext) artifact.SweepResult {
 	return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Points: []artifact.PointResult{{Concurrency: 100, Passed: true, SummaryExcerpt: artifact.SummaryExcerpt{LatencyP95MS: 100, TTFTP95MS: 200}}}, HighestPassedConcurrency: 100}
 }

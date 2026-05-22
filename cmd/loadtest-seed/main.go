@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 
 	"github.com/QuantumNous/new-api/common"
@@ -55,10 +56,16 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeErr(stderr, err)
 		return 1
 	}
+	common.UsingSQLite = false
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = true
+	common.LogSqlType = common.DatabaseTypePostgreSQL
 	model.DB = db
 	model.LOG_DB = db
 	seedCfg := seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: cfgFile.Loadtest.Model, Group: cfgFile.Loadtest.Group, MockBaseURL: cfgFile.MockUpstream.BaseURL, SubscriptionKey: cfgFile.Loadtest.SubscriptionKey, CompatKey: cfgFile.Loadtest.CompatKey}
-	out, err := seed.Apply(context.Background(), db, seedCfg)
+	ctx, cancel := seedContext()
+	defer cancel()
+	out, err := seed.Apply(ctx, db, seedCfg)
 	if err != nil {
 		writeErr(stderr, err)
 		return 1
@@ -80,6 +87,10 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "seed ok seed_output_hash=%s\n", seedHash)
 	return 0
+}
+
+func seedContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt)
 }
 
 func readJSON(path string, v any) error {

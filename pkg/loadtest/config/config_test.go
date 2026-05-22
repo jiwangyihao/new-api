@@ -18,7 +18,7 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := file.NewAPIEnv()
-	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "BATCH_UPDATE_ENABLED", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
+	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "NODE_TYPE", "BATCH_UPDATE_ENABLED", "BATCH_UPDATE_INTERVAL", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
 		if _, ok := env[key]; !ok {
 			t.Fatalf("missing env %s", key)
 		}
@@ -31,6 +31,12 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	}
 	if env["RELAY_MAX_IDLE_CONNS"] != "64" || env["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
 		t.Fatalf("unsafe relay connection limits: %#v", env)
+	}
+	if env["BATCH_UPDATE_ENABLED"] != "false" || env["BATCH_UPDATE_INTERVAL"] != "1" {
+		t.Fatalf("loadtest must use synchronous quota counters: %#v", env)
+	}
+	if env["NODE_TYPE"] != "slave" {
+		t.Fatalf("loadtest must run as a non-master node: %#v", env)
 	}
 	rc, err := file.BaseRunContext("abcdef0")
 	if err != nil {

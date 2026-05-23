@@ -48,6 +48,15 @@ func TestFailureClassDetectsClientTransport(t *testing.T) {
 	}
 }
 
+func TestFailureClassDoesNotTreatLoadDurationAsTransportFailure(t *testing.T) {
+	in := analysisBaseInput()
+	in.Summary.ErrorReasons = map[string]int{"client_duration": 9, "request_timeout": 1}
+	in.Summary.StopReason = "duration"
+	if got := ClassifyFailure(in); got == "client_transport" {
+		t.Fatalf("load duration cancellation misclassified as %q", got)
+	}
+}
+
 func TestFailureClassDetectsStreamProtocol(t *testing.T) {
 	in := analysisBaseInput()
 	in.Summary.ErrorReasons = map[string]int{"missing_done": 9, "json_error": 1}

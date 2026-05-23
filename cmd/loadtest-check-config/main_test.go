@@ -27,7 +27,7 @@ func TestRunWritesBenchmarkProfileEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := string(content)
-	for _, want := range []string{"REDIS_POOL_SIZE=2048", "RELAY_MAX_IDLE_CONNS=1024", "RELAY_MAX_IDLE_CONNS_PER_HOST=1024", "GOMEMLIMIT=384MiB"} {
+	for _, want := range []string{"REDIS_POOL_SIZE=2048", "SQL_MAX_OPEN_CONNS=256", "SQL_MAX_IDLE_CONNS=64", "RELAY_MAX_IDLE_CONNS=1024", "RELAY_MAX_IDLE_CONNS_PER_HOST=1024", "GOMEMLIMIT=384MiB"} {
 		if !strings.Contains(env, want+"\n") {
 			t.Fatalf("env missing %q:\n%s", want, env)
 		}

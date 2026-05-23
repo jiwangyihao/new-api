@@ -32,6 +32,9 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	if env["REDIS_POOL_SIZE"] != "2048" {
 		t.Fatalf("redis pool size not raised for benchmark: %#v", env)
 	}
+	if env["SQL_MAX_OPEN_CONNS"] != "256" || env["SQL_MAX_IDLE_CONNS"] != "64" {
+		t.Fatalf("loadtest SQL pool must cover benchmark concurrency: %#v", env)
+	}
 	if env["RELAY_MAX_IDLE_CONNS"] != "64" || env["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
 		t.Fatalf("unsafe relay connection limits: %#v", env)
 	}
@@ -165,7 +168,7 @@ func TestNewAPIEnvForProfileOnlyRaisesRelayPoolForBenchmark(t *testing.T) {
 	if profileEnv["RELAY_MAX_IDLE_CONNS"] != "1024" || profileEnv["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "1024" || profileEnv["GOMEMLIMIT"] != "384MiB" {
 		t.Fatalf("benchmark env mismatch: %#v", profileEnv)
 	}
-	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
+	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
 		if profileEnv[key] != base[key] {
 			t.Fatalf("profile env changed safety key %s: %q != %q", key, profileEnv[key], base[key])
 		}

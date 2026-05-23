@@ -620,9 +620,9 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		endRequest(state)
-		reason := classifyHTTPError(err, ctx)
+		reason := classifyHTTPError(err, ctx, parent, opts.Duration)
 		record.ErrorReason = reason
-		return requestResult{record: record, latencyMS: elapsedMS(startedAt), phase: "http_client_do", networkRuntimeFailure: true}
+		return requestResult{record: record, latencyMS: elapsedMS(startedAt), phase: "http_client_do", networkRuntimeFailure: reason != "client_duration"}
 	}
 	defer resp.Body.Close()
 
@@ -651,7 +651,7 @@ func doOne(parent context.Context, httpClient *http.Client, opts Options, reques
 		endRequest(state)
 		latency := elapsedMS(startedAt)
 		if parseErr != nil {
-			record.ErrorReason = classifyStreamParseError(parseErr)
+			record.ErrorReason = classifyStreamParseError(parseErr, parent, opts.Duration)
 			return requestResult{record: record, latencyMS: latency, protocol: protocol, phase: "stream_parse", stream: streamRecord}
 		}
 		if !streamRecord.DoneReceived {
@@ -763,7 +763,10 @@ func transportProfile(opts TransportOptions) artifact.TransportProfile {
 	}
 }
 
-func classifyHTTPError(err error, ctx context.Context) string {
+func classifyHTTPError(err error, ctx context.Context, loadCtx context.Context, loadDuration time.Duration) string {
+	if loadDuration > 0 && loadCtx != nil && errors.Is(loadCtx.Err(), context.DeadlineExceeded) {
+		return "client_duration"
+	}
 	if ctx != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return "request_timeout"
 	}
@@ -803,9 +806,12 @@ func errorIsErrno(err error, values ...syscall.Errno) bool {
 	return false
 }
 
-func classifyStreamParseError(err error) string {
+func classifyStreamParseError(err error, loadCtx context.Context, loadDuration time.Duration) string {
 	if err == nil {
 		return ""
+	}
+	if loadDuration > 0 && loadCtx != nil && errors.Is(loadCtx.Err(), context.DeadlineExceeded) {
+		return "client_duration"
 	}
 	if errors.Is(err, io.EOF) {
 		return "read_error"

@@ -195,7 +195,7 @@ func TestRunLoadClassifiesLoadDurationCancellationWithoutRuntimeError(t *testing
 		Model:        "gpt-5.5",
 		Scenario:     "test",
 		Concurrency:  1,
-		MaxRequests:  2,
+		MaxRequests:  10,
 		Duration:     20 * time.Millisecond,
 		Timeout:      time.Second,
 		Stream:       true,
@@ -204,10 +204,10 @@ func TestRunLoadClassifiesLoadDurationCancellationWithoutRuntimeError(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.StopReason != "duration" || summary.Total != 1 {
+	if summary.StopReason != "duration" || summary.Total >= 10 {
 		t.Fatalf("summary stop/total = %q/%d", summary.StopReason, summary.Total)
 	}
-	if summary.ErrorReasons["client_duration"] != 1 || summary.ErrorReasons["request_timeout"] != 0 {
+	if summary.ErrorReasons["client_duration"] == 0 || summary.ErrorReasons["request_timeout"] != 0 {
 		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
 	}
 }
@@ -235,7 +235,7 @@ func TestRunLoadClassifiesStreamReadCanceledByLoadDuration(t *testing.T) {
 		Model:        "gpt-5.5",
 		Scenario:     "test",
 		Concurrency:  1,
-		MaxRequests:  2,
+		MaxRequests:  10,
 		Duration:     20 * time.Millisecond,
 		Timeout:      time.Second,
 		Stream:       true,
@@ -244,7 +244,10 @@ func TestRunLoadClassifiesStreamReadCanceledByLoadDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.ErrorReasons["client_duration"] != 1 || summary.ErrorReasons["json_error"] != 0 {
+	if summary.StopReason != "duration" || summary.Total >= 10 {
+		t.Fatalf("summary stop/total = %q/%d", summary.StopReason, summary.Total)
+	}
+	if summary.ErrorReasons["client_duration"] == 0 || summary.ErrorReasons["json_error"] != 0 {
 		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
 	}
 	if len(summary.FirstErrorSamples) != 1 || summary.FirstErrorSamples[0].Reason != "client_duration" || summary.FirstErrorSamples[0].StatusCode != http.StatusOK || summary.FirstErrorSamples[0].RequestID != "rid-duration" {

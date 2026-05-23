@@ -41,6 +41,9 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	if env["NODE_TYPE"] != "slave" {
 		t.Fatalf("loadtest must run as a non-master node: %#v", env)
 	}
+	if env["REDIS_POOL_SIZE"] != "2048" {
+		t.Fatalf("loadtest Redis pool must cover benchmark concurrency: %#v", env)
+	}
 	rc, err := file.BaseRunContext("abcdef0")
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +202,8 @@ func TestBenchmarkProfileRejectsNonCanonicalValues(t *testing.T) {
 		{"zero timeout", func(c *ProfileConfig) { c.Timeout = Duration{} }},
 		{"bad transport", func(c *ProfileConfig) { c.Transport.Mode = "h2c_diagnostic" }},
 		{"wrong requests", func(c *ProfileConfig) { c.RequestsPerPoint = 2999 }},
-		{"wrong point", func(c *ProfileConfig) { c.Points = []int{250, 500, 750, 999} }},
+		{"missing upper point", func(c *ProfileConfig) { c.Points = []int{250, 500, 750, 1000} }},
+		{"wrong point", func(c *ProfileConfig) { c.Points = []int{250, 500, 750, 1000, 1250, 1500, 1750, 1999} }},
 		{"wrong gomemlimit", func(c *ProfileConfig) { c.ServerLimits.GOMEMLIMIT = "512MiB" }},
 		{"wrong transport mode", func(c *ProfileConfig) { c.Transport.Mode = "h1_no_keepalive" }},
 	} {

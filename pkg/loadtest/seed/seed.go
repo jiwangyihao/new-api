@@ -248,6 +248,8 @@ func ensureOptions(tx *gorm.DB) error {
 		"RetryTimes":                           "0",
 		"AutomaticRetryStatusCodes":            "",
 		"SubscriptionConcurrencyQueueCapacity": "2000",
+		"SubscriptionConcurrencyFailOpen":      "false",
+		"SubscriptionConcurrencyRequireRedis":  "false",
 		"performance_setting.monitor_enabled":  "false",
 		"AutomaticDisableChannelEnabled":       "false",
 		"AutomaticEnableChannelEnabled":        "false",

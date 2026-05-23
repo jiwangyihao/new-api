@@ -36,6 +36,8 @@ func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	assertOptionValue(t, db, "performance_setting.monitor_enabled", "false")
 	assertOptionValue(t, db, "AutomaticDisableChannelEnabled", "false")
 	assertOptionValue(t, db, "AutomaticEnableChannelEnabled", "false")
+	assertOptionEnabled(t, db, "SubscriptionConcurrencyFailOpen", false)
+	assertOptionEnabled(t, db, "SubscriptionConcurrencyRequireRedis", false)
 	assertSubscriptionConcurrency(t, db)
 }
 
@@ -231,5 +233,26 @@ func assertSubscriptionConcurrency(t *testing.T, db *gorm.DB) {
 		if sub.ConcurrencyLimit != 2000 {
 			t.Fatalf("subscription %d concurrency limit = %d want 2000", sub.Id, sub.ConcurrencyLimit)
 		}
+	}
+}
+
+func assertSubscriptionConcurrencyAtLeast(t *testing.T, db *gorm.DB, want int) {
+	t.Helper()
+	var opt model.Option
+	require.NoError(t, db.First(&opt, "key = ?", "SubscriptionConcurrencyQueueCapacity").Error)
+	if opt.Value != "2000" {
+		t.Fatalf("subscription concurrency queue capacity = %q want at least %d", opt.Value, want)
+	}
+	var subs []model.UserSubscription
+	require.NoError(t, db.Find(&subs).Error)
+	for _, sub := range subs {
+		if sub.ConcurrencyLimit < want {
+			t.Fatalf("subscription %d concurrency limit = %d want at least %d", sub.Id, sub.ConcurrencyLimit, want)
+		}
+	}
+	var plan model.SubscriptionPlan
+	require.NoError(t, db.First(&plan, planID).Error)
+	if plan.ConcurrencyLimit < want {
+		t.Fatalf("plan concurrency limit = %d want at least %d", plan.ConcurrencyLimit, want)
 	}
 }

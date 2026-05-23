@@ -48,7 +48,31 @@ func snapshotCompactEndpointTestGlobals(t *testing.T) func() {
 	}
 }
 
-func TestModelPriceHelperResponsesCompactUsesBillingModelName(t *testing.T) {
+func TestModelPriceHelperResponsesCompactFallsBackToOriginModelPricing(t *testing.T) {
+	restore := snapshotCompactEndpointTestGlobals(t)
+	t.Cleanup(restore)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.5":1}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	ctx.Set("group", "default")
+	info := &relaycommon.RelayInfo{
+		RelayMode:        constant.RelayModeResponsesCompact,
+		OriginModelName:  "gpt-5.5",
+		BillingModelName: "gpt-5.5-openai-compact",
+		UserGroup:        "default",
+		UsingGroup:       "default",
+	}
+
+	priceData, err := ModelPriceHelper(ctx, info, 1000, &types.TokenCountMeta{})
+
+	require.NoError(t, err)
+	require.Equal(t, 1.0, priceData.ModelRatio)
+}
+
+func TestModelPriceHelperResponsesCompactUsesBillingModelNameWhenConfigured(t *testing.T) {
 	restore := snapshotCompactEndpointTestGlobals(t)
 	t.Cleanup(restore)
 	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-5.5":1,"gpt-5.5-openai-compact":9}`))

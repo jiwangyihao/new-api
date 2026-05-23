@@ -66,3 +66,18 @@ func TestCacheGetRandomSatisfiedChannelFiltersEndpointOnRetry(t *testing.T) {
 	assert.Equal(t, "default", group)
 	assert.Equal(t, 2502, channel.Id)
 }
+
+func TestCacheGetRandomSatisfiedChannelWithoutEndpointUsesLegacySelection(t *testing.T) {
+	db := setupChannelSelectEndpointTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{Id: 2503, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default"}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: 2503, Enabled: true}).Error)
+	model.RefreshEndpointSupportCache()
+	ctx := gin.Context{}
+
+	channel, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: &ctx, TokenGroup: "default", ModelName: "gpt-5.5", Retry: common.GetPointer(0)})
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, "default", group)
+	assert.Equal(t, 2503, channel.Id)
+}

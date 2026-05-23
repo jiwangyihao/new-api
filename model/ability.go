@@ -177,6 +177,9 @@ func selectChannelFromEndpointFilteredAbilities(abilities []Ability, retry int) 
 }
 
 func GetChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {
+	if endpointType == "" {
+		return GetChannel(group, model, retry)
+	}
 	abilities, err := getEndpointFilteredAbilities(group, model, endpointType)
 	if err != nil {
 		return nil, err

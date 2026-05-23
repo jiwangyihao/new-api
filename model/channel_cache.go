@@ -273,6 +273,9 @@ func selectCachedChannelByPriority(channels []int, retry int, group string, mode
 }
 
 func GetRandomSatisfiedChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {
+	if endpointType == "" {
+		return GetRandomSatisfiedChannel(group, model, retry)
+	}
 	if !common.MemoryCacheEnabled {
 		return GetChannelForEndpoint(group, model, retry, endpointType)
 	}

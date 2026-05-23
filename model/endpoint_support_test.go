@@ -89,6 +89,19 @@ func TestGetChannelForEndpointFiltersBeforePrioritySelection(t *testing.T) {
 	assert.Equal(t, 2, channel.Id)
 }
 
+func TestGetChannelForEndpointWithoutRequiredEndpointUsesLegacySelection(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	require.NoError(t, db.Create(&Channel{Id: 3, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default"}).Error)
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "gpt-5.5", ChannelId: 3, Enabled: true}).Error)
+	RefreshEndpointSupportCache()
+
+	channel, err := GetChannelForEndpoint("default", "gpt-5.5", 0, "")
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 3, channel.Id)
+}
+
 func TestGetRandomSatisfiedChannelForEndpointMemoryCache(t *testing.T) {
 	db := setupEndpointSupportTestDB(t)
 	oldMemoryCache := common.MemoryCacheEnabled

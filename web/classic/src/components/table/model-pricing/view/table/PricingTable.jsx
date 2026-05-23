@@ -31,8 +31,6 @@ const PricingTable = ({
   rowSelection,
   pageSize,
   setPageSize,
-  selectedGroup,
-  groupRatio,
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -49,8 +47,6 @@ const PricingTable = ({
   const columns = useMemo(() => {
     return getPricingTableColumns({
       t,
-      selectedGroup,
-      groupRatio,
       copyText,
       setModalImageUrl,
       setIsModalOpenurl,
@@ -62,8 +58,6 @@ const PricingTable = ({
     });
   }, [
     t,
-    selectedGroup,
-    groupRatio,
     copyText,
     setModalImageUrl,
     setIsModalOpenurl,

@@ -56,13 +56,13 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		writeErr(stderr, err)
 		return 1
 	}
+	model.DB = db
+	model.LOG_DB = db
 	common.UsingSQLite = false
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = true
 	common.LogSqlType = common.DatabaseTypePostgreSQL
-	model.DB = db
-	model.LOG_DB = db
-	seedCfg := seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: cfgFile.Loadtest.Model, Group: cfgFile.Loadtest.Group, MockBaseURL: cfgFile.MockUpstream.BaseURL, SubscriptionKey: cfgFile.Loadtest.SubscriptionKey, CompatKey: cfgFile.Loadtest.CompatKey}
+	seedCfg := seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: cfgFile.Loadtest.Model, MockBaseURL: cfgFile.MockUpstream.BaseURL, SubscriptionKey: cfgFile.Loadtest.SubscriptionKey, CompatKey: cfgFile.Loadtest.CompatKey}
 	ctx, cancel := seedContext()
 	defer cancel()
 	out, err := seed.Apply(ctx, db, seedCfg)

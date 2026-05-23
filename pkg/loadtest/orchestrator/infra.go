@@ -23,6 +23,7 @@ import (
 )
 
 var findExecutableFn = findExecutable
+var managedRedisCommand = exec.Command
 
 func startManagedInfraProcesses(ctx context.Context, opts Options, cfg loadtestconfig.File) (Process, error) {
 	if err := ensureManagedInfraPortsClosed(ctx, cfg); err != nil {
@@ -70,11 +71,15 @@ func startManagedRedis(ctx context.Context, opts Options, cfg loadtestconfig.Fil
 		return nil, err
 	}
 	dir := filepath.Join(opts.ArtifactDir, "infra", "redis")
+	port, err := redisPort(cfg.Redis.Addr)
+	if err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	confPath := filepath.Join(dir, "redis.conf")
-	conf := fmt.Sprintf("bind 127.0.0.1\nport %d\ndir %s\nsave \"\"\nappendonly no\nprotected-mode yes\ndaemonize no\n", managedRedisPort, filepath.ToSlash(dir))
+	conf := fmt.Sprintf("bind 127.0.0.1\nport %d\ndir %s\nsave \"\"\nappendonly no\nprotected-mode yes\ndaemonize no\n", port, filepath.ToSlash(dir))
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
 		return nil, err
 	}
@@ -82,7 +87,7 @@ func startManagedRedis(ctx context.Context, opts Options, cfg loadtestconfig.Fil
 	if err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(redisServer, confPath)
+	cmd := managedRedisCommand(redisServer, confPath)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if err := cmd.Start(); err != nil {
@@ -188,6 +193,24 @@ func findExecutable(name string, windowsName string, candidates []string) (strin
 	return "", fmt.Errorf("%s executable not found", name)
 }
 
+func redisPort(addr string) (int, error) {
+	parsed, err := url.Parse(redisURL(addr))
+	if err != nil {
+		return 0, err
+	}
+	port := parsed.Port()
+	if port == "" {
+		return 6379, nil
+	}
+	value, err := strconv.Atoi(port)
+	if err != nil {
+		return 0, err
+	}
+	if value < 1 || value > 65535 {
+		return 0, fmt.Errorf("redis port out of range: %d", value)
+	}
+	return value, nil
+}
 func waitRedis(ctx context.Context, addr string, timeout time.Duration) error {
 	opt, err := redis.ParseURL(redisURL(addr))
 	if err != nil {
@@ -275,10 +298,32 @@ func postgresAdminDSN(raw string) (string, error) {
 }
 
 func runCommandRedacted(cmd *exec.Cmd) error {
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	basePath := filepath.Join(os.TempDir(), "new-api-loadtest-"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	stderrPath := basePath + ".stderr"
+	stdoutPath := basePath + ".stdout"
+	stderr, openErr := os.OpenFile(stderrPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if openErr != nil {
+		return openErr
+	}
+	stdout, openErr := os.OpenFile(stdoutPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o600)
+	if openErr != nil {
+		_ = stderr.Close()
+		_ = os.Remove(stderrPath)
+		return openErr
+	}
+	defer func() {
+		_ = stderr.Close()
+		_ = stdout.Close()
+		_ = os.Remove(stderrPath)
+		_ = os.Remove(stdoutPath)
+	}()
+	cmd.Stderr = stderr
+	cmd.Stdout = stdout
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s failed: %w: %s", filepath.Base(cmd.Path), err, artifact.Redact(stderr.String()))
+		_, _ = stderr.Seek(0, 0)
+		var stderrBuffer bytes.Buffer
+		_, _ = stderrBuffer.ReadFrom(stderr)
+		return fmt.Errorf("%s failed: %w: %s", filepath.Base(cmd.Path), err, artifact.Redact(stderrBuffer.String()))
 	}
 	return nil
 }

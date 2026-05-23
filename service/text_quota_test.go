@@ -38,8 +38,8 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 		CacheCreationRatio:   1.25,
 		CacheCreation5mRatio: 1.25,
 		CacheCreation1hRatio: 2,
-		GroupRatioInfo: types.GroupRatioInfo{
-			GroupRatio: 1,
+		QuotaMultiplierInfo: types.QuotaMultiplierInfo{
+			Ratio: 1,
 		},
 	}
 
@@ -84,8 +84,8 @@ func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.
 			CacheCreationRatio:   1,
 			CacheCreation5mRatio: 2,
 			CacheCreation1hRatio: 3,
-			GroupRatioInfo: types.GroupRatioInfo{
-				GroupRatio: 1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{
+				Ratio: 1,
 			},
 		},
 		StartTime: time.Now(),
@@ -122,8 +122,8 @@ func TestCalculateTextQuotaSummaryUsesAnthropicUsageSemanticFromUpstreamUsage(t 
 			CacheCreationRatio:   1.25,
 			CacheCreation5mRatio: 1.25,
 			CacheCreation1hRatio: 2,
-			GroupRatioInfo: types.GroupRatioInfo{
-				GroupRatio: 1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{
+				Ratio: 1,
 			},
 		},
 		StartTime: time.Now(),
@@ -187,7 +187,7 @@ func TestCalculateTextQuotaSummaryHandlesLegacyClaudeDerivedOpenAIUsage(t *testi
 			CacheCreationRatio:   1.25,
 			CacheCreation5mRatio: 1.25,
 			CacheCreation1hRatio: 2,
-			GroupRatioInfo:       types.GroupRatioInfo{GroupRatio: 1},
+			QuotaMultiplierInfo:  types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -218,11 +218,11 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheReadFromPromptBilling(
 			ChannelType: constant.ChannelTypeOpenRouter,
 		},
 		PriceData: types.PriceData{
-			ModelRatio:         1,
-			CompletionRatio:    1,
-			CacheRatio:         0.1,
-			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			CacheRatio:          0.1,
+			CacheCreationRatio:  1.25,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -255,10 +255,10 @@ func TestCalculateTextQuotaSummarySeparatesOpenRouterCacheCreationFromPromptBill
 			ChannelType: constant.ChannelTypeOpenRouter,
 		},
 		PriceData: types.PriceData{
-			ModelRatio:         1,
-			CompletionRatio:    1,
-			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			CacheCreationRatio:  1.25,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -291,11 +291,11 @@ func TestCalculateTextQuotaSummaryKeepsPrePRClaudeOpenRouterBilling(t *testing.T
 			ChannelType: constant.ChannelTypeOpenRouter,
 		},
 		PriceData: types.PriceData{
-			ModelRatio:         1,
-			CompletionRatio:    1,
-			CacheRatio:         0.1,
-			CacheCreationRatio: 1.25,
-			GroupRatioInfo:     types.GroupRatioInfo{GroupRatio: 1},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			CacheRatio:          0.1,
+			CacheCreationRatio:  1.25,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		StartTime: time.Now(),
 	}
@@ -329,9 +329,9 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		OriginModelName: "o1",
 		PriceData: types.PriceData{
-			ModelRatio:      1,
-			CompletionRatio: 1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -345,8 +345,8 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
-			GroupRatio:                1,
-			EstimatedQuotaBeforeGroup: 1000,
+			QuotaMultiplier:           1,
+			EstimatedQuotaBeforeRatio: 1000,
 		},
 		StartTime: time.Now(),
 	}
@@ -359,8 +359,8 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 	quota := composeTieredTextQuota(relayInfo, summary, 1000, &billingexpr.TieredResult{
-		ActualQuotaBeforeGroup: 1000,
-		ActualQuotaAfterGroup:  1000,
+		ActualQuotaBeforeRatio: 1000,
+		ActualQuota:            1000,
 	})
 
 	require.Equal(t, int64(13000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
@@ -376,14 +376,14 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		OriginModelName: "claude-3-7-sonnet",
 		PriceData: types.PriceData{
-			ModelRatio:      1,
-			CompletionRatio: 1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1.25},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
-			GroupRatio:                1.25,
-			EstimatedQuotaBeforeGroup: 1000,
+			QuotaMultiplier:           1,
+			EstimatedQuotaBeforeRatio: 1000,
 		},
 		StartTime: time.Now(),
 	}
@@ -395,10 +395,10 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	}
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	quota := composeTieredTextQuota(relayInfo, summary, 1250, nil)
+	quota := composeTieredTextQuota(relayInfo, summary, 1000, nil)
 
-	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
-	require.Equal(t, 13750, quota)
+	require.Equal(t, int64(10000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Equal(t, 11000, quota)
 }
 
 func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
@@ -410,14 +410,14 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		OriginModelName: "claude-3-7-sonnet",
 		PriceData: types.PriceData{
-			ModelRatio:      1,
-			CompletionRatio: 1,
-			GroupRatioInfo:  types.GroupRatioInfo{GroupRatio: 1.25},
+			ModelRatio:          1,
+			CompletionRatio:     1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 		},
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
-			GroupRatio:                1.25,
-			EstimatedQuotaBeforeGroup: 1000,
+			QuotaMultiplier:           1,
+			EstimatedQuotaBeforeRatio: 1000,
 		},
 		StartTime: time.Now(),
 	}
@@ -431,11 +431,10 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
 
 	// tieredResult=nil simulates a settlement error where TryTieredSettle
-	// falls back to FinalPreConsumedQuota (2000), which differs from
-	// EstimatedQuotaBeforeGroup * GroupRatio (1250).
+	// falls back to FinalPreConsumedQuota (2000), which differs from frozen estimate (1000).
 	preConsumedFallback := 2000
 	quota := composeTieredTextQuota(relayInfo, summary, preConsumedFallback, nil)
 
-	require.Equal(t, int64(12500), summary.ToolCallSurchargeQuota.Round(0).IntPart())
-	require.Equal(t, 14500, quota)
+	require.Equal(t, int64(10000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	require.Equal(t, 12000, quota)
 }

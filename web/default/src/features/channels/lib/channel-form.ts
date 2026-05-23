@@ -31,7 +31,6 @@ export const channelFormSchema = z.object({
   key: z.string(),
   openai_organization: z.string().optional(),
   models: z.string().min(1, 'At least one model is required'),
-  group: z.array(z.string()).min(1, 'At least one group is required'),
   model_mapping: z.string().optional(),
   priority: z.number().optional(),
   weight: z.number().optional(),
@@ -94,7 +93,6 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   key: '',
   openai_organization: '',
   models: '',
-  group: ['default'],
   model_mapping: '',
   priority: 0,
   weight: 0,
@@ -234,7 +232,6 @@ export function transformChannelToFormDefaults(
     key: '', // Never populate key from backend for security
     openai_organization: channel.openai_organization || '',
     models: channel.models || '',
-    group: parseGroups(channel.group || 'default'),
     model_mapping: channel.model_mapping || '',
     priority: channel.priority || 0,
     weight: channel.weight || 0,
@@ -428,7 +425,6 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     key: formData.key,
     openai_organization: formData.openai_organization || null,
     models: formData.models,
-    group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
     priority: formData.priority || null,
     weight: formData.weight || null,
@@ -476,7 +472,6 @@ export function transformFormDataToUpdatePayload(
     base_url: formData.base_url || null,
     openai_organization: formData.openai_organization || null,
     models: formData.models,
-    group: formatGroups(formData.group),
     model_mapping: formData.model_mapping || null,
     priority: formData.priority || null,
     weight: formData.weight || null,
@@ -551,26 +546,8 @@ export function parseModels(models: string): string[] {
 }
 
 /**
- * Parse groups string to array
- */
-export function parseGroups(groups: string): string[] {
-  if (!groups) return []
-  return groups
-    .split(',')
-    .map((g) => g.trim())
-    .filter((g) => g.length > 0)
-}
-
-/**
  * Format models array to string
  */
 export function formatModels(models: string[]): string {
   return models.join(',')
-}
-
-/**
- * Format groups array to string
- */
-export function formatGroups(groups: string[]): string {
-  return groups.join(',')
 }

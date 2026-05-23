@@ -11,7 +11,7 @@ import (
 type PerfMetric struct {
 	Id             int    `json:"id" gorm:"primaryKey"`
 	ModelName      string `json:"model_name" gorm:"size:128;uniqueIndex:idx_perf_model_group_bucket,priority:1"`
-	Group          string `json:"group" gorm:"column:group;size:64;uniqueIndex:idx_perf_model_group_bucket,priority:2"`
+	Group          string `json:"-" gorm:"column:group;size:64;uniqueIndex:idx_perf_model_group_bucket,priority:2"`
 	BucketTs       int64  `json:"bucket_ts" gorm:"uniqueIndex:idx_perf_model_group_bucket,priority:3;index:idx_perf_bucket_ts"`
 	RequestCount   int64  `json:"-" gorm:"default:0"`
 	SuccessCount   int64  `json:"-" gorm:"default:0"`
@@ -53,6 +53,7 @@ func UpsertPerfMetric(metric *PerfMetric) error {
 	if metric == nil || metric.RequestCount == 0 {
 		return nil
 	}
+	metric.Group = ""
 	return DB.Clauses(perfMetricUpsertClause(metric)).Create(metric).Error
 }
 
@@ -60,9 +61,6 @@ func GetPerfMetrics(modelName string, group string, startTs int64, endTs int64) 
 	var metrics []PerfMetric
 	query := DB.Model(&PerfMetric{}).
 		Where("model_name = ? AND bucket_ts >= ? AND bucket_ts <= ?", modelName, startTs, endTs)
-	if group != "" {
-		query = query.Where(commonGroupCol+" = ?", group)
-	}
 	err := query.Order("bucket_ts ASC").Find(&metrics).Error
 	return metrics, err
 }

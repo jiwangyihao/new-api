@@ -130,7 +130,6 @@ export const buildApiPayload = (
 
   const payload = {
     model: inputs.model,
-    group: inputs.group,
     messages: processedMessages,
     stream: inputs.stream,
   };
@@ -209,34 +208,6 @@ export const processModelsData = (data, currentModel) => {
   return { modelOptions, selectedModel };
 };
 
-// 处理分组数据
-export const processGroupsData = (data, userGroup) => {
-  let groupOptions = Object.entries(data).map(([group, info]) => ({
-    label:
-      info.desc.length > 20 ? info.desc.substring(0, 20) + '...' : info.desc,
-    value: group,
-    ratio: info.ratio,
-    fullLabel: info.desc,
-  }));
-
-  if (groupOptions.length === 0) {
-    groupOptions = [
-      {
-        label: '用户分组',
-        value: '',
-        ratio: 1,
-      },
-    ];
-  } else if (userGroup) {
-    const userGroupIndex = groupOptions.findIndex((g) => g.value === userGroup);
-    if (userGroupIndex > -1) {
-      const userGroupOption = groupOptions.splice(userGroupIndex, 1)[0];
-      groupOptions.unshift(userGroupOption);
-    }
-  }
-
-  return groupOptions;
-};
 
 // 原来components中的utils.js
 

@@ -133,6 +133,42 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		assert.True(t, status.Entitled)
 		assert.Equal(t, 2, status.QualifiedActiveCount)
 	})
+
+	t.Run("counts redemption and admin granted paid subscriptions", func(t *testing.T) {
+		truncate(t)
+		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+		seedInvitationRewardUsers(t, 1551, 1552, 1553)
+		seedInvitationRewardPlan(t, 2551, "trial_monthly", false)
+		paidPlan := seedInvitationRewardPlan(t, 2552, "standard_monthly", true)
+		seedActiveInviteeSubscription(t, 1552, paidPlan.Id, at, "redemption", "redemption")
+		seedActiveInviteeSubscription(t, 1553, paidPlan.Id, at, "admin", "admin")
+
+		status, err := EnsureMonthlyInvitationEntitlement(1551, at)
+
+		require.NoError(t, err)
+		assert.True(t, status.Entitled)
+		assert.Equal(t, 2, status.QualifiedActiveCount)
+		assert.Equal(t, paidPlan.Id, status.RewardPlanId)
+	})
+
+	t.Run("excludes trial and invitation reward subscriptions", func(t *testing.T) {
+		truncate(t)
+		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+		seedInvitationRewardUsers(t, 1561, 1562, 1563, 1564)
+		trialPlan := seedInvitationRewardPlan(t, 2561, "trial_monthly", false)
+		paidPlan := seedInvitationRewardPlan(t, 2562, "standard_monthly", true)
+		seedActiveInviteeSubscription(t, 1562, trialPlan.Id, at, "redemption", "redemption")
+		seedActiveInviteeSubscription(t, 1563, paidPlan.Id, at, "monthly_invite_entitlement", "monthly_invite_entitlement")
+		seedActiveInviteeSubscription(t, 1564, paidPlan.Id, at, "redemption", "redemption")
+
+		status, err := EnsureMonthlyInvitationEntitlement(1561, at)
+
+		require.NoError(t, err)
+		assert.False(t, status.Entitled)
+		assert.Equal(t, 1, status.QualifiedActiveCount)
+	})
 }
 
 func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *testing.T) {

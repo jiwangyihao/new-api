@@ -586,11 +586,43 @@ func TestBuildCreateDatabaseCommandUsesPostgresAdminDatabase(t *testing.T) {
 	}
 }
 
+func TestRedisPortUsesConfiguredAddress(t *testing.T) {
+	got, err := redisPort("redis://127.0.0.1:16444/0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 16444 {
+		t.Fatalf("redisPort = %d, want 16444", got)
+	}
+	got, err = redisPort("127.0.0.1:16445")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 16445 {
+		t.Fatalf("redisPort bare addr = %d, want 16445", got)
+	}
+}
+
+func TestRunCommandRedactedHonorsContextTimeout(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHelperProcess$")
+	cmd.Env = append(cmd.Environ(), "GO_WANT_HELPER_PROCESS=1", "GO_WANT_FAKE_REDIS_SERVER=")
+	started := time.Now()
+	err := runCommandRedacted(cmd)
+	if err == nil {
+		t.Fatal("runCommandRedacted returned nil for a command killed by context timeout")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("runCommandRedacted ignored context timeout; elapsed=%s err=%v", elapsed, err)
+	}
+}
+
 func TestRedisManagedProcessStopDoesNotWaitForever(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	proc := &redisManagedProcess{cmd: exec.CommandContext(context.Background(), os.Args[0], "-test.run=TestHelperProcess")}
-	proc.cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	proc := &redisManagedProcess{cmd: exec.CommandContext(context.Background(), os.Args[0], "-test.run=^TestHelperProcess$")}
+	proc.cmd.Env = append(proc.cmd.Environ(), "GO_WANT_HELPER_PROCESS=1", "GO_WANT_FAKE_REDIS_SERVER=")
 	if err := proc.cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -604,18 +636,35 @@ func TestRedisManagedProcessStopDoesNotWaitForever(t *testing.T) {
 }
 
 func TestStartManagedRedisOutlivesStartupContextCancellation(t *testing.T) {
-	redisServer := fakeRedisServerPath(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	oldFindExecutable := findExecutableFn
 	findExecutableFn = func(name string, windowsName string, candidates []string) (string, error) {
 		if name == "redis-server" || windowsName == "redis-server.exe" {
-			return redisServer, nil
+			return os.Args[0], nil
 		}
 		return oldFindExecutable(name, windowsName, candidates)
 	}
-	t.Cleanup(func() { findExecutableFn = oldFindExecutable })
+	oldManagedRedisCommand := managedRedisCommand
+	managedRedisCommand = func(name string, arg ...string) *exec.Cmd {
+		args := append([]string{"-test.run=^TestHelperProcess$", "--"}, arg...)
+		cmd := exec.Command(name, args...)
+		cmd.Env = append(cmd.Environ(), "GO_WANT_FAKE_REDIS_SERVER=1", "GO_WANT_HELPER_PROCESS=")
+		return cmd
+	}
+	t.Cleanup(func() {
+		findExecutableFn = oldFindExecutable
+		managedRedisCommand = oldManagedRedisCommand
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
-	proc, err := startManagedRedis(ctx, Options{ArtifactDir: t.TempDir()}, loadtestconfig.File{Redis: loadtestconfig.RedisConfig{Addr: "redis://127.0.0.1:16379/0"}})
+	proc, err := startManagedRedis(ctx, Options{ArtifactDir: t.TempDir()}, loadtestconfig.File{Redis: loadtestconfig.RedisConfig{Addr: "redis://" + addr + "/0"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -632,27 +681,9 @@ func TestStartManagedRedisOutlivesStartupContextCancellation(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	if err := waitRedis(context.Background(), "redis://127.0.0.1:16379/0", time.Second); err != nil {
+	if err := waitRedis(context.Background(), "redis://"+addr+"/0", time.Second); err != nil {
 		t.Fatalf("managed redis process did not survive startup context cancellation: %v", err)
 	}
-}
-
-func fakeRedisServerPath(t *testing.T) string {
-	t.Helper()
-	ext := ""
-	if strings.HasSuffix(strings.ToLower(os.Args[0]), ".exe") {
-		ext = ".exe"
-	}
-	path := filepath.Join(t.TempDir(), "redis-server"+ext)
-	b, err := os.ReadFile(os.Args[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, b, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GO_WANT_FAKE_REDIS_SERVER", "1")
-	return path
 }
 
 func TestHelperProcess(t *testing.T) {
@@ -668,8 +699,11 @@ func TestHelperProcess(t *testing.T) {
 
 func runFakeRedisServer() {
 	confPath := ""
-	if len(os.Args) > 1 {
-		confPath = os.Args[1]
+	for index, arg := range os.Args {
+		if arg == "--" && index+1 < len(os.Args) {
+			confPath = os.Args[index+1]
+			break
+		}
 	}
 	port := "16379"
 	if confPath != "" {

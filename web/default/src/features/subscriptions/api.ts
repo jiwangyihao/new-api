@@ -219,8 +219,3 @@ export async function getHomePublicPlansQuiet(): Promise<
     return { success: false, data: [] }
   }
 }
-
-export async function getGroups(): Promise<ApiResponse<string[]>> {
-  const res = await api.get('/api/group')
-  return res.data
-}

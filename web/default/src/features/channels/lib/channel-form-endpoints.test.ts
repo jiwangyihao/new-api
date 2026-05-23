@@ -88,5 +88,8 @@ describe('channel endpoint capabilities form contract', () => {
     assert.match(channelDrawerSource, /CHANNEL_ENDPOINT_OPTIONS/)
     assert.match(channelDrawerSource, /openai-response-compact/)
     assert.match(channelDrawerSource, /name='supported_endpoint_types'/)
+    assert.match(channelDrawerSource, /Endpoint Capabilities/)
+    assert.match(channelDrawerSource, /Supported Endpoint Types/)
+    assert.match(channelDrawerSource, /Use channel type defaults/)
   })
 })

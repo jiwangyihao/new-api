@@ -6,46 +6,38 @@ import (
 )
 
 func IsChannelEnabledForGroupModel(group string, modelName string, channelID int) bool {
-	if group == "" || modelName == "" || channelID <= 0 {
+	if modelName == "" || channelID <= 0 {
 		return false
 	}
 	if !common.MemoryCacheEnabled {
-		return isChannelEnabledForGroupModelDB(group, modelName, channelID)
+		return isChannelEnabledForGroupModelDB(modelName, channelID)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
-	if group2model2channels == nil {
+	if model2channels == nil {
 		return false
 	}
 
-	if isChannelIDInList(group2model2channels[group][modelName], channelID) {
+	if isChannelIDInList(model2channels[modelName], channelID) {
 		return true
 	}
 	normalized := ratio_setting.FormatMatchingModelName(modelName)
 	if normalized != "" && normalized != modelName {
-		return isChannelIDInList(group2model2channels[group][normalized], channelID)
+		return isChannelIDInList(model2channels[normalized], channelID)
 	}
 	return false
 }
 
 func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channelID int) bool {
-	if len(groups) == 0 {
-		return false
-	}
-	for _, g := range groups {
-		if IsChannelEnabledForGroupModel(g, modelName, channelID) {
-			return true
-		}
-	}
-	return false
+	return IsChannelEnabledForGroupModel("", modelName, channelID)
 }
 
-func isChannelEnabledForGroupModelDB(group string, modelName string, channelID int) bool {
+func isChannelEnabledForGroupModelDB(modelName string, channelID int) bool {
 	var count int64
 	err := DB.Model(&Ability{}).
-		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, modelName, channelID, true).
+		Where("model = ? and channel_id = ? and enabled = ?", modelName, channelID, true).
 		Count(&count).Error
 	if err == nil && count > 0 {
 		return true
@@ -56,7 +48,7 @@ func isChannelEnabledForGroupModelDB(group string, modelName string, channelID i
 	}
 	count = 0
 	err = DB.Model(&Ability{}).
-		Where(commonGroupCol+" = ? and model = ? and channel_id = ? and enabled = ?", group, normalized, channelID, true).
+		Where("model = ? and channel_id = ? and enabled = ?", normalized, channelID, true).
 		Count(&count).Error
 	return err == nil && count > 0
 }

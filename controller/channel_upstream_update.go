@@ -44,7 +44,6 @@ var channelUpstreamModelUpdateSelectFields = []string{
 	"settings",
 	"setting",
 	"other",
-	"group",
 	"priority",
 	"weight",
 	"tag",

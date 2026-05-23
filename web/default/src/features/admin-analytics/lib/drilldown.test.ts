@@ -18,7 +18,6 @@ test('usage logs target uses common section and milliseconds', () => {
     user_id: 1,
     token_id: 2,
     model: 'gpt',
-    request_group: 'api',
   })
   assert.equal(target?.to, '/usage-logs/$section')
   assert.deepEqual(target?.params, { section: 'common' })
@@ -33,7 +32,6 @@ test('users target only maps whitelist search fields', () => {
     user_id: 1,
     plan_id: 2,
     inviter_id: 3,
-    user_group: 'vip',
   })
   assert.equal(target?.to, '/users')
   assert.equal(target?.search.userId, 1)

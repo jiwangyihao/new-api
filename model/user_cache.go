@@ -16,7 +16,7 @@ import (
 // UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
 	Id       int    `json:"id"`
-	Group    string `json:"group"`
+	Group    string `json:"-"`
 	Email    string `json:"email"`
 	Quota    int    `json:"quota"`
 	Status   int    `json:"status"`
@@ -25,7 +25,6 @@ type UserBase struct {
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
-	common.SetContextKey(c, constant.ContextKeyUserGroup, user.Group)
 	common.SetContextKey(c, constant.ContextKeyUserQuota, user.Quota)
 	common.SetContextKey(c, constant.ContextKeyUserStatus, user.Status)
 	common.SetContextKey(c, constant.ContextKeyUserEmail, user.Email)
@@ -118,7 +117,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	// Create cache object from user data
 	userCache = &UserBase{
 		Id:       user.Id,
-		Group:    user.Group,
+		Group:    "",
 		Quota:    user.Quota,
 		Status:   user.Status,
 		Username: user.Username,
@@ -215,14 +214,11 @@ func updateUserQuotaCache(userId int, quota int) error {
 }
 
 func updateUserGroupCache(userId int, group string) error {
-	if !common.RedisEnabled {
-		return nil
-	}
-	return common.RedisHSetField(getUserCacheKey(userId), "Group", group)
+	return nil
 }
 
 func UpdateUserGroupCache(userId int, group string) error {
-	return updateUserGroupCache(userId, group)
+	return nil
 }
 
 func updateUserNameCache(userId int, username string) error {

@@ -10,7 +10,6 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
@@ -19,13 +18,6 @@ type tokenPayload struct {
 	model.Token
 	Group           *string `json:"group"`
 	CrossGroupRetry *bool   `json:"cross_group_retry"`
-}
-
-func defaultTokenGroup() string {
-	if ratio_setting.ContainsGroupRatio("default") {
-		return "default"
-	}
-	return ""
 }
 
 func buildMaskedTokenResponse(token *model.Token) *model.Token {
@@ -65,7 +57,7 @@ func GetOpenCodeOpenAIModels(c *gin.Context) {
 	if !ok {
 		return
 	}
-	user, usingGroup, ok := validateConfigGuideTokenUsability(c, token)
+	user, _, ok := validateConfigGuideTokenUsability(c, token)
 	if !ok {
 		return
 	}
@@ -76,7 +68,7 @@ func GetOpenCodeOpenAIModels(c *gin.Context) {
 	effective, err := buildConfigGuideEffectiveModels(configGuideEffectiveModelsInput{
 		Client:          configGuideClientOpenCode,
 		Metadata:        metadata,
-		AvailableModels: availableConfigGuideModelsForToken(token, user, usingGroup),
+		AvailableModels: availableConfigGuideModelsForToken(token, user),
 	})
 	if err != nil {
 		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")
@@ -273,8 +265,6 @@ func AddToken(c *gin.Context) {
 		ModelLimitsEnabled: token.ModelLimitsEnabled,
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
-		Group:              defaultTokenGroup(),
-		CrossGroupRetry:    token.CrossGroupRetry,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -352,12 +342,7 @@ func UpdateToken(c *gin.Context) {
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
-		if req.Group != nil {
-			cleanToken.Group = *req.Group
-		}
-		if req.CrossGroupRetry != nil {
-			cleanToken.CrossGroupRetry = *req.CrossGroupRetry
-		}
+
 	}
 	err = cleanToken.Update()
 	if err != nil {

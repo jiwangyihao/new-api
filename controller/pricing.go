@@ -4,62 +4,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/gin-gonic/gin"
 )
-
-func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string]string) []model.Pricing {
-	if len(pricing) == 0 {
-		return pricing
-	}
-	if len(usableGroup) == 0 {
-		return []model.Pricing{}
-	}
-
-	filtered := make([]model.Pricing, 0, len(pricing))
-	for _, item := range pricing {
-		if common.StringsContains(item.EnableGroup, "all") {
-			filtered = append(filtered, item)
-			continue
-		}
-		for _, group := range item.EnableGroup {
-			if _, ok := usableGroup[group]; ok {
-				filtered = append(filtered, item)
-				break
-			}
-		}
-	}
-	return filtered
-}
-
-func applyVisibleEndpointTypes(pricing []model.Pricing, usableGroup map[string]string) []model.Pricing {
-	visible := make([]model.Pricing, 0, len(pricing))
-	for _, item := range pricing {
-		item.SupportedEndpointTypes = model.GetModelSupportEndpointTypesForGroups(item.ModelName, usableGroup)
-		visible = append(visible, item)
-	}
-	return visible
-}
-
-func buildSupportedEndpointMapForPricing(pricing []model.Pricing) map[string]common.EndpointInfo {
-	supported := make(map[string]common.EndpointInfo)
-	global := model.GetSupportedEndpointMap()
-	for _, item := range pricing {
-		for _, endpointType := range item.SupportedEndpointTypes {
-			key := string(endpointType)
-			if info, ok := global[key]; ok {
-				supported[key] = info
-				continue
-			}
-			if info, ok := common.GetDefaultEndpointInfo(endpointType); ok {
-				supported[key] = info
-			}
-		}
-	}
-	return supported
-}
 
 type pricingDirectoryItem struct {
 	ModelName              string                  `json:"model_name"`
@@ -68,14 +16,17 @@ type pricingDirectoryItem struct {
 	Tags                   string                  `json:"tags,omitempty"`
 	VendorID               int                     `json:"vendor_id,omitempty"`
 	QuotaType              int                     `json:"quota_type"`
-	EnableGroup            []string                `json:"enable_groups"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
 }
 
-func toPricingDirectoryItems(pricing []model.Pricing) []pricingDirectoryItem {
+func toPricingDirectoryItems(pricing []model.Pricing, supportedByModel map[string][]constant.EndpointType) []pricingDirectoryItem {
 	items := make([]pricingDirectoryItem, 0, len(pricing))
 	for _, item := range pricing {
+		endpoints := item.SupportedEndpointTypes
+		if supportedByModel != nil {
+			endpoints = supportedByModel[item.ModelName]
+		}
 		items = append(items, pricingDirectoryItem{
 			ModelName:              item.ModelName,
 			Description:            item.Description,
@@ -83,8 +34,7 @@ func toPricingDirectoryItems(pricing []model.Pricing) []pricingDirectoryItem {
 			Tags:                   item.Tags,
 			VendorID:               item.VendorID,
 			QuotaType:              item.QuotaType,
-			EnableGroup:            item.EnableGroup,
-			SupportedEndpointTypes: item.SupportedEndpointTypes,
+			SupportedEndpointTypes: endpoints,
 			PricingVersion:         item.PricingVersion,
 		})
 	}
@@ -94,51 +44,30 @@ func toPricingDirectoryItems(pricing []model.Pricing) []pricingDirectoryItem {
 func GetPricing(c *gin.Context) {
 	pricing := model.GetPricing()
 	userId, exists := c.Get("id")
-	usableGroup := map[string]string{}
-	groupRatio := map[string]float64{}
-	for s, f := range ratio_setting.GetGroupRatioCopy() {
-		groupRatio[s] = f
-	}
-	var group string
 	isAdmin := false
+	supportedByModel := map[string][]constant.EndpointType(nil)
 	if exists {
 		if id, ok := userId.(int); ok {
 			user, err := model.GetUserById(id, false)
 			if err == nil {
-				group = user.Group
 				isAdmin = user.Role >= common.RoleAdminUser
-				for g := range groupRatio {
-					ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
-					if ok {
-						groupRatio[g] = ratio
-					}
-				}
 			}
 		}
 	}
-
-	usableGroup = service.GetUserUsableGroups(group)
-	pricing = filterPricingByUsableGroups(pricing, usableGroup)
-	pricing = applyVisibleEndpointTypes(pricing, usableGroup)
-	// check groupRatio contains usableGroup
-	for group := range ratio_setting.GetGroupRatioCopy() {
-		if _, ok := usableGroup[group]; !ok {
-			delete(groupRatio, group)
-		}
+	if !isAdmin {
+		supportedByModel = model.GetPublicPricingSupportedEndpointsByModel()
 	}
 
 	response := gin.H{
 		"success":            true,
-		"data":               toPricingDirectoryItems(pricing),
+		"data":               toPricingDirectoryItems(pricing, supportedByModel),
 		"vendors":            model.GetVendors(),
-		"usable_group":       usableGroup,
-		"supported_endpoint": buildSupportedEndpointMapForPricing(pricing),
-		"auto_groups":        service.GetUserAutoGroup(group),
+		"supported_endpoint": model.GetSupportedEndpointMapForTypes(model.MergeEndpointTypes(supportedByModel)),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
 	}
 	if isAdmin {
 		response["data"] = pricing
-		response["group_ratio"] = groupRatio
+		response["supported_endpoint"] = model.GetSupportedEndpointMap()
 	}
 	c.JSON(200, response)
 }

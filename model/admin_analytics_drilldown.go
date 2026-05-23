@@ -11,7 +11,6 @@ type AdminAnalyticsDrilldownFilter struct {
 	UserIDs    []int
 	PlanID     int
 	InviterID  int
-	UserGroup  string
 	UserStatus string
 	Status     string
 }
@@ -25,9 +24,6 @@ func GetAdminAnalyticsDrilldownUsers(query AdminAnalyticsQuery, filter AdminAnal
 	}
 	if filter.InviterID > 0 {
 		db = db.Where("inviter_id = ?", filter.InviterID)
-	}
-	if filter.UserGroup != "" {
-		db = db.Where(commonGroupCol+" = ?", filter.UserGroup)
 	}
 	if filter.UserStatus != "" {
 		status, err := strconv.Atoi(filter.UserStatus)
@@ -57,7 +53,7 @@ func GetAdminAnalyticsDrilldownUsers(query AdminAnalyticsQuery, filter AdminAnal
 				continue
 			}
 		}
-		item := dto.AdminAnalyticsDrilldownUserItem{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, UserGroup: user.Group, Status: user.Status, Role: user.Role, CreatedAt: user.CreatedAt, LastLoginAt: user.LastLoginAt, InviterID: user.InviterId}
+		item := dto.AdminAnalyticsDrilldownUserItem{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Status: user.Status, Role: user.Role, CreatedAt: user.CreatedAt, LastLoginAt: user.LastLoginAt, InviterID: user.InviterId}
 		if active, ok := activeByUser[user.Id]; ok {
 			item.ActivePlanID = active.Subscription.PlanId
 			item.ActivePlanTitle = active.Plan.Title

@@ -28,6 +28,14 @@ const tabs = new Set<string>([
 ])
 const granularities = new Set<string>(['hour', 'day', 'week', 'month'])
 const sortOrders = new Set<string>(['asc', 'desc'])
+const subscriptionStatuses = new Set<string>([
+  'active',
+  'expired',
+  'cancelled',
+  'inactive',
+])
+const userStatuses = new Set<string>(['enabled', 'disabled'])
+const logStatuses = new Set<string>(['success', 'error'])
 const sources = new Set<string>([
   'order',
   'trial_code',
@@ -42,8 +50,6 @@ const usageGroupBy = new Set<string>([
   'user',
   'plan',
   'model',
-  'user_group',
-  'request_group',
   'stream',
   'status',
   'channel',
@@ -168,19 +174,20 @@ export function buildAdminAnalyticsCanonicalFilters(
       granularities,
       'day'
     ),
+    plan_ids: parseIntArray(raw.plan_ids),
     user_ids: parseIntArray(raw.user_ids),
     token_ids: parseIntArray(raw.token_ids),
     channel_ids: parseIntArray(raw.channel_ids),
-    user_groups: normalizeArray(raw.user_groups),
-    request_groups: normalizeArray(raw.request_groups),
-    plan_ids: parseIntArray(raw.plan_ids),
     sources: parseAllowedArray<AdminAnalyticsSource>(raw.sources, sources),
-    subscription_statuses: normalizeArray(raw.subscription_statuses),
-    user_statuses: normalizeArray(raw.user_statuses),
-    log_statuses: normalizeArray(raw.log_statuses),
-    grant_reasons: normalizeArray(raw.grant_reasons),
-    business_codes: normalizeArray(raw.business_codes),
     statuses: normalizeArray(raw.statuses),
+    subscription_statuses: parseAllowedArray<string>(
+      raw.subscription_statuses,
+      subscriptionStatuses
+    ),
+    user_statuses: parseAllowedArray<string>(raw.user_statuses, userStatuses),
+    log_statuses: parseAllowedArray<string>(raw.log_statuses, logStatuses),
+    grant_reasons: parseAllowedArray<string>(raw.grant_reasons, sources),
+    business_codes: normalizeArray(raw.business_codes),
     group_by: parseEnum<AdminUsageGroupBy>(raw.group_by, usageGroupBy, 'user'),
     metric,
     plan_attribution: parseEnum<AdminPlanAttribution>(
@@ -219,19 +226,17 @@ export function buildAdminAnalyticsApiParams(
   params.append('limit', String(filters.limit))
   params.append('offset', String(filters.offset))
   params.append('sort_order', filters.sort_order)
+  appendArray(params, 'plan_ids', filters.plan_ids)
   appendArray(params, 'user_ids', filters.user_ids)
   appendArray(params, 'token_ids', filters.token_ids)
   appendArray(params, 'channel_ids', filters.channel_ids)
-  appendArray(params, 'user_groups', filters.user_groups)
-  appendArray(params, 'request_groups', filters.request_groups)
-  appendArray(params, 'plan_ids', filters.plan_ids)
   appendArray(params, 'sources', filters.sources)
+  appendArray(params, 'statuses', filters.statuses)
   appendArray(params, 'subscription_statuses', filters.subscription_statuses)
   appendArray(params, 'user_statuses', filters.user_statuses)
   appendArray(params, 'log_statuses', filters.log_statuses)
   appendArray(params, 'grant_reasons', filters.grant_reasons)
   appendArray(params, 'business_codes', filters.business_codes)
-  appendArray(params, 'statuses', filters.statuses)
   if (options.includeUsage === true) {
     params.append('group_by', filters.group_by)
     params.append('metric', filters.metric)

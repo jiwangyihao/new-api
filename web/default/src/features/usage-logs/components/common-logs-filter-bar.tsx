@@ -89,7 +89,6 @@ export function CommonLogsFilterBar<TData>(
       channel: searchParams.channel ? String(searchParams.channel) : undefined,
       model: searchParams.model || undefined,
       token: searchParams.token || undefined,
-      group: searchParams.group || undefined,
       username: searchParams.username || undefined,
       requestId: searchParams.requestId || undefined,
       upstreamRequestId: searchParams.upstreamRequestId || undefined,
@@ -111,7 +110,6 @@ export function CommonLogsFilterBar<TData>(
     searchParams.channel,
     searchParams.model,
     searchParams.token,
-    searchParams.group,
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
@@ -184,7 +182,6 @@ export function CommonLogsFilterBar<TData>(
 
   const hasAdditionalFilters =
     !!filters.model ||
-    !!filters.group ||
     !!logType ||
     !!filters.status ||
     filters.isStream !== undefined ||
@@ -239,14 +236,6 @@ export function CommonLogsFilterBar<TData>(
             placeholder={t('Model Name')}
             value={filters.model || ''}
             onChange={(e) => handleChange('model', e.target.value)}
-            onKeyDown={handleKeyDown}
-            className={inputClass}
-          />
-          <Input
-            placeholder={t('Group')}
-            type={sensitiveType}
-            value={filters.group || ''}
-            onChange={(e) => handleChange('group', e.target.value)}
             onKeyDown={handleKeyDown}
             className={inputClass}
           />

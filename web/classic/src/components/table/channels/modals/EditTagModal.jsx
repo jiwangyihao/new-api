@@ -43,7 +43,6 @@ import {
   IconSave,
   IconClose,
   IconBookmark,
-  IconUser,
   IconCode,
   IconSetting,
 } from '@douyinfe/semi-icons';
@@ -62,14 +61,12 @@ const EditTagModal = (props) => {
   const [loading, setLoading] = useState(false);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
-  const [groupOptions, setGroupOptions] = useState([]);
   const [customModel, setCustomModel] = useState('');
   const [modelSearchValue, setModelSearchValue] = useState('');
   const originInputs = {
     tag: '',
     new_tag: null,
     model_mapping: null,
-    groups: [],
     models: [],
     param_override: null,
     header_override: null,
@@ -178,22 +175,6 @@ const EditTagModal = (props) => {
     }
   };
 
-  const fetchGroups = async () => {
-    try {
-      let res = await API.get(`/api/group/`);
-      if (res === undefined) {
-        return;
-      }
-      setGroupOptions(
-        res.data.data.map((group) => ({
-          label: group,
-          value: group,
-        })),
-      );
-    } catch (error) {
-      showError(error.message);
-    }
-  };
 
   const handleSave = async (values) => {
     setLoading(true);
@@ -206,9 +187,6 @@ const EditTagModal = (props) => {
         return;
       }
       data.model_mapping = formVals.model_mapping;
-    }
-    if (formVals.groups && formVals.groups.length > 0) {
-      data.groups = formVals.groups.join(',');
     }
     if (formVals.models && formVals.models.length > 0) {
       data.models = formVals.models.join(',');
@@ -250,7 +228,6 @@ const EditTagModal = (props) => {
     data.new_tag = formVals.new_tag;
     if (
       data.model_mapping === undefined &&
-      data.groups === undefined &&
       data.models === undefined &&
       data.new_tag === undefined &&
       data.param_override === undefined &&
@@ -310,7 +287,6 @@ const EditTagModal = (props) => {
     };
 
     fetchModels().then();
-    fetchGroups().then();
     fetchTagModels().then();
     setModelSearchValue('');
     if (formApiRef.current) {
@@ -713,36 +689,6 @@ const EditTagModal = (props) => {
                 </div>
               </Card>
 
-              <Card className='!rounded-2xl shadow-sm border-0'>
-                {/* Header: Group Settings */}
-                <div className='flex items-center mb-2'>
-                  <Avatar size='small' color='green' className='mr-2 shadow-md'>
-                    <IconUser size={16} />
-                  </Avatar>
-                  <div>
-                    <Text className='text-lg font-medium'>{t('分组设置')}</Text>
-                    <div className='text-xs text-gray-600'>
-                      {t('用户分组配置')}
-                    </div>
-                  </div>
-                </div>
-
-                <div className='space-y-4'>
-                  <Form.Select
-                    field='groups'
-                    label={t('分组')}
-                    placeholder={t('请选择可以使用该渠道的分组，留空则不更改')}
-                    multiple
-                    allowAdditions
-                    additionLabel={t(
-                      '请在系统设置页面编辑分组倍率以添加新的分组：',
-                    )}
-                    optionList={groupOptions}
-                    style={{ width: '100%' }}
-                    onChange={(value) => handleInputChange('groups', value)}
-                  />
-                </div>
-              </Card>
             </div>
           </Spin>
         )}

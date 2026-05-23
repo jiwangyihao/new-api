@@ -186,7 +186,7 @@ docker run --name new-api -d --restart always \
 | 🌍 Multi-language | Supports Chinese, English, French, Japanese |
 | 🔄 Data Compatibility | Fully compatible with the original One API database |
 | 📈 Data Dashboard | Visual console and statistical analysis |
-| 🔒 Permission Management | Token grouping, model restrictions, user management |
+| 🔒 Permission Management | Model restrictions, user management |
 
 ### 💰 Authorized Usage Accounting and Billing
 

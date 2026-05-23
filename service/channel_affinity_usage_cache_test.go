@@ -18,7 +18,6 @@ func buildChannelAffinityStatsContextForTest(ruleName, usingGroup, keyFP string)
 		CacheKey:       fmt.Sprintf("test:%s:%s:%s", ruleName, usingGroup, keyFP),
 		TTLSeconds:     600,
 		RuleName:       ruleName,
-		UsingGroup:     usingGroup,
 		KeyFingerprint: keyFP,
 	})
 	return ctx

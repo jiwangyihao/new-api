@@ -95,16 +95,7 @@ test('clamps excessive limit to backend maximum', () => {
   assert.equal(canonical.sort_by, 'quota')
 })
 
-test('preserves comma values when input is repeated array', () => {
-  const normalized = normalizeUsageAnalyticsSearch(
-    { groups: ['a,b', 'default'] },
-    1_779_321_600
-  )
-
-  assert.deepEqual(normalized.groups, ['a,b', 'default'])
-})
-
-test('serializes api params as repeated query params', () => {
+test('serializes api params without deprecated business group params', () => {
   const canonical = buildUsageAnalyticsCanonicalFilters(
     { model_names: ['gpt-4', 'claude'], groups: ['a,b', 'default'] },
     1_779_321_600
@@ -112,8 +103,8 @@ test('serializes api params as repeated query params', () => {
   const params = buildUsageAnalyticsApiParams(canonical)
 
   assert.deepEqual(params.getAll('model_names'), ['claude', 'gpt-4'])
-  assert.deepEqual(params.getAll('groups'), ['a,b', 'default'])
-  assert.equal(params.toString().includes('groups=a%2Cb'), true)
+  assert.equal(params.has('groups'), false)
+  assert.equal('groups' in canonical, false)
 })
 
 test('builds api key entry search without full key material', () => {
@@ -133,7 +124,6 @@ test('builds usage logs drilldown search with status not numeric type', () => {
     {
       token_id: 5,
       model_name: 'gpt-4',
-      group: 'default',
       status: 'error',
       is_stream: true,
     }
@@ -144,11 +134,11 @@ test('builds usage logs drilldown search with status not numeric type', () => {
     endTime: 20_000,
     tokenId: 5,
     model: 'gpt-4',
-    group: 'default',
     status: 'error',
     isStream: true,
   })
   assert.equal(Object.prototype.hasOwnProperty.call(search, 'type'), false)
+  assert.equal(Object.prototype.hasOwnProperty.call(search, 'group'), false)
 })
 
 test('omits invalid token id from usage logs drilldown search', () => {

@@ -43,7 +43,6 @@ export const USAGE_ANALYTICS_GROUP_BY_OPTIONS: Array<
 > = [
   { value: 'token', labelKey: 'usageAnalytics.groupBy.token' },
   { value: 'model', labelKey: 'usageAnalytics.groupBy.model' },
-  { value: 'group', labelKey: 'usageAnalytics.groupBy.group' },
   { value: 'stream', labelKey: 'usageAnalytics.groupBy.stream' },
   { value: 'status', labelKey: 'usageAnalytics.groupBy.status' },
 ]

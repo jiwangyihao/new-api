@@ -30,7 +30,6 @@ import {
 } from '@douyinfe/semi-ui';
 import { IconMore } from '@douyinfe/semi-icons';
 import {
-  renderGroup,
   renderNumber,
   renderQuota,
   timestamp2string,
@@ -337,13 +336,6 @@ export const getUsersColumns = ({
       title: t('剩余额度/总额度'),
       key: 'quota_usage',
       render: (text, record) => renderQuotaUsage(text, record, t),
-    },
-    {
-      title: t('分组'),
-      dataIndex: 'group',
-      render: (text, record, index) => {
-        return <div>{renderGroup(text)}</div>;
-      },
     },
     {
       title: t('角色'),

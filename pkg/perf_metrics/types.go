@@ -9,7 +9,6 @@ type Store interface {
 
 type Sample struct {
 	Model        string
-	Group        string
 	LatencyMs    int64
 	TtftMs       int64
 	HasTtft      bool
@@ -20,7 +19,6 @@ type Sample struct {
 
 type QueryParams struct {
 	Model string
-	Group string
 	Hours int
 }
 
@@ -32,19 +30,10 @@ type BucketPoint struct {
 	AvgTps       float64 `json:"avg_tps"`
 }
 
-type GroupResult struct {
-	Group        string        `json:"group"`
-	AvgTtftMs    int64         `json:"avg_ttft_ms"`
-	AvgLatencyMs int64         `json:"avg_latency_ms"`
-	SuccessRate  float64       `json:"success_rate"`
-	AvgTps       float64       `json:"avg_tps"`
-	Series       []BucketPoint `json:"series"`
-}
-
 type QueryResult struct {
 	ModelName    string        `json:"model_name"`
 	SeriesSchema string        `json:"series_schema"`
-	Groups       []GroupResult `json:"groups"`
+	Series       []BucketPoint `json:"series"`
 }
 
 type ModelSummary struct {
@@ -61,7 +50,6 @@ type SummaryAllResult struct {
 
 type bucketKey struct {
 	model    string
-	group    string
 	bucketTs int64
 }
 

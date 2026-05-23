@@ -111,9 +111,6 @@ func createBalanceSubscriptionOrder(userId int, plan *model.SubscriptionPlan, tr
 	}
 	if created {
 		_ = model.InvalidateUserCache(userId)
-		if strings.TrimSpace(plan.UpgradeGroup) != "" {
-			_ = model.UpdateUserGroupCache(userId, plan.UpgradeGroup)
-		}
 		model.RecordLog(userId, model.LogTypeTopup, "账户余额购买订阅套餐："+plan.Title)
 	}
 	return &order, created, nil

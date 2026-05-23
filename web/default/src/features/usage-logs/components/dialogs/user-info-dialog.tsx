@@ -134,9 +134,6 @@ export function UserInfoDialog({
                 label={t('Request Count')}
                 value={formatCompactNumber(userInfo.request_count)}
               />
-              {userInfo.group && (
-                <InfoItem label={t('User Group')} value={userInfo.group} />
-              )}
             </div>
 
             {/* Invitation Info */}

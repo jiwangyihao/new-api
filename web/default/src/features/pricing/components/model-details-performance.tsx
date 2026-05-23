@@ -29,14 +29,13 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { GroupBadge } from '@/components/group-badge'
 import { getPerfMetrics } from '@/features/performance-metrics/api'
 import {
   formatLatency,
   formatThroughput,
   formatUptimePct,
 } from '@/features/performance-metrics/lib/format'
-import type { PerformanceGroup } from '@/features/performance-metrics/types'
+import type { PerformanceSeriesPoint } from '@/features/performance-metrics/types'
 import { type UptimeDayPoint } from '../lib/mock-stats'
 import type { PricingModel } from '../types'
 import { LatencyTrendChart, UptimeTrendChart } from './model-details-charts'
@@ -76,72 +75,31 @@ function StatCard(props: {
 }
 
 type PerformanceRow = {
-  group: string
   avg_ttft_ms: number
   avg_latency_ms: number
   success_rate: number
   avg_tps: number
 }
 
-function toLatencySeries(groups: PerformanceGroup[]) {
-  const byTs = new Map<number, number[]>()
-  for (const group of groups) {
-    for (const point of group.series) {
-      if (point.avg_ttft_ms <= 0) continue
-      const current = byTs.get(point.ts) ?? []
-      current.push(point.avg_ttft_ms)
-      byTs.set(point.ts, current)
-    }
-  }
-
-  return Array.from(byTs.entries())
-    .sort(([a], [b]) => a - b)
-    .map(([ts, values]) => ({
-      timestamp: new Date(ts * 1000).toISOString(),
-      group: 'latency',
-      ttft_ms: Math.round(
-        values.reduce((sum, value) => sum + value, 0) / values.length
-      ),
+function toLatencySeries(series: PerformanceSeriesPoint[]) {
+  return series
+    .filter((point) => point.avg_ttft_ms > 0)
+    .map((point) => ({
+      timestamp: new Date(point.ts * 1000).toISOString(),
+      series: 'latency',
+      ttft_ms: point.avg_ttft_ms,
     }))
 }
 
-function toUptimeSeries(groups: PerformanceGroup[]): UptimeDayPoint[] {
-  const byTs = new Map<number, { rates: number[]; incidents: number }>()
-  for (const group of groups) {
-    for (const point of group.series) {
-      const current = byTs.get(point.ts) ?? { rates: [], incidents: 0 }
-      if (Number.isFinite(point.success_rate)) {
-        current.rates.push(point.success_rate)
-        if (point.success_rate < 100) current.incidents += 1
-      }
-      byTs.set(point.ts, current)
-    }
-  }
-  return Array.from(byTs.entries())
-    .sort(([a], [b]) => a - b)
-    .map(([ts, value]) => {
-      const uptime =
-        value.rates.length > 0
-          ? value.rates.reduce((sum, rate) => sum + rate, 0) /
-            value.rates.length
-          : 0
-      return {
-        date: new Date(ts * 1000).toISOString(),
-        uptime_pct: Math.round(uptime * 100) / 100,
-        incidents: value.incidents,
-        outage_minutes: 0,
-      }
-    })
-}
-
-function toGroupUptimeSeries(group: PerformanceGroup): UptimeDayPoint[] {
-  return group.series.map((point) => ({
+function toUptimeSeries(series: PerformanceSeriesPoint[]): UptimeDayPoint[] {
+  return series.map((point) => ({
     date: new Date(point.ts * 1000).toISOString(),
     uptime_pct: Math.round(point.success_rate * 100) / 100,
     incidents: point.success_rate < 100 ? 1 : 0,
     outage_minutes: 0,
   }))
 }
+
 
 function average(
   rows: PerformanceRow[],
@@ -161,30 +119,57 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
     queryFn: () => getPerfMetrics(props.model.model_name, 24),
     staleTime: 60 * 1000,
   })
-  const groups = useMemo(
-    () => metricsQuery.data?.data.groups ?? [],
+  const series = useMemo(
+    () => metricsQuery.data?.data.series ?? [],
     [metricsQuery.data]
   )
-  const performances = useMemo<PerformanceRow[]>(
-    () =>
-      groups.map((group) => ({
-        group: group.group,
-        avg_ttft_ms: group.avg_ttft_ms,
-        avg_latency_ms: group.avg_latency_ms,
-        success_rate: group.success_rate,
-        avg_tps: group.avg_tps,
-      })),
-    [groups]
-  )
-  const latencySeries = useMemo(() => toLatencySeries(groups), [groups])
-  const uptimeSeries = useMemo(() => toUptimeSeries(groups), [groups])
-  const uptimeByGroup = useMemo<Record<string, UptimeDayPoint[]>>(() => {
-    const map: Record<string, UptimeDayPoint[]> = {}
-    for (const group of groups) {
-      map[group.group] = toGroupUptimeSeries(group)
-    }
-    return map
-  }, [groups])
+  const performances = useMemo<PerformanceRow[]>(() => {
+    if (series.length === 0) return []
+
+    const ttftValues = series
+      .map((point) => point.avg_ttft_ms)
+      .filter((value) => value > 0)
+    const latencyValues = series
+      .map((point) => point.avg_latency_ms)
+      .filter((value) => value > 0)
+    const successRates = series
+      .map((point) => point.success_rate)
+      .filter((value) => Number.isFinite(value))
+    const tpsValues = series
+      .map((point) => point.avg_tps)
+      .filter((value) => value > 0)
+
+    return [
+      {
+        avg_ttft_ms:
+          ttftValues.length > 0
+            ? Math.round(
+                ttftValues.reduce((sum, value) => sum + value, 0) /
+                  ttftValues.length
+              )
+            : 0,
+        avg_latency_ms:
+          latencyValues.length > 0
+            ? Math.round(
+                latencyValues.reduce((sum, value) => sum + value, 0) /
+                  latencyValues.length
+              )
+            : 0,
+        success_rate:
+          successRates.length > 0
+            ? successRates.reduce((sum, value) => sum + value, 0) /
+              successRates.length
+            : 0,
+        avg_tps:
+          tpsValues.length > 0
+            ? tpsValues.reduce((sum, value) => sum + value, 0) /
+              tpsValues.length
+            : 0,
+      },
+    ]
+  }, [series])
+  const latencySeries = useMemo(() => toLatencySeries(series), [series])
+  const uptimeSeries = useMemo(() => toUptimeSeries(series), [series])
 
   if (metricsQuery.isLoading || performances.length === 0) {
     return (
@@ -253,14 +238,13 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
       <section>
         <SectionHeader
           icon={HeartPulse}
-          title={t('Per-group performance')}
+          title={t('Performance summary')}
           description={t('Average latency, TTFT, TPS, and success rate')}
         />
         <div className='overflow-x-auto rounded-lg border'>
           <Table className='text-sm'>
             <TableHeader>
               <TableRow className='hover:bg-transparent'>
-                <TableHead className={headerCellClass}>{t('Group')}</TableHead>
                 <TableHead className={`${headerCellClass} text-right`}>
                   TPS
                 </TableHead>
@@ -278,11 +262,8 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {performances.map((perf) => (
-                <TableRow key={perf.group}>
-                  <TableCell className='py-2.5'>
-                    <GroupBadge group={perf.group} size='sm' />
-                  </TableCell>
+              {performances.map((perf, index) => (
+                <TableRow key={index}>
                   <TableCell className='py-2.5 text-right font-mono'>
                     {formatThroughput(perf.avg_tps)}
                   </TableCell>
@@ -293,10 +274,7 @@ export function ModelDetailsPerformance(props: { model: PricingModel }) {
                     {formatLatency(perf.avg_latency_ms)}
                   </TableCell>
                   <TableCell className='py-2.5'>
-                    <UptimeSparkline
-                      size='sm'
-                      series={uptimeByGroup[perf.group] ?? []}
-                    />
+                    <UptimeSparkline size='sm' series={uptimeSeries} />
                   </TableCell>
                 </TableRow>
               ))}

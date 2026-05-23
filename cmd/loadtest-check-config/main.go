@@ -60,7 +60,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	rc.Role = strings.TrimSpace(*role)
 	if *outEnv != "" {
-		if err := writeEnvFile(*outEnv, file.NewAPIEnv()); err != nil {
+		if err := writeBenchmarkEnvFile(*outEnv, file); err != nil {
 			writeErr(stderr, err)
 			return 1
 		}
@@ -73,6 +73,14 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "config ok role=%s commit=%s comparison_config_hash=%s\n", rc.Role, rc.Commit, rc.ComparisonConfigHash)
 	return 0
+}
+
+func writeBenchmarkEnvFile(path string, file *loadconfig.File) error {
+	env, err := file.NewAPIEnvForProfile("benchmark")
+	if err != nil {
+		return err
+	}
+	return writeEnvFile(path, env)
 }
 
 func writeEnvFile(path string, env map[string]string) error {

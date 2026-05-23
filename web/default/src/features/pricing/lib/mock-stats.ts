@@ -30,16 +30,16 @@ import {
 //
 // The backend has not yet implemented latency / uptime / app-ranking data.
 // These helpers generate plausible, deterministic mock values seeded from
-// the model name (and optionally the group name) so that:
+// the model name so that:
 //   - Every render of the same model shows the same numbers
-//   - Different models / different groups render visibly distinct values
+//   - Different models render visibly distinct values
 //
 // When the backend ships real metrics, callers should switch to the
 // real API and these helpers can be deleted. The shape of the returned
 // data is designed to mirror what we expect the real endpoints to return.
 
-export type GroupPerformance = {
-  group: string
+export type ModelPerformance = {
+  name: string
   ttft_p50_ms: number
   ttft_p95_ms: number
   ttft_p99_ms: number
@@ -51,7 +51,7 @@ export type GroupPerformance = {
 
 export type LatencyTimePoint = {
   timestamp: string
-  group: string
+  series: string
   ttft_ms: number
 }
 
@@ -288,15 +288,15 @@ function rangeFromSeed(
   return randomInRange(rand, min, max)
 }
 
-function applyGroupFactor(value: number, factor: number): number {
+function applyPerformanceFactor(value: number, factor: number): number {
   return value * factor
 }
 
-function groupFactor(
-  group: string,
+function performanceFactor(
+  name: string,
   baseSeed: number
 ): { ttft: number; throughput: number; uptime: number } {
-  const rand = seededRandom(baseSeed ^ hashStringToSeed(group || 'default'))
+  const rand = seededRandom(baseSeed ^ hashStringToSeed(name || 'model'))
   return {
     ttft: 0.85 + rand() * 0.55,
     throughput: 0.85 + rand() * 0.4,
@@ -304,56 +304,47 @@ function groupFactor(
   }
 }
 
-/**
- * Build per-group performance stats for a model. Always returns at least one
- * row for each enabled group, sorted alphabetically.
- */
-export function buildGroupPerformance(model: PricingModel): GroupPerformance[] {
-  const groups = (model.enable_groups ?? []).filter((g) => g && g !== 'auto')
-  const targets = groups.length > 0 ? groups : ['default']
+/** Build deterministic performance stats for a model. */
+export function buildModelPerformance(model: PricingModel): ModelPerformance[] {
   const profile = PROFILE_BY_NAME(model.model_name)
   const spec = PROFILE_SPECS[profile]
   const baseSeed = hashStringToSeed(model.model_name)
-
-  return targets
-    .slice()
-    .sort((a, b) => a.localeCompare(b))
-    .map<GroupPerformance>((group) => {
-      const rand = seededRandom(baseSeed ^ hashStringToSeed(group))
-      const factor = groupFactor(group, baseSeed)
-      const ttftP50 = applyGroupFactor(
-        rangeFromSeed(rand, spec.ttftRange),
-        factor.ttft
-      )
-      const throughput = applyGroupFactor(
-        rangeFromSeed(rand, spec.throughputRange),
-        factor.throughput
-      )
-      const uptimePct = Math.min(
-        99.99,
-        rangeFromSeed(rand, spec.uptimeRange) * factor.uptime
-      )
-      const requestVolume = randomIntInRange(rand, 18_000, 480_000)
-      return {
-        group,
-        ttft_p50_ms: Math.round(ttftP50),
-        ttft_p95_ms: Math.round(ttftP50 * (1.6 + rand() * 0.4)),
-        ttft_p99_ms: Math.round(ttftP50 * (2.4 + rand() * 0.6)),
-        throughput_tps: throughput === 0 ? 0 : Math.round(throughput * 10) / 10,
-        uptime_30d_pct: Math.round(uptimePct * 100) / 100,
-        request_volume_24h: requestVolume,
-      }
-    })
+  const rand = seededRandom(baseSeed)
+  const factor = performanceFactor(model.model_name, baseSeed)
+  const ttftP50 = applyPerformanceFactor(
+    rangeFromSeed(rand, spec.ttftRange),
+    factor.ttft
+  )
+  const throughput = applyPerformanceFactor(
+    rangeFromSeed(rand, spec.throughputRange),
+    factor.throughput
+  )
+  const uptimePct = Math.min(
+    99.99,
+    rangeFromSeed(rand, spec.uptimeRange) * factor.uptime
+  )
+  const requestVolume = randomIntInRange(rand, 18_000, 480_000)
+  return [
+    {
+      name: model.model_name,
+      ttft_p50_ms: Math.round(ttftP50),
+      ttft_p95_ms: Math.round(ttftP50 * (1.6 + rand() * 0.4)),
+      ttft_p99_ms: Math.round(ttftP50 * (2.4 + rand() * 0.6)),
+      throughput_tps: throughput === 0 ? 0 : Math.round(throughput * 10) / 10,
+      uptime_30d_pct: Math.round(uptimePct * 100) / 100,
+      request_volume_24h: requestVolume,
+    },
+  ]
 }
 
 /**
- * Build a 24-hour latency series for each group. Returns one point per hour
- * (24 buckets), oldest first.
+ * Build a 24-hour latency series. Returns one point per hour (24 buckets),
+ * oldest first.
  */
 export function buildLatencyTimeSeries(
   model: PricingModel
 ): LatencyTimePoint[] {
-  const performances = buildGroupPerformance(model)
+  const performances = buildModelPerformance(model)
   if (performances.length === 0) return []
 
   const now = new Date()
@@ -362,7 +353,7 @@ export function buildLatencyTimeSeries(
   const points: LatencyTimePoint[] = []
 
   for (const perf of performances) {
-    const rand = seededRandom(baseSeed ^ hashStringToSeed(perf.group))
+    const rand = seededRandom(baseSeed ^ hashStringToSeed(perf.name))
     for (let i = 23; i >= 0; i--) {
       const ts = new Date(now.getTime() - i * 3_600_000)
       const noise = 0.7 + rand() * 0.7
@@ -370,7 +361,7 @@ export function buildLatencyTimeSeries(
       const value = Math.max(50, Math.round(perf.ttft_p50_ms * noise * trend))
       points.push({
         timestamp: ts.toISOString(),
-        group: perf.group,
+        series: perf.name,
         ttft_ms: value,
       })
     }
@@ -381,23 +372,23 @@ export function buildLatencyTimeSeries(
 /**
  * Build a 30-day uptime series. Returns one point per day, oldest first.
  *
- * If `group` is provided the series is anchored on that group's mean uptime,
+ * If a series name is provided the series is anchored on that metric row,
  * otherwise it uses the per-model average. Either way the seed is derived
  * deterministically so re-renders are stable.
  */
 export function buildUptimeSeries(
   model: PricingModel,
-  group?: string
+  series?: string
 ): UptimeDayPoint[] {
-  const performances = buildGroupPerformance(model)
+  const performances = buildModelPerformance(model)
   if (performances.length === 0) return []
 
-  const target = group ? performances.find((p) => p.group === group) : null
+  const target = series ? performances.find((p) => p.name === series) : null
   const baseUptime = target
     ? target.uptime_30d_pct
     : performances.reduce((s, p) => s + p.uptime_30d_pct, 0) /
       performances.length
-  const baseSeed = hashStringToSeed(`${model.model_name}:up:${group ?? '_all'}`)
+  const baseSeed = hashStringToSeed(`${model.model_name}:up:${series ?? '_all'}`)
   const rand = seededRandom(baseSeed)
 
   const today = new Date()
@@ -799,37 +790,28 @@ export function buildSupportedParameters(
 }
 
 export type RateLimit = {
-  group: string
   rpm: number
   tpm: number
   rpd: number
 }
 
-/** Build per-group RPM / TPM / RPD limits for the model. */
-export function buildRateLimits(model: PricingModel): RateLimit[] {
-  const groups = (model.enable_groups ?? []).filter((g) => g && g !== 'auto')
-  const targets = groups.length > 0 ? groups : ['default']
+/** Build deterministic RPM / TPM / RPD limits for the model. */
+export function buildRateLimits(model: PricingModel): RateLimit {
   const cat = apiCategoryOf(model)
   const baseSeed = hashStringToSeed(`${model.model_name}:rl`)
+  const rand = seededRandom(baseSeed)
   const isHeavy = cat === 'image' || cat === 'video'
   const isLight = cat === 'embedding'
   const baseRpm = isHeavy ? 60 : isLight ? 5_000 : 500
   const baseTpm = isHeavy ? 0 : isLight ? 1_000_000 : 200_000
   const baseRpd = isHeavy ? 1_000 : isLight ? 100_000 : 10_000
+  const tier = 0.6 + rand() * 1.4
 
-  return targets
-    .slice()
-    .sort((a, b) => a.localeCompare(b))
-    .map((group) => {
-      const rand = seededRandom(baseSeed ^ hashStringToSeed(group))
-      const tier = 0.6 + rand() * 1.4
-      return {
-        group,
-        rpm: Math.round((baseRpm * tier) / 10) * 10,
-        tpm: baseTpm === 0 ? 0 : Math.round((baseTpm * tier) / 1_000) * 1_000,
-        rpd: Math.round((baseRpd * tier) / 100) * 100,
-      }
-    })
+  return {
+    rpm: Math.round((baseRpm * tier) / 10) * 10,
+    tpm: baseTpm === 0 ? 0 : Math.round((baseTpm * tier) / 1_000) * 1_000,
+    rpd: Math.round((baseRpd * tier) / 100) * 100,
+  }
 }
 
 /** Format an integer rate-limit value compactly. */

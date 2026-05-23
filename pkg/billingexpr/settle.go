@@ -22,13 +22,13 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 		return TieredResult{}, err
 	}
 
-	quotaBeforeGroup := quotaConversion(cost, snap)
-	afterGroup := QuotaRound(quotaBeforeGroup * snap.GroupRatio)
+	quotaBeforeRatio := quotaConversion(cost, snap)
+	quota := QuotaRound(quotaBeforeRatio * snap.QuotaMultiplier)
 	crossed := trace.MatchedTier != snap.EstimatedTier
 
 	return TieredResult{
-		ActualQuotaBeforeGroup: quotaBeforeGroup,
-		ActualQuotaAfterGroup:  afterGroup,
+		ActualQuotaBeforeRatio: quotaBeforeRatio,
+		ActualQuota:            quota,
 		MatchedTier:            trace.MatchedTier,
 		CrossedTier:            crossed,
 	}, nil

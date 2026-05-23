@@ -114,12 +114,6 @@ const UserInfoModal = ({
                 {renderNumber(userInfoData.request_count)}
               </div>
             </div>
-            {userInfoData.group && (
-              <div style={colStyle}>
-                {renderLabel(t('用户组'), 'tertiary')}
-                <div style={valueStyle}>{userInfoData.group}</div>
-              </div>
-            )}
           </div>
 
           {/* 邀请信息 */}

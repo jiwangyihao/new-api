@@ -11,11 +11,11 @@ const (
 )
 
 type ServerLimits struct {
-	GOMAXPROCS               string
-	GOGC                     string
-	GOMEMLIMIT               string
-	ProcessMemoryLimitBytes  uint64
-	CPUAffinityCores         int
+	GOMAXPROCS              string
+	GOGC                    string
+	GOMEMLIMIT              string
+	ProcessMemoryLimitBytes uint64
+	CPUAffinityCores        int
 }
 
 type Transport struct {
@@ -46,7 +46,7 @@ type Profile struct {
 func Benchmark() Profile {
 	return Profile{
 		Name:             "benchmark",
-		Points:           []int{250, 500, 750, 1000},
+		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
 		RampStep:         25,
 		RampInterval:     200 * time.Millisecond,

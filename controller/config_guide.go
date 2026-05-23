@@ -12,12 +12,10 @@ import (
 	"unicode"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -336,18 +334,7 @@ func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*mod
 		}
 	}
 
-	usingGroup := userCache.Group
-	if token.Group != "" {
-		if _, ok := service.GetUserUsableGroups(userCache.Group)[token.Group]; !ok {
-			writeConfigGuideError(c, http.StatusForbidden, "token group is not usable")
-			return nil, "", false
-		}
-		usingGroup = token.Group
-	}
-	if usingGroup != "auto" && !ratio_setting.ContainsGroupRatio(usingGroup) {
-		writeConfigGuideError(c, http.StatusForbidden, "group is not usable")
-		return nil, "", false
-	}
+	// Legacy user/token group fields are ignored for config guide eligibility.
 
 	c.Set("id", token.UserId)
 	c.Set("token_id", token.Id)
@@ -363,14 +350,12 @@ func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*mod
 	} else {
 		c.Set("token_model_limit_enabled", false)
 	}
-	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
-	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
-	common.SetContextKey(c, constant.ContextKeyUsingGroup, usingGroup)
+
 	userCache.WriteContext(c)
-	return userCache, usingGroup, true
+	return userCache, "", true
 }
 
-func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase, usingGroup string) []string {
+func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase) []string {
 	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
 	if !acceptUnsetRatioModel && user != nil && user.Id > 0 {
 		userSettings, _ := model.GetUserSetting(user.Id, false)
@@ -388,21 +373,7 @@ func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase
 		return models
 	}
 
-	var models []string
-	if usingGroup == "auto" && user != nil {
-		seen := make(map[string]struct{})
-		for _, autoGroup := range service.GetUserAutoGroup(user.Group) {
-			for _, modelName := range model.GetGroupEnabledModels(autoGroup) {
-				if _, ok := seen[modelName]; ok {
-					continue
-				}
-				seen[modelName] = struct{}{}
-				models = append(models, modelName)
-			}
-		}
-	} else {
-		models = model.GetGroupEnabledModels(usingGroup)
-	}
+	models := model.GetEnabledModels()
 
 	filtered := models[:0]
 	for _, modelName := range models {
@@ -482,7 +453,7 @@ func requireConfigGuideEffectiveModels(c *gin.Context, client configGuideClient)
 	if !ok {
 		return configGuideQueryParams{}, nil, false
 	}
-	user, usingGroup, ok := validateConfigGuideTokenUsability(c, token)
+	user, _, ok := validateConfigGuideTokenUsability(c, token)
 	if !ok {
 		return configGuideQueryParams{}, nil, false
 	}
@@ -493,7 +464,7 @@ func requireConfigGuideEffectiveModels(c *gin.Context, client configGuideClient)
 	effective, err := buildConfigGuideEffectiveModels(configGuideEffectiveModelsInput{
 		Client:          client,
 		Metadata:        metadata,
-		AvailableModels: availableConfigGuideModelsForToken(token, user, usingGroup),
+		AvailableModels: availableConfigGuideModelsForToken(token, user),
 	})
 	if err != nil {
 		writeConfigGuideError(c, http.StatusServiceUnavailable, "OpenAI model metadata incomplete")

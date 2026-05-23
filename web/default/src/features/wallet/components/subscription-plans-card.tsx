@@ -550,9 +550,6 @@ export function SubscriptionPlansCard({
                   t
                 )}`,
                 limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
-                plan.upgrade_group
-                  ? `${t('Upgrade Group')}: ${plan.upgrade_group}`
-                  : null,
               ].filter(Boolean) as string[]
 
               return (

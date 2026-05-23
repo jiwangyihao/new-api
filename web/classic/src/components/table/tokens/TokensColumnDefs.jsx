@@ -35,7 +35,6 @@ import {
 } from '@douyinfe/semi-ui';
 import {
   timestamp2string,
-  renderGroup,
   renderQuota,
   getModelCategories,
   showError,
@@ -87,35 +86,6 @@ const renderStatus = (text, record, t) => {
   );
 };
 
-// Render group column
-const renderGroupColumn = (text, record, t, groupRatios = {}) => {
-  if (text === 'auto') {
-    return (
-      <Tooltip
-        content={t(
-          '当前分组为 auto，会自动选择最优分组，当一个组不可用时自动降级到下一个组（熔断机制）',
-        )}
-        position='top'
-      >
-        <Tag color='white' shape='circle'>
-          {t('智能熔断')}
-          {record && record.cross_group_retry ? `(${t('跨分组')})` : ''}
-        </Tag>
-      </Tooltip>
-    );
-  }
-  const ratio = groupRatios[text];
-  return (
-    <span className='flex items-center gap-1'>
-      {renderGroup(text)}
-      {ratio !== undefined && (
-        <Tag size='small' color='green' shape='circle'>
-          {ratio}x
-        </Tag>
-      )}
-    </span>
-  );
-};
 
 // Render token key column with show/hide and copy functionality
 const renderTokenKey = (
@@ -479,7 +449,6 @@ export const getTokensColumns = ({
   setEditingToken,
   setShowEdit,
   refresh,
-  groupRatios = {},
 }) => {
   return [
     {
@@ -496,12 +465,6 @@ export const getTokensColumns = ({
       title: t('剩余额度/总额度'),
       key: 'quota_usage',
       render: (text, record) => renderQuotaUsage(text, record, t),
-    },
-    {
-      title: t('分组'),
-      dataIndex: 'group',
-      key: 'group',
-      render: (text, record) => renderGroupColumn(text, record, t, groupRatios),
     },
     {
       title: t('密钥'),

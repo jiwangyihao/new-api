@@ -11,7 +11,6 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
 )
 
 type Pricing struct {
@@ -30,7 +29,6 @@ type Pricing struct {
 	ImageRatio             *float64                `json:"image_ratio,omitempty"`
 	AudioRatio             *float64                `json:"audio_ratio,omitempty"`
 	AudioCompletionRatio   *float64                `json:"audio_completion_ratio,omitempty"`
-	EnableGroup            []string                `json:"enable_groups"`
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
@@ -51,10 +49,9 @@ var (
 	lastGetPricingTime   time.Time
 	updatePricingLock    sync.Mutex
 
-	// 缓存映射：模型名 -> 启用分组 / 计费类型
-	modelEnableGroups     = make(map[string][]string)
+	// 缓存映射：模型名 -> 计费类型
 	modelQuotaTypeMap     = make(map[string]int)
-	modelEnableGroupsLock = sync.RWMutex{}
+	modelQuotaTypeMapLock = sync.RWMutex{}
 )
 
 var (
@@ -108,6 +105,45 @@ func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
 		return endpoints
 	}
 	return make([]constant.EndpointType, 0)
+}
+
+func GetPublicPricingSupportedEndpointsByModel() map[string][]constant.EndpointType {
+	GetPricing()
+	var abilities []Ability
+	if err := DB.Where("enabled = ?", true).Find(&abilities).Error; err != nil {
+		return map[string][]constant.EndpointType{}
+	}
+	byModel := make(map[string][]constant.EndpointType)
+	seenByModel := make(map[string]map[constant.EndpointType]struct{})
+	for _, ability := range abilities {
+		channel := Channel{}
+		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
+		seen := seenByModel[ability.Model]
+		if seen == nil {
+			seen = make(map[constant.EndpointType]struct{})
+			seenByModel[ability.Model] = seen
+		}
+		for _, endpoint := range GetEndpointDisplayTypes(&channel, ability.Model) {
+			byModel[ability.Model] = appendEndpointIfMissing(byModel[ability.Model], seen, endpoint)
+		}
+	}
+	return byModel
+}
+
+func MergeEndpointTypes(byModel map[string][]constant.EndpointType) []constant.EndpointType {
+	if len(byModel) == 0 {
+		return []constant.EndpointType{}
+	}
+	endpoints := make([]constant.EndpointType, 0)
+	seen := make(map[constant.EndpointType]struct{})
+	for _, modelEndpoints := range byModel {
+		for _, endpoint := range modelEndpoints {
+			endpoints = appendEndpointIfMissing(endpoints, seen, endpoint)
+		}
+	}
+	return endpoints
 }
 
 func updatePricing() {
@@ -191,17 +227,6 @@ func updatePricing() {
 		})
 	}
 
-	modelGroupsMap := make(map[string]*types.Set[string])
-
-	for _, ability := range enableAbilities {
-		groups, ok := modelGroupsMap[ability.Model]
-		if !ok {
-			groups = types.NewSet[string]()
-			modelGroupsMap[ability.Model] = groups
-		}
-		groups.Add(ability.Group)
-	}
-
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 
@@ -270,10 +295,15 @@ func updatePricing() {
 	}
 
 	pricingMap = make([]Pricing, 0)
-	for model, groups := range modelGroupsMap {
+	seenModels := make(map[string]struct{})
+	for _, ability := range enableAbilities {
+		model := ability.Model
+		if _, seen := seenModels[model]; seen {
+			continue
+		}
+		seenModels[model] = struct{}{}
 		pricing := Pricing{
 			ModelName:              model,
-			EnableGroup:            groups.Items(),
 			SupportedEndpointTypes: modelSupportEndpointTypes[model],
 		}
 
@@ -330,19 +360,42 @@ func updatePricing() {
 	}
 
 	// 刷新缓存映射，供高并发快速查询
-	modelEnableGroupsLock.Lock()
-	modelEnableGroups = make(map[string][]string)
+	modelQuotaTypeMapLock.Lock()
 	modelQuotaTypeMap = make(map[string]int)
 	for _, p := range pricingMap {
-		modelEnableGroups[p.ModelName] = p.EnableGroup
 		modelQuotaTypeMap[p.ModelName] = p.QuotaType
 	}
-	modelEnableGroupsLock.Unlock()
+	modelQuotaTypeMapLock.Unlock()
 
 	lastGetPricingTime = time.Now()
+}
+
+func GetModelQuotaTypes(modelName string) []int {
+	GetPricing()
+	modelQuotaTypeMapLock.RLock()
+	quotaType, ok := modelQuotaTypeMap[modelName]
+	modelQuotaTypeMapLock.RUnlock()
+	if !ok {
+		return nil
+	}
+	return []int{quotaType}
 }
 
 // GetSupportedEndpointMap 返回全局端点到路径的映射
 func GetSupportedEndpointMap() map[string]common.EndpointInfo {
 	return supportedEndpointMap
+}
+
+func GetSupportedEndpointMapForTypes(endpointTypes []constant.EndpointType) map[string]common.EndpointInfo {
+	if len(endpointTypes) == 0 {
+		return map[string]common.EndpointInfo{}
+	}
+	filtered := make(map[string]common.EndpointInfo, len(endpointTypes))
+	for _, endpointType := range endpointTypes {
+		key := string(endpointType)
+		if info, ok := supportedEndpointMap[key]; ok {
+			filtered[key] = info
+		}
+	}
+	return filtered
 }

@@ -8,7 +8,7 @@ import (
 
 func TestBenchmarkProfileMatchesWorkbenchMatrix(t *testing.T) {
 	p := Benchmark()
-	wantPoints := []int{250, 500, 750, 1000}
+	wantPoints := []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000}
 	if len(p.Points) != len(wantPoints) {
 		t.Fatalf("points len = %d", len(p.Points))
 	}

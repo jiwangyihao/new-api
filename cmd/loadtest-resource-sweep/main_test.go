@@ -362,7 +362,7 @@ client:
   max_idle_conns_per_host: 16
 profiles:
   benchmark:
-    points: [250, 500, 750, 1000]
+    points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
     ramp_step: 25
     ramp_interval: "200ms"

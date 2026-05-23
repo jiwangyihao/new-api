@@ -610,48 +610,18 @@ export const selectFilter = (input, option) => {
 // 模型定价计算工具函数
 export const calculateModelPrice = ({
   record,
-  selectedGroup,
-  groupRatio,
   tokenUnit,
   displayPrice,
   currency,
   quotaDisplayType = 'USD',
   precision = 4,
 }) => {
-  // 1. 选择实际使用的分组
-  let usedGroup = selectedGroup;
-  let usedGroupRatio = groupRatio[selectedGroup];
-
-  if (selectedGroup === 'all' || usedGroupRatio === undefined) {
-    // 在模型可用分组中选择倍率最小的分组，若无则使用 1
-    let minRatio = Number.POSITIVE_INFINITY;
-    if (
-      Array.isArray(record.enable_groups) &&
-      record.enable_groups.length > 0
-    ) {
-      record.enable_groups.forEach((g) => {
-        const r = groupRatio[g];
-        if (r !== undefined && r < minRatio) {
-          minRatio = r;
-          usedGroup = g;
-          usedGroupRatio = r;
-        }
-      });
-    }
-
-    // 如果找不到合适分组倍率，回退为 1
-    if (usedGroupRatio === undefined) {
-      usedGroupRatio = 1;
-    }
-  }
-
+  const pricingMultiplier = 1;
   // 2. 动态计费（tiered_expr）
   if (record.billing_mode === 'tiered_expr' && record.billing_expr) {
     return {
       isDynamicPricing: true,
       billingExpr: record.billing_expr,
-      usedGroup,
-      usedGroupRatio,
     };
   }
 
@@ -659,7 +629,7 @@ export const calculateModelPrice = ({
   if (record.quota_type === 0) {
     // 按量计费
     const isTokensDisplay = quotaDisplayType === 'TOKENS';
-    const inputRatioPriceUSD = record.model_ratio * 2 * usedGroupRatio;
+    const inputRatioPriceUSD = record.model_ratio * 2 * pricingMultiplier;
     const unitDivisor = tokenUnit === 'K' ? 1000 : 1;
     const unitLabel = tokenUnit === 'K' ? 'K' : 'M';
     const hasRatioValue = (value) =>
@@ -682,8 +652,6 @@ export const calculateModelPrice = ({
         audioOutputRatio: formatRatio(record.audio_completion_ratio),
         isPerToken: true,
         isTokensDisplay: true,
-        usedGroup,
-        usedGroupRatio,
       };
     }
 
@@ -742,22 +710,18 @@ export const calculateModelPrice = ({
       unitLabel,
       isPerToken: true,
       isTokensDisplay: false,
-      usedGroup,
-      usedGroupRatio,
     };
   }
 
   if (record.quota_type === 1) {
     // 按次计费
-    const priceUSD = parseFloat(record.model_price) * usedGroupRatio;
+    const priceUSD = parseFloat(record.model_price) * pricingMultiplier;
     const displayVal = displayPrice(priceUSD);
 
     return {
       price: displayVal,
       isPerToken: false,
       isTokensDisplay: false,
-      usedGroup,
-      usedGroupRatio,
     };
   }
 
@@ -766,8 +730,6 @@ export const calculateModelPrice = ({
     price: '-',
     isPerToken: false,
     isTokensDisplay: false,
-    usedGroup,
-    usedGroupRatio,
   };
 };
 
@@ -897,7 +859,7 @@ export const getModelPriceItems = (
 };
 
 // 格式化动态计费摘要（用于卡片视图，与 formatPriceInfo 风格统一）
-export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
+export const formatDynamicPriceSummary = (billingExpr, t) => {
   if (!billingExpr) return <span style={{ color: 'var(--semi-color-text-1)' }}>{t('动态计费')}</span>;
 
   const quotaDisplayType = localStorage.getItem('quota_display_type') || 'USD';
@@ -914,7 +876,6 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
     }
   } catch (e) {}
 
-  const gr = groupRatio || 1;
   const exprBody = billingExpr.replace(/^v\d+:/, '');
   const tierMatches = exprBody.match(/tier\(/g) || [];
   const tierCount = tierMatches.length;
@@ -947,7 +908,7 @@ export const formatDynamicPriceSummary = (billingExpr, t, groupRatio = 1) => {
           {varLabels.map(([key, label]) =>
             key in varCoeffs ? (
               <span key={key} style={lineStyle}>
-                {`${t(label)} ${symbol}${(varCoeffs[key] * gr * rate).toFixed(4)}${unitSuffix}`}
+                {`${t(label)} ${symbol}${(varCoeffs[key] * rate).toFixed(4)}${unitSuffix}`}
               </span>
             ) : null,
           )}
@@ -1060,7 +1021,6 @@ const DEFAULT_PRICING_FILTERS = {
   showRatio: false,
   viewMode: 'card',
   tokenUnit: 'M',
-  filterGroup: 'all',
   filterQuotaType: 'all',
   filterEndpointType: 'all',
   filterVendor: 'all',
@@ -1075,7 +1035,6 @@ export const resetPricingFilters = ({
   setCurrency,
   setShowRatio,
   setViewMode,
-  setFilterGroup,
   setFilterQuotaType,
   setFilterEndpointType,
   setFilterVendor,
@@ -1089,7 +1048,6 @@ export const resetPricingFilters = ({
   setShowRatio?.(DEFAULT_PRICING_FILTERS.showRatio);
   setViewMode?.(DEFAULT_PRICING_FILTERS.viewMode);
   setTokenUnit?.(DEFAULT_PRICING_FILTERS.tokenUnit);
-  setFilterGroup?.(DEFAULT_PRICING_FILTERS.filterGroup);
   setFilterQuotaType?.(DEFAULT_PRICING_FILTERS.filterQuotaType);
   setFilterEndpointType?.(DEFAULT_PRICING_FILTERS.filterEndpointType);
   setFilterVendor?.(DEFAULT_PRICING_FILTERS.filterVendor);

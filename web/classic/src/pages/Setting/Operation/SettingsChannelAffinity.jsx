@@ -76,10 +76,7 @@ const CONTEXT_KEY_PRESETS = [
   { key: 'id', label: 'id（用户 ID）' },
   { key: 'token_id', label: 'token_id' },
   { key: 'token_key', label: 'token_key' },
-  { key: 'token_group', label: 'token_group' },
-  { key: 'group', label: 'group（using_group）' },
   { key: 'username', label: 'username' },
-  { key: 'user_group', label: 'user_group' },
   { key: 'user_email', label: 'user_email' },
   { key: 'specific_channel_id', label: 'specific_channel_id' },
 ];
@@ -102,7 +99,6 @@ const RULES_JSON_PLACEHOLDER = `[
       ]
     },
     "skip_retry_on_failure": false,
-    "include_using_group": true,
     "include_model_name": false,
     "include_rule_name": true
   }
@@ -210,7 +206,6 @@ const buildChannelAffinityRulePayload = ({
   key_sources: keySources,
   value_regex: (values?.value_regex || '').trim(),
   ttl_seconds: Number(values?.ttl_seconds || 0),
-  include_using_group: !!values?.include_using_group,
   include_model_name: !!values?.include_model_name,
   include_rule_name: !!values?.include_rule_name,
   skip_retry_on_failure: !!values?.skip_retry_on_failure,
@@ -276,7 +271,6 @@ export default function SettingsChannelAffinity(props) {
       value_regex: r.value_regex || '',
       ttl_seconds: Number(r.ttl_seconds || 0),
       skip_retry_on_failure: !!r.skip_retry_on_failure,
-      include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
       include_rule_name: r.include_rule_name ?? true,
       param_override_template_json: r.param_override_template
@@ -611,7 +605,6 @@ export default function SettingsChannelAffinity(props) {
       title: t('作用域'),
       render: (_, record) => {
         const tags = [];
-        if (record?.include_using_group) tags.push(t('分组'));
         if (record?.include_model_name) tags.push(t('模型'));
         if (record?.include_rule_name) tags.push(t('规则'));
         if (tags.length === 0) return '-';
@@ -680,7 +673,6 @@ export default function SettingsChannelAffinity(props) {
       value_regex: '',
       ttl_seconds: 0,
       skip_retry_on_failure: false,
-      include_using_group: true,
       include_model_name: false,
       include_rule_name: true,
     };
@@ -1274,17 +1266,6 @@ export default function SettingsChannelAffinity(props) {
               </Row>
 
               <Row gutter={16}>
-                <Col xs={24} sm={8}>
-                  <Form.Switch
-                    field='include_using_group'
-                    label={t('作用域：包含分组')}
-                  />
-                  <Text type='tertiary' size='small'>
-                    {t(
-                      '开启后，using_group 会参与 cache key（不同分组隔离）。',
-                    )}
-                  </Text>
-                </Col>
                 <Col xs={24} sm={8}>
                   <Form.Switch
                     field='include_model_name'

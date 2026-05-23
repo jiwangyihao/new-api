@@ -154,10 +154,6 @@ function UsageLogsContent() {
           affinityTarget
             ? {
                 rule_name: affinityTarget.rule_name || '',
-                using_group:
-                  affinityTarget.using_group ||
-                  affinityTarget.selected_group ||
-                  '',
                 key_hint: affinityTarget.key_hint || '',
                 key_fp: affinityTarget.key_fp || '',
               }

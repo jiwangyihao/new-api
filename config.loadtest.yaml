@@ -15,7 +15,6 @@ mock_upstream:
   base_url: "http://127.0.0.1:19080"
 loadtest:
   model: "gpt-5.5"
-  group: "default"
   subscription_key: "sk-loadtestsub"
   compat_key: "sk-loadtestcompat"
   invalid_key: "sk-loadtestinvalid"
@@ -27,7 +26,7 @@ client:
   max_idle_conns_per_host: 16
 profiles:
   benchmark:
-    points: [250, 500, 750, 1000]
+    points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
     ramp_step: 25
     ramp_interval: 200ms

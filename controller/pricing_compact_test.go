@@ -148,7 +148,7 @@ func TestGetPricingCustomCompactEndpointInfoRequiresChannelCapability(t *testing
 	assert.False(t, ok)
 }
 
-func TestGetPricingSupportedEndpointMapIsScopedToUsableGroups(t *testing.T) {
+func TestGetPricingSupportedEndpointMapReflectsAllEnabledRoutesAfterBusinessGroupRemoval(t *testing.T) {
 	setupCompactPricingTest(t)
 	seedCompactPricingUser(t, 2231, "default")
 	seedCompactPricingUser(t, 2232, "vip")
@@ -160,9 +160,9 @@ func TestGetPricingSupportedEndpointMapIsScopedToUsableGroups(t *testing.T) {
 
 	defaultPayload := performGetPricingForDirectoryTest(t, common.GetPointer(2231))
 	defaultItem := pricingDirectoryItemByName(t, defaultPayload, "gpt-5.5")
-	assertPricingItemLacksEndpoint(t, defaultItem, constant.EndpointTypeOpenAIResponseCompact)
+	assertPricingItemHasEndpoint(t, defaultItem, constant.EndpointTypeOpenAIResponseCompact)
 	_, defaultHasCompact := supportedEndpointMap(t, defaultPayload)[string(constant.EndpointTypeOpenAIResponseCompact)]
-	assert.False(t, defaultHasCompact)
+	assert.True(t, defaultHasCompact)
 
 	vipPayload := performGetPricingForDirectoryTest(t, common.GetPointer(2232))
 	vipItem := pricingDirectoryItemByName(t, vipPayload, "gpt-5.5")

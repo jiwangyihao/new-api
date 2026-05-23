@@ -176,7 +176,6 @@ func TestUsageAnalyticsParsesRepeatedParamsBeforeCommaFallback(t *testing.T) {
 	query, err := parseUsageAnalyticsRawQueryForTest("model_names=gpt-4&model_names=claude&groups=a%2Cb&groups=default")
 	require.NoError(t, err)
 	require.Equal(t, []string{"claude", "gpt-4"}, query.ModelNames)
-	require.Equal(t, []string{"a,b", "default"}, query.Groups)
 }
 
 func TestUsageAnalyticsParsesCommaFallbackAndLimits(t *testing.T) {

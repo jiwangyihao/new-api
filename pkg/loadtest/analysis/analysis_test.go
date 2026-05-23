@@ -128,10 +128,10 @@ func TestDiagnosticGateClassifiesResourceBottlenecks(t *testing.T) {
 			name: "profile capacity limit",
 			want: "capacity_limit",
 			edit: func(in *Inputs) {
-				in.Point.Concurrency = 1000
-				in.Point.SummaryExcerpt.MaxObservedInFlight = 1000
-				in.Summary.TargetConcurrency = 1000
-				in.Summary.MaxObservedInFlight = 1000
+				in.Point.Concurrency = 2000
+				in.Point.SummaryExcerpt.MaxObservedInFlight = 2000
+				in.Summary.TargetConcurrency = 2000
+				in.Summary.MaxObservedInFlight = 2000
 			},
 		},
 		{

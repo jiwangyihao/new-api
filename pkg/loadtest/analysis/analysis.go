@@ -21,7 +21,7 @@ const (
 )
 
 const (
-	benchmarkMaxConcurrency = 1000
+	benchmarkMaxConcurrency = 2000
 	postgresPoolLimit       = 10
 )
 

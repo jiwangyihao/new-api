@@ -82,7 +82,6 @@ const FIELD_LABELS: Record<string, string> = {
   status: 'Status',
   endpoints: 'Endpoints',
   quota_types: 'Quota Types',
-  enable_groups: 'Enable Groups',
 }
 
 const formatValue = (value: unknown) => {

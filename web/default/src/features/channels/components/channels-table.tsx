@@ -39,7 +39,7 @@ import {
   DISABLED_ROW_MOBILE,
   DataTablePage,
 } from '@/components/data-table'
-import { getChannels, searchChannels, getGroups } from '../api'
+import { getChannels, searchChannels } from '../api'
 import {
   DEFAULT_PAGE_SIZE,
   CHANNEL_STATUS,
@@ -108,7 +108,6 @@ export function ChannelsTable() {
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'type', searchKey: 'type', type: 'array' },
-      { columnId: 'group', searchKey: 'group', type: 'array' },
       { columnId: 'model', searchKey: 'model', type: 'string' },
     ],
   })
@@ -118,8 +117,6 @@ export function ChannelsTable() {
     (columnFilters.find((f) => f.id === 'status')?.value as string[]) || []
   const typeFilter =
     (columnFilters.find((f) => f.id === 'type')?.value as string[]) || []
-  const groupFilter =
-    (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
   const modelFilterFromUrl =
     (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
 
@@ -174,20 +171,6 @@ export function ChannelsTable() {
     })
   }
 
-  // Fetch groups for filter
-  const { data: groupsData } = useQuery({
-    queryKey: ['groups'],
-    queryFn: getGroups,
-  })
-
-  const groupOptions = useMemo(
-    () =>
-      (groupsData?.data || []).map((g) => ({
-        label: g,
-        value: g,
-      })),
-    [groupsData]
-  )
 
   // Fetch channels data
   // eslint-disable-next-line @tanstack/query/exhaustive-deps
@@ -195,10 +178,6 @@ export function ChannelsTable() {
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
-      group:
-        groupFilter.length > 0 && !groupFilter.includes('all')
-          ? groupFilter[0]
-          : undefined,
       status:
         statusFilter.length > 0 && !statusFilter.includes('all')
           ? statusFilter[0]
@@ -218,10 +197,6 @@ export function ChannelsTable() {
         return searchChannels({
           keyword: globalFilter,
           model: modelFilter,
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
           status:
             statusFilter.length > 0 && !statusFilter.includes('all')
               ? statusFilter[0]
@@ -238,10 +213,6 @@ export function ChannelsTable() {
         })
       } else {
         return getChannels({
-          group:
-            groupFilter.length > 0 && !groupFilter.includes('all')
-              ? groupFilter[0]
-              : undefined,
           status:
             statusFilter.length > 0 && !statusFilter.includes('all')
               ? statusFilter[0]
@@ -366,10 +337,6 @@ export function ChannelsTable() {
     ]
   }, [t, typeCounts, typeFilter])
 
-  const groupFilterOptions = [
-    { label: t('All Groups'), value: 'all' },
-    ...groupOptions,
-  ]
 
   return (
     <DataTablePage
@@ -404,12 +371,6 @@ export function ChannelsTable() {
             columnId: 'type',
             title: t('Type'),
             options: typeFilterOptions,
-            singleSelect: true,
-          },
-          {
-            columnId: 'group',
-            title: t('Group'),
-            options: groupFilterOptions,
             singleSelect: true,
           },
         ],

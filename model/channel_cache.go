@@ -14,8 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-var group2model2channels map[string]map[string][]int // enabled channel
-var channelsIDM map[int]*Channel                     // all channels include disabled
+var model2channels map[string][]int // enabled channel ids keyed by model
+var channelsIDM map[int]*Channel    // all channels include disabled
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -28,44 +28,35 @@ func InitChannelCache() {
 	for _, channel := range channels {
 		newChannelId2channel[channel.Id] = channel
 	}
-	var abilities []*Ability
-	DB.Find(&abilities)
-	groups := make(map[string]bool)
-	for _, ability := range abilities {
-		groups[ability.Group] = true
-	}
-	newGroup2model2channels := make(map[string]map[string][]int)
-	for group := range groups {
-		newGroup2model2channels[group] = make(map[string][]int)
-	}
+	newModel2channels := make(map[string][]int)
 	for _, channel := range channels {
 		if channel.Status != common.ChannelStatusEnabled {
 			continue // skip disabled channels
 		}
-		groups := strings.Split(channel.Group, ",")
-		for _, group := range groups {
-			models := strings.Split(channel.Models, ",")
-			for _, model := range models {
-				if _, ok := newGroup2model2channels[group][model]; !ok {
-					newGroup2model2channels[group][model] = make([]int, 0)
-				}
-				newGroup2model2channels[group][model] = append(newGroup2model2channels[group][model], channel.Id)
+		seenModels := make(map[string]struct{})
+		for _, model := range strings.Split(channel.Models, ",") {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
 			}
+			if _, ok := seenModels[model]; ok {
+				continue
+			}
+			seenModels[model] = struct{}{}
+			newModel2channels[model] = append(newModel2channels[model], channel.Id)
 		}
 	}
 
 	// sort by priority
-	for group, model2channels := range newGroup2model2channels {
-		for model, channels := range model2channels {
-			sort.Slice(channels, func(i, j int) bool {
-				return newChannelId2channel[channels[i]].GetPriority() > newChannelId2channel[channels[j]].GetPriority()
-			})
-			newGroup2model2channels[group][model] = channels
-		}
+	for model, channels := range newModel2channels {
+		sort.Slice(channels, func(i, j int) bool {
+			return newChannelId2channel[channels[i]].GetPriority() > newChannelId2channel[channels[j]].GetPriority()
+		})
+		newModel2channels[model] = channels
 	}
 
 	channelSyncLock.Lock()
-	group2model2channels = newGroup2model2channels
+	model2channels = newModel2channels
 	//channelsIDM = newChannelId2channel
 	for i, channel := range newChannelId2channel {
 		if channel.ChannelInfo.IsMultiKey {
@@ -93,22 +84,22 @@ func SyncChannelCache(frequency int) {
 	}
 }
 
-func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel, error) {
+func GetRandomSatisfiedChannel(model string, retry int) (*Channel, error) {
 	// if memory cache is disabled, get channel directly from database
 	if !common.MemoryCacheEnabled {
-		return GetChannel(group, model, retry)
+		return GetChannel(model, retry)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
 	// First, try to find channels with the exact model name.
-	channels := group2model2channels[group][model]
+	channels := model2channels[model]
 
 	// If no channels found, try to find channels with the normalized model name.
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels = model2channels[normalizedModel]
 	}
 
 	if len(channels) == 0 {
@@ -156,7 +147,7 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	}
 
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, errors.New(fmt.Sprintf("no channel found, model: %s, priority: %d", model, targetPriority))
 	}
 
 	// smoothing factor and adjustment
@@ -190,11 +181,11 @@ func GetRandomSatisfiedChannel(group string, model string, retry int) (*Channel,
 	return nil, errors.New("channel not found")
 }
 
-func getCachedChannelIDsForEndpoint(group string, model string, endpointType constant.EndpointType) ([]int, error) {
-	channels := group2model2channels[group][model]
+func getCachedChannelIDsForEndpoint(model string, endpointType constant.EndpointType) ([]int, error) {
+	channels := model2channels[model]
 	if len(channels) == 0 {
 		normalizedModel := ratio_setting.FormatMatchingModelName(model)
-		channels = group2model2channels[group][normalizedModel]
+		channels = model2channels[normalizedModel]
 	}
 	if len(channels) == 0 {
 		return nil, nil
@@ -212,7 +203,7 @@ func getCachedChannelIDsForEndpoint(group string, model string, endpointType con
 	return filtered, nil
 }
 
-func selectCachedChannelByPriority(channels []int, retry int, group string, model string) (*Channel, error) {
+func selectCachedChannelByPriority(channels []int, retry int, model string) (*Channel, error) {
 	if len(channels) == 0 {
 		return nil, nil
 	}
@@ -252,7 +243,7 @@ func selectCachedChannelByPriority(channels []int, retry int, group string, mode
 		}
 	}
 	if len(targetChannels) == 0 {
-		return nil, errors.New(fmt.Sprintf("no channel found, group: %s, model: %s, priority: %d", group, model, targetPriority))
+		return nil, errors.New(fmt.Sprintf("no channel found, model: %s, priority: %d", model, targetPriority))
 	}
 	smoothingFactor := 1
 	smoothingAdjustment := 0
@@ -274,18 +265,18 @@ func selectCachedChannelByPriority(channels []int, retry int, group string, mode
 
 func GetRandomSatisfiedChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {
 	if endpointType == "" {
-		return GetRandomSatisfiedChannel(group, model, retry)
+		return GetRandomSatisfiedChannel(model, retry)
 	}
 	if !common.MemoryCacheEnabled {
 		return GetChannelForEndpoint(group, model, retry, endpointType)
 	}
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
-	channels, err := getCachedChannelIDsForEndpoint(group, model, endpointType)
+	channels, err := getCachedChannelIDsForEndpoint(model, endpointType)
 	if err != nil {
 		return nil, err
 	}
-	return selectCachedChannelByPriority(channels, retry, group, model)
+	return selectCachedChannelByPriority(channels, retry, model)
 }
 
 func CacheGetChannel(id int) (*Channel, error) {
@@ -330,15 +321,12 @@ func CacheUpdateChannelStatus(id int, status int) {
 		channel.Status = status
 	}
 	if status != common.ChannelStatusEnabled {
-		// delete the channel from group2model2channels
-		for group, model2channels := range group2model2channels {
-			for model, channels := range model2channels {
-				for i, channelId := range channels {
-					if channelId == id {
-						// remove the channel from the slice
-						group2model2channels[group][model] = append(channels[:i], channels[i+1:]...)
-						break
-					}
+		// delete the channel from model2channels
+		for model, channels := range model2channels {
+			for i, channelId := range channels {
+				if channelId == id {
+					model2channels[model] = append(channels[:i], channels[i+1:]...)
+					break
 				}
 			}
 		}

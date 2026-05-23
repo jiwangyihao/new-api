@@ -41,7 +41,6 @@ func TestApplyChannelAffinityOverrideTemplate_MergeTemplate(t *testing.T) {
 			"temperature": 0.2,
 			"top_p":       0.95,
 		},
-		UsingGroup:     "default",
 		ModelName:      "gpt-4.1",
 		RequestPath:    "/v1/responses",
 		KeySourceType:  "gjson",
@@ -133,10 +132,9 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 			name: "explicit skip retry flag in context",
 			ctx: func() *gin.Context {
 				ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
-					RuleName:   "rule-explicit-flag",
-					SkipRetry:  false,
-					UsingGroup: "default",
-					ModelName:  "gpt-5",
+					RuleName:  "rule-explicit-flag",
+					SkipRetry: false,
+					ModelName: "gpt-5",
 				})
 				ctx.Set(ginKeyChannelAffinitySkipRetry, true)
 				return ctx
@@ -147,10 +145,9 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 			name: "fallback to matched rule meta",
 			ctx: func() *gin.Context {
 				return buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
-					RuleName:   "rule-skip-retry",
-					SkipRetry:  true,
-					UsingGroup: "default",
-					ModelName:  "gpt-5",
+					RuleName:  "rule-skip-retry",
+					SkipRetry: true,
+					ModelName: "gpt-5",
 				})
 			},
 			want: true,
@@ -159,10 +156,9 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 			name: "no flag and no skip retry meta",
 			ctx: func() *gin.Context {
 				return buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
-					RuleName:   "rule-no-skip-retry",
-					SkipRetry:  false,
-					UsingGroup: "default",
-					ModelName:  "gpt-5",
+					RuleName:  "rule-no-skip-retry",
+					SkipRetry: false,
+					ModelName: "gpt-5",
 				})
 			},
 			want: false,

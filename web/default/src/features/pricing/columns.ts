@@ -31,7 +31,6 @@ const PUBLIC_MODEL_DIRECTORY_COLUMNS: readonly ModelDirectoryColumn[] = [
   { id: 'modalities' },
   { id: 'capabilities' },
   { accessorKey: 'tags' },
-  { accessorKey: 'enable_groups' },
 ]
 
 const ADMIN_COST_COLUMNS: readonly ModelDirectoryColumn[] = [

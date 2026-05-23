@@ -35,7 +35,6 @@ export default function SettingsGeneralPayment(props) {
   const [inputs, setInputs] = useState({
     ServerAddress: '',
     CustomCallbackAddress: '',
-    TopupGroupRatio: '',
     PayMethods: '',
     AmountOptions: '',
     AmountDiscount: '',
@@ -48,7 +47,6 @@ export default function SettingsGeneralPayment(props) {
       const currentInputs = {
         ServerAddress: props.options.ServerAddress || '',
         CustomCallbackAddress: props.options.CustomCallbackAddress || '',
-        TopupGroupRatio: props.options.TopupGroupRatio || '',
         PayMethods: props.options.PayMethods || '',
         AmountOptions: props.options.AmountOptions || '',
         AmountDiscount: props.options.AmountDiscount || '',
@@ -64,13 +62,6 @@ export default function SettingsGeneralPayment(props) {
   };
 
   const submitGeneralSettings = async () => {
-    if (
-      originInputs.TopupGroupRatio !== inputs.TopupGroupRatio &&
-      !verifyJSON(inputs.TopupGroupRatio)
-    ) {
-      showError(t('充值分组倍率不是合法的 JSON 字符串'));
-      return;
-    }
 
     if (
       originInputs.PayMethods !== inputs.PayMethods &&
@@ -112,9 +103,6 @@ export default function SettingsGeneralPayment(props) {
           key: 'CustomCallbackAddress',
           value: removeTrailingSlash(inputs.CustomCallbackAddress),
         });
-      }
-      if (originInputs.TopupGroupRatio !== inputs.TopupGroupRatio) {
-        options.push({ key: 'TopupGroupRatio', value: inputs.TopupGroupRatio });
       }
       if (originInputs.PayMethods !== inputs.PayMethods) {
         options.push({ key: 'PayMethods', value: inputs.PayMethods });
@@ -186,14 +174,6 @@ export default function SettingsGeneralPayment(props) {
                 extraText={t(
                   '留空时默认使用服务器地址作为回调地址，填写后将覆盖默认值',
                 )}
-              />
-            </Col>
-            <Col xs={24} sm={24} md={12} lg={12} xl={12}>
-              <Form.TextArea
-                field='TopupGroupRatio'
-                label={t('充值分组倍率')}
-                placeholder={t('为一个 JSON 文本，键为组名称，值为倍率')}
-                autosize
               />
             </Col>
           </Row>

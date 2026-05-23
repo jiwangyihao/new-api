@@ -52,7 +52,6 @@ export const useChannelsData = () => {
   const [searching, setSearching] = useState(false);
   const [pageSize, setPageSize] = useState(ITEMS_PER_PAGE);
   const [channelCount, setChannelCount] = useState(0);
-  const [groupOptions, setGroupOptions] = useState([]);
 
   // UI states
   const [showEdit, setShowEdit] = useState(false);
@@ -125,7 +124,6 @@ export const useChannelsData = () => {
 
   const formInitValues = {
     searchKeyword: '',
-    searchGroup: '',
     searchModel: '',
   };
 
@@ -133,7 +131,6 @@ export const useChannelsData = () => {
   const COLUMN_KEYS = {
     ID: 'id',
     NAME: 'name',
-    GROUP: 'group',
     TYPE: 'type',
     STATUS: 'status',
     RESPONSE_TIME: 'response_time',
@@ -163,7 +160,6 @@ export const useChannelsData = () => {
       .catch((reason) => {
         showError(reason);
       });
-    fetchGroups().then();
     loadChannelModels().then();
     fetchGlobalPassThroughEnabled().then();
   }, []);
@@ -173,7 +169,6 @@ export const useChannelsData = () => {
     return {
       [COLUMN_KEYS.ID]: true,
       [COLUMN_KEYS.NAME]: true,
-      [COLUMN_KEYS.GROUP]: true,
       [COLUMN_KEYS.TYPE]: true,
       [COLUMN_KEYS.STATUS]: true,
       [COLUMN_KEYS.RESPONSE_TIME]: true,
@@ -283,16 +278,6 @@ export const useChannelsData = () => {
           }
         }
 
-        if (tagChannelDates.group === '') {
-          tagChannelDates.group = channels[i].group;
-        } else {
-          let channelGroupsStr = channels[i].group;
-          channelGroupsStr.split(',').forEach((item, index) => {
-            if (tagChannelDates.group.indexOf(item) === -1) {
-              tagChannelDates.group += ',' + item;
-            }
-          });
-        }
 
         tagChannelDates.children.push(channels[i]);
         if (channels[i].status === 1) {
@@ -311,7 +296,6 @@ export const useChannelsData = () => {
     const formValues = formApi ? formApi.getValues() : {};
     return {
       searchKeyword: formValues.searchKeyword || '',
-      searchGroup: formValues.searchGroup || '',
       searchModel: formValues.searchModel || '',
     };
   };
@@ -327,8 +311,8 @@ export const useChannelsData = () => {
   ) => {
     if (statusF === undefined) statusF = statusFilter;
 
-    const { searchKeyword, searchGroup, searchModel } = getFormValues();
-    if (searchKeyword !== '' || searchGroup !== '' || searchModel !== '') {
+    const { searchKeyword, searchModel } = getFormValues();
+    if (searchKeyword !== '' || searchModel !== '') {
       setLoading(true);
       await searchChannels(
         enableTagMode,
@@ -381,10 +365,10 @@ export const useChannelsData = () => {
     pageSz = pageSize,
     sortFlag = idSort,
   ) => {
-    const { searchKeyword, searchGroup, searchModel } = getFormValues();
+    const { searchKeyword, searchModel } = getFormValues();
     setSearching(true);
     try {
-      if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
+      if (searchKeyword === '' && searchModel === '') {
         await loadChannels(
           page,
           pageSz,
@@ -399,7 +383,7 @@ export const useChannelsData = () => {
       const typeParam = typeKey !== 'all' ? `&type=${typeKey}` : '';
       const statusParam = statusF !== 'all' ? `&status=${statusF}` : '';
       const res = await API.get(
-        `/api/channel/search?keyword=${searchKeyword}&group=${searchGroup}&model=${searchModel}&id_sort=${sortFlag}&tag_mode=${enableTagMode}&p=${page}&page_size=${pageSz}${typeParam}${statusParam}`,
+        `/api/channel/search?keyword=${searchKeyword}&model=${searchModel}&id_sort=${sortFlag}&tag_mode=${enableTagMode}&p=${page}&page_size=${pageSz}${typeParam}${statusParam}`,
       );
       const { success, message, data } = res.data;
       if (success) {
@@ -422,8 +406,8 @@ export const useChannelsData = () => {
 
   // Refresh
   const refresh = async (page = activePage) => {
-    const { searchKeyword, searchGroup, searchModel } = getFormValues();
-    if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
+    const { searchKeyword, searchModel } = getFormValues();
+    if (searchKeyword === '' && searchModel === '') {
       await loadChannels(page, pageSize, idSort, enableTagMode);
     } else {
       await searchChannels(
@@ -518,9 +502,9 @@ export const useChannelsData = () => {
 
   // Page handlers
   const handlePageChange = (page) => {
-    const { searchKeyword, searchGroup, searchModel } = getFormValues();
+    const { searchKeyword, searchModel } = getFormValues();
     setActivePage(page);
-    if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
+    if (searchKeyword === '' && searchModel === '') {
       loadChannels(page, pageSize, idSort, enableTagMode).then(() => {});
     } else {
       searchChannels(
@@ -538,8 +522,8 @@ export const useChannelsData = () => {
     localStorage.setItem('page-size', size + '');
     setPageSize(size);
     setActivePage(1);
-    const { searchKeyword, searchGroup, searchModel } = getFormValues();
-    if (searchKeyword === '' && searchGroup === '' && searchModel === '') {
+    const { searchKeyword, searchModel } = getFormValues();
+    if (searchKeyword === '' && searchModel === '') {
       loadChannels(1, size, idSort, enableTagMode)
         .then()
         .catch((reason) => {
@@ -557,21 +541,6 @@ export const useChannelsData = () => {
     }
   };
 
-  // Fetch groups
-  const fetchGroups = async () => {
-    try {
-      let res = await API.get(`/api/group/`);
-      if (res === undefined) return;
-      setGroupOptions(
-        res.data.data.map((group) => ({
-          label: group,
-          value: group,
-        })),
-      );
-    } catch (error) {
-      showError(error.message);
-    }
-  };
 
   // Copy channel
   const copySelectedChannel = async (record) => {
@@ -1141,7 +1110,6 @@ export const useChannelsData = () => {
     activePage,
     pageSize,
     channelCount,
-    groupOptions,
     idSort,
     enableTagMode,
     enableBatchDelete,

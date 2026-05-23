@@ -20,7 +20,6 @@ import { useMemo } from 'react'
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { DataTableColumnHeader } from '@/components/data-table'
-import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import {
   formatConcurrencyLimit,
@@ -265,23 +264,6 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
           )
         },
         size: 180,
-      },
-      {
-        id: 'upgrade_group',
-        meta: { label: t('Upgrade Group'), mobileHidden: true },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Upgrade Group')} />
-        ),
-        cell: ({ row }) => {
-          const group = row.original.plan.upgrade_group
-          if (!group) {
-            return (
-              <span className='text-muted-foreground'>{t('No Upgrade')}</span>
-            )
-          }
-          return <GroupBadge group={group} />
-        },
-        size: 100,
       },
       {
         id: 'actions',

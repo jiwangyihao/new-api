@@ -49,7 +49,6 @@ export interface CommonFilters {
 export interface CommonLogFilters extends CommonFilters {
   model?: string
   token?: string
-  group?: string
   username?: string
   userId?: number
   requestId?: string
@@ -87,13 +86,11 @@ export type LogFilters = CommonLogFilters | DrawingLogFilters | TaskLogFilters
  */
 export interface ChannelAffinityInfo {
   rule_name?: string
-  selected_group?: string
   key_source?: string
   key_path?: string
   key_key?: string
   key_hint?: string
   key_fp?: string
-  using_group?: string
 }
 
 export interface LogOtherData {
@@ -130,8 +127,6 @@ export interface LogOtherData {
   model_ratio?: number
   completion_ratio?: number
   model_price?: number
-  group_ratio?: number
-  user_group_ratio?: number
   cache_ratio?: number
   cache_creation_ratio?: number
   cache_creation_ratio_5m?: number
@@ -165,7 +160,6 @@ export interface LogOtherData {
   is_system_prompt_overwritten?: boolean
   po?: string[]
   billing_source?: string
-  group?: string
   stream_status?: {
     status?: string
     end_reason?: string
@@ -277,7 +271,6 @@ export interface GetLogsParams {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
-  group?: string
   request_id?: string
   upstream_request_id?: string
   token_id?: number
@@ -305,7 +298,6 @@ export interface GetLogStatsParams {
   start_timestamp?: number
   end_timestamp?: number
   channel?: number
-  group?: string
   request_id?: string
   upstream_request_id?: string
   token_id?: number
@@ -372,7 +364,6 @@ export interface UserInfo {
   quota: number
   used_quota: number
   request_count: number
-  group?: string
   aff_code?: string
   aff_count?: number
   aff_quota?: number

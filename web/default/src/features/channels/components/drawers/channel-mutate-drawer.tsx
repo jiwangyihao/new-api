@@ -91,7 +91,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
-import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import {
@@ -111,7 +110,6 @@ import {
   getAllModels,
   getChannel,
   getChannelKey,
-  getGroups,
   getPrefillGroups,
   refreshCodexCredential,
   updateChannel,
@@ -350,11 +348,6 @@ export function ChannelMutateDrawer({
     enabled: isEditing && Boolean(currentRow?.id),
   })
 
-  // Fetch available groups
-  const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
-    queryKey: ['groups'],
-    queryFn: getGroups,
-  })
 
   // Fetch all available models
   const { data: allModelsData } = useQuery({
@@ -362,7 +355,7 @@ export function ChannelMutateDrawer({
     queryFn: getAllModels,
   })
 
-  // Fetch prefill model groups
+  // Fetch prefill model sets
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
     queryFn: () => getPrefillGroups('model'),
@@ -404,7 +397,6 @@ export function ChannelMutateDrawer({
   const multiKeyMode = form.watch('multi_key_mode')
   const multiKeyType = form.watch('multi_key_type')
   const keyMode = form.watch('key_mode')
-  const currentGroups = form.watch('group')
   const currentType = form.watch('type')
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
@@ -454,21 +446,12 @@ export function ChannelMutateDrawer({
     return allModelsList
   }, [allModelsList, currentType])
 
-  // Get prefill groups
+  // Get prefill model sets
   const prefillGroups = useMemo(
     () => prefillGroupsData?.data || [],
     [prefillGroupsData]
   )
 
-  // Transform groups to multi-select options
-  const groupOptions = useMemo(() => {
-    if (!groupsData?.data) return []
-    const allGroups = new Set([...groupsData.data, ...(currentGroups || [])])
-    return Array.from(allGroups).map((group) => ({
-      value: group,
-      label: group,
-    }))
-  }, [groupsData, currentGroups])
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -866,13 +849,13 @@ export function ChannelMutateDrawer({
     await copyToClipboard(models)
   }, [form, copyToClipboard, t])
 
-  // Handle adding prefill group models
+  // Handle adding prefill model set models
   const handleAddPrefillGroup = useCallback(
-    (group: { id: number; name: string; items: string | string[] }) => {
+    (prefillGroup: { id: number; name: string; items: string | string[] }) => {
       try {
-        const items = Array.isArray(group.items)
-          ? group.items
-          : JSON.parse(group.items)
+        const items = Array.isArray(prefillGroup.items)
+          ? prefillGroup.items
+          : JSON.parse(prefillGroup.items)
 
         if (!Array.isArray(items)) {
           throw new Error('Invalid items format')
@@ -882,11 +865,11 @@ export function ChannelMutateDrawer({
         toast.success(
           t('Added {{count}} models from "{{name}}"', {
             count,
-            name: group.name,
+            name: prefillGroup.name,
           })
         )
       } catch {
-        toast.error(t('Failed to parse group items'))
+        toast.error(t('Failed to parse prefill items'))
       }
     },
     [updateModels, t]
@@ -2198,10 +2181,10 @@ export function ChannelMutateDrawer({
                 )}
               </div>
 
-              {/* ── Models & Groups ── */}
+              {/* ── Models ── */}
               <div className='bg-card space-y-4 rounded-xl border p-5'>
                 <CardHeading
-                  title={t('Models & Groups')}
+                  title={t('Models')}
                   icon={<Boxes className='h-4 w-4' />}
                 />
                 <FormField
@@ -2427,31 +2410,6 @@ export function ChannelMutateDrawer({
                   )}
                 />
 
-                <FormField
-                  control={form.control}
-                  name='group'
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t('Groups *')}</FormLabel>
-                      <FormControl>
-                        {isLoadingGroups ? (
-                          <Skeleton className='h-10 w-full' />
-                        ) : (
-                          <MultiSelect
-                            options={groupOptions}
-                            selected={field.value}
-                            onChange={field.onChange}
-                            placeholder={t(FIELD_PLACEHOLDERS.GROUP)}
-                          />
-                        )}
-                      </FormControl>
-                      <FormDescription>
-                        {t(FIELD_DESCRIPTIONS.GROUP)}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
               </div>
 
               <Collapsible

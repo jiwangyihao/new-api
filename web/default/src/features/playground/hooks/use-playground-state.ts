@@ -31,7 +31,6 @@ import type {
   PlaygroundConfig,
   ParameterEnabled,
   ModelOption,
-  GroupOption,
 } from '../types'
 
 /**
@@ -56,7 +55,6 @@ export function usePlaygroundState() {
   })
 
   const [models, setModels] = useState<ModelOption[]>([])
-  const [groups, setGroups] = useState<GroupOption[]>([])
 
   // Update config with automatic save
   const updateConfig = useCallback(
@@ -114,11 +112,9 @@ export function usePlaygroundState() {
     parameterEnabled,
     messages,
     models,
-    groups,
 
     // Setters
     setModels,
-    setGroups,
 
     // Actions
     updateConfig,

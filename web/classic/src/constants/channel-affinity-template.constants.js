@@ -69,7 +69,6 @@ export const CHANNEL_AFFINITY_RULE_TEMPLATES = {
     value_regex: '',
     ttl_seconds: 0,
     skip_retry_on_failure: true,
-    include_using_group: true,
     include_rule_name: true,
   },
   claudeCli: {
@@ -81,7 +80,6 @@ export const CHANNEL_AFFINITY_RULE_TEMPLATES = {
     value_regex: '',
     ttl_seconds: 0,
     skip_retry_on_failure: true,
-    include_using_group: true,
     include_rule_name: true,
   },
 };

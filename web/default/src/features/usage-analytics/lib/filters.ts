@@ -43,7 +43,6 @@ import type {
 const usageAnalyticsGroupByValues = [
   'token',
   'model',
-  'group',
   'stream',
   'status',
 ] as const
@@ -83,7 +82,6 @@ const usageAnalyticsLooseSearchSchema = z
     metric: z.unknown().optional(),
     token_ids: z.unknown().optional(),
     model_names: z.unknown().optional(),
-    groups: z.unknown().optional(),
     streams: z.unknown().optional(),
     statuses: z.unknown().optional(),
     limit: z.unknown().optional(),
@@ -225,7 +223,6 @@ export function normalizeUsageAnalyticsSearch(
     metric,
     token_ids: parseTokenIds(rawSearch.token_ids),
     model_names: parseStringList(rawSearch.model_names),
-    groups: parseStringList(rawSearch.groups),
     streams: parseAllowedList<UsageAnalyticsStream>(
       rawSearch.streams,
       usageAnalyticsStreamSet
@@ -286,7 +283,6 @@ export function buildUsageAnalyticsApiParams(
   params.append('metric', filters.metric)
   appendNumberArrayParams(params, 'token_ids', filters.token_ids)
   appendStringArrayParams(params, 'model_names', filters.model_names)
-  appendStringArrayParams(params, 'groups', filters.groups)
   appendStringArrayParams(params, 'streams', filters.streams)
   appendStringArrayParams(params, 'statuses', filters.statuses)
   appendNumberParam(params, 'limit', filters.limit)
@@ -312,7 +308,6 @@ export function buildUsageLogsDrilldownSearch(
     ...(drilldown.model_name !== undefined
       ? { model: drilldown.model_name }
       : {}),
-    ...(drilldown.group !== undefined ? { group: drilldown.group } : {}),
     ...(drilldown.is_stream !== undefined
       ? { isStream: drilldown.is_stream }
       : {}),

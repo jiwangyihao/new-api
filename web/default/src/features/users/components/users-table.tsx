@@ -88,7 +88,6 @@ function mapAdminAnalyticsDrilldownUser(
     quota: 0,
     used_quota: 0,
     request_count: 0,
-    group: user.user_group,
     inviter_id: user.inviter_id,
     status: user.status,
     role: user.role,
@@ -124,7 +123,6 @@ export function UsersTable() {
     columnFilters: [
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'role', searchKey: 'role', type: 'array' },
-      { columnId: 'group', searchKey: 'group', type: 'string' },
     ],
   })
 
@@ -143,7 +141,6 @@ export function UsersTable() {
       searchParams.userIds,
       searchParams.planId,
       searchParams.inviterId,
-      searchParams.group,
       statusFilter,
     ],
     queryFn: async () => {
@@ -154,7 +151,6 @@ export function UsersTable() {
           user_id: searchParams.userIds ?? searchParams.userId,
           plan_id: searchParams.planId,
           inviter_id: searchParams.inviterId,
-          user_group: searchParams.group || undefined,
           user_status: statusFilter,
           limit: pagination.pageSize,
           offset: pagination.pageIndex * pagination.pageSize,

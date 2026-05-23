@@ -31,7 +31,7 @@ func makeSnapshot(expr string, groupRatio float64, estPrompt, estCompletion int)
 		BillingMode:               "tiered_expr",
 		ExprString:                expr,
 		ExprHash:                  billingexpr.ExprHashString(expr),
-		GroupRatio:                groupRatio,
+		QuotaMultiplier:           groupRatio,
 		EstimatedPromptTokens:     estPrompt,
 		EstimatedCompletionTokens: estCompletion,
 		QuotaPerUnit:              testQuotaPerUnit,
@@ -41,13 +41,13 @@ func makeSnapshot(expr string, groupRatio float64, estPrompt, estCompletion int)
 func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int) *relaycommon.RelayInfo {
 	snap := makeSnapshot(expr, groupRatio, estPrompt, estCompletion)
 	cost, trace, _ := billingexpr.RunExpr(expr, billingexpr.TokenParams{P: float64(estPrompt), C: float64(estCompletion)})
-	quotaBeforeGroup := cost / 1_000_000 * testQuotaPerUnit
-	snap.EstimatedQuotaBeforeGroup = quotaBeforeGroup
-	snap.EstimatedQuotaAfterGroup = billingexpr.QuotaRound(quotaBeforeGroup * groupRatio)
+	quotaBeforeRatio := cost / 1_000_000 * testQuotaPerUnit
+	snap.EstimatedQuotaBeforeRatio = quotaBeforeRatio
+	snap.EstimatedQuota = billingexpr.QuotaRound(quotaBeforeRatio * groupRatio)
 	snap.EstimatedTier = trace.MatchedTier
 	return &relaycommon.RelayInfo{
 		TieredBillingSnapshot: snap,
-		FinalPreConsumedQuota: snap.EstimatedQuotaAfterGroup,
+		FinalPreConsumedQuota: snap.EstimatedQuota,
 	}
 }
 
@@ -62,10 +62,10 @@ func TestTryTieredSettleUsesFrozenRequestInput(t *testing.T) {
 			BillingMode:               "tiered_expr",
 			ExprString:                exprStr,
 			ExprHash:                  billingexpr.ExprHashString(exprStr),
-			GroupRatio:                1.0,
+			QuotaMultiplier:           1.0,
 			EstimatedPromptTokens:     100,
 			EstimatedCompletionTokens: 0,
-			EstimatedQuotaAfterGroup:  50,
+			EstimatedQuota:            50,
 			QuotaPerUnit:              testQuotaPerUnit,
 		},
 		BillingRequestInput: &billingexpr.RequestInput{
@@ -90,11 +90,11 @@ func TestTryTieredSettleFallsBackToFrozenPreConsumeOnExprError(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		FinalPreConsumedQuota: 321,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:              "tiered_expr",
-			ExprString:               `invalid +-+ expr`,
-			ExprHash:                 billingexpr.ExprHashString(`invalid +-+ expr`),
-			GroupRatio:               1.0,
-			EstimatedQuotaAfterGroup: 123,
+			BillingMode:     "tiered_expr",
+			ExprString:      `invalid +-+ expr`,
+			ExprHash:        billingexpr.ExprHashString(`invalid +-+ expr`),
+			QuotaMultiplier: 1.0,
+			EstimatedQuota:  123,
 		},
 	}
 
@@ -353,10 +353,10 @@ func TestTryTieredSettle_RatioMode_NilSnapshot(t *testing.T) {
 func TestTryTieredSettle_RatioMode_WrongBillingMode(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode: "ratio",
-			ExprString:  flatExpr,
-			ExprHash:    billingexpr.ExprHashString(flatExpr),
-			GroupRatio:  1.0,
+			BillingMode:     "ratio",
+			ExprString:      flatExpr,
+			ExprHash:        billingexpr.ExprHashString(flatExpr),
+			QuotaMultiplier: 1.0,
 		},
 	}
 
@@ -369,10 +369,10 @@ func TestTryTieredSettle_RatioMode_WrongBillingMode(t *testing.T) {
 func TestTryTieredSettle_RatioMode_EmptyBillingMode(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode: "",
-			ExprString:  flatExpr,
-			ExprHash:    billingexpr.ExprHashString(flatExpr),
-			GroupRatio:  1.0,
+			BillingMode:     "",
+			ExprString:      flatExpr,
+			ExprHash:        billingexpr.ExprHashString(flatExpr),
+			QuotaMultiplier: 1.0,
 		},
 	}
 
@@ -386,15 +386,15 @@ func TestTryTieredSettle_RatioMode_EmptyBillingMode(t *testing.T) {
 // Fallback tests
 // ---------------------------------------------------------------------------
 
-func TestTryTieredSettle_ErrorFallbackToEstimatedQuotaAfterGroup(t *testing.T) {
+func TestTryTieredSettle_ErrorFallbackToEstimatedQuota(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		FinalPreConsumedQuota: 0,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:              "tiered_expr",
-			ExprString:               `invalid expr!!!`,
-			ExprHash:                 billingexpr.ExprHashString(`invalid expr!!!`),
-			GroupRatio:               1.0,
-			EstimatedQuotaAfterGroup: 999,
+			BillingMode:     "tiered_expr",
+			ExprString:      `invalid expr!!!`,
+			ExprHash:        billingexpr.ExprHashString(`invalid expr!!!`),
+			QuotaMultiplier: 1.0,
+			EstimatedQuota:  999,
 		},
 	}
 
@@ -402,7 +402,7 @@ func TestTryTieredSettle_ErrorFallbackToEstimatedQuotaAfterGroup(t *testing.T) {
 	if !ok {
 		t.Fatal("expected tiered settle to apply")
 	}
-	// FinalPreConsumedQuota is 0, should fall back to EstimatedQuotaAfterGroup
+	// FinalPreConsumedQuota is 0, should fall back to EstimatedQuota
 	if quota != 999 {
 		t.Fatalf("quota = %d, want 999", quota)
 	}

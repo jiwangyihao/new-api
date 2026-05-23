@@ -46,7 +46,6 @@ import { buildDefaultUsageAnalyticsFilters } from '../lib/page-contract'
 import type {
   UsageAnalyticsCanonicalFilters,
   UsageAnalyticsGranularity,
-  UsageAnalyticsGroupBy,
   UsageAnalyticsMetric,
   UsageAnalyticsSortOrder,
   UsageAnalyticsStatus,
@@ -126,8 +125,9 @@ function buildAppliedFilters(
       startTimestamp > 0 ? startTimestamp : draft.start_timestamp,
     end_timestamp: endTimestamp > 0 ? endTimestamp : draft.end_timestamp,
     token_ids: sortedTokenIds(draft.token_ids),
-    model_names: Array.from(new Set(draft.model_names.map((item) => item.trim()).filter(Boolean))).sort(),
-    groups: Array.from(new Set(draft.groups.map((item) => item.trim()).filter(Boolean))).sort(),
+    model_names: Array.from(
+      new Set(draft.model_names.map((item) => item.trim()).filter(Boolean))
+    ).sort(),
     limit: normalizeLimit(draft.limit),
   }
 }
@@ -216,7 +216,7 @@ export function UsageAnalyticsFilterBar(props: UsageAnalyticsFilterBarProps) {
                 if (value === null) return
                 setDraft((previous) => ({
                   ...previous,
-                  group_by: value as UsageAnalyticsGroupBy,
+                  group_by: value as UsageAnalyticsCanonicalFilters['group_by'],
                 }))
               }}
             >
@@ -430,16 +430,6 @@ export function UsageAnalyticsFilterBar(props: UsageAnalyticsFilterBarProps) {
                   }))
                 }
                 placeholder={t('Add model name')}
-              />
-            </div>
-            <div className='grid gap-2'>
-              <Label>{t('Groups')}</Label>
-              <TagInput
-                value={draft.groups}
-                onChange={(groups) =>
-                  setDraft((previous) => ({ ...previous, groups }))
-                }
-                placeholder={t('Add group')}
               />
             </div>
           </div>

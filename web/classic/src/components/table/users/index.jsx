@@ -50,7 +50,6 @@ const UsersPage = () => {
     loadUsers,
     activePage,
     pageSize,
-    groupOptions,
     loading,
     searching,
 
@@ -97,7 +96,6 @@ const UsersPage = () => {
               loadUsers={loadUsers}
               activePage={activePage}
               pageSize={pageSize}
-              groupOptions={groupOptions}
               loading={loading}
               searching={searching}
               t={t}

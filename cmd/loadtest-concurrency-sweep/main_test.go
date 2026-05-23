@@ -310,7 +310,7 @@ thresholds:
   ttft_p95_regression_ratio: 1.10
 profiles:
   benchmark:
-    points: [250, 500, 750, 1000]
+    points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
     ramp_step: 25
     ramp_interval: "200ms"
@@ -421,7 +421,7 @@ func assertPassedInvariant(t *testing.T, invariants []artifact.Invariant, name s
 
 func benchmarkProfileConfig() loadtestconfig.ProfileConfig {
 	return loadtestconfig.ProfileConfig{
-		Points:           []int{250, 500, 750, 1000},
+		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
 		RampStep:         25,
 		RampInterval:     loadtestconfig.Duration{Duration: 200 * time.Millisecond},

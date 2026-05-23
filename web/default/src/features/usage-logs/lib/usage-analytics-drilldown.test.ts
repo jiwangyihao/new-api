@@ -28,7 +28,6 @@ test('preserves usage analytics drilldown through filter apply and api params', 
     endTime: 20000,
     tokenId: 5,
     model: 'gpt-4',
-    group: 'default',
     isStream: true,
     status: 'success',
   }
@@ -39,7 +38,6 @@ test('preserves usage analytics drilldown through filter apply and api params', 
       endTime: new Date(20000),
       tokenId: 5,
       model: 'gpt-4',
-      group: 'default',
       isStream: true,
       status: 'success',
     },
@@ -55,7 +53,6 @@ test('preserves usage analytics drilldown through filter apply and api params', 
   })
   assert.equal(apiParams.token_id, 5)
   assert.equal(apiParams.model_name, 'gpt-4')
-  assert.equal(apiParams.group, 'default')
   assert.equal(apiParams.is_stream, true)
   assert.equal(apiParams.status, 'success')
   assert.equal(Object.prototype.hasOwnProperty.call(apiParams, 'type'), false)

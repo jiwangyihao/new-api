@@ -17,7 +17,7 @@ import (
 
 func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	db := openSeedTestDB(t)
-	cfg := Config{Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"}
+	cfg := Config{Model: "gpt-5.5", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"}
 	first, err := Apply(context.Background(), db, cfg)
 	require.NoError(t, err)
 	second, err := Apply(context.Background(), db, cfg)
@@ -36,7 +36,28 @@ func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	assertOptionValue(t, db, "performance_setting.monitor_enabled", "false")
 	assertOptionValue(t, db, "AutomaticDisableChannelEnabled", "false")
 	assertOptionValue(t, db, "AutomaticEnableChannelEnabled", "false")
-	assertSubscriptionConcurrencyPositive(t, db)
+	assertSubscriptionConcurrency(t, db)
+}
+
+func TestSeedClearsLegacyBusinessGroupsOnExistingRows(t *testing.T) {
+	db := openSeedTestDB(t)
+	legacyURL := "http://legacy.invalid"
+	require.NoError(t, db.Create(&model.User{Id: subscriptionUserID, Username: "legacy_subscription", Status: common.UserStatusEnabled, Group: "vip", AffCode: "legacy-sub"}).Error)
+	require.NoError(t, db.Create(&model.Token{UserId: subscriptionUserID, Key: loadtestconfig.SubscriptionDBKey, Status: common.TokenStatusEnabled, Name: "legacy token", ExpiredTime: -1, Group: "vip"}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "legacy", Status: common.ChannelStatusEnabled, Name: "legacy", BaseURL: &legacyURL, Models: "gpt-5.5", Group: "vip"}).Error)
+
+	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey})
+	require.NoError(t, err)
+
+	var user model.User
+	require.NoError(t, db.First(&user, subscriptionUserID).Error)
+	require.Empty(t, user.Group)
+	var token model.Token
+	require.NoError(t, db.First(&token, "`key` = ?", loadtestconfig.SubscriptionDBKey).Error)
+	require.Empty(t, token.Group)
+	var channel model.Channel
+	require.NoError(t, db.First(&channel, channelID).Error)
+	require.Empty(t, channel.Group)
 }
 
 func TestApplyRefreshesRuntimeChannelCache(t *testing.T) {
@@ -62,11 +83,11 @@ func TestSeedDisablesUnsafeChannelsForModelRoute(t *testing.T) {
 	require.NoError(t, db.Create(&unsafeChannel).Error)
 	priority := int64(999)
 	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: unsafeChannel.Id, Enabled: true, Priority: &priority, Weight: 100}).Error)
-	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"})
+	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", Group: "legacy-ignored", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"})
 	require.NoError(t, err)
 	var reloaded model.Channel
 	require.NoError(t, db.First(&reloaded, unsafeChannel.Id).Error)
-	if reloaded.Status == common.ChannelStatusEnabled && strings.Contains(reloaded.Models, "gpt-5.5") && strings.Contains(reloaded.Group, "default") {
+	if reloaded.Status == common.ChannelStatusEnabled && strings.Contains(reloaded.Models, "gpt-5.5") {
 		t.Fatalf("unsafe channel still routable: %#v", reloaded)
 	}
 	var ability model.Ability
@@ -193,11 +214,22 @@ func assertOptionValue(t *testing.T, db *gorm.DB, key, want string) {
 	}
 }
 
-func assertSubscriptionConcurrencyPositive(t *testing.T, db *gorm.DB) {
+func assertSubscriptionConcurrency(t *testing.T, db *gorm.DB) {
 	t.Helper()
-	var opt model.Option
-	require.NoError(t, db.First(&opt, "key = ?", "SubscriptionConcurrencyQueueCapacity").Error)
-	if opt.Value == "" || opt.Value == "0" {
-		t.Fatalf("subscription concurrency disabled: %#v", opt)
+	assertOptionValue(t, db, "SubscriptionConcurrencyQueueCapacity", "2000")
+	var plan model.SubscriptionPlan
+	require.NoError(t, db.First(&plan, planID).Error)
+	if plan.ConcurrencyLimit != 2000 {
+		t.Fatalf("plan concurrency limit = %d want 2000", plan.ConcurrencyLimit)
+	}
+	var subs []model.UserSubscription
+	require.NoError(t, db.Find(&subs, "id IN ?", []int{subscriptionID, compatSubscriptionID}).Error)
+	if len(subs) != 2 {
+		t.Fatalf("subscriptions len = %d want 2", len(subs))
+	}
+	for _, sub := range subs {
+		if sub.ConcurrencyLimit != 2000 {
+			t.Fatalf("subscription %d concurrency limit = %d want 2000", sub.Id, sub.ConcurrencyLimit)
+		}
 	}
 }

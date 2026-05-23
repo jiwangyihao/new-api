@@ -400,7 +400,7 @@ func parseAdminAnalyticsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error)
 	if end < snapshotAt {
 		snapshotAt = end
 	}
-	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, UserGroups: parseAdminAnalyticsStringList(c, "user_groups"), RequestGroups: parseAdminAnalyticsStringList(c, "request_groups"), PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
+	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
 }
 
 func parseAdminUsageAnalyticsQuery(c *gin.Context, endpoint string) (model.AdminAnalyticsUsageQuery, error) {
@@ -598,7 +598,7 @@ func parseAdminDrilldownFilter(c *gin.Context) (model.AdminAnalyticsDrilldownFil
 	if err != nil {
 		return model.AdminAnalyticsDrilldownFilter{}, err
 	}
-	return model.AdminAnalyticsDrilldownFilter{UserIDs: userIDs, PlanID: planID, InviterID: inviterID, UserGroup: strings.TrimSpace(c.Query("user_group")), UserStatus: strings.TrimSpace(c.Query("user_status")), Status: strings.TrimSpace(c.Query("status"))}, nil
+	return model.AdminAnalyticsDrilldownFilter{UserIDs: userIDs, PlanID: planID, InviterID: inviterID, UserStatus: strings.TrimSpace(c.Query("user_status")), Status: strings.TrimSpace(c.Query("status"))}, nil
 }
 
 func writeAdminAnalyticsResponse[T any](c *gin.Context, data T, err error) {

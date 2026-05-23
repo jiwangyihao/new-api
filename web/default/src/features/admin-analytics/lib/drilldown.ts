@@ -20,7 +20,6 @@ export function buildAdminAnalyticsDrilldown(
         search: {
           userId: target.user_id,
           userIds: target.user_ids,
-          group: target.user_group,
           status: target.user_status,
           planId: target.plan_id,
           inviterId: target.inviter_id,
@@ -35,7 +34,6 @@ export function buildAdminAnalyticsDrilldown(
           username: target.username,
           tokenId: target.token_id,
           model: target.model,
-          group: target.request_group,
           channel: target.channel_id,
           status: target.status,
           startTime: secondsToMillis(

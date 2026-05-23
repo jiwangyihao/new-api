@@ -148,7 +148,7 @@ export default function SettingGrokModel(props) {
                 }
                 extraText={
                   <span>
-                    {t('这是基础金额，实际扣费 = 基础金额 x 系统分组倍率。')}{' '}
+                    {t('这是基础金额，将作为违规请求的额外扣费。')}{' '}
                     <a
                       href={XAI_VIOLATION_FEE_DOC_URL}
                       target='_blank'

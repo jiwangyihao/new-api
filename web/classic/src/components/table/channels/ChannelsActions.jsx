@@ -242,13 +242,8 @@ const ChannelsActions = ({
               onChange={(v) => {
                 localStorage.setItem('id-sort', v + '');
                 setIdSort(v);
-                const { searchKeyword, searchGroup, searchModel } =
-                  getFormValues();
-                if (
-                  searchKeyword === '' &&
-                  searchGroup === '' &&
-                  searchModel === ''
-                ) {
+                const { searchKeyword, searchModel } = getFormValues();
+                if (searchKeyword === '' && searchModel === '') {
                   loadChannels(activePage, pageSize, v, enableTagMode);
                 } else {
                   searchChannels(

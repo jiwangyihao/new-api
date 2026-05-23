@@ -13,8 +13,6 @@ export type AdminUsageGroupBy =
   | 'user'
   | 'plan'
   | 'model'
-  | 'user_group'
-  | 'request_group'
   | 'stream'
   | 'status'
   | 'channel'
@@ -56,16 +54,14 @@ export interface AdminAnalyticsSearch {
   user_ids: number[]
   token_ids: number[]
   channel_ids: number[]
-  user_groups: string[]
-  request_groups: string[]
   plan_ids: number[]
   sources: AdminAnalyticsSource[]
+  statuses: string[]
   subscription_statuses: string[]
   user_statuses: string[]
   log_statuses: string[]
   grant_reasons: string[]
   business_codes: string[]
-  statuses: string[]
   group_by: AdminUsageGroupBy
   metric: AdminUsageMetric
   plan_attribution: AdminPlanAttribution
@@ -115,13 +111,11 @@ export interface AdminAnalyticsDrilldownTarget {
   user_id?: number
   user_ids?: number[]
   username?: string
-  user_group?: string
   user_status?: string
   plan_id?: number
   inviter_id?: number
   token_id?: number
   model?: string
-  request_group?: string
   channel_id?: number
   status?: string
   start_timestamp?: number
@@ -279,7 +273,6 @@ export interface AdminAnalyticsSubscriptionRankingItem {
   subscription_id: number
   user_id: number
   username: string
-  user_group: string
   plan_id: number
   plan_title: string
   source: AdminAnalyticsSource
@@ -320,25 +313,12 @@ export interface AdminAnalyticsUserLifecycleTrendPoint {
   trial_users: number
 }
 
-export interface AdminAnalyticsUserGroupDistribution {
-  group: string
-  user_count: number
-  share: number
-}
-
-export interface AdminAnalyticsRequestGroupDistribution {
-  group: string
-  request_count: number
-  total_tokens: number
-  share: number
-}
 
 export interface AdminAnalyticsUserLifecycleItem {
   user_id: number
   username: string
   display_name: string
   email: string
-  user_group: string
   status: number
   created_at: number
   last_login_at: number
@@ -354,8 +334,6 @@ export interface AdminAnalyticsUserLifecycleItem {
 export interface AdminAnalyticsUserLifecycleResponse {
   summary: AdminAnalyticsUserLifecycleSummary
   trends: AdminAnalyticsUserLifecycleTrendPoint[]
-  user_groups: AdminAnalyticsUserGroupDistribution[]
-  request_groups: AdminAnalyticsRequestGroupDistribution[]
   users: AdminAnalyticsList<AdminAnalyticsUserLifecycleItem>
 }
 

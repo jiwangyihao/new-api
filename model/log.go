@@ -36,7 +36,7 @@ type Log struct {
 	ChannelId         int    `json:"channel" gorm:"index"`
 	ChannelName       string `json:"channel_name" gorm:"->"`
 	TokenId           int    `json:"token_id" gorm:"default:0;index"`
-	Group             string `json:"group" gorm:"index"`
+	Group             string `json:"-" gorm:"index"` // legacy business group column; ignored at runtime
 	Ip                string `json:"ip" gorm:"index;default:''"`
 	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
 	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
@@ -175,7 +175,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		TokenId:          tokenId,
 		UseTime:          useTimeSeconds,
 		IsStream:         isStream,
-		Group:            group,
+		Group:            "",
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
@@ -252,7 +252,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		TokenId:          params.TokenId,
 		UseTime:          params.UseTimeSeconds,
 		IsStream:         params.IsStream,
-		Group:            params.Group,
+		Group:            "",
 		Ip: func() string {
 			if needRecordIp {
 				return c.ClientIP()
@@ -347,7 +347,7 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Quota:     params.Quota,
 		ChannelId: params.ChannelId,
 		TokenId:   params.TokenId,
-		Group:     params.Group,
+		Group:     "",
 		Other:     common.MapToJsonStr(params.Other),
 	}
 	err := LOG_DB.Create(log).Error
@@ -387,9 +387,6 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	}
 	if channel != 0 {
 		tx = tx.Where("logs.channel_id = ?", channel)
-	}
-	if group != "" {
-		tx = tx.Where("logs."+logGroupCol+" = ?", group)
 	}
 	err = tx.Model(&Log{}).Count(&total).Error
 	if err != nil {
@@ -510,7 +507,6 @@ type LogFilter struct {
 	Username          string
 	TokenName         string
 	Channel           int
-	Group             string
 	RequestId         string
 	UpstreamRequestId string
 	TokenId           *int
@@ -569,13 +565,6 @@ func applyLogFilters(tx *gorm.DB, filter LogFilter, qualify bool) (*gorm.DB, err
 	if filter.Channel != 0 {
 		tx = tx.Where(col("channel_id")+" = ?", filter.Channel)
 	}
-	if filter.Group != "" {
-		groupCol := logGroupCol
-		if qualify {
-			groupCol = "logs." + groupCol
-		}
-		tx = tx.Where(groupCol+" = ?", filter.Group)
-	}
 	if filter.TokenId != nil {
 		tx = tx.Where(col("token_id")+" = ?", *filter.TokenId)
 	}
@@ -587,7 +576,7 @@ func applyLogFilters(tx *gorm.DB, filter LogFilter, qualify bool) (*gorm.DB, err
 
 func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	selfUserID := userId
-	tx, err := applyLogFilters(LOG_DB, LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, SelfUserId: &selfUserID}, true)
+	tx, err := applyLogFilters(LOG_DB, LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, RequestId: requestId, UpstreamRequestId: upstreamRequestId, SelfUserId: &selfUserID}, true)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -668,7 +657,7 @@ func meteredTokensExpr() string {
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	return SumUsedQuotaWithFilter(LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group})
+	return SumUsedQuotaWithFilter(LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel})
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {

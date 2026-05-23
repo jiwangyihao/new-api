@@ -37,8 +37,8 @@ import { aggregateUptime, type UptimeDayPoint } from '../lib/mock-stats'
 //   - Bar height reflects severity (the worse the day, the shorter the bar)
 //   - Hovering a bar reveals the exact date and uptime
 //
-// Useful as a header strip ("at-a-glance" status) and as a per-row visual
-// inside the per-group performance table.
+// Useful as a header strip ("at-a-glance" status) and as a compact visual
+// inside metrics tables.
 
 type SparklineSize = 'sm' | 'md'
 

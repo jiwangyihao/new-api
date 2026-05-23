@@ -50,9 +50,9 @@ import {
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
-import { ModelGroupSelector } from '@/components/model-group-selector'
+import { ModelSelector } from '@/components/model-group-selector'
 import { ApiUsageHelpDialog } from '@/features/api-help'
-import type { ModelOption, GroupOption } from '../types'
+import type { ModelOption } from '../types'
 
 interface PlaygroundInputProps {
   onSubmit: (text: string) => void
@@ -63,9 +63,6 @@ interface PlaygroundInputProps {
   modelValue: string
   onModelChange: (value: string) => void
   isModelLoading?: boolean
-  groups: GroupOption[]
-  groupValue: string
-  onGroupChange: (value: string) => void
 }
 
 const suggestions = [
@@ -86,16 +83,12 @@ export function PlaygroundInput({
   modelValue,
   onModelChange,
   isModelLoading = false,
-  groups,
-  groupValue,
-  onGroupChange,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
 
   const isModelSelectDisabled =
     disabled || isModelLoading || models.length === 0
-  const isGroupSelectDisabled = disabled || groups.length === 0
 
   const handleSubmit = (message: PromptInputMessage) => {
     if (!message.text?.trim() || disabled) return
@@ -197,14 +190,11 @@ export function PlaygroundInput({
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>
-            <ModelGroupSelector
+            <ModelSelector
               selectedModel={modelValue}
               models={models}
               onModelChange={onModelChange}
-              selectedGroup={groupValue}
-              groups={groups}
-              onGroupChange={onGroupChange}
-              disabled={isModelSelectDisabled || isGroupSelectDisabled}
+              disabled={isModelSelectDisabled}
             />
 
             {isGenerating && onStop ? (

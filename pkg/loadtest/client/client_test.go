@@ -178,6 +178,80 @@ func TestRunLoadClassifiesRequestTimeout(t *testing.T) {
 	}
 }
 
+func TestRunLoadClassifiesLoadDurationCancellationWithoutRuntimeError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Second):
+		}
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  2,
+		Duration:     20 * time.Millisecond,
+		Timeout:      time.Second,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.StopReason != "duration" || summary.Total != 1 {
+		t.Fatalf("summary stop/total = %q/%d", summary.StopReason, summary.Total)
+	}
+	if summary.ErrorReasons["client_duration"] != 1 || summary.ErrorReasons["request_timeout"] != 0 {
+		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	}
+}
+
+func TestRunLoadClassifiesStreamReadCanceledByLoadDuration(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Oneapi-Request-Id", "rid-duration")
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		select {
+		case <-r.Context().Done():
+		case <-time.After(time.Second):
+		}
+	}))
+	defer server.Close()
+
+	summary, err := RunLoad(context.Background(), Options{
+		BaseURL:      server.URL,
+		APIKey:       "sk-loadtestsub",
+		TokenProfile: "subscription",
+		Path:         "/v1/responses",
+		Model:        "gpt-5.5",
+		Scenario:     "test",
+		Concurrency:  1,
+		MaxRequests:  2,
+		Duration:     20 * time.Millisecond,
+		Timeout:      time.Second,
+		Stream:       true,
+		Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.ErrorReasons["client_duration"] != 1 || summary.ErrorReasons["json_error"] != 0 {
+		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	}
+	if len(summary.FirstErrorSamples) != 1 || summary.FirstErrorSamples[0].Reason != "client_duration" || summary.FirstErrorSamples[0].StatusCode != http.StatusOK || summary.FirstErrorSamples[0].RequestID != "rid-duration" {
+		t.Fatalf("samples = %#v", summary.FirstErrorSamples)
+	}
+}
+
 func TestRunLoadRecordsNormalizedTransportForInjectedClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

@@ -18,7 +18,7 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := file.NewAPIEnv()
-	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "NODE_TYPE", "BATCH_UPDATE_ENABLED", "BATCH_UPDATE_INTERVAL", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
+	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "NODE_TYPE", "BATCH_UPDATE_ENABLED", "BATCH_UPDATE_INTERVAL", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
 		if _, ok := env[key]; !ok {
 			t.Fatalf("missing env %s", key)
 		}
@@ -28,6 +28,9 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	}
 	if env["MEMORY_CACHE_ENABLED"] != "true" {
 		t.Fatalf("loadtest runtime guard not set: %#v", env)
+	}
+	if env["REDIS_POOL_SIZE"] != "2048" {
+		t.Fatalf("redis pool size not raised for benchmark: %#v", env)
 	}
 	if env["RELAY_MAX_IDLE_CONNS"] != "64" || env["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
 		t.Fatalf("unsafe relay connection limits: %#v", env)
@@ -159,7 +162,7 @@ func TestNewAPIEnvForProfileOnlyRaisesRelayPoolForBenchmark(t *testing.T) {
 	if profileEnv["RELAY_MAX_IDLE_CONNS"] != "1024" || profileEnv["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "1024" || profileEnv["GOMEMLIMIT"] != "384MiB" {
 		t.Fatalf("benchmark env mismatch: %#v", profileEnv)
 	}
-	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
+	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
 		if profileEnv[key] != base[key] {
 			t.Fatalf("profile env changed safety key %s: %q != %q", key, profileEnv[key], base[key])
 		}
@@ -284,7 +287,6 @@ mock_upstream:
   base_url: "http://127.0.0.1:19080"
 loadtest:
   model: "gpt-5.5"
-  group: "default"
   subscription_key: "sk-loadtestsub"
   compat_key: "sk-loadtestcompat"
   invalid_key: "sk-loadtestinvalid"
@@ -345,7 +347,7 @@ retry:
   automatic_retry_status_codes: []
 profiles:
   benchmark:
-    points: [250, 500, 750, 1000]
+    points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
     ramp_step: 25
     ramp_interval: 200ms
@@ -381,7 +383,7 @@ func mustDuration(value string) Duration {
 
 func benchmarkProfileConfig() ProfileConfig {
 	return ProfileConfig{
-		Points:           []int{250, 500, 750, 1000},
+		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
 		RampStep:         25,
 		RampInterval:     mustDuration("200ms"),
@@ -477,7 +479,6 @@ func validFile() File {
 		},
 		Loadtest: LoadtestConfig{
 			Model:                  "gpt-5.5",
-			Group:                  "default",
 			SubscriptionKey:        "sk-loadtestsub",
 			CompatKey:              "sk-loadtestcompat",
 			InvalidKey:             "sk-loadtestinvalid",

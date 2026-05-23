@@ -135,7 +135,7 @@ export function UsageAnalyticsPage(
         <div className='space-y-4'>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Analyze your API usage across API keys, models, groups, streaming status, and request outcomes.'
+              'Analyze your API usage across API keys, models, streaming status, and request outcomes.'
             )}
           </p>
 

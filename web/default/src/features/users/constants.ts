@@ -96,11 +96,6 @@ export const getUserRoleOptions = (t: (key: string) => string) => [
   { label: t('Root'), value: String(USER_ROLE.ROOT), icon: Shield },
 ]
 
-// ============================================================================
-// Default Values
-// ============================================================================
-
-export const DEFAULT_GROUP = 'default' as const
 
 // ============================================================================
 // Third-party Binding Fields

@@ -105,7 +105,7 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, selfRecorder.Code)
 }
 
-func TestSubscriptionPlansProtectedDTOStillIncludesPurchaseFields(t *testing.T) {
+func TestSubscriptionPlansProtectedDTOOmitsLegacyBusinessGroupFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupSubscriptionPublicPlansRouteTestDB(t)
 	seedSubscriptionPublicPlanRouteTestPlans(t)
@@ -120,7 +120,7 @@ func TestSubscriptionPlansProtectedDTOStillIncludesPurchaseFields(t *testing.T) 
 	assert.Contains(t, body, "stripe_price_id")
 	assert.Contains(t, body, "creem_product_id")
 	assert.Contains(t, body, "max_purchase_per_user")
-	assert.Contains(t, body, "upgrade_group")
+	assert.NotContains(t, body, "upgrade_group")
 	assert.Contains(t, body, "business_code")
 	assert.Contains(t, body, "reward_eligible")
 }

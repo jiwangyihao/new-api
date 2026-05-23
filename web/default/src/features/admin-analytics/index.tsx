@@ -566,7 +566,7 @@ function UsersPanel(props: {
         items={props.data.users.items.map((item) => ({
           key: String(item.user_id),
           label: item.username,
-          value: item.active_plan_title || item.user_group,
+          value: item.active_plan_title,
           drilldown: item.drilldown,
         }))}
         onDrilldown={props.onDrilldown}

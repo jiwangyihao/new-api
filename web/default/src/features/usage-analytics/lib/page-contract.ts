@@ -55,7 +55,6 @@ export function buildDefaultUsageAnalyticsFilters(
     metric: 'total_tokens',
     token_ids: [],
     model_names: [],
-    groups: [],
     streams: [],
     statuses: [],
     limit: 10,

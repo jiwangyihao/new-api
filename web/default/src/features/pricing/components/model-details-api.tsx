@@ -672,7 +672,6 @@ function RateLimitsSection(props: { model: PricingModel }) {
   const { t } = useTranslation()
   const limits = useMemo(() => buildRateLimits(props.model), [props.model])
 
-  if (limits.length === 0) return null
 
   return (
     <section>
@@ -681,35 +680,29 @@ function RateLimitsSection(props: { model: PricingModel }) {
         <Table>
           <TableHeader>
             <TableRow className='bg-muted/30 hover:bg-muted/30'>
-              <TableHead className='h-9 text-xs'>{t('Group')}</TableHead>
               <TableHead className='h-9 text-right text-xs'>RPM</TableHead>
               <TableHead className='h-9 text-right text-xs'>TPM</TableHead>
               <TableHead className='h-9 text-right text-xs'>RPD</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {limits.map((l) => (
-              <TableRow key={l.group} className='hover:bg-muted/20'>
-                <TableCell className='py-2 font-mono text-xs'>
-                  {l.group}
-                </TableCell>
-                <TableCell className='py-2 text-right font-mono text-xs'>
-                  {formatRateLimit(l.rpm)}
-                </TableCell>
-                <TableCell className='py-2 text-right font-mono text-xs'>
-                  {formatRateLimit(l.tpm)}
-                </TableCell>
-                <TableCell className='py-2 text-right font-mono text-xs'>
-                  {formatRateLimit(l.rpd)}
-                </TableCell>
-              </TableRow>
-            ))}
+            <TableRow className='hover:bg-muted/20'>
+              <TableCell className='py-2 text-right font-mono text-xs'>
+                {formatRateLimit(limits.rpm)}
+              </TableCell>
+              <TableCell className='py-2 text-right font-mono text-xs'>
+                {formatRateLimit(limits.tpm)}
+              </TableCell>
+              <TableCell className='py-2 text-right font-mono text-xs'>
+                {formatRateLimit(limits.rpd)}
+              </TableCell>
+            </TableRow>
           </TableBody>
         </Table>
       </div>
       <p className='text-muted-foreground mt-2 text-[11px] leading-relaxed'>
         {t(
-          'RPM = requests per minute, TPM = tokens per minute, RPD = requests per day. Limits apply per token group.'
+          'RPM = requests per minute, TPM = tokens per minute, RPD = requests per day.'
         )}
       </p>
     </section>
@@ -841,7 +834,7 @@ function AuthSection() {
           </p>
           <p className='text-muted-foreground'>
             {t(
-              'Generate tokens from the Tokens page; you can scope them to specific models, groups, IPs, and rate-limits.'
+              'Generate tokens from the Tokens page; you can scope them to specific models, IPs, and rate-limits.'
             )}
           </p>
         </div>

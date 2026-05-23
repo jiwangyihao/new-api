@@ -133,7 +133,6 @@ const (
 	MsgSubscriptionPriceMax         = "subscription.price_max"
 	MsgSubscriptionPurchaseLimitNeg = "subscription.purchase_limit_negative"
 	MsgSubscriptionQuotaNegative    = "subscription.quota_negative"
-	MsgSubscriptionGroupNotExists   = "subscription.group_not_exists"
 	MsgSubscriptionResetCycleGtZero = "subscription.reset_cycle_gt_zero"
 	MsgSubscriptionPurchaseMax      = "subscription.purchase_max"
 	MsgSubscriptionInvalidId        = "subscription.invalid_id"
@@ -195,12 +194,6 @@ const (
 	MsgVendorIdMissing  = "vendor.id_missing"
 )
 
-// Group related messages
-const (
-	MsgGroupNameTypeEmpty = "group.name_type_empty"
-	MsgGroupNameExists    = "group.name_exists"
-	MsgGroupIdMissing     = "group.id_missing"
-)
 
 // Checkin related messages
 const (
@@ -312,7 +305,6 @@ const (
 	MsgDistributorTokenModelForbidden     = "distributor.token_model_forbidden"
 	MsgDistributorModelNameRequired       = "distributor.model_name_required"
 	MsgDistributorInvalidPlayground       = "distributor.invalid_playground_request"
-	MsgDistributorGroupAccessDenied       = "distributor.group_access_denied"
 	MsgDistributorGetChannelFailed        = "distributor.get_channel_failed"
 	MsgDistributorNoAvailableChannel      = "distributor.no_available_channel"
 	MsgDistributorInvalidMidjourney       = "distributor.invalid_midjourney_request"

@@ -19,11 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { VChart } from '@visactor/react-vchart'
 import { useTranslation } from 'react-i18next'
-import { useThemeRadiusPx } from '@/lib/theme-radius'
 import { useChartTheme } from '@/lib/use-chart-theme'
 import { cn } from '@/lib/utils'
 import { VCHART_OPTION } from '@/lib/vchart'
-import { useThemeCustomization } from '@/context/theme-customization-provider'
 import type { LatencyTimePoint, UptimeDayPoint } from '../lib/mock-stats'
 
 function formatHourLabel(iso: string): string {
@@ -48,7 +46,7 @@ function formatDayLabel(date: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Latency trend chart (24h, multi-group point-line chart)
+// Latency trend chart (24h point-line chart)
 // ---------------------------------------------------------------------------
 
 export function LatencyTrendChart(props: {
@@ -62,7 +60,7 @@ export function LatencyTrendChart(props: {
     if (props.series.length === 0) return null
     const data = props.series.map((point) => ({
       time: formatHourLabel(point.timestamp),
-      group: point.group,
+      series: point.series,
       ttft: point.ttft_ms,
     }))
     return {
@@ -70,7 +68,7 @@ export function LatencyTrendChart(props: {
       data: [{ id: 'latency', values: data }],
       xField: 'time',
       yField: 'ttft',
-      seriesField: 'group',
+      seriesField: 'series',
       smooth: true,
       point: {
         visible: true,
@@ -244,95 +242,6 @@ export function UptimeTrendChart(props: {
       {themeReady && spec && (
         <VChart
           key={`uptime-trend-${resolvedTheme}`}
-          spec={{
-            ...spec,
-            theme: resolvedTheme === 'dark' ? 'dark' : 'light',
-            background: 'transparent',
-          }}
-          option={VCHART_OPTION}
-        />
-      )}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Throughput by group (horizontal bar)
-// ---------------------------------------------------------------------------
-
-export function ThroughputBarChart(props: {
-  rows: { group: string; throughput_tps: number }[]
-  className?: string
-}) {
-  const { t } = useTranslation()
-  const { resolvedTheme, themeReady } = useChartTheme()
-  const { customization } = useThemeCustomization()
-  const barRadius = useThemeRadiusPx(
-    '--radius-sm',
-    `${customization.preset}:${customization.radius}`
-  )
-
-  const filtered = useMemo(
-    () => props.rows.filter((r) => r.throughput_tps > 0),
-    [props.rows]
-  )
-
-  const spec = useMemo(() => {
-    if (filtered.length === 0) return null
-    return {
-      type: 'bar' as const,
-      direction: 'horizontal' as const,
-      data: [{ id: 'tput', values: filtered.map((r) => ({ ...r })) }],
-      xField: 'throughput_tps',
-      yField: 'group',
-      bar: {
-        style: {
-          fill: '#6366f1',
-          ...(barRadius == null ? {} : { cornerRadius: barRadius }),
-        },
-      },
-      label: {
-        visible: true,
-        position: 'right',
-        style: { fontSize: 11, fill: 'currentColor' },
-        formatMethod: (text: string) => `${text} t/s`,
-      },
-      axes: [
-        {
-          orient: 'left',
-          label: { style: { fill: 'currentColor', fontSize: 10 } },
-          tick: { visible: false },
-        },
-        {
-          orient: 'bottom',
-          label: { style: { fill: 'currentColor', fontSize: 10 } },
-          grid: { visible: true, style: { lineDash: [3, 3] } },
-        },
-      ],
-      tooltip: {
-        mark: {
-          title: { value: (d: { group: string }) => d.group },
-          content: [
-            {
-              key: t('Throughput'),
-              value: (d: { throughput_tps: number }) =>
-                `${d.throughput_tps.toFixed(1)} t/s`,
-            },
-          ],
-        },
-      },
-    }
-  }, [barRadius, filtered, t])
-
-  if (filtered.length === 0) {
-    return null
-  }
-
-  return (
-    <div className={cn('h-48 sm:h-56', props.className)}>
-      {themeReady && spec && (
-        <VChart
-          key={`tput-${resolvedTheme}`}
           spec={{
             ...spec,
             theme: resolvedTheme === 'dark' ? 'dark' : 'light',

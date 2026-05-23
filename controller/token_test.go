@@ -14,7 +14,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
@@ -418,6 +417,7 @@ func TestGetAllTokensMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("list response leaked raw token key: %s", recorder.Body.String())
 	}
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
 func TestSearchTokensMasksKeyInResponse(t *testing.T) {
@@ -445,6 +445,7 @@ func TestSearchTokensMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("search response leaked raw token key: %s", recorder.Body.String())
 	}
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
 func TestGetTokenMasksKeyInResponse(t *testing.T) {
@@ -470,6 +471,7 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("detail response leaked raw token key: %s", recorder.Body.String())
 	}
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
 func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
@@ -484,8 +486,6 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 		"unlimited_quota":      true,
 		"model_limits_enabled": false,
 		"model_limits":         "",
-		"group":                "default",
-		"cross_group_retry":    false,
 	}
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", body, 1)
@@ -506,17 +506,26 @@ func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), token.Key) {
 		t.Fatalf("update response leaked raw token key: %s", recorder.Body.String())
 	}
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
-func TestAddTokenDefaultsToDefaultGroupWhenPayloadOmitsGroup(t *testing.T) {
+func assertTokenResponseOmitsLegacyGroupFields(t *testing.T, body string) {
+	t.Helper()
+	require.NotContains(t, body, `"group"`)
+	require.NotContains(t, body, `"cross_group_retry"`)
+}
+
+func TestAddTokenIgnoresLegacyGroupPayload(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	body := map[string]any{
-		"name":                 "default-group-token",
+		"name":                 "legacy-group-token",
 		"expired_time":         -1,
 		"remain_quota":         100,
 		"unlimited_quota":      true,
 		"model_limits_enabled": false,
 		"model_limits":         "",
+		"group":                "vip",
+		"cross_group_retry":    true,
 	}
 
 	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
@@ -527,46 +536,16 @@ func TestAddTokenDefaultsToDefaultGroupWhenPayloadOmitsGroup(t *testing.T) {
 		t.Fatalf("expected success response, got message: %s", response.Message)
 	}
 	var inserted model.Token
-	require.NoError(t, db.First(&inserted, "name = ?", "default-group-token").Error)
-	require.Equal(t, "default", inserted.Group)
-	require.False(t, inserted.CrossGroupRetry)
-}
-
-func TestAddTokenFallsBackToBlankGroupWhenDefaultGroupUnavailable(t *testing.T) {
-	originalGroupRatio := ratio_setting.GroupRatio2JSONString()
-	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatio))
-	})
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"paid":1}`))
-	db := setupTokenControllerTestDB(t)
-	body := map[string]any{
-		"name":                 "blank-group-token",
-		"expired_time":         -1,
-		"remain_quota":         100,
-		"unlimited_quota":      true,
-		"model_limits_enabled": false,
-		"model_limits":         "",
-	}
-
-	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", body, 1)
-	AddToken(ctx)
-
-	response := decodeAPIResponse(t, recorder)
-	if !response.Success {
-		t.Fatalf("expected success response, got message: %s", response.Message)
-	}
-	var inserted model.Token
-	require.NoError(t, db.First(&inserted, "name = ?", "blank-group-token").Error)
+	require.NoError(t, db.First(&inserted, "name = ?", "legacy-group-token").Error)
 	require.Equal(t, "", inserted.Group)
 	require.False(t, inserted.CrossGroupRetry)
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
-func TestUpdateTokenPreservesExistingGroupWhenPayloadOmitsGroup(t *testing.T) {
+func TestUpdateTokenPreservesLegacyGroupColumnsWhenPayloadOmitsGroup(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "preserve-group-token", "preserve1234token5678")
-	token.Group = "paid"
-	token.CrossGroupRetry = true
-	require.NoError(t, token.Update())
+	require.NoError(t, db.Model(&model.Token{}).Where("id = ?", token.Id).Updates(map[string]any{"group": "paid", "cross_group_retry": true}).Error)
 	body := map[string]any{
 		"id":                   token.Id,
 		"name":                 "preserve-group-updated",
@@ -588,14 +567,13 @@ func TestUpdateTokenPreservesExistingGroupWhenPayloadOmitsGroup(t *testing.T) {
 	require.NoError(t, db.First(&updated, token.Id).Error)
 	require.Equal(t, "paid", updated.Group)
 	require.True(t, updated.CrossGroupRetry)
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
-func TestUpdateTokenAppliesExplicitGroupFields(t *testing.T) {
+func TestUpdateTokenIgnoresExplicitLegacyGroupFields(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "explicit-group-token", "explicit1234token5678")
-	token.Group = "default"
-	token.CrossGroupRetry = false
-	require.NoError(t, token.Update())
+	require.NoError(t, db.Model(&model.Token{}).Where("id = ?", token.Id).Updates(map[string]any{"group": "default", "cross_group_retry": false}).Error)
 	body := map[string]any{
 		"id":                   token.Id,
 		"name":                 "explicit-group-updated",
@@ -617,8 +595,9 @@ func TestUpdateTokenAppliesExplicitGroupFields(t *testing.T) {
 	}
 	var updated model.Token
 	require.NoError(t, db.First(&updated, token.Id).Error)
-	require.Equal(t, "paid", updated.Group)
-	require.True(t, updated.CrossGroupRetry)
+	require.Equal(t, "default", updated.Group)
+	require.False(t, updated.CrossGroupRetry)
+	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
 func TestGetTokenKeyRequiresOwnershipAndReturnsFullKey(t *testing.T) {
@@ -708,7 +687,7 @@ func TestGetOpenCodeOpenAIModelsReusesPublicTokenStatusCodes(t *testing.T) {
 		{name: "expired time", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: 1, group: "default", wantStatus: http.StatusForbidden},
 		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusTooManyRequests},
 		{name: "user disabled", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusDisabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
-		{name: "deprecated group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", wantStatus: http.StatusForbidden},
+		{name: "deprecated group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", wantStatus: http.StatusOK},
 		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), wantStatus: http.StatusForbidden},
 	}
 	for _, tc := range cases {

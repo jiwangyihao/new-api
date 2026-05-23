@@ -39,7 +39,7 @@ type User struct {
 	Quota                             int            `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota                         int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount                      int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group                             string         `json:"group" gorm:"type:varchar(64);default:'default'"`
+	Group                             string         `json:"-" gorm:"type:varchar(64);default:''"`
 	AffCode                           string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	AffCount                          int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota                          int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
@@ -72,7 +72,6 @@ type User struct {
 func (user *User) ToBaseUser() *UserBase {
 	cache := &UserBase{
 		Id:       user.Id,
-		Group:    user.Group,
 		Quota:    user.Quota,
 		Status:   user.Status,
 		Username: user.Username,
@@ -229,7 +228,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	}
 
 	// Get paginated users within same transaction
-	err = tx.Unscoped().Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password").Find(&users).Error
+	err = tx.Unscoped().Order("id desc").Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("password", "group").Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -247,7 +246,7 @@ func GetAllUsers(pageInfo *common.PageInfo) (users []*User, total int64, err err
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, int64, error) {
+func SearchUsers(keyword string, _ string, startIdx int, num int) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
@@ -274,22 +273,12 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	if err == nil {
 		// 如果是数字，同时搜索ID和其他字段
 		likeCondition = "id = ? OR " + likeCondition
-		if group != "" {
-			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
-		} else {
-			query = query.Where(likeCondition,
-				keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
-		}
+		query = query.Where(likeCondition,
+			keywordInt, "%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	} else {
 		// 非数字关键字，只搜索字符串字段
-		if group != "" {
-			query = query.Where("("+likeCondition+") AND "+commonGroupCol+" = ?",
-				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%", group)
-		} else {
-			query = query.Where(likeCondition,
-				"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
-		}
+		query = query.Where(likeCondition,
+			"%"+keyword+"%", "%"+keyword+"%", "%"+keyword+"%")
 	}
 
 	// 获取总数
@@ -300,7 +289,7 @@ func SearchUsers(keyword string, group string, startIdx int, num int) ([]*User, 
 	}
 
 	// 获取分页数据
-	err = query.Omit("password").Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
+	err = query.Omit("password", "group").Order("id desc").Limit(num).Offset(startIdx).Find(&users).Error
 	if err != nil {
 		tx.Rollback()
 		return nil, 0, err
@@ -419,9 +408,9 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	user := User{Id: id}
 	var err error = nil
 	if selectAll {
-		err = DB.First(&user, "id = ?", id).Error
+		err = DB.Omit("group").First(&user, "id = ?", id).Error
 	} else {
-		err = DB.Omit("password").First(&user, "id = ?", id).Error
+		err = DB.Omit("password", "group").First(&user, "id = ?", id).Error
 	}
 	return &user, err
 }
@@ -521,6 +510,7 @@ func (user *User) Insert(inviterId int) error {
 	user.Quota = common.QuotaForNewUser
 	//user.SetAccessToken(common.GetUUID())
 	user.AffCode = common.GetRandomString(4)
+	user.Group = ""
 
 	// 初始化用户设置，包括默认的边栏配置
 	if user.Setting == "" {
@@ -579,6 +569,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 	}
 	user.Quota = common.QuotaForNewUser
 	user.AffCode = common.GetRandomString(4)
+	user.Group = ""
 
 	// 初始化用户设置
 	if user.Setting == "" {
@@ -691,7 +682,6 @@ func (user *User) Edit(updatePassword bool) error {
 	updates := map[string]interface{}{
 		"username":     newUser.Username,
 		"display_name": newUser.DisplayName,
-		"group":        newUser.Group,
 		"remark":       newUser.Remark,
 	}
 	if updatePassword {
@@ -983,32 +973,9 @@ func GetUserEmail(id int) (email string, err error) {
 	return email, err
 }
 
-// GetUserGroup gets group from Redis first, falls back to DB if needed
+// GetUserGroup is a legacy compatibility helper. Business group selection is removed.
 func GetUserGroup(id int, fromDB bool) (group string, err error) {
-	defer func() {
-		// Update Redis cache asynchronously on successful DB read
-		if shouldUpdateRedis(fromDB, err) {
-			gopool.Go(func() {
-				if err := updateUserGroupCache(id, group); err != nil {
-					common.SysLog("failed to update user group cache: " + err.Error())
-				}
-			})
-		}
-	}()
-	if !fromDB && common.RedisEnabled {
-		group, err := getUserGroupCache(id)
-		if err == nil {
-			return group, nil
-		}
-		// Don't return error - fall through to DB
-	}
-	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
-	if err != nil {
-		return "", err
-	}
-
-	return group, nil
+	return "", nil
 }
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed

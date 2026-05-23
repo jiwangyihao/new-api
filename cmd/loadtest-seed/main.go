@@ -57,7 +57,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 	model.DB = db
 	model.LOG_DB = db
-	seedCfg := seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: cfgFile.Loadtest.Model, Group: cfgFile.Loadtest.Group, MockBaseURL: cfgFile.MockUpstream.BaseURL, SubscriptionKey: cfgFile.Loadtest.SubscriptionKey, CompatKey: cfgFile.Loadtest.CompatKey}
+	seedCfg := seed.Config{RunContext: rc.WithoutSeedOutputHash().WithoutMockHash(), Model: cfgFile.Loadtest.Model, MockBaseURL: cfgFile.MockUpstream.BaseURL, SubscriptionKey: cfgFile.Loadtest.SubscriptionKey, CompatKey: cfgFile.Loadtest.CompatKey}
 	out, err := seed.Apply(context.Background(), db, seedCfg)
 	if err != nil {
 		writeErr(stderr, err)

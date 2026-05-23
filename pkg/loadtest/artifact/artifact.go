@@ -115,7 +115,7 @@ type SeedOutput struct {
 	TokenDBKeyCompat        string         `json:"token_db_key_compat"`
 	ChannelID               int            `json:"channel_id"`
 	Model                   string         `json:"model"`
-	Group                   string         `json:"group"`
+	Group                   string         `json:"-"`
 	MockBaseURL             string         `json:"mock_base_url"`
 	ExpectedUsagePerSuccess Usage          `json:"expected_usage_per_success"`
 	RatioConfig             map[string]any `json:"ratio_config,omitempty"`
@@ -177,14 +177,14 @@ type PostgresSnapshot struct {
 
 type RedisSnapshot struct {
 	Statused
-	Info                    map[string]string `json:"info,omitempty"`
-	ConnectedClients        int               `json:"connected_clients,omitempty"`
-	UsedMemoryBytes         uint64            `json:"used_memory_bytes,omitempty"`
-	UsedMemoryRSSBytes      uint64            `json:"used_memory_rss_bytes,omitempty"`
-	MemFragmentationRatio   float64           `json:"mem_fragmentation_ratio,omitempty"`
-	InstantaneousOpsPerSec  int               `json:"instantaneous_ops_per_sec,omitempty"`
-	TotalCommandsProcessed  uint64            `json:"total_commands_processed,omitempty"`
-	Keyspace                map[string]int64  `json:"keyspace,omitempty"`
+	Info                   map[string]string `json:"info,omitempty"`
+	ConnectedClients       int               `json:"connected_clients,omitempty"`
+	UsedMemoryBytes        uint64            `json:"used_memory_bytes,omitempty"`
+	UsedMemoryRSSBytes     uint64            `json:"used_memory_rss_bytes,omitempty"`
+	MemFragmentationRatio  float64           `json:"mem_fragmentation_ratio,omitempty"`
+	InstantaneousOpsPerSec int               `json:"instantaneous_ops_per_sec,omitempty"`
+	TotalCommandsProcessed uint64            `json:"total_commands_processed,omitempty"`
+	Keyspace               map[string]int64  `json:"keyspace,omitempty"`
 }
 
 type RuntimeSnapshot struct {
@@ -337,28 +337,28 @@ type ProfilePaths struct {
 }
 
 type ResourcePeaks struct {
-	RSSPeakBytes                     uint64  `json:"rss_peak_bytes,omitempty"`
-	CPUPercentPeak                   float64 `json:"cpu_percent_peak,omitempty"`
-	CPUTimeSecondsPeak               float64 `json:"cpu_time_seconds_peak,omitempty"`
-	ThreadCountPeak                  int     `json:"thread_count_peak,omitempty"`
-	HandleCountPeak                  int     `json:"handle_count_peak,omitempty"`
-	OpenTCPSocketsPeak               int     `json:"open_tcp_sockets_peak,omitempty"`
-	GoroutinesPeak                   int     `json:"goroutines_peak,omitempty"`
-	HeapAllocPeakBytes               uint64  `json:"heap_alloc_peak_bytes,omitempty"`
-	HeapSysPeakBytes                 uint64  `json:"heap_sys_peak_bytes,omitempty"`
-	GCCountPeak                      uint32  `json:"gc_count_peak,omitempty"`
-	PauseTotalNSPeak                 uint64  `json:"pause_total_ns_peak,omitempty"`
-	HTTPAcceptTotalPeak              uint64  `json:"http_accept_total_peak,omitempty"`
-	HTTPActiveCurrentPeak            int64   `json:"http_active_current_peak,omitempty"`
-	RedisConnectedClientsPeak        int     `json:"redis_connected_clients_peak,omitempty"`
-	RedisUsedMemoryPeakBytes         uint64  `json:"redis_used_memory_peak_bytes,omitempty"`
-	RedisUsedMemoryRSSPeakBytes      uint64  `json:"redis_used_memory_rss_peak_bytes,omitempty"`
-	RedisInstantaneousOpsPeak        int     `json:"redis_instantaneous_ops_peak,omitempty"`
-	RedisTotalCommandsProcessedPeak  uint64  `json:"redis_total_commands_processed_peak,omitempty"`
-	PostgresActiveConnectionsPeak    int     `json:"postgres_active_connections_peak,omitempty"`
-	PostgresIdleConnectionsPeak      int     `json:"postgres_idle_connections_peak,omitempty"`
-	PostgresWaitingLocksPeak         int     `json:"postgres_waiting_locks_peak,omitempty"`
-	PostgresDatabaseSizePeakBytes    uint64  `json:"postgres_database_size_peak_bytes,omitempty"`
+	RSSPeakBytes                    uint64  `json:"rss_peak_bytes,omitempty"`
+	CPUPercentPeak                  float64 `json:"cpu_percent_peak,omitempty"`
+	CPUTimeSecondsPeak              float64 `json:"cpu_time_seconds_peak,omitempty"`
+	ThreadCountPeak                 int     `json:"thread_count_peak,omitempty"`
+	HandleCountPeak                 int     `json:"handle_count_peak,omitempty"`
+	OpenTCPSocketsPeak              int     `json:"open_tcp_sockets_peak,omitempty"`
+	GoroutinesPeak                  int     `json:"goroutines_peak,omitempty"`
+	HeapAllocPeakBytes              uint64  `json:"heap_alloc_peak_bytes,omitempty"`
+	HeapSysPeakBytes                uint64  `json:"heap_sys_peak_bytes,omitempty"`
+	GCCountPeak                     uint32  `json:"gc_count_peak,omitempty"`
+	PauseTotalNSPeak                uint64  `json:"pause_total_ns_peak,omitempty"`
+	HTTPAcceptTotalPeak             uint64  `json:"http_accept_total_peak,omitempty"`
+	HTTPActiveCurrentPeak           int64   `json:"http_active_current_peak,omitempty"`
+	RedisConnectedClientsPeak       int     `json:"redis_connected_clients_peak,omitempty"`
+	RedisUsedMemoryPeakBytes        uint64  `json:"redis_used_memory_peak_bytes,omitempty"`
+	RedisUsedMemoryRSSPeakBytes     uint64  `json:"redis_used_memory_rss_peak_bytes,omitempty"`
+	RedisInstantaneousOpsPeak       int     `json:"redis_instantaneous_ops_peak,omitempty"`
+	RedisTotalCommandsProcessedPeak uint64  `json:"redis_total_commands_processed_peak,omitempty"`
+	PostgresActiveConnectionsPeak   int     `json:"postgres_active_connections_peak,omitempty"`
+	PostgresIdleConnectionsPeak     int     `json:"postgres_idle_connections_peak,omitempty"`
+	PostgresWaitingLocksPeak        int     `json:"postgres_waiting_locks_peak,omitempty"`
+	PostgresDatabaseSizePeakBytes   uint64  `json:"postgres_database_size_peak_bytes,omitempty"`
 }
 
 type ResourceSamplesArtifact struct {
@@ -402,10 +402,10 @@ type PointResult struct {
 	SummaryExcerpt    SummaryExcerpt `json:"summary_excerpt"`
 	MockDelta         MockStatsDelta `json:"mock_delta"`
 	Invariants        []Invariant    `json:"invariants,omitempty"`
-	ResourcePeaks ResourcePeaks  `json:"resource_peaks,omitzero"`
-	ResourceDelta ResourceDelta  `json:"resource_delta,omitzero"`
-	ProfilePaths  ProfilePaths   `json:"profile_paths,omitzero"`
-	Gate          GateResult     `json:"gate,omitzero"`
+	ResourcePeaks     ResourcePeaks  `json:"resource_peaks,omitzero"`
+	ResourceDelta     ResourceDelta  `json:"resource_delta,omitzero"`
+	ProfilePaths      ProfilePaths   `json:"profile_paths,omitzero"`
+	Gate              GateResult     `json:"gate,omitzero"`
 }
 
 type SweepResult struct {

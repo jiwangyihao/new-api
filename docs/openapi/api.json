@@ -43,7 +43,7 @@
       "name": "数据统计"
     },
     {
-      "name": "分组"
+      "name": "预填组"
     },
     {
       "name": "任务"
@@ -671,31 +671,6 @@
         ]
       }
     },
-    "/api/user/groups": {
-      "get": {
-        "summary": "获取用户分组列表",
-        "deprecated": false,
-        "description": "🔓 无需鉴权",
-        "tags": [
-          "用户登陆注册"
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "headers": {}
-          }
-        },
-        "security": [
-          {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
-          }
-        ]
-      }
-    },
     "/api/user/passkey/login/begin": {
       "post": {
         "summary": "开始Passkey登录",
@@ -1017,31 +992,6 @@
         "description": "🔓 无需鉴权",
         "tags": [
           "OAuth"
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "headers": {}
-          }
-        },
-        "security": [
-          {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
-          }
-        ]
-      }
-    },
-    "/api/user/self/groups": {
-      "get": {
-        "summary": "获取当前用户分组",
-        "deprecated": false,
-        "description": "🔐 需要登录（User权限）",
-        "tags": [
-          "用户管理"
         ],
         "parameters": [],
         "responses": {
@@ -1633,15 +1583,6 @@
         "parameters": [
           {
             "name": "keyword",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "group",
             "in": "query",
             "description": "",
             "required": false,
@@ -2503,15 +2444,6 @@
         "parameters": [
           {
             "name": "keyword",
-            "in": "query",
-            "description": "",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "group",
             "in": "query",
             "description": "",
             "required": false,
@@ -4136,38 +4068,13 @@
         ]
       }
     },
-    "/api/group/": {
-      "get": {
-        "summary": "获取所有分组",
-        "deprecated": false,
-        "description": "👨‍💼 需要管理员权限（Admin）",
-        "tags": [
-          "分组"
-        ],
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "成功",
-            "headers": {}
-          }
-        },
-        "security": [
-          {
-            "Combination343": []
-          },
-          {
-            "Combination1243": []
-          }
-        ]
-      }
-    },
     "/api/prefill_group/": {
       "get": {
         "summary": "获取预填分组",
         "deprecated": false,
         "description": "👨‍💼 需要管理员权限（Admin）",
         "tags": [
-          "分组"
+          "预填组"
         ],
         "parameters": [],
         "responses": {
@@ -4190,7 +4097,7 @@
         "deprecated": false,
         "description": "👨‍💼 需要管理员权限（Admin）",
         "tags": [
-          "分组"
+          "预填组"
         ],
         "parameters": [],
         "responses": {
@@ -4213,7 +4120,7 @@
         "deprecated": false,
         "description": "👨‍💼 需要管理员权限（Admin）",
         "tags": [
-          "分组"
+          "预填组"
         ],
         "parameters": [],
         "responses": {
@@ -4238,7 +4145,7 @@
         "deprecated": false,
         "description": "👨‍💼 需要管理员权限（Admin）",
         "tags": [
-          "分组"
+          "预填组"
         ],
         "parameters": [
           {
@@ -5017,9 +4924,6 @@
           "email": {
             "type": "string"
           },
-          "group": {
-            "type": "string"
-          },
           "quota": {
             "type": "integer"
           },
@@ -5047,9 +4951,6 @@
             "type": "integer"
           },
           "models": {
-            "type": "string"
-          },
-          "groups": {
             "type": "string"
           },
           "priority": {

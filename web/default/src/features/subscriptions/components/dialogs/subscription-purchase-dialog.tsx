@@ -37,7 +37,6 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
-import { GroupBadge } from '@/components/group-badge'
 import {
   paySubscriptionStripe,
   paySubscriptionCreem,
@@ -304,14 +303,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 {formatConcurrencyLimit(plan.concurrency_limit, t)}
               </span>
             </div>
-            {plan.upgrade_group && (
-              <div className='flex items-center justify-between'>
-                <span className='text-muted-foreground text-sm'>
-                  {t('Upgrade Group')}
-                </span>
-                <GroupBadge group={plan.upgrade_group} />
-              </div>
-            )}
             <Separator />
             <div className='flex items-center justify-between'>
               <span className='text-sm font-medium'>{t('Amount Due')}</span>

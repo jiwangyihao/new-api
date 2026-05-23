@@ -32,7 +32,6 @@ export interface AffinityRule {
   value_regex?: string
   ttl_seconds: number
   skip_retry_on_failure: boolean
-  include_using_group: boolean
   include_model_name: boolean
   include_rule_name: boolean
   param_override_template?: Record<string, unknown> | null

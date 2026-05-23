@@ -128,12 +128,6 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
                   <span className='truncate'>{profile.email}</span>
                 </>
               )}
-              {profile.group && (
-                <>
-                  <span>•</span>
-                  <span className='truncate'>{profile.group}</span>
-                </>
-              )}
             </div>
           </div>
         </div>

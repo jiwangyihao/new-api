@@ -202,9 +202,6 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 	for i := range subs {
 		sub := subs[i]
 		user := users[sub.UserId]
-		if len(query.UserGroups) > 0 && !adminStringInSet(user.Group, query.UserGroups) {
-			continue
-		}
 		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
 		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
 			continue
@@ -426,7 +423,7 @@ func GetAdminAnalyticsQuotaDistribution(query AdminAnalyticsQuery) (dto.AdminAna
 		if row.Quota.RemainingTokens != nil {
 			remaining = *row.Quota.RemainingTokens
 		}
-		rankings = append(rankings, dto.AdminAnalyticsSubscriptionRankingItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, UserGroup: row.User.Group, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate, Drilldown: &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_users", UserID: &userID, PlanID: &planID}})
+		rankings = append(rankings, dto.AdminAnalyticsSubscriptionRankingItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate, Drilldown: &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_users", UserID: &userID, PlanID: &planID}})
 	}
 	buckets := make([]dto.AdminAnalyticsQuotaBucket, 0, len(bucketsByName))
 	for _, bucket := range bucketsByName {
@@ -482,21 +479,16 @@ func GetAdminAnalyticsUserLifecycle(query AdminAnalyticsQuery) (dto.AdminAnalyti
 		}
 	}
 	items := make([]dto.AdminAnalyticsUserLifecycleItem, 0, len(users))
-	groupCounts := make(map[string]int)
 	var newUsers, disabledUsers int
 	for i := range users {
 		user := users[i]
-		if len(query.UserGroups) > 0 && !adminStringInSet(user.Group, query.UserGroups) {
-			continue
-		}
 		if user.CreatedAt >= query.StartTimestamp && user.CreatedAt <= query.EndTimestamp {
 			newUsers++
 		}
 		if user.Status != common.UserStatusEnabled {
 			disabledUsers++
 		}
-		groupCounts[user.Group]++
-		item := dto.AdminAnalyticsUserLifecycleItem{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, UserGroup: user.Group, Status: user.Status, CreatedAt: user.CreatedAt, LastLoginAt: user.LastLoginAt, RequestCount: user.RequestCount}
+		item := dto.AdminAnalyticsUserLifecycleItem{UserID: user.Id, Username: user.Username, DisplayName: user.DisplayName, Email: user.Email, Status: user.Status, CreatedAt: user.CreatedAt, LastLoginAt: user.LastLoginAt, RequestCount: user.RequestCount}
 		if row, ok := activeByUser[user.Id]; ok {
 			item.ActivePlanID = row.Subscription.PlanId
 			item.ActivePlanTitle = row.Plan.Title
@@ -510,16 +502,7 @@ func GetAdminAnalyticsUserLifecycle(query AdminAnalyticsQuery) (dto.AdminAnalyti
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].UserID < items[j].UserID })
 	paged, page := paginateAdminAnalyticsList(items, query.Limit, query.Offset)
-	userGroups := make([]dto.AdminAnalyticsUserGroupDistribution, 0, len(groupCounts))
-	for group, count := range groupCounts {
-		share := 0.0
-		if len(items) > 0 {
-			share = float64(count) / float64(len(items))
-		}
-		userGroups = append(userGroups, dto.AdminAnalyticsUserGroupDistribution{Group: group, UserCount: count, Share: share})
-	}
-	sort.Slice(userGroups, func(i, j int) bool { return userGroups[i].UserCount > userGroups[j].UserCount })
-	data := dto.AdminAnalyticsUserLifecycleResponse{Summary: dto.AdminAnalyticsUserLifecycleSummary{TotalUsers: len(items), NewUsers: newUsers, ActiveUsers: len(activeByUser), DisabledUsers: disabledUsers}, UserGroups: userGroups, Users: dto.AdminAnalyticsList[dto.AdminAnalyticsUserLifecycleItem]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}
+	data := dto.AdminAnalyticsUserLifecycleResponse{Summary: dto.AdminAnalyticsUserLifecycleSummary{TotalUsers: len(items), NewUsers: newUsers, ActiveUsers: len(activeByUser), DisabledUsers: disabledUsers}, Users: dto.AdminAnalyticsList[dto.AdminAnalyticsUserLifecycleItem]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsUserLifecycleResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil
 }
 

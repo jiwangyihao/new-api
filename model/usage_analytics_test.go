@@ -178,7 +178,7 @@ func TestUsageAnalyticsGroupsStatusStreamModelAndGroup(t *testing.T) {
 	seedUsageAnalyticsLog(t, &Log{UserId: 101, CreatedAt: now - 30, Type: LogTypeConsume, TokenId: 1, ModelName: "gpt-a", Group: "default", IsStream: true, MeteredTokens: intPtrForUsageAnalyticsTest(10), UseTime: 1})
 	seedUsageAnalyticsLog(t, &Log{UserId: 101, CreatedAt: now - 20, Type: LogTypeError, TokenId: 2, ModelName: "gpt-b", Group: "vip", IsStream: false, UseTime: 2})
 
-	for _, groupBy := range []UsageAnalyticsGroupBy{UsageAnalyticsGroupByStatus, UsageAnalyticsGroupByStream, UsageAnalyticsGroupByModel, UsageAnalyticsGroupByGroup} {
+	for _, groupBy := range []UsageAnalyticsGroupBy{UsageAnalyticsGroupByStatus, UsageAnalyticsGroupByStream, UsageAnalyticsGroupByModel, UsageAnalyticsGroupByToken} {
 		res, err := GetUsageAnalyticsSummary(UsageAnalyticsQuery{UserID: 101, StartTimestamp: now - 60, EndTimestamp: now, GroupBy: groupBy, Limit: 10})
 		require.NoError(t, err)
 		require.Len(t, res.Groups, 2)
@@ -320,7 +320,7 @@ func TestUsageAnalyticsCandidateLimit(t *testing.T) {
 func TestUsageAnalyticsSQLAvoidsDatabaseSpecificFunctions(t *testing.T) {
 	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
 		t.Run(dialect, func(t *testing.T) {
-			sql := buildUsageAnalyticsDryRunSQLForTest(t, dialect, UsageAnalyticsGroupByGroup)
+			sql := buildUsageAnalyticsDryRunSQLForTest(t, dialect, UsageAnalyticsGroupByModel)
 			upperSQL := strings.ToUpper(sql)
 			forbidden := []string{"DATE_TRUNC", "FROM_UNIXTIME", "STRFTIME", "PERCENTILE_CONT", " OVER ", "->", "JSON_EXTRACT", "GROUP_CONCAT", "IFNULL"}
 			for _, fragment := range forbidden {
@@ -373,7 +373,7 @@ func buildUsageAnalyticsDryRunSQLForTest(t *testing.T, dialect string, groupBy U
 
 	dryRunDB, err := gorm.Open(dialector, &gorm.Config{DryRun: true})
 	require.NoError(t, err)
-	query := UsageAnalyticsQuery{UserID: 101, StartTimestamp: 1778716800, EndTimestamp: 1779321600, GroupBy: groupBy, Groups: []string{"default"}, Limit: 10}
+	query := UsageAnalyticsQuery{UserID: 101, StartTimestamp: 1778716800, EndTimestamp: 1779321600, GroupBy: groupBy, Limit: 10}
 	groupExpr, ok := usageAnalyticsGroupExpr(groupBy)
 	require.True(t, ok)
 	stmt := usageAnalyticsBaseLogQuery(dryRunDB, query, true).Select(groupExpr + " AS group_value").Group(groupExpr).Find(&[]struct{ GroupValue string }{}).Statement
@@ -387,11 +387,8 @@ func requireNoBareGroupColumnForUsageAnalyticsTest(t *testing.T, sql string, dia
 	require.NotContains(t, lowerSQL, "select group,")
 	require.NotContains(t, lowerSQL, "where group =")
 	require.NotContains(t, lowerSQL, "group by group")
-	if dialect == "postgres" {
-		require.Contains(t, sql, `"group"`)
-	} else {
-		require.Contains(t, sql, "`group`")
-	}
+	require.NotContains(t, sql, `"group"`)
+	require.NotContains(t, sql, "`group`")
 }
 
 func TestUsageAnalyticsDoesNotReadQuotaDataForTokenDimension(t *testing.T) {

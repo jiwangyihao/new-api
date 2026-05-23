@@ -25,7 +25,6 @@ func GetAllLogs(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
 	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
@@ -43,7 +42,7 @@ func GetAllLogs(c *gin.Context) {
 		writeLogBadRequest(c, err.Error())
 		return
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
 	logs, total, err := model.GetAllLogsWithFilter(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
@@ -154,7 +153,6 @@ func GetUserLogs(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
-	group := c.Query("group")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
 	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
@@ -173,7 +171,7 @@ func GetUserLogs(c *gin.Context) {
 			return
 		}
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Group: group, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, RequestId: requestId, UpstreamRequestId: upstreamRequestId, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
 	logs, total, err := model.GetUserLogsWithFilter(filter, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
@@ -237,7 +235,6 @@ func GetLogsStat(c *gin.Context) {
 	username := c.Query("username")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
 	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
 	if err != nil {
 		writeLogBadRequest(c, err.Error())
@@ -253,7 +250,7 @@ func GetLogsStat(c *gin.Context) {
 		writeLogBadRequest(c, err.Error())
 		return
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, Group: group, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
 	stat, err := model.SumUsedQuotaWithFilter(filter)
 	if err != nil {
 		common.ApiError(c, err)
@@ -285,7 +282,6 @@ func GetLogsSelfStat(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel"))
-	group := c.Query("group")
 	tokenID, err := parseOptionalPositiveIntQuery(c, "token_id")
 	if err != nil {
 		writeLogBadRequest(c, err.Error())
@@ -302,7 +298,7 @@ func GetLogsSelfStat(c *gin.Context) {
 			return
 		}
 	}
-	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Channel: channel, Group: group, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
+	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Channel: channel, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
 	quotaNum, err := model.SumUsedQuotaWithFilter(filter)
 	if err != nil {
 		common.ApiError(c, err)

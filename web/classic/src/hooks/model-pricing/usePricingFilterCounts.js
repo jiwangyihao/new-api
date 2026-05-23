@@ -32,7 +32,6 @@ const normalizeTags = (tags = '') =>
  */
 export const usePricingFilterCounts = ({
   models = [],
-  filterGroup = 'all',
   filterQuotaType = 'all',
   filterEndpointType = 'all',
   filterVendor = 'all',
@@ -49,12 +48,6 @@ export const usePricingFilterCounts = ({
    * @returns {boolean}
    */
   const matchesFilters = (model, ignore = []) => {
-    // 分组
-    if (!ignore.includes('group') && filterGroup !== 'all') {
-      if (!model.enable_groups || !model.enable_groups.includes(filterGroup))
-        return false;
-    }
-
     // 计费类型
     if (!ignore.includes('quota') && filterQuotaType !== 'all') {
       if (model.quota_type !== filterQuotaType) return false;
@@ -108,7 +101,6 @@ export const usePricingFilterCounts = ({
     () => allModels.filter((m) => matchesFilters(m, ['quota'])),
     [
       allModels,
-      filterGroup,
       filterEndpointType,
       filterVendor,
       filterTag,
@@ -120,7 +112,6 @@ export const usePricingFilterCounts = ({
     () => allModels.filter((m) => matchesFilters(m, ['endpoint'])),
     [
       allModels,
-      filterGroup,
       filterQuotaType,
       filterVendor,
       filterTag,
@@ -132,7 +123,6 @@ export const usePricingFilterCounts = ({
     () => allModels.filter((m) => matchesFilters(m, ['vendor'])),
     [
       allModels,
-      filterGroup,
       filterQuotaType,
       filterEndpointType,
       filterTag,
@@ -144,7 +134,6 @@ export const usePricingFilterCounts = ({
     () => allModels.filter((m) => matchesFilters(m, ['tag'])),
     [
       allModels,
-      filterGroup,
       filterQuotaType,
       filterEndpointType,
       filterVendor,
@@ -152,23 +141,11 @@ export const usePricingFilterCounts = ({
     ],
   );
 
-  const groupCountModels = useMemo(
-    () => allModels.filter((m) => matchesFilters(m, ['group'])),
-    [
-      allModels,
-      filterQuotaType,
-      filterEndpointType,
-      filterVendor,
-      filterTag,
-      searchValue,
-    ],
-  );
 
   return {
     quotaTypeModels,
     endpointTypeModels,
     vendorModels,
-    groupCountModels,
     tagModels,
   };
 };

@@ -39,7 +39,6 @@ export function buildChatCompletionPayload(
 
   const payload: ChatCompletionRequest = {
     model: config.model,
-    group: config.group,
     messages: processedMessages,
     stream: config.stream,
   }

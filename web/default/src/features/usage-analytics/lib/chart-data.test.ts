@@ -171,7 +171,6 @@ test('builds ranking rows with deleted token safe fields', () => {
         name: 'deleted-history',
         masked_key: null,
         status: null,
-        group: null,
         remain_quota: null,
         unlimited_quota: null,
         deleted: true,

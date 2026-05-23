@@ -112,8 +112,8 @@ func newBillingTestRelayInfo(userId, tokenId int, tokenKey string, requestId str
 			ModelRatio:      1,
 			CompletionRatio: 1,
 			CacheRatio:      1,
-			GroupRatioInfo: types.GroupRatioInfo{
-				GroupRatio: 1,
+			QuotaMultiplierInfo: types.QuotaMultiplierInfo{
+				Ratio: 1,
 			},
 		},
 		ChannelMeta: &relaycommon.ChannelMeta{},

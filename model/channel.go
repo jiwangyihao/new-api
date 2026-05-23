@@ -36,7 +36,7 @@ type Channel struct {
 	Balance            float64 `json:"balance"` // in USD
 	BalanceUpdatedTime int64   `json:"balance_updated_time" gorm:"bigint"`
 	Models             string  `json:"models"`
-	Group              string  `json:"group" gorm:"type:varchar(64);default:'default'"`
+	Group              string  `json:"-" gorm:"type:varchar(64)"`
 	UsedQuota          int64   `json:"used_quota" gorm:"bigint;default:0"`
 	ModelMapping       *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
@@ -364,23 +364,9 @@ func SearchChannels(keyword string, group string, model string, idSort bool, sor
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
 
-	// 构造WHERE子句
-	var whereClause string
-	var args []interface{}
-	if group != "" && group != "null" {
-		var groupCondition string
-		if common.UsingMySQL {
-			groupCondition = `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ?`
-		} else {
-			// sqlite, PostgreSQL
-			groupCondition = `(',' || ` + commonGroupCol + ` || ',') LIKE ?`
-		}
-		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + ` LIKE ? AND ` + groupCondition
-		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%", "%,"+group+",%")
-	} else {
-		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
-		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%")
-	}
+	// 构造WHERE子句；legacy group 参数兼容忽略。
+	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
+	args := []interface{}{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
 
 	// 执行查询
 	err := order.Apply(baseQuery.Where(whereClause, args...)).Find(&channels).Error
@@ -763,8 +749,7 @@ func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *
 		updateData.Models = *models
 	}
 	if group != nil && *group != "" {
-		shouldReCreateAbilities = true
-		updateData.Group = *group
+		// Legacy groups payload is accepted but no longer updates business state.
 	}
 	if priority != nil {
 		updateData.Priority = priority
@@ -856,23 +841,9 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	// 构造基础查询
 	baseQuery := DB.Model(&Channel{}).Omit("key")
 
-	// 构造WHERE子句
-	var whereClause string
-	var args []interface{}
-	if group != "" && group != "null" {
-		var groupCondition string
-		if common.UsingMySQL {
-			groupCondition = `CONCAT(',', ` + commonGroupCol + `, ',') LIKE ?`
-		} else {
-			// sqlite, PostgreSQL
-			groupCondition = `(',' || ` + commonGroupCol + ` || ',') LIKE ?`
-		}
-		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + ` LIKE ? AND ` + groupCondition
-		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%", "%,"+group+",%")
-	} else {
-		whereClause = "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
-		args = append(args, common.String2Int(keyword), "%"+keyword+"%", keyword, "%"+keyword+"%", "%"+model+"%")
-	}
+	// 构造WHERE子句；legacy group 参数兼容忽略。
+	whereClause := "(id = ? OR name LIKE ? OR " + commonKeyCol + " = ? OR " + baseURLCol + " LIKE ?) AND " + modelsCol + " LIKE ?"
+	args := []interface{}{common.String2Int(keyword), "%" + keyword + "%", keyword, "%" + keyword + "%", "%" + model + "%"}
 
 	subQuery := baseQuery.Where(whereClause, args...).
 		Select("tag").

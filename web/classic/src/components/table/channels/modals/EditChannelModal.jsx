@@ -183,7 +183,6 @@ const EditChannelModal = (props) => {
     models: [],
     auto_ban: 1,
     test_model: '',
-    groups: ['default'],
     priority: 0,
     weight: 0,
     tag: '',
@@ -223,7 +222,6 @@ const EditChannelModal = (props) => {
   const [inputs, setInputs] = useState(originInputs);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
-  const [groupOptions, setGroupOptions] = useState([]);
   const [basicModels, setBasicModels] = useState([]);
   const [fullModels, setFullModels] = useState([]);
   const [modelGroups, setModelGroups] = useState([]);
@@ -832,11 +830,6 @@ const EditChannelModal = (props) => {
       } else {
         data.models = data.models.split(',');
       }
-      if (data.group === '') {
-        data.groups = [];
-      } else {
-        data.groups = data.group.split(',');
-      }
       if (data.model_mapping !== '') {
         data.model_mapping = JSON.stringify(
           JSON.parse(data.model_mapping),
@@ -1172,22 +1165,6 @@ const EditChannelModal = (props) => {
     }
   };
 
-  const fetchGroups = async () => {
-    try {
-      let res = await API.get(`/api/group/`);
-      if (res === undefined) {
-        return;
-      }
-      setGroupOptions(
-        res.data.data.map((group) => ({
-          label: group,
-          value: group,
-        })),
-      );
-    } catch (error) {
-      showError(error.message);
-    }
-  };
 
   const fetchModelGroups = async () => {
     try {
@@ -1307,7 +1284,6 @@ const EditChannelModal = (props) => {
 
   useEffect(() => {
     fetchModels().then();
-    fetchGroups().then();
     if (!isEdit) {
       initialBaseUrlRef.current = '';
       setInputs(originInputs);
@@ -1857,7 +1833,8 @@ const EditChannelModal = (props) => {
     let res;
     localInputs.auto_ban = localInputs.auto_ban ? 1 : 0;
     localInputs.models = localInputs.models.join(',');
-    localInputs.group = (localInputs.groups || []).join(',');
+    delete localInputs.groups;
+    delete localInputs.group;
 
     let mode = 'single';
     if (batch) {
@@ -3578,21 +3555,6 @@ const EditChannelModal = (props) => {
                     }
                   />
 
-                  {/* Groups - Core Config */}
-                  <Form.Select
-                    field='groups'
-                    label={t('分组')}
-                    placeholder={t('请选择可以使用该渠道的分组')}
-                    multiple
-                    allowAdditions
-                    additionLabel={t(
-                      '请在系统设置页面编辑分组倍率以添加新的分组：',
-                    )}
-                    optionList={groupOptions}
-                    style={{ width: '100%' }}
-                    position='top'
-                    onChange={(value) => handleInputChange('groups', value)}
-                  />
 
                   {/* Model Mapping - Core Config */}
                   <JSONEditor

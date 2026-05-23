@@ -62,8 +62,6 @@ const PricingCardView = ({
   setPageSize,
   currentPage,
   setCurrentPage,
-  selectedGroup,
-  groupRatio,
   copyText,
   setModalImageUrl,
   setIsModalOpenurl,
@@ -243,8 +241,6 @@ const PricingCardView = ({
 
           const priceData = calculateModelPrice({
             record: model,
-            selectedGroup,
-            groupRatio,
             tokenUnit,
             displayPrice,
             currency,
@@ -269,7 +265,7 @@ const PricingCardView = ({
                       </h3>
                       <div className='flex flex-col gap-1 text-xs mt-1'>
                         {priceData.isDynamicPricing ? (
-                          formatDynamicPriceSummary(priceData.billingExpr, t, priceData.usedGroupRatio)
+                          formatDynamicPriceSummary(priceData.billingExpr, t)
                         ) : (
                           formatPriceInfo(priceData, t, siteDisplayType)
                         )}
@@ -349,9 +345,6 @@ const PricingCardView = ({
                           {model.quota_type === 0
                             ? parseFloat(model.completion_ratio.toFixed(3))
                             : t('无')}
-                        </div>
-                        <div>
-                          {t('分组')}: {priceData?.usedGroupRatio ?? '-'}
                         </div>
                       </div>
                     </div>

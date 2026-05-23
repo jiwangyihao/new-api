@@ -42,8 +42,6 @@ const usageGroupBy = new Set<string>([
   'user',
   'plan',
   'model',
-  'user_group',
-  'request_group',
   'stream',
   'status',
   'channel',
@@ -168,8 +166,6 @@ export function buildAdminAnalyticsCanonicalFilters(
       granularities,
       'day'
     ),
-    user_groups: normalizeArray(raw.user_groups),
-    request_groups: normalizeArray(raw.request_groups),
     plan_ids: parseIntArray(raw.plan_ids),
     sources: parseAllowedArray<AdminAnalyticsSource>(raw.sources, sources),
     statuses: normalizeArray(raw.statuses),
@@ -211,8 +207,6 @@ export function buildAdminAnalyticsApiParams(
   params.append('limit', String(filters.limit))
   params.append('offset', String(filters.offset))
   params.append('sort_order', filters.sort_order)
-  appendArray(params, 'user_groups', filters.user_groups)
-  appendArray(params, 'request_groups', filters.request_groups)
   appendArray(params, 'plan_ids', filters.plan_ids)
   appendArray(params, 'sources', filters.sources)
   appendArray(params, 'statuses', filters.statuses)

@@ -112,7 +112,7 @@ const Setting = () => {
       tab: (
         <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
           <Calculator size={18} />
-          {t('分组与模型定价设置')}
+          {t('模型定价设置')}
         </span>
       ),
       content: <RatioSetting />,

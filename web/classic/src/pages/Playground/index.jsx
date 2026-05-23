@@ -93,7 +93,6 @@ const Playground = () => {
     customRequestBody,
     showSettings,
     models,
-    groups,
     status,
     message,
     debugData,
@@ -109,7 +108,6 @@ const Playground = () => {
     handleConfigReset,
     setShowSettings,
     setModels,
-    setGroups,
     setStatus,
     setMessage,
     setDebugData,
@@ -130,7 +128,7 @@ const Playground = () => {
   );
 
   // 数据加载
-  useDataLoader(userState, inputs, handleInputChange, setModels, setGroups);
+  useDataLoader(userState, inputs, handleInputChange, setModels);
 
   // 消息编辑
   const {
@@ -477,7 +475,6 @@ const Playground = () => {
                 inputs={inputs}
                 parameterEnabled={parameterEnabled}
                 models={models}
-                groups={groups}
                 styleState={styleState}
                 showSettings={showSettings}
                 showDebugPanel={showDebugPanel}

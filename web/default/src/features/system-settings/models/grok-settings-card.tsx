@@ -133,9 +133,7 @@ export function GrokSettingsCard(props: Props) {
                   />
                 </FormControl>
                 <FormDescription>
-                  {t(
-                    'Base amount. Actual deduction = base amount × system group rate.'
-                  )}
+                  {t('Base amount. Actual deduction equals the configured amount.')}
                 </FormDescription>
               </FormItem>
             )}

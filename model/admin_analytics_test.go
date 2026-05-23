@@ -138,13 +138,14 @@ func TestAdminAnalyticsPlanDistributionAggregatesTokenQuotaOnly(t *testing.T) {
 	require.Equal(t, int64(250), group.RemainingTokens)
 }
 
-func TestAdminAnalyticsSeparatesUserGroupsAndRequestGroups(t *testing.T) {
+func TestAdminAnalyticsUserLifecycleOmitsBusinessGroupDistributions(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	require.NoError(t, DB.Create(&User{Id: 21, Username: "vip", Status: common.UserStatusEnabled, Group: "vip", AffCode: "aff-vip"}).Error)
 	require.NoError(t, DB.Create(&User{Id: 22, Username: "default", Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-default"}).Error)
 	res, err := GetAdminAnalyticsUserLifecycle(AdminAnalyticsQuery{Limit: 20})
 	require.NoError(t, err)
-	require.Len(t, res.Data.UserGroups, 2)
+	require.Len(t, res.Data.Users.Items, 2)
+	require.Empty(t, res.Data.UserGroups)
 	require.Empty(t, res.Data.RequestGroups)
 }
 

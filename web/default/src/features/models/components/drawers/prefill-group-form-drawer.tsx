@@ -200,10 +200,10 @@ export function PrefillGroupFormDrawer({
           >
             <div className='space-y-4'>
               <div className='space-y-1'>
-                <h3 className='text-sm font-semibold'>{t('Group details')}</h3>
+                <h3 className='text-sm font-semibold'>{t('Bundle details')}</h3>
                 <p className='text-muted-foreground text-sm'>
                   {t(
-                    'Give the group a recognizable name and optional description.'
+                    'Give the bundle a recognizable name and optional description.'
                   )}
                 </p>
               </div>
@@ -213,7 +213,7 @@ export function PrefillGroupFormDrawer({
                 name='name'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Group Name')}</FormLabel>
+                    <FormLabel>{t('Bundle Name')}</FormLabel>
                     <FormControl>
                       <Input
                         placeholder={t('Premium chat models')}
@@ -221,7 +221,7 @@ export function PrefillGroupFormDrawer({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Give this group a recognizable name.')}
+                      {t('Give this bundle a recognizable name.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -237,7 +237,7 @@ export function PrefillGroupFormDrawer({
                     <FormControl>
                       <Textarea
                         placeholder={t(
-                          'Optional notes about when to use this group'
+                          'Optional notes about when to use this bundle'
                         )}
                         rows={3}
                         {...field}
@@ -245,7 +245,7 @@ export function PrefillGroupFormDrawer({
                     </FormControl>
                     <FormDescription>
                       {t(
-                        'Make it easier for teammates to pick the right group.'
+                        'Make it easier for teammates to pick the right bundle.'
                       )}
                     </FormDescription>
                     <FormMessage />
@@ -269,7 +269,7 @@ export function PrefillGroupFormDrawer({
                 name='type'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Group Type</FormLabel>
+                    <FormLabel>{t('Bundle Type')}</FormLabel>
                     <Select
                       items={[
                         ...PREFILL_GROUP_TYPES.map((type) => ({
@@ -295,7 +295,7 @@ export function PrefillGroupFormDrawer({
                     >
                       <FormControl>
                         <SelectTrigger className='[&_[data-slot=select-value]_[data-prefill-description]]:hidden'>
-                          <SelectValue placeholder={t('Select a group type')} />
+                          <SelectValue placeholder={t('Select a bundle type')} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent alignItemWithTrigger={false}>
@@ -319,7 +319,7 @@ export function PrefillGroupFormDrawer({
                       </SelectContent>
                     </Select>
                     <FormDescription>
-                      {t('Determines how this group is applied elsewhere.')}
+                      {t('Determines how this bundle is applied elsewhere.')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

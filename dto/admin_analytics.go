@@ -35,8 +35,6 @@ const (
 	AdminUsageGroupByUser               AdminUsageGroupBy = "user"
 	AdminUsageGroupByPlan               AdminUsageGroupBy = "plan"
 	AdminUsageGroupByModel              AdminUsageGroupBy = "model"
-	AdminUsageGroupByUserGroup          AdminUsageGroupBy = "user_group"
-	AdminUsageGroupByRequestGroup       AdminUsageGroupBy = "request_group"
 	AdminUsageGroupByStream             AdminUsageGroupBy = "stream"
 	AdminUsageGroupByStatus             AdminUsageGroupBy = "status"
 	AdminUsageGroupByChannel            AdminUsageGroupBy = "channel"
@@ -274,7 +272,7 @@ type AdminAnalyticsSubscriptionRankingItem struct {
 	SubscriptionID  int                            `json:"subscription_id"`
 	UserID          int                            `json:"user_id"`
 	Username        string                         `json:"username"`
-	UserGroup       string                         `json:"user_group"`
+	UserGroup       string                         `json:"-"`
 	PlanID          int                            `json:"plan_id"`
 	PlanTitle       string                         `json:"plan_title"`
 	Source          AdminAnalyticsSource           `json:"source"`
@@ -292,8 +290,8 @@ type AdminAnalyticsSubscriptionRankingItem struct {
 type AdminAnalyticsUserLifecycleResponse struct {
 	Summary       AdminAnalyticsUserLifecycleSummary                  `json:"summary"`
 	Trends        []AdminAnalyticsUserLifecycleTrendPoint             `json:"trends"`
-	UserGroups    []AdminAnalyticsUserGroupDistribution               `json:"user_groups"`
-	RequestGroups []AdminAnalyticsRequestGroupDistribution            `json:"request_groups"`
+	UserGroups    []AdminAnalyticsUserGroupDistribution               `json:"-"`
+	RequestGroups []AdminAnalyticsRequestGroupDistribution            `json:"-"`
 	Users         AdminAnalyticsList[AdminAnalyticsUserLifecycleItem] `json:"users"`
 }
 
@@ -333,7 +331,7 @@ type AdminAnalyticsUserLifecycleItem struct {
 	Username        string                         `json:"username"`
 	DisplayName     string                         `json:"display_name"`
 	Email           string                         `json:"email"`
-	UserGroup       string                         `json:"user_group"`
+	UserGroup       string                         `json:"-"`
 	Status          int                            `json:"status"`
 	CreatedAt       int64                          `json:"created_at"`
 	LastLoginAt     int64                          `json:"last_login_at"`
@@ -497,13 +495,13 @@ type AdminAnalyticsDrilldownTarget struct {
 	UserID         *int   `json:"user_id,omitempty"`
 	UserIDs        []int  `json:"user_ids,omitempty"`
 	Username       string `json:"username,omitempty"`
-	UserGroup      string `json:"user_group,omitempty"`
+	UserGroup      string `json:"-"`
 	UserStatus     string `json:"user_status,omitempty"`
 	PlanID         *int   `json:"plan_id,omitempty"`
 	InviterID      *int   `json:"inviter_id,omitempty"`
 	TokenID        *int   `json:"token_id,omitempty"`
 	Model          string `json:"model,omitempty"`
-	RequestGroup   string `json:"request_group,omitempty"`
+	RequestGroup   string `json:"-"`
 	ChannelID      *int   `json:"channel_id,omitempty"`
 	Status         string `json:"status,omitempty"`
 	StartTimestamp int64  `json:"start_timestamp,omitempty"`
@@ -520,7 +518,7 @@ type AdminAnalyticsDrilldownUserItem struct {
 	Username        string                         `json:"username"`
 	DisplayName     string                         `json:"display_name"`
 	Email           string                         `json:"email"`
-	UserGroup       string                         `json:"user_group"`
+	UserGroup       string                         `json:"-"`
 	Status          int                            `json:"status"`
 	Role            int                            `json:"role"`
 	CreatedAt       int64                          `json:"created_at"`

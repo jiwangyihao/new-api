@@ -41,11 +41,11 @@ type BillingSnapshot struct {
 	ModelName                 string  `json:"model_name"`
 	ExprString                string  `json:"expr_string"`
 	ExprHash                  string  `json:"expr_hash"`
-	GroupRatio                float64 `json:"group_ratio"`
+	QuotaMultiplier           float64 `json:"-"`
 	EstimatedPromptTokens     int     `json:"estimated_prompt_tokens"`
 	EstimatedCompletionTokens int     `json:"estimated_completion_tokens"`
-	EstimatedQuotaBeforeGroup float64 `json:"estimated_quota_before_group"`
-	EstimatedQuotaAfterGroup  int     `json:"estimated_quota_after_group"`
+	EstimatedQuotaBeforeRatio float64 `json:"estimated_quota_before_ratio"`
+	EstimatedQuota            int     `json:"estimated_quota"`
 	EstimatedTier             string  `json:"estimated_tier"`
 	QuotaPerUnit              float64 `json:"quota_per_unit"`
 	ExprVersion               int     `json:"expr_version"`
@@ -53,8 +53,8 @@ type BillingSnapshot struct {
 
 // TieredResult holds everything needed after running tiered settlement.
 type TieredResult struct {
-	ActualQuotaBeforeGroup float64 `json:"actual_quota_before_group"`
-	ActualQuotaAfterGroup  int     `json:"actual_quota_after_group"`
+	ActualQuotaBeforeRatio float64 `json:"actual_quota_before_ratio"`
+	ActualQuota            int     `json:"actual_quota"`
 	MatchedTier            string  `json:"matched_tier"`
 	CrossedTier            bool    `json:"crossed_tier"`
 }

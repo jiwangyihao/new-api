@@ -149,7 +149,7 @@ func makeTask(userId, channelId, quota, tokenId int, billingSource string, subsc
 			TokenId:        tokenId,
 			BillingContext: &model.TaskBillingContext{
 				ModelPrice:      0.02,
-				GroupRatio:      1.0,
+				QuotaMultiplier: 1.0,
 				OriginModelName: "test-model",
 			},
 		},

@@ -35,7 +35,6 @@ type Model struct {
 	DeletedAt    gorm.DeletedAt `json:"-" gorm:"index;uniqueIndex:uk_model_name_delete_at,priority:2"`
 
 	BoundChannels []BoundChannel `json:"bound_channels,omitempty" gorm:"-"`
-	EnableGroups  []string       `json:"enable_groups,omitempty" gorm:"-"`
 	QuotaTypes    []int          `json:"quota_types,omitempty" gorm:"-"`
 	NameRule      int            `json:"name_rule" gorm:"default:0"`
 

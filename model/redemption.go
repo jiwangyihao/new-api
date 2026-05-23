@@ -198,7 +198,6 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 	}
 	redemption := &Redemption{}
 	result := &RedemptionResult{}
-	upgradeGroup := ""
 
 	keyCol := "`key`"
 	if common.UsingPostgreSQL {
@@ -228,7 +227,6 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 				return err
 			}
 			result.Plan = plan
-			upgradeGroup = strings.TrimSpace(plan.UpgradeGroup)
 		} else {
 			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 			if err != nil {
@@ -245,9 +243,6 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
 		return nil, ErrRedeemFailed
-	}
-	if upgradeGroup != "" {
-		_ = UpdateUserGroupCache(userId, upgradeGroup)
 	}
 	if result.Type == RedemptionTypeSubscription {
 		planTitle := ""

@@ -278,7 +278,6 @@ mock_upstream:
   base_url: "http://127.0.0.1:19080"
 loadtest:
   model: "gpt-5.5"
-  group: "default"
   subscription_key: "sk-loadtestsub"
   compat_key: "sk-loadtestcompat"
   invalid_key: "sk-loadtestinvalid"
@@ -471,7 +470,6 @@ func validFile() File {
 		},
 		Loadtest: LoadtestConfig{
 			Model:                  "gpt-5.5",
-			Group:                  "default",
 			SubscriptionKey:        "sk-loadtestsub",
 			CompatKey:              "sk-loadtestcompat",
 			InvalidKey:             "sk-loadtestinvalid",

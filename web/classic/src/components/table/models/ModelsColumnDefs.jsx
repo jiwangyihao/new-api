@@ -69,19 +69,6 @@ const renderVendorTag = (vendorId, vendorMap, t) => {
   );
 };
 
-// Render groups (enable_groups)
-const renderGroups = (groups) => {
-  if (!groups || groups.length === 0) return '-';
-  return renderLimitedItems({
-    items: groups,
-    renderItem: (g, idx) => (
-      <Tag key={idx} size='small' shape='circle' color={stringToColor(g)}>
-        {g}
-      </Tag>
-    ),
-  });
-};
-
 // Render tags
 const renderTags = (text) => {
   if (!text) return '-';
@@ -336,11 +323,6 @@ export const getModelsColumns = ({
       title: t('已绑定渠道'),
       dataIndex: 'bound_channels',
       render: renderBoundChannels,
-    },
-    {
-      title: t('可用分组'),
-      dataIndex: 'enable_groups',
-      render: renderGroups,
     },
     {
       title: t('计费类型'),

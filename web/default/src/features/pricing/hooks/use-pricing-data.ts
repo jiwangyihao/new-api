@@ -55,7 +55,6 @@ export function usePricingData() {
         vendor_name: vendor?.name,
         vendor_icon: vendor?.icon,
         vendor_description: vendor?.description,
-        group_ratio: data.group_ratio,
       }
     })
   }, [data])
@@ -63,10 +62,7 @@ export function usePricingData() {
   return {
     models,
     vendors: data?.vendors ?? [],
-    groupRatio: data?.group_ratio ?? {},
-    usableGroup: data?.usable_group ?? {},
     endpointMap: data?.supported_endpoint ?? {},
-    autoGroups: data?.auto_groups ?? [],
     isLoading,
     error,
     refetch,

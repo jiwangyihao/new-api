@@ -33,7 +33,6 @@ type UsageAnalyticsDrilldown = dto.UsageAnalyticsDrilldown
 const (
 	UsageAnalyticsGroupByToken  = dto.UsageAnalyticsGroupByToken
 	UsageAnalyticsGroupByModel  = dto.UsageAnalyticsGroupByModel
-	UsageAnalyticsGroupByGroup  = dto.UsageAnalyticsGroupByGroup
 	UsageAnalyticsGroupByStream = dto.UsageAnalyticsGroupByStream
 	UsageAnalyticsGroupByStatus = dto.UsageAnalyticsGroupByStatus
 
@@ -225,9 +224,6 @@ func usageAnalyticsBaseLogQuery(db *gorm.DB, query UsageAnalyticsQuery, useQuery
 	}
 	if len(query.ModelNames) > 0 {
 		q = q.Where("model_name IN ?", query.ModelNames)
-	}
-	if len(query.Groups) > 0 {
-		q = q.Where(logGroupCol+" IN ?", query.Groups)
 	}
 	if len(query.Streams) > 0 {
 		q = q.Where("is_stream IN ?", query.Streams)
@@ -471,13 +467,6 @@ func usageAnalyticsDimension(groupBy UsageAnalyticsGroupBy, log Log) (string, st
 			label = "Unknown Model"
 		}
 		return "model:" + value, value, label, &UsageAnalyticsDrilldown{ModelName: &value}
-	case UsageAnalyticsGroupByGroup:
-		value := log.Group
-		label := value
-		if label == "" {
-			label = "Unknown Group"
-		}
-		return "group:" + value, value, label, &UsageAnalyticsDrilldown{Group: &value}
 	case UsageAnalyticsGroupByStream:
 		value := strconv.FormatBool(log.IsStream)
 		isStream := log.IsStream
@@ -512,8 +501,6 @@ func usageAnalyticsGroupExpr(groupBy UsageAnalyticsGroupBy) (string, bool) {
 		return "token_id", true
 	case UsageAnalyticsGroupByModel:
 		return "model_name", true
-	case UsageAnalyticsGroupByGroup:
-		return logGroupCol, true
 	case UsageAnalyticsGroupByStream:
 		return "is_stream", true
 	case UsageAnalyticsGroupByStatus:
@@ -555,11 +542,10 @@ func usageAnalyticsAttachTokenInfo(userID int, groups map[string]*usageAnalytics
 		if token, ok := tokenByID[id]; ok {
 			maskedKey := token.GetMaskedKey()
 			status := token.Status
-			group := token.Group
 			remainQuota := token.RemainQuota
 			unlimitedQuota := token.UnlimitedQuota
 			acc.GroupLabel = token.Name
-			acc.Token = &UsageAnalyticsTokenInfo{ID: token.Id, Name: token.Name, MaskedKey: &maskedKey, Status: &status, Group: &group, RemainQuota: &remainQuota, UnlimitedQuota: &unlimitedQuota, Deleted: false}
+			acc.Token = &UsageAnalyticsTokenInfo{ID: token.Id, Name: token.Name, MaskedKey: &maskedKey, Status: &status, RemainQuota: &remainQuota, UnlimitedQuota: &unlimitedQuota, Deleted: false}
 			continue
 		}
 		label := acc.tokenName
@@ -567,7 +553,7 @@ func usageAnalyticsAttachTokenInfo(userID int, groups map[string]*usageAnalytics
 			label = acc.GroupLabel
 		}
 		acc.GroupLabel = label
-		acc.Token = &UsageAnalyticsTokenInfo{ID: id, Name: label, MaskedKey: nil, Status: nil, Group: nil, RemainQuota: nil, UnlimitedQuota: nil, Deleted: true}
+		acc.Token = &UsageAnalyticsTokenInfo{ID: id, Name: label, MaskedKey: nil, Status: nil, RemainQuota: nil, UnlimitedQuota: nil, Deleted: true}
 	}
 }
 

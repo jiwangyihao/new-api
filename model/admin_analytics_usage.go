@@ -36,7 +36,6 @@ type adminUsageCandidateLog struct {
 	BillingSource              string
 	SubscriptionSource         string
 	Endpoint                   string
-	RequestGroup               string
 	OtherSubscriptionID        int
 	OtherSubscriptionPlanID    int
 	SubscriptionTokensConsumed *int64
@@ -80,7 +79,7 @@ func normalizeAdminUsageQuery(query AdminAnalyticsUsageQuery) AdminAnalyticsUsag
 
 func ValidateAdminUsageQuery(query AdminAnalyticsUsageQuery, endpoint string) error {
 	switch query.GroupBy {
-	case dto.AdminUsageGroupByUser, dto.AdminUsageGroupByPlan, dto.AdminUsageGroupByModel, dto.AdminUsageGroupByUserGroup, dto.AdminUsageGroupByRequestGroup, dto.AdminUsageGroupByStream, dto.AdminUsageGroupByStatus, dto.AdminUsageGroupByChannel, dto.AdminUsageGroupByEndpoint, dto.AdminUsageGroupByBillingSource, dto.AdminUsageGroupByToken, dto.AdminUsageGroupBySubscriptionSource:
+	case dto.AdminUsageGroupByUser, dto.AdminUsageGroupByPlan, dto.AdminUsageGroupByModel, dto.AdminUsageGroupByStream, dto.AdminUsageGroupByStatus, dto.AdminUsageGroupByChannel, dto.AdminUsageGroupByEndpoint, dto.AdminUsageGroupByBillingSource, dto.AdminUsageGroupByToken, dto.AdminUsageGroupBySubscriptionSource:
 	default:
 		return ErrAdminAnalyticsInvalidGroupBy
 	}
@@ -103,9 +102,6 @@ func ValidateAdminUsageQuery(query AdminAnalyticsUsageQuery, endpoint string) er
 func loadAdminUsageCandidateLogs(query AdminAnalyticsUsageQuery) ([]adminUsageCandidateLog, []dto.AdminAnalyticsAvailabilityWarning, error) {
 	query = normalizeAdminUsageQuery(query)
 	base := LOG_DB.Model(&Log{}).Where("type IN ?", []int{LogTypeConsume, LogTypeError}).Where("created_at >= ? AND created_at <= ?", query.StartTimestamp, query.EndTimestamp)
-	if len(query.RequestGroups) > 0 {
-		base = base.Where(logGroupCol+" IN ?", query.RequestGroups)
-	}
 	var logs []Log
 	if err := base.Order("created_at asc").Limit(adminAnalyticsCandidateLogLimit + 1).Find(&logs).Error; err != nil {
 		return nil, nil, err
@@ -136,10 +132,6 @@ func parseAdminUsageOther(log *adminUsageCandidateLog) {
 	log.Endpoint = adminStringFromAny(other["endpoint"])
 	if log.Endpoint == "" {
 		log.Endpoint = adminStringFromAny(other["request_path"])
-	}
-	log.RequestGroup = adminStringFromAny(other["request_group"])
-	if log.RequestGroup == "" {
-		log.RequestGroup = log.Group
 	}
 	log.OtherSubscriptionID = adminIntFromAny(other["subscription_id"])
 	log.OtherSubscriptionPlanID = adminIntFromAny(other["subscription_plan_id"])
@@ -539,14 +531,6 @@ func adminUsageDimension(groupBy dto.AdminUsageGroupBy, log adminUsageCandidateL
 		return "plan:unknown", "unknown", "Unknown", nil
 	case dto.AdminUsageGroupByModel:
 		return "model:" + log.ModelName, log.ModelName, log.ModelName, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_usage_logs", Model: log.ModelName}
-	case dto.AdminUsageGroupByUserGroup:
-		return "user_group:" + log.Group, log.Group, log.Group, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_users", UserGroup: log.Group}
-	case dto.AdminUsageGroupByRequestGroup:
-		group := log.RequestGroup
-		if group == "" {
-			group = log.Group
-		}
-		return "request_group:" + group, group, group, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_usage_logs", RequestGroup: group}
 	case dto.AdminUsageGroupByStream:
 		value := strconv.FormatBool(log.IsStream)
 		return "stream:" + value, value, value, &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_usage_logs"}

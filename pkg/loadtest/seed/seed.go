@@ -18,7 +18,7 @@ import (
 type Config struct {
 	RunContext      artifact.RunContext
 	Model           string
-	Group           string
+	Group           string // Deprecated: ignored.
 	MockBaseURL     string
 	SubscriptionKey string
 	CompatKey       string
@@ -59,15 +59,12 @@ func Apply(ctx context.Context, db *gorm.DB, cfg Config) (artifact.SeedOutput, e
 }
 
 func SeedOutputForTest() artifact.SeedOutput {
-	return seedOutput(Config{RunContext: artifact.RunContext{SchemaVersion: artifact.SchemaVersion, Role: "baseline", Commit: "abcdef0", ComparisonConfigHash: "sha256:cfg", CacheMode: "cold-fresh-role,warm-per-point", Model: "gpt-5.5"}, Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey})
+	return seedOutput(Config{RunContext: artifact.RunContext{SchemaVersion: artifact.SchemaVersion, Role: "baseline", Commit: "abcdef0", ComparisonConfigHash: "sha256:cfg", CacheMode: "cold-fresh-role,warm-per-point", Model: "gpt-5.5"}, Model: "gpt-5.5", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey})
 }
 
 func (c Config) withDefaults() Config {
 	if c.Model == "" {
 		c.Model = "gpt-5.5"
-	}
-	if c.Group == "" {
-		c.Group = "default"
 	}
 	if c.MockBaseURL == "" {
 		c.MockBaseURL = "http://127.0.0.1:19080"
@@ -89,8 +86,8 @@ func (c Config) withDefaults() Config {
 }
 
 func (c Config) Validate() error {
-	if strings.TrimSpace(c.Model) == "" || strings.TrimSpace(c.Group) == "" {
-		return fmt.Errorf("model and group are required")
+	if strings.TrimSpace(c.Model) == "" {
+		return fmt.Errorf("model is required")
 	}
 	if err := localguard.ValidateURL(c.MockBaseURL); err != nil {
 		return fmt.Errorf("mock base url: %w", err)
@@ -112,11 +109,11 @@ func (c Config) Validate() error {
 
 func ensureUsers(tx *gorm.DB) error {
 	users := []model.User{
-		{Id: subscriptionUserID, Username: "loadtest_subscription", Password: "loadtest", DisplayName: "loadtest subscription", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "default", AffCode: "loadtestsub"},
-		{Id: compatUserID, Username: "loadtest_compat", Password: "loadtest", DisplayName: "loadtest compat", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "default", AffCode: "loadtestcompat"},
+		{Id: subscriptionUserID, Username: "loadtest_subscription", Password: "loadtest", DisplayName: "loadtest subscription", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "", AffCode: "loadtestsub"},
+		{Id: compatUserID, Username: "loadtest_compat", Password: "loadtest", DisplayName: "loadtest compat", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Quota: 1_000_000, Group: "", AffCode: "loadtestcompat"},
 	}
 	for _, user := range users {
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"username", "display_name", "role", "status", "quota", "group", "aff_code"})}).Create(&user).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"username", "display_name", "role", "status", "quota", "aff_code"})}).Create(&user).Error; err != nil {
 			return err
 		}
 	}
@@ -144,11 +141,11 @@ func ensurePlanAndSubscriptions(tx *gorm.DB, cfg Config) error {
 
 func ensureTokens(tx *gorm.DB, cfg Config) error {
 	tokens := []model.Token{
-		{UserId: subscriptionUserID, Key: loadtestconfig.SubscriptionDBKey, Status: common.TokenStatusEnabled, Name: "loadtest subscription", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: cfg.Group},
-		{UserId: compatUserID, Key: loadtestconfig.CompatDBKey, Status: common.TokenStatusEnabled, Name: "loadtest compat", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: cfg.Group},
+		{UserId: subscriptionUserID, Key: loadtestconfig.SubscriptionDBKey, Status: common.TokenStatusEnabled, Name: "loadtest subscription", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: ""},
+		{UserId: compatUserID, Key: loadtestconfig.CompatDBKey, Status: common.TokenStatusEnabled, Name: "loadtest compat", ExpiredTime: -1, RemainQuota: 1_000_000, UnlimitedQuota: false, Group: ""},
 	}
 	for _, token := range tokens {
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"user_id", "status", "name", "expired_time", "remain_quota", "unlimited_quota", "group"})}).Create(&token).Error; err != nil {
+		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"user_id", "status", "name", "expired_time", "remain_quota", "unlimited_quota"})}).Create(&token).Error; err != nil {
 			return err
 		}
 	}
@@ -156,7 +153,7 @@ func ensureTokens(tx *gorm.DB, cfg Config) error {
 }
 
 func isolateRoute(tx *gorm.DB, cfg Config) error {
-	if err := tx.Model(&model.Ability{}).Where(&model.Ability{Model: cfg.Model, Group: cfg.Group}).Where("channel_id <> ?", channelID).Update("enabled", false).Error; err != nil {
+	if err := tx.Model(&model.Ability{}).Where(&model.Ability{Model: cfg.Model}).Where("channel_id <> ?", channelID).Update("enabled", false).Error; err != nil {
 		return err
 	}
 	var channels []model.Channel
@@ -165,16 +162,8 @@ func isolateRoute(tx *gorm.DB, cfg Config) error {
 	}
 	for _, ch := range channels {
 		models := removeCSVValue(ch.Models, cfg.Model)
-		groups := removeCSVValue(ch.Group, cfg.Group)
-		updates := map[string]any{}
 		if models != ch.Models {
-			updates["models"] = models
-		}
-		if groups != ch.Group {
-			updates["group"] = groups
-		}
-		if len(updates) != 0 {
-			if err := tx.Model(&model.Channel{}).Where("id = ?", ch.Id).Updates(updates).Error; err != nil {
+			if err := tx.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("models", models).Error; err != nil {
 				return err
 			}
 		}
@@ -182,11 +171,11 @@ func isolateRoute(tx *gorm.DB, cfg Config) error {
 	baseURL := cfg.MockBaseURL
 	priority := int64(1000)
 	weight := uint(100)
-	channel := model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-loadtest-mock", Status: common.ChannelStatusEnabled, Name: "loadtest-loopback-openai", BaseURL: &baseURL, Models: cfg.Model, Group: cfg.Group, Priority: &priority, Weight: &weight}
-	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "key", "status", "name", "base_url", "models", "group", "priority", "weight"})}).Create(&channel).Error; err != nil {
+	channel := model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-loadtest-mock", Status: common.ChannelStatusEnabled, Name: "loadtest-loopback-openai", BaseURL: &baseURL, Models: cfg.Model, Group: "", Priority: &priority, Weight: &weight}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "key", "status", "name", "base_url", "models", "priority", "weight"})}).Create(&channel).Error; err != nil {
 		return err
 	}
-	ability := model.Ability{Group: cfg.Group, Model: cfg.Model, ChannelId: channelID, Enabled: true, Priority: &priority, Weight: weight}
+	ability := model.Ability{Group: "", Model: cfg.Model, ChannelId: channelID, Enabled: true, Priority: &priority, Weight: weight}
 	return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "group"}, {Name: "model"}, {Name: "channel_id"}}, DoUpdates: clause.AssignmentColumns([]string{"enabled", "priority", "weight"})}).Create(&ability).Error
 }
 
@@ -194,7 +183,6 @@ func ensureOptions(tx *gorm.DB) error {
 	options := map[string]string{
 		"ModelRatio":                           "{\"gpt-5.5\":1}",
 		"CompletionRatio":                      "{\"gpt-5.5\":1}",
-		"GroupRatio":                           "{\"default\":1}",
 		"LogConsumeEnabled":                    "true",
 		"DataExportEnabled":                    "true",
 		"perf_metrics_setting.enabled":         "true",
@@ -216,7 +204,7 @@ func ensureOptions(tx *gorm.DB) error {
 
 func seedOutput(cfg Config) artifact.SeedOutput {
 	cfg = cfg.withDefaults()
-	return artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: cfg.RunContext.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: subscriptionUserID, UserIDCompat: compatUserID, TokenSubscription: cfg.SubscriptionKey, TokenCompat: cfg.CompatKey, TokenDBKeySubscription: loadtestconfig.SubscriptionDBKey, TokenDBKeyCompat: loadtestconfig.CompatDBKey, ChannelID: channelID, Model: cfg.Model, Group: cfg.Group, MockBaseURL: cfg.MockBaseURL, ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}, RatioConfig: map[string]any{"ModelRatio": map[string]any{cfg.Model: float64(1)}, "CompletionRatio": map[string]any{cfg.Model: float64(1)}, "GroupRatio": map[string]any{cfg.Group: float64(1)}}, FeatureOptions: map[string]any{"LogConsumeEnabled": true, "DataExportEnabled": true, "perf_metrics_setting.enabled": true, "RetryTimes": float64(0), "AutomaticRetryStatusCodes": ""}}
+	return artifact.SeedOutput{SchemaVersion: artifact.SchemaVersion, RunContext: cfg.RunContext.WithoutSeedOutputHash().WithoutMockHash(), UserIDSubscription: subscriptionUserID, UserIDCompat: compatUserID, TokenSubscription: cfg.SubscriptionKey, TokenCompat: cfg.CompatKey, TokenDBKeySubscription: loadtestconfig.SubscriptionDBKey, TokenDBKeyCompat: loadtestconfig.CompatDBKey, ChannelID: channelID, Model: cfg.Model, MockBaseURL: cfg.MockBaseURL, ExpectedUsagePerSuccess: artifact.Usage{PromptTokens: 11, CompletionTokens: 17, TotalTokens: 28}, RatioConfig: map[string]any{"ModelRatio": map[string]any{cfg.Model: float64(1)}, "CompletionRatio": map[string]any{cfg.Model: float64(1)}}, FeatureOptions: map[string]any{"LogConsumeEnabled": true, "DataExportEnabled": true, "perf_metrics_setting.enabled": true, "RetryTimes": float64(0), "AutomaticRetryStatusCodes": ""}}
 }
 
 func removeCSVValue(raw, value string) string {

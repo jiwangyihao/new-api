@@ -31,7 +31,6 @@ const ChannelsFilters = ({
   searchChannels,
   enableTagMode,
   formApi,
-  groupOptions,
   loading,
   searching,
   t,
@@ -103,26 +102,6 @@ const ChannelsFilters = ({
               placeholder={t('模型关键字')}
               showClear
               pure
-            />
-          </div>
-          <div className='w-full md:w-32'>
-            <Form.Select
-              size='small'
-              field='searchGroup'
-              placeholder={t('选择分组')}
-              optionList={[
-                { label: t('选择分组'), value: null },
-                ...groupOptions,
-              ]}
-              className='w-full'
-              showClear
-              pure
-              onChange={() => {
-                // 延迟执行搜索，让表单值先更新
-                setTimeout(() => {
-                  searchChannels(enableTagMode);
-                }, 0);
-              }}
             />
           </div>
           <Button

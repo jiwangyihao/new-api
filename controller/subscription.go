@@ -6,7 +6,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -239,13 +238,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
-	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
-	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
-			common.ApiErrorMsg(c, "升级分组不存在")
-			return
-		}
-	}
+	req.Plan.UpgradeGroup = ""
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
@@ -299,13 +292,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
-	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
-	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
-			common.ApiErrorMsg(c, "升级分组不存在")
-			return
-		}
-	}
+	req.Plan.UpgradeGroup = ""
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
@@ -328,7 +315,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"creem_product_id":           req.Plan.CreemProductId,
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"total_amount":               req.Plan.TotalAmount,
-			"upgrade_group":              req.Plan.UpgradeGroup,
+			"upgrade_group":              "",
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"monthly_token_limit":        req.Plan.MonthlyTokenLimit,

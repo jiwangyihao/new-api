@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -45,7 +46,7 @@ func setupModelListControllerTestDB(t *testing.T) *gorm.DB {
 	model.DB = db
 	model.LOG_DB = db
 
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.Ability{}, &model.Model{}, &model.Vendor{}))
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()
@@ -154,6 +155,28 @@ func pricingByModelName(pricings []model.Pricing) map[string]model.Pricing {
 		byName[pricing.ModelName] = pricing
 	}
 	return byName
+}
+
+func TestModelListIgnoresUserAndTokenGroups(t *testing.T) {
+	withSelfUseModeDisabled(t)
+	originalModelRatio := ratio_setting.ModelRatio2JSONString()
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(originalModelRatio)) })
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"gpt-groupless":1}`))
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.User{Id: 901, Username: "groupless", Password: "password", Group: "gone", Status: common.UserStatusEnabled, AffCode: "groupless"}).Error)
+	require.NoError(t, db.Create(&model.Token{Id: 1901, UserId: 901, Name: "token", Key: "sk-groupless", Status: common.TokenStatusEnabled, ExpiredTime: -1, UnlimitedQuota: true, Group: "gone"}).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "legacy", Model: "gpt-groupless", ChannelId: 1001, Enabled: true}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx.Set("id", 901)
+	ctx.Set("token_id", 1901)
+
+	ListModels(ctx, constant.ChannelTypeOpenAI)
+
+	ids := decodeListModelsResponse(t, recorder)
+	require.Contains(t, ids, "gpt-groupless")
 }
 
 func TestListModelsIncludesTieredBillingModel(t *testing.T) {

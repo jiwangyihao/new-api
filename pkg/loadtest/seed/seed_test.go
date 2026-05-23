@@ -16,7 +16,7 @@ import (
 
 func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	db := openSeedTestDB(t)
-	cfg := Config{Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"}
+	cfg := Config{Model: "gpt-5.5", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"}
 	first, err := Apply(context.Background(), db, cfg)
 	require.NoError(t, err)
 	second, err := Apply(context.Background(), db, cfg)
@@ -45,11 +45,11 @@ func TestSeedDisablesUnsafeChannelsForModelRoute(t *testing.T) {
 	require.NoError(t, db.Create(&unsafeChannel).Error)
 	priority := int64(999)
 	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: unsafeChannel.Id, Enabled: true, Priority: &priority, Weight: 100}).Error)
-	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"})
+	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", Group: "legacy-ignored", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: "sk-loadtestsub", CompatKey: "sk-loadtestcompat"})
 	require.NoError(t, err)
 	var reloaded model.Channel
 	require.NoError(t, db.First(&reloaded, unsafeChannel.Id).Error)
-	if reloaded.Status == common.ChannelStatusEnabled && strings.Contains(reloaded.Models, "gpt-5.5") && strings.Contains(reloaded.Group, "default") {
+	if reloaded.Status == common.ChannelStatusEnabled && strings.Contains(reloaded.Models, "gpt-5.5") {
 		t.Fatalf("unsafe channel still routable: %#v", reloaded)
 	}
 	var ability model.Ability

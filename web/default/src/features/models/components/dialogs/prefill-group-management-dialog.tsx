@@ -196,7 +196,7 @@ export function PrefillGroupManagementDialog({
                 </DialogTitle>
                 <DialogDescription className='text-base leading-relaxed sm:text-sm'>
                   {t(
-                    'Create reusable bundles of models, tags, endpoints, and user groups to speed up configuration elsewhere in the console.'
+                    'Create reusable bundles of models, tags, and endpoints to speed up configuration elsewhere in the console.'
                   )}
                 </DialogDescription>
               </DialogHeader>
@@ -219,7 +219,7 @@ export function PrefillGroupManagementDialog({
               <div className='flex flex-wrap items-center gap-2'>
                 <Button size='sm' onClick={onCreateGroup}>
                   <Plus className='mr-2 h-4 w-4' />
-                  {t('New Group')}
+                  {t('New Bundle')}
                 </Button>
                 <Button
                   size='sm'
@@ -236,7 +236,7 @@ export function PrefillGroupManagementDialog({
                 </Button>
               </div>
               <StatusBadge
-                label={`${groups.length} group${groups.length === 1 ? '' : 's'}`}
+                label={`${groups.length} bundle${groups.length === 1 ? '' : 's'}`}
                 variant='neutral'
                 copyable={false}
               />
@@ -252,7 +252,7 @@ export function PrefillGroupManagementDialog({
                 <div className='flex flex-col gap-4'>
                   {error && (
                     <Alert variant='destructive'>
-                      <AlertTitle>{t('Unable to load groups')}</AlertTitle>
+                      <AlertTitle>{t('Unable to load bundles')}</AlertTitle>
                       <AlertDescription>
                         {(error as Error).message ||
                           'Please retry or refresh the page.'}
@@ -264,7 +264,7 @@ export function PrefillGroupManagementDialog({
                     <div className='flex flex-col items-center justify-center gap-2 py-16 text-center'>
                       <Loader2 className='text-muted-foreground h-6 w-6 animate-spin' />
                       <p className='text-muted-foreground text-sm'>
-                        {t('Fetching prefill groups...')}
+                        {t('Fetching prefill bundles...')}
                       </p>
                     </div>
                   ) : normalizedGroups.length === 0 ? (
@@ -276,7 +276,7 @@ export function PrefillGroupManagementDialog({
                         <EmptyTitle>{t('No prefill groups yet')}</EmptyTitle>
                         <EmptyDescription>
                           {t(
-                            'Create your first group to reuse model, tag, or endpoint selections anywhere in the dashboard.'
+                            'Create your first prefill bundle to reuse model, tag, or endpoint selections anywhere in the dashboard.'
                           )}
                         </EmptyDescription>
                       </EmptyHeader>
@@ -326,7 +326,7 @@ export function PrefillGroupManagementDialog({
                                 onClick={() => onEditGroup(group)}
                               >
                                 <Pencil className='h-4 w-4' />
-                                <span className='sr-only'>Edit group</span>
+                                <span className='sr-only'>Edit bundle</span>
                               </Button>
                               <Button
                                 size='icon'
@@ -335,7 +335,7 @@ export function PrefillGroupManagementDialog({
                                 onClick={() => handleDeleteClick(group)}
                               >
                                 <Trash2 className='h-4 w-4' />
-                                <span className='sr-only'>Delete group</span>
+                                <span className='sr-only'>Delete bundle</span>
                               </Button>
                             </div>
                           </CardHeader>
@@ -385,7 +385,7 @@ export function PrefillGroupManagementDialog({
                         <Table className='min-w-[720px]'>
                           <TableHeader>
                             <TableRow>
-                              <TableHead>{t('Group')}</TableHead>
+                              <TableHead>{t('Bundle')}</TableHead>
                               <TableHead>{t('Type')}</TableHead>
                               <TableHead className='min-w-[280px]'>
                                 {t('Items')}
@@ -477,7 +477,7 @@ export function PrefillGroupManagementDialog({
                                       >
                                         <Pencil className='h-4 w-4' />
                                         <span className='sr-only'>
-                                          Edit group
+                                          Edit bundle
                                         </span>
                                       </Button>
                                       <Button
@@ -488,7 +488,7 @@ export function PrefillGroupManagementDialog({
                                       >
                                         <Trash2 className='h-4 w-4' />
                                         <span className='sr-only'>
-                                          Delete group
+                                          Delete bundle
                                         </span>
                                       </Button>
                                     </div>
@@ -511,7 +511,7 @@ export function PrefillGroupManagementDialog({
       <ConfirmDialog
         open={deleteState.open}
         onOpenChange={(next) => setDeleteState({ open: next, group: null })}
-        title={t('Delete group')}
+        title={t('Delete bundle')}
         desc={
           <p>
             {t('Are you sure you want to delete')}{' '}

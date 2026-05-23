@@ -77,7 +77,7 @@ func (f *FileMeta) GetRawData() string {
 
 type RequestMeta struct {
 	OriginalModelName string `json:"original_model_name"`
-	UserUsingGroup    string `json:"user_using_group"`
+	UserUsingGroup    string `json:"-"`
 	PromptTokens      int    `json:"prompt_tokens"`
 	PreConsumedQuota  int    `json:"pre_consumed_quota"`
 }

@@ -28,7 +28,6 @@ const UsersFilters = ({
   loadUsers,
   activePage,
   pageSize,
-  groupOptions,
   loading,
   searching,
   t,
@@ -66,23 +65,6 @@ const UsersFilters = ({
             field='searchKeyword'
             prefix={<IconSearch />}
             placeholder={t('支持搜索用户的 ID、用户名、显示名称和邮箱地址')}
-            showClear
-            pure
-            size='small'
-          />
-        </div>
-        <div className='w-full md:w-48'>
-          <Form.Select
-            field='searchGroup'
-            placeholder={t('选择分组')}
-            optionList={groupOptions}
-            onChange={(value) => {
-              // Group change triggers automatic search
-              setTimeout(() => {
-                searchUsers(1, pageSize);
-              }, 100);
-            }}
-            className='w-full'
             showClear
             pure
             size='small'

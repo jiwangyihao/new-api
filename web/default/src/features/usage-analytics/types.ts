@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 export type UsageAnalyticsGroupBy =
   | 'token'
   | 'model'
-  | 'group'
   | 'stream'
   | 'status'
 
@@ -50,7 +49,6 @@ export interface UsageAnalyticsCanonicalFilters {
   metric: UsageAnalyticsMetric
   token_ids: number[]
   model_names: string[]
-  groups: string[]
   streams: UsageAnalyticsStream[]
   statuses: UsageAnalyticsStatus[]
   limit: number
@@ -63,7 +61,6 @@ export type UsageAnalyticsSearch = UsageAnalyticsCanonicalFilters
 export interface UsageAnalyticsDrilldown {
   token_id?: number
   model_name?: string
-  group?: string
   is_stream?: boolean
   status?: UsageAnalyticsStatus
 }
@@ -81,7 +78,6 @@ export interface UsageAnalyticsTokenInfo {
   name: string
   masked_key: string | null
   status: number | null
-  group: string | null
   remain_quota: number | null
   unlimited_quota: boolean | null
   deleted: boolean
@@ -149,7 +145,6 @@ export interface UsageLogsDrilldownSearch {
   endTime: number
   tokenId?: number
   model?: string
-  group?: string
   isStream?: boolean
   status?: UsageAnalyticsStatus
 }

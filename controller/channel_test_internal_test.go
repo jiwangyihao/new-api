@@ -16,13 +16,13 @@ import (
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
-			BillingMode:   "tiered_expr",
-			ExprString:    `param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`,
-			ExprHash:      billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
-			GroupRatio:    1,
-			EstimatedTier: "stream",
-			QuotaPerUnit:  common.QuotaPerUnit,
-			ExprVersion:   1,
+			BillingMode:     "tiered_expr",
+			ExprString:      `param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`,
+			ExprHash:        billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
+			QuotaMultiplier: 1,
+			EstimatedTier:   "stream",
+			QuotaPerUnit:    common.QuotaPerUnit,
+			ExprVersion:     1,
 		},
 		BillingRequestInput: &billingexpr.RequestInput{
 			Body: []byte(`{"stream":true}`),
@@ -53,7 +53,7 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
 	priceData := types.PriceData{
-		GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 1},
+		QuotaMultiplierInfo: types.QuotaMultiplierInfo{Ratio: 1},
 	}
 	usage := &dto.Usage{
 		PromptTokensDetails: dto.InputTokenDetails{

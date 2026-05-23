@@ -22,7 +22,6 @@ import { Card, Spin, Tabs } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 
 import ModelPricingCombined from '../../pages/Setting/Ratio/ModelPricingCombined';
-import GroupRatioSettings from '../../pages/Setting/Ratio/GroupRatioSettings';
 import ModelRatioNotSetEditor from '../../pages/Setting/Ratio/ModelRationNotSetEditor';
 import UpstreamRatioSync from '../../pages/Setting/Ratio/UpstreamRatioSync';
 import ToolPriceSettings from '../../pages/Setting/Ratio/ToolPriceSettings';
@@ -38,16 +37,10 @@ const RatioSetting = () => {
     CacheRatio: '',
     CreateCacheRatio: '',
     CompletionRatio: '',
-    GroupRatio: '',
-    GroupGroupRatio: '',
     ImageRatio: '',
     AudioRatio: '',
     AudioCompletionRatio: '',
-    AutoGroups: '',
-    DefaultUseAutoGroup: false,
     ExposeRatioEnabled: false,
-    UserUsableGroups: '',
-    'group_ratio_setting.group_special_usable_group': '',
   });
 
   const [loading, setLoading] = useState(false);
@@ -65,7 +58,7 @@ const RatioSetting = () => {
             // 如果后端返回的不是合法 JSON，直接展示
           }
         }
-        if (['DefaultUseAutoGroup', 'ExposeRatioEnabled'].includes(item.key)) {
+        if (['ExposeRatioEnabled'].includes(item.key)) {
           newInputs[item.key] = toBoolean(item.value);
         } else {
           newInputs[item.key] = item.value;
@@ -99,9 +92,6 @@ const RatioSetting = () => {
         <Tabs type='card' defaultActiveKey='pricing'>
           <Tabs.TabPane tab={t('模型定价设置')} itemKey='pricing'>
             <ModelPricingCombined options={inputs} refresh={onRefresh} />
-          </Tabs.TabPane>
-          <Tabs.TabPane tab={t('分组相关设置')} itemKey='group'>
-            <GroupRatioSettings options={inputs} refresh={onRefresh} />
           </Tabs.TabPane>
           <Tabs.TabPane tab={t('未设置价格模型')} itemKey='unset_models'>
             <ModelRatioNotSetEditor options={inputs} refresh={onRefresh} />

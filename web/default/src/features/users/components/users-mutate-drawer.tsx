@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useQuery } from '@tanstack/react-query'
 import { Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -55,7 +54,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
-import { createUser, updateUser, getUser, getGroups } from '../api'
+import { createUser, updateUser, getUser } from '../api'
 import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
   userFormSchema,
@@ -85,14 +84,6 @@ export function UsersMutateDrawer({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
 
-  // Fetch groups
-  const { data: groupsData } = useQuery({
-    queryKey: ['groups'],
-    queryFn: getGroups,
-    staleTime: 5 * 60 * 1000,
-  })
-
-  const groups = groupsData?.data || []
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userFormSchema),
@@ -295,46 +286,11 @@ export function UsersMutateDrawer({
                 />
               </div>
 
-              {/* Group & Quota Settings (Update only) */}
+              {/* Quota Settings (Update only) */}
               {isUpdate && (
                 <div className='space-y-4'>
-                  <h3 className='text-sm font-medium'>{t('Group & Quota')}</h3>
+                  <h3 className='text-sm font-medium'>{t('Quota')}</h3>
 
-                  <FormField
-                    control={form.control}
-                    name='group'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{t('Group')}</FormLabel>
-                        <Select
-                          items={[
-                            ...groups.map((group) => ({
-                              value: group,
-                              label: group,
-                            })),
-                          ]}
-                          onValueChange={field.onChange}
-                          value={field.value}
-                        >
-                          <FormControl>
-                            <SelectTrigger>
-                              <SelectValue placeholder={t('Select a group')} />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent alignItemWithTrigger={false}>
-                            <SelectGroup>
-                              {groups.map((group) => (
-                                <SelectItem key={group} value={group}>
-                                  {group}
-                                </SelectItem>
-                              ))}
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
 
                   <FormField
                     control={form.control}

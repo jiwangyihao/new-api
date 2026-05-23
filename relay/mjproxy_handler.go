@@ -215,7 +215,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		if mjResp.StatusCode == 200 && mjResp.Response.Code == 1 {
 
 			tokenName := c.GetString("token_name")
-			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, constant.MjActionSwapFace)
+			logContent := fmt.Sprintf("模型固定价格 %.2f，操作 %s", priceData.ModelPrice, constant.MjActionSwapFace)
 			other := service.GenerateMjOtherInfo(info, priceData)
 			model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 				ChannelId: info.ChannelId,
@@ -224,7 +224,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 				Quota:     priceData.Quota,
 				Content:   logContent,
 				TokenId:   info.TokenId,
-				Group:     info.UsingGroup,
+				Group:     "",
 				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(info.UserId, priceData.Quota)
@@ -505,7 +505,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 	defer func() {
 		if consumeQuota && midjResponseWithStatus.StatusCode == 200 {
 			tokenName := c.GetString("token_name")
-			logContent := fmt.Sprintf("模型固定价格 %.2f，分组倍率 %.2f，操作 %s，ID %s", priceData.ModelPrice, priceData.GroupRatioInfo.GroupRatio, midjRequest.Action, midjResponse.Result)
+			logContent := fmt.Sprintf("模型固定价格 %.2f，操作 %s，ID %s", priceData.ModelPrice, midjRequest.Action, midjResponse.Result)
 			other := service.GenerateMjOtherInfo(relayInfo, priceData)
 			model.RecordConsumeLog(c, relayInfo.UserId, model.RecordConsumeLogParams{
 				ChannelId: relayInfo.ChannelId,
@@ -514,7 +514,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 				Quota:     priceData.Quota,
 				Content:   logContent,
 				TokenId:   relayInfo.TokenId,
-				Group:     relayInfo.UsingGroup,
+				Group:     "",
 				Other:     other,
 			})
 			model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, priceData.Quota)

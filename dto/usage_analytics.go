@@ -10,7 +10,6 @@ type UsageAnalyticsGroupBy string
 const (
 	UsageAnalyticsGroupByToken  UsageAnalyticsGroupBy = "token"
 	UsageAnalyticsGroupByModel  UsageAnalyticsGroupBy = "model"
-	UsageAnalyticsGroupByGroup  UsageAnalyticsGroupBy = "group"
 	UsageAnalyticsGroupByStream UsageAnalyticsGroupBy = "stream"
 	UsageAnalyticsGroupByStatus UsageAnalyticsGroupBy = "status"
 )
@@ -37,7 +36,6 @@ type UsageAnalyticsQuery struct {
 	Metric         string
 	TokenIDs       []int
 	ModelNames     []string
-	Groups         []string
 	Streams        []bool
 	Statuses       []string
 	Limit          int
@@ -68,7 +66,6 @@ type UsageAnalyticsMetrics struct {
 type UsageAnalyticsDrilldown struct {
 	TokenID   *int    `json:"token_id,omitempty"`
 	ModelName *string `json:"model_name,omitempty"`
-	Group     *string `json:"group,omitempty"`
 	IsStream  *bool   `json:"is_stream,omitempty"`
 	Status    *string `json:"status,omitempty"`
 }
@@ -78,7 +75,6 @@ type UsageAnalyticsTokenInfo struct {
 	Name           string  `json:"name"`
 	MaskedKey      *string `json:"masked_key"`
 	Status         *int    `json:"status"`
-	Group          *string `json:"group"`
 	RemainQuota    *int    `json:"remain_quota"`
 	UnlimitedQuota *bool   `json:"unlimited_quota"`
 	Deleted        bool    `json:"deleted"`

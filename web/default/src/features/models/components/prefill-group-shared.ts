@@ -24,19 +24,19 @@ export type PrefillGroupType = PrefillGroup['type']
 export const PREFILL_GROUP_TYPES = [
   {
     value: 'model' as PrefillGroupType,
-    label: 'Model Group',
+    label: 'Model Bundle',
     description: 'Reusable sets of models you can attach to channels.',
     badge: 'blue' as StatusBadgeProps['variant'],
   },
   {
     value: 'tag' as PrefillGroupType,
-    label: 'Tag Group',
+    label: 'Tag Bundle',
     description: 'Collections of metadata tags for bulk operations.',
     badge: 'purple' as StatusBadgeProps['variant'],
   },
   {
     value: 'endpoint' as PrefillGroupType,
-    label: 'Endpoint Group',
+    label: 'Endpoint Bundle',
     description: 'HTTP endpoint mappings shared across providers.',
     badge: 'cyan' as StatusBadgeProps['variant'],
   },

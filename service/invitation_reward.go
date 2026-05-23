@@ -329,7 +329,7 @@ func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.S
 		"status":               "active",
 		"source":               monthlyInviteEntitlementReason,
 		"next_reset_time":      nextReset,
-		"upgrade_group":        strings.TrimSpace(plan.UpgradeGroup),
+		"upgrade_group":        "",
 		"updated_at":           common.GetTimestamp(),
 	}
 	if rewardSubscriptionId > 0 {
@@ -364,7 +364,7 @@ func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.S
 		Source:            monthlyInviteEntitlementReason,
 		LastResetTime:     now,
 		NextResetTime:     nextReset,
-		UpgradeGroup:      strings.TrimSpace(plan.UpgradeGroup),
+		UpgradeGroup:      "",
 		PrevUserGroup:     "",
 		CreatedAt:         common.GetTimestamp(),
 		UpdatedAt:         common.GetTimestamp(),

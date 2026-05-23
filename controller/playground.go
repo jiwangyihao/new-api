@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"fmt"
 
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
@@ -29,7 +28,7 @@ func Playground(c *gin.Context) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, nil, nil)
+	_, err := relaycommon.GenRelayInfo(c, types.RelayFormatOpenAI, nil, nil)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		return
@@ -47,8 +46,7 @@ func Playground(c *gin.Context) {
 
 	tempToken := &model.Token{
 		UserId: userId,
-		Name:   fmt.Sprintf("playground-%s", relayInfo.UsingGroup),
-		Group:  relayInfo.UsingGroup,
+		Name:   "playground",
 	}
 	_ = middleware.SetupContextForToken(c, tempToken)
 

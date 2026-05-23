@@ -33,7 +33,7 @@ type DynamicPriceOptions = {
   showRechargePrice?: boolean
   priceRate?: number
   usdExchangeRate?: number
-  groupRatioMultiplier?: number
+  pricingMultiplier?: number
 }
 
 export type DynamicPriceEntry = {
@@ -64,21 +64,6 @@ export function isDynamicPricingModel(model: PricingModel): boolean {
   return model.billing_mode === 'tiered_expr' && Boolean(model.billing_expr)
 }
 
-export function getDynamicDisplayGroupRatio(model: PricingModel): number {
-  const groups = Array.isArray(model.enable_groups) ? model.enable_groups : []
-  const ratios = model.group_ratio || {}
-  if (groups.length === 0) return 1
-
-  let minRatio = Number.POSITIVE_INFINITY
-  for (const group of groups) {
-    const ratio = ratios[group]
-    if (ratio !== undefined && ratio < minRatio) {
-      minRatio = ratio
-    }
-  }
-
-  return minRatio === Number.POSITIVE_INFINITY ? 1 : minRatio
-}
 
 function applyRechargeRate(
   price: number,
@@ -94,11 +79,11 @@ export function formatDynamicUnitPrice(
   valuePerMillionTokens: number,
   options: DynamicPriceOptions
 ): string {
-  const groupRatio = options.groupRatioMultiplier ?? 1
+  const pricingMultiplier = options.pricingMultiplier ?? 1
   const priceRate = options.priceRate ?? 1
   const usdExchangeRate = options.usdExchangeRate ?? 1
   const priceUSD =
-    (valuePerMillionTokens * groupRatio) /
+    (valuePerMillionTokens * pricingMultiplier) /
     TOKEN_UNIT_DIVISORS[options.tokenUnit]
   const displayPrice = applyRechargeRate(
     priceUSD,

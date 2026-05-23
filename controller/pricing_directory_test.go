@@ -62,8 +62,8 @@ func int64PtrForPricingDirectoryTest(value int64) *int64 {
 func seedPricingDirectoryData(t *testing.T) {
 	t.Helper()
 
-	require.NoError(t, model.DB.Create(&model.User{Id: 9101, Username: "pricing_common", Group: "default", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: "pricing_common"}).Error)
-	require.NoError(t, model.DB.Create(&model.User{Id: 9102, Username: "pricing_admin", Group: "default", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AffCode: "pricing_admin"}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9101, Username: "pricing_common", Group: "", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, AffCode: "pricing_common"}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9102, Username: "pricing_admin", Group: "", Role: common.RoleAdminUser, Status: common.UserStatusEnabled, AffCode: "pricing_admin"}).Error)
 	require.NoError(t, model.DB.Create(&model.Channel{
 		Id:     9201,
 		Type:   constant.ChannelTypeOpenAI,
@@ -164,12 +164,9 @@ func TestGetPricingKeepsDirectoryFieldsForAnonymousAndUser(t *testing.T) {
 	item := firstPricingDirectoryItem(t, payload)
 
 	assert.Contains(t, item, "model_name")
-	assert.Contains(t, item, "enable_groups")
 	assert.Contains(t, item, "supported_endpoint_types")
 	assert.Contains(t, payload, "vendors")
-	assert.Contains(t, payload, "usable_group")
 	assert.Contains(t, payload, "supported_endpoint")
-	assert.Contains(t, payload, "auto_groups")
 	assert.Contains(t, payload, "pricing_version")
 }
 
@@ -184,7 +181,6 @@ func TestGetPricingKeepsCostFieldsForAdmin(t *testing.T) {
 	assert.Contains(t, item, "model_ratio")
 	assert.Contains(t, item, "model_price")
 	assert.Contains(t, item, "billing_expr")
-	assert.Contains(t, payload, "group_ratio")
 }
 
 func TestRatioSyncDefaultEndpointUsesRatioConfig(t *testing.T) {
@@ -214,7 +210,7 @@ func TestRatioSyncRejectsRedactedPricingPayload(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/api/pricing", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"success":true,"data":[{"model_name":"pricing-visible-model","enable_groups":["default"],"supported_endpoint_types":["chat"]}]}`))
+		_, _ = w.Write([]byte(`{"success":true,"data":[{"model_name":"pricing-visible-model","supported_endpoint_types":["chat"]}]}`))
 	}))
 	defer server.Close()
 

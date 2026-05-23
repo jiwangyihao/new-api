@@ -204,7 +204,7 @@ export function countKeys(key: string): number {
 }
 
 // ============================================================================
-// Model & Group Parsing
+// Model Parsing
 // ============================================================================
 
 /**
@@ -218,22 +218,6 @@ export function parseModelsList(models: string): string[] {
     .filter((m) => m.length > 0)
 }
 
-/**
- * Parse comma-separated groups list.
- * Sorts with 'default' group first, then locale-sorted alphabetically.
- */
-export function parseGroupsList(groups: string): string[] {
-  if (!groups) return []
-  const list = groups
-    .split(',')
-    .map((g) => g.trim())
-    .filter((g) => g.length > 0)
-  return list.sort((a, b) => {
-    if (a === 'default') return -1
-    if (b === 'default') return 1
-    return a.localeCompare(b)
-  })
-}
 
 /**
  * Format models array back to string
@@ -242,12 +226,6 @@ export function formatModelsString(models: string[]): string {
   return models.join(',')
 }
 
-/**
- * Format groups array back to string
- */
-export function formatGroupsString(groups: string[]): string {
-  return groups.join(',')
-}
 
 // ============================================================================
 // Settings Parsing
@@ -446,12 +424,6 @@ export function validateModels(models: string): boolean {
   return parseModelsList(models).length > 0
 }
 
-/**
- * Validate groups list
- */
-export function validateGroups(groups: string): boolean {
-  return parseGroupsList(groups).length > 0
-}
 
 /**
  * Check if channel needs attention (low balance, auto-disabled, etc.)
@@ -534,7 +506,6 @@ export function aggregateChannelsByTag(
         name: tag,
         type: 0,
         status: undefined as unknown as number,
-        group: '',
         used_quota: 0,
         response_time: 0,
         priority: -1 as unknown as number | null,
@@ -578,18 +549,7 @@ export function aggregateChannelsByTag(
       tagRow.weight = null
     }
 
-    // Aggregate group (concatenate and deduplicate)
-    if (tagRow.group === '') {
-      tagRow.group = channel.group
-    } else {
-      const existingGroups = new Set(tagRow.group.split(',').filter(Boolean))
-      const newGroups = channel.group.split(',').filter(Boolean)
-      newGroups.forEach((g) => {
-        if (!existingGroups.has(g)) {
-          tagRow.group += ',' + g
-        }
-      })
-    }
+    // Business groups are intentionally omitted from tag aggregation.
 
     // Aggregate status (enabled if any child is enabled)
     if (channel.status === 1) {

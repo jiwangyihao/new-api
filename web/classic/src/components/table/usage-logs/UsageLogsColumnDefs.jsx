@@ -27,7 +27,6 @@ import {
   Typography,
 } from '@douyinfe/semi-ui';
 import {
-  renderGroup,
   renderQuota,
   stringToColor,
   getLogOther,
@@ -56,15 +55,6 @@ const colors = [
   'yellow',
 ];
 
-function formatRatio(ratio) {
-  if (ratio === undefined || ratio === null) {
-    return '-';
-  }
-  if (typeof ratio === 'number') {
-    return ratio.toFixed(4);
-  }
-  return String(ratio);
-}
 
 function buildChannelAffinityTooltip(affinity, t) {
   if (!affinity) {
@@ -80,7 +70,6 @@ function buildChannelAffinityTooltip(affinity, t) {
   const lines = [
     t('渠道亲和性'),
     `${t('规则')}：${affinity.rule_name || '-'}`,
-    `${t('分组')}：${affinity.selected_group || '-'}`,
     `${t('Key')}：${keyText}`,
     ...(keyHint ? [`${t('Key 摘要')}：${keyHint}`] : []),
   ];
@@ -376,16 +365,6 @@ function normalizeDetailText(detail) {
     .replace(/\r\n/g, '\n');
 }
 
-function getUsageLogGroupSummary(groupRatio, userGroupRatio, t) {
-  const parsedUserGroupRatio = Number(userGroupRatio);
-  const useUserGroupRatio =
-    Number.isFinite(parsedUserGroupRatio) && parsedUserGroupRatio !== -1;
-  const ratio = useUserGroupRatio ? userGroupRatio : groupRatio;
-  if (ratio === undefined || ratio === null || ratio === '') {
-    return '';
-  }
-  return `${useUserGroupRatio ? t('专属倍率') : t('分组')} ${formatRatio(ratio)}x`;
-}
 
 function renderCompactDetailSummary(summarySegments) {
   const segments = Array.isArray(summarySegments)
@@ -443,14 +422,8 @@ function getUsageLogDetailSummary(record, text, billingDisplayMode, t) {
     Boolean(other?.violation_fee_marker)
   ) {
     const feeQuota = other?.fee_quota ?? record?.quota;
-    const groupText = getUsageLogGroupSummary(
-      other?.group_ratio,
-      other?.user_group_ratio,
-      t,
-    );
     return {
       segments: [
-        groupText ? { text: groupText, tone: 'primary' } : null,
         { text: t('违规扣费'), tone: 'primary' },
         {
           text: `${t('扣费')}：${renderQuota(feeQuota, 6)}`,
@@ -632,43 +605,6 @@ export const getLogsColumns = ({
         ) : (
           <></>
         );
-      },
-    },
-    {
-      key: COLUMN_KEYS.GROUP,
-      title: t('分组'),
-      dataIndex: 'group',
-      render: (text, record, index) => {
-        if (
-          record.type === 0 ||
-          record.type === 2 ||
-          record.type === 5 ||
-          record.type === 6
-        ) {
-          if (record.group) {
-            return <>{renderGroup(record.group)}</>;
-          } else {
-            let other = null;
-            try {
-              other = JSON.parse(record.other);
-            } catch (e) {
-              console.error(
-                `Failed to parse record.other: "${record.other}".`,
-                e,
-              );
-            }
-            if (other === null) {
-              return <></>;
-            }
-            if (other.group !== undefined) {
-              return <>{renderGroup(other.group)}</>;
-            } else {
-              return <></>;
-            }
-          }
-        } else {
-          return <></>;
-        }
       },
     },
     {

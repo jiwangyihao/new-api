@@ -28,7 +28,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { GroupBadge } from '@/components/group-badge'
 import { StatusBadge } from '@/components/status-badge'
 import {
   getModelStatusConfig,
@@ -444,45 +443,6 @@ export function useModelsColumns(vendors: Vendor[] = []): ColumnDef<Model>[] {
       enableSorting: false,
     },
 
-    // Enable Groups column
-    {
-      accessorKey: 'enable_groups',
-      meta: { label: t('Enable Groups'), mobileHidden: true },
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Enable Groups')} />
-      ),
-      cell: ({ row }) => {
-        const groups = row.getValue('enable_groups') as string[]
-
-        if (!groups || groups.length === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
-
-        const groupBadges = groups.map((g) => (
-          <GroupBadge key={g} group={g} size='sm' />
-        ))
-
-        return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedItems(groupBadges, 2)}
-              </TooltipTrigger>
-              {groups.length > 2 && (
-                <TooltipContent
-                  side='top'
-                  className='border-border bg-popover max-h-48 max-w-[320px] overflow-y-auto p-2'
-                >
-                  <div className='flex flex-wrap gap-1'>{groupBadges}</div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
-        )
-      },
-      size: 150,
-      enableSorting: false,
-    },
 
     // Quota Types column
     {

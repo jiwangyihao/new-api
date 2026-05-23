@@ -26,19 +26,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { GroupBadge } from '@/components/group-badge'
 import { DEFAULT_TOKEN_UNIT, QUOTA_TYPE_VALUES } from '../constants'
-import {
-  getDynamicDisplayGroupRatio,
-  getDynamicPricingSummary,
-} from '../lib/dynamic-price'
+import { getDynamicPricingSummary } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
-import {
-  formatPrice,
-  formatRequestPrice,
-  stripTrailingZeros,
-} from '../lib/price'
+import { formatPrice, formatRequestPrice, stripTrailingZeros } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 
 // ----------------------------------------------------------------------------
@@ -72,27 +64,6 @@ function renderLimitedTags(
   )
 }
 
-function renderLimitedGroupBadges(
-  groups: string[],
-  maxDisplay: number = 2
-): React.ReactNode {
-  if (groups.length === 0)
-    return <span className='text-muted-foreground/50 text-xs'>—</span>
-
-  const displayed = groups.slice(0, maxDisplay)
-  const remaining = groups.length - maxDisplay
-
-  return (
-    <div className='flex max-w-full items-center gap-1 overflow-hidden'>
-      {displayed.map((group) => (
-        <GroupBadge key={group} group={group} size='sm' />
-      ))}
-      {remaining > 0 && (
-        <span className='text-muted-foreground/50 text-xs'>+{remaining}</span>
-      )}
-    </div>
-  )
-}
 
 export function usePricingColumns(
   options: PricingColumnsOptions = {}
@@ -164,7 +135,6 @@ export function usePricingColumns(
           showRechargePrice,
           priceRate,
           usdExchangeRate,
-          groupRatioMultiplier: getDynamicDisplayGroupRatio(model),
         })
 
         if (dynamicSummary) {
@@ -288,7 +258,6 @@ export function usePricingColumns(
           showRechargePrice,
           priceRate,
           usdExchangeRate,
-          groupRatioMultiplier: getDynamicDisplayGroupRatio(model),
         })
 
         if (dynamicSummary) {
@@ -425,40 +394,6 @@ export function usePricingColumns(
               {endpoints.length > 2 && (
                 <TooltipContent side='top' className='max-w-[280px] p-2'>
                   <span className='text-xs'>{endpoints.join(', ')}</span>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
-        )
-      },
-      size: 130,
-      enableSorting: false,
-    },
-
-    // Enable Groups column
-    {
-      accessorKey: 'enable_groups',
-      meta: { label: t('Groups') },
-      header: t('Groups'),
-      cell: ({ row }) => {
-        const groups = row.original.enable_groups || []
-        if (groups.length === 0) {
-          return <span className='text-muted-foreground/50 text-xs'>—</span>
-        }
-
-        return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedGroupBadges(groups, 2)}
-              </TooltipTrigger>
-              {groups.length > 2 && (
-                <TooltipContent side='top' className='max-w-[280px] p-2'>
-                  <div className='flex flex-wrap gap-1'>
-                    {groups.map((group) => (
-                      <GroupBadge key={group} group={group} size='sm' />
-                    ))}
-                  </div>
                 </TooltipContent>
               )}
             </Tooltip>

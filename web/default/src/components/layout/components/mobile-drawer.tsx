@@ -98,14 +98,6 @@ function MobileUserProfile({ user, onNavigate }: MobileUserProfileProps) {
             </p>
             <div className='flex items-center gap-1.5'>
               <span className='text-muted-foreground text-xs'>{roleLabel}</span>
-              {user.group && (
-                <>
-                  <span className='text-muted-foreground text-xs'>·</span>
-                  <span className='text-muted-foreground text-xs'>
-                    {String(user.group)}
-                  </span>
-                </>
-              )}
             </div>
           </div>
         </div>

@@ -189,7 +189,7 @@ func parseAdminAnalyticsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error)
 	if err != nil {
 		return model.AdminAnalyticsQuery{}, err
 	}
-	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: time.Now().Unix(), Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, UserGroups: parseAdminAnalyticsStringList(c, "user_groups"), RequestGroups: parseAdminAnalyticsStringList(c, "request_groups"), PlanIDs: planIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses")}, nil
+	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: time.Now().Unix(), Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses")}, nil
 }
 
 func parseAdminUsageAnalyticsQuery(c *gin.Context, endpoint string) (model.AdminAnalyticsUsageQuery, error) {
@@ -307,7 +307,7 @@ func parseAdminDrilldownFilter(c *gin.Context) model.AdminAnalyticsDrilldownFilt
 	userID, _ := strconv.Atoi(c.Query("user_id"))
 	planID, _ := strconv.Atoi(c.Query("plan_id"))
 	inviterID, _ := strconv.Atoi(c.Query("inviter_id"))
-	return model.AdminAnalyticsDrilldownFilter{UserID: userID, PlanID: planID, InviterID: inviterID, UserGroup: strings.TrimSpace(c.Query("user_group")), UserStatus: strings.TrimSpace(c.Query("user_status")), Status: strings.TrimSpace(c.Query("status"))}
+	return model.AdminAnalyticsDrilldownFilter{UserID: userID, PlanID: planID, InviterID: inviterID, UserStatus: strings.TrimSpace(c.Query("user_status")), Status: strings.TrimSpace(c.Query("status"))}
 }
 
 func writeAdminAnalyticsResponse[T any](c *gin.Context, data T, err error) {

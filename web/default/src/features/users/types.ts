@@ -43,7 +43,6 @@ export const userSchema = z.object({
   quota: z.number(),
   used_quota: z.number(),
   request_count: z.number(),
-  group: z.string(),
   aff_code: z.string().optional(),
   aff_count: z.number().optional(),
   aff_quota: z.number().optional(),
@@ -106,7 +105,6 @@ export interface GetUsersResponse {
 
 export interface SearchUsersParams {
   keyword?: string
-  group?: string
   p?: number
   page_size?: number
 }
@@ -117,7 +115,6 @@ export interface AdminAnalyticsUsersDrilldownParams {
   user_id?: number | number[]
   plan_id?: number
   inviter_id?: number
-  user_group?: string
   user_status?: string
   limit?: number
   offset?: number
@@ -129,7 +126,6 @@ export interface AdminAnalyticsUsersDrilldownItem {
   username: string
   display_name: string
   email: string
-  user_group: string
   status: number
   role: number
   created_at: number
@@ -166,7 +162,6 @@ export interface UserFormData {
   password?: string
   role?: number // Only used when creating user
   quota?: number // Only used when updating user
-  group?: string // Only used when updating user
   remark?: string // Only used when updating user
 }
 

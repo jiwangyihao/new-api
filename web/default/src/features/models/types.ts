@@ -48,7 +48,6 @@ export interface Model {
   name_rule: number
   // Runtime fields
   bound_channels?: BoundChannel[]
-  enable_groups?: string[]
   quota_types?: number[]
   matched_models?: string[]
   matched_count?: number
@@ -260,7 +259,7 @@ export type VendorFormValues = z.infer<typeof vendorFormSchema>
  */
 export const prefillGroupFormSchema = z.object({
   id: z.number().optional(),
-  name: z.string().min(1, 'Group name is required'),
+  name: z.string().min(1, 'Bundle name is required'),
   description: z.string().optional(),
   type: z.enum(['model', 'tag', 'endpoint']),
   items: z.union([z.string(), z.array(z.string())]),

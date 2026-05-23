@@ -59,18 +59,18 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 		expected         float64
 	}{
 		{
-			name:             "currency display applies unit price group ratio and discount",
+			name:             "currency display applies unit price and discount without group ratio",
 			amount:           10,
 			group:            "vip",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeUSD,
-			expected:         24,
+			expected:         20,
 		},
 		{
-			name:             "tokens display converts quota to display units before pricing",
+			name:             "tokens display converts quota to display units before pricing without group ratio",
 			amount:           int64(common.QuotaPerUnit * 3),
 			group:            "vip",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeTokens,
-			expected:         4.5,
+			expected:         3.75,
 		},
 		{
 			name:             "non-positive discount falls back to no discount",

@@ -23,7 +23,6 @@ export type PricingSearch = {
   search?: string
   sort?: string
   vendor?: string
-  group?: string
   quotaType?: string | number
   endpointType?: string
   tag?: string

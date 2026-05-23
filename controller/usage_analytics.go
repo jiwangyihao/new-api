@@ -108,7 +108,7 @@ func parseUsageAnalyticsQuery(c *gin.Context) (model.UsageAnalyticsQuery, error)
 
 	groupBy := model.UsageAnalyticsGroupBy(c.DefaultQuery("group_by", string(model.UsageAnalyticsGroupByToken)))
 	switch groupBy {
-	case model.UsageAnalyticsGroupByToken, model.UsageAnalyticsGroupByModel, model.UsageAnalyticsGroupByGroup, model.UsageAnalyticsGroupByStream, model.UsageAnalyticsGroupByStatus:
+	case model.UsageAnalyticsGroupByToken, model.UsageAnalyticsGroupByModel, model.UsageAnalyticsGroupByStream, model.UsageAnalyticsGroupByStatus:
 	default:
 		return model.UsageAnalyticsQuery{}, errors.New("unsupported group_by in current phase")
 	}
@@ -128,7 +128,6 @@ func parseUsageAnalyticsQuery(c *gin.Context) (model.UsageAnalyticsQuery, error)
 		return model.UsageAnalyticsQuery{}, err
 	}
 	modelNames := parseUsageAnalyticsStringList(c, "model_names")
-	groups := parseUsageAnalyticsStringList(c, "groups")
 	streams, err := parseUsageAnalyticsBoolList(c, "streams")
 	if err != nil {
 		return model.UsageAnalyticsQuery{}, err
@@ -174,7 +173,6 @@ func parseUsageAnalyticsQuery(c *gin.Context) (model.UsageAnalyticsQuery, error)
 		Metric:         metric,
 		TokenIDs:       tokenIDs,
 		ModelNames:     modelNames,
-		Groups:         groups,
 		Streams:        streams,
 		Statuses:       statuses,
 		Limit:          limit,

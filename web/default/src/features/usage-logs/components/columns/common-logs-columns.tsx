@@ -50,7 +50,6 @@ import {
   getLogTokenUsageColumnValue,
   getTokenNameMeta,
   shouldShowCostDetails,
-  formatRatioCompact,
 } from '../../lib/format'
 import {
   isDisplayableLogType,
@@ -219,26 +218,9 @@ function buildDetailSegments(
           })
         }
       }
-    } else {
-      const userGroupRatio = other.user_group_ratio
-      const groupRatio = other.group_ratio
-      const isUserGroup =
-        userGroupRatio != null &&
-        Number.isFinite(userGroupRatio) &&
-        userGroupRatio !== -1
-      const effectiveRatio = isUserGroup ? userGroupRatio : groupRatio
-      const ratioLabel = isUserGroup
-        ? t('User Exclusive Ratio')
-        : t('Group Ratio')
-
-      if (effectiveRatio != null && Number.isFinite(effectiveRatio)) {
-        segments.push({
-          text: `${ratioLabel} ${formatRatioCompact(effectiveRatio)}x`,
-        })
-      }
-    }
   }
 
+  }
   if (other.is_system_prompt_overwritten) {
     segments.push({
       text: t('System Prompt Override'),
@@ -336,10 +318,6 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                           e.stopPropagation()
                           setAffinityTarget({
                             rule_name: affinity.rule_name || '',
-                            using_group:
-                              affinity.using_group ||
-                              affinity.selected_group ||
-                              '',
                             key_hint: affinity.key_hint || '',
                             key_fp: affinity.key_fp || '',
                           })
@@ -371,14 +349,6 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                         <p className='font-medium'>{t('Channel Affinity')}</p>
                         <p>
                           {t('Rule')}: {affinity.rule_name || '-'}
-                        </p>
-                        <p>
-                          {t('Group')}:{' '}
-                          {sensitiveVisible
-                            ? affinity.using_group ||
-                              affinity.selected_group ||
-                              '-'
-                            : '••••'}
                         </p>
                       </div>
                     )}
@@ -452,13 +422,8 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       if (!tokenName) return null
 
       const other = parseLogOther(log.other)
-      const group = log.group || other?.group || ''
-      const otherWithGroup = group ? { ...other, group } : other
       const displayName = sensitiveVisible ? tokenName : '••••'
-      const metaParts = getTokenNameMeta(
-        otherWithGroup,
-        isAdmin && sensitiveVisible
-      )
+      const metaParts = getTokenNameMeta(other, isAdmin && sensitiveVisible)
       const displayMetaParts = sensitiveVisible
         ? metaParts
         : metaParts.map(() => '••••')

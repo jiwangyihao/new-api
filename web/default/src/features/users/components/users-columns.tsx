@@ -28,7 +28,6 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
-import { GroupBadge } from '@/components/group-badge'
 import { LongText } from '@/components/long-text'
 import { StatusBadge, dotColorMap } from '@/components/status-badge'
 import { USER_STATUSES, USER_ROLES, isUserDeleted } from '../constants'
@@ -264,22 +263,6 @@ export function useUsersColumns(): ColumnDef<User>[] {
         )
       },
       meta: { label: t('Quota') },
-    },
-    {
-      accessorKey: 'group',
-      header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Group')} />
-      ),
-      cell: ({ row }) => {
-        const group = row.getValue('group') as string
-        return <GroupBadge group={group} />
-      },
-      filterFn: (row, id, value) => {
-        const group = String(row.getValue(id) || t('User Group')).toLowerCase()
-        const searchValue = String(value).toLowerCase()
-        return group.includes(searchValue)
-      },
-      meta: { label: t('Group') },
     },
     {
       accessorKey: 'role',

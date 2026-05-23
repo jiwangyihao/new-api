@@ -22,9 +22,9 @@ For commercial licensing, please contact support@quantumnous.com
 //
 // These utilities are used to generate stable, repeatable mock metrics for
 // model details (latency, throughput, uptime, app rankings) until the
-// backend ships real values. Seeding the PRNG from the model name (and
-// optionally the group name) ensures the same model always renders the same
-// numbers, instead of jittering on every render.
+// backend ships real values. Seeding the PRNG from the model name ensures the
+// same model always renders the same numbers, instead of jittering on every
+// render.
 
 /** djb2-inspired string hash → non-negative 31-bit integer. */
 export function hashStringToSeed(input: string): number {

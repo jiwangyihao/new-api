@@ -95,7 +95,7 @@ type MockUpstreamConfig struct {
 
 type LoadtestConfig struct {
 	Model                  string `json:"model" yaml:"model"`
-	Group                  string `json:"group" yaml:"group"`
+	Group                  string `json:"group" yaml:"group"` // Deprecated: legacy configs may include it; ignored.
 	SubscriptionKey        string `json:"subscription_key" yaml:"subscription_key"`
 	CompatKey              string `json:"compat_key" yaml:"compat_key"`
 	InvalidKey             string `json:"invalid_key" yaml:"invalid_key"`
@@ -558,9 +558,6 @@ func (f File) comparisonConfigHash() (string, error) {
 func validateLoadtest(loadtest LoadtestConfig) error {
 	if loadtest.Model == "" {
 		return fmt.Errorf("loadtest.model is required")
-	}
-	if loadtest.Group == "" {
-		return fmt.Errorf("loadtest.group is required")
 	}
 	for _, key := range []string{loadtest.SubscriptionKey, loadtest.CompatKey, loadtest.InvalidKey} {
 		if err := localguard.ValidateAPIKey(key); err != nil {

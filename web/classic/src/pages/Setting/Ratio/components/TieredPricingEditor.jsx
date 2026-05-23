@@ -1609,7 +1609,7 @@ export default function TieredPricingEditor({ model, onExprChange, requestRuleEx
       >
         <div className='font-medium mb-2'>{t('Token 估算器')}</div>
         <div className='text-xs text-gray-500 mb-3'>
-          {t('输入 Token 数量，查看按当前配置的预计费用（不含分组倍率）。')}
+          {t('输入 Token 数量，查看按当前配置的预计费用。')}
         </div>
         <div
           style={{

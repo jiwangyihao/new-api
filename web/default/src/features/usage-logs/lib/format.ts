@@ -103,38 +103,13 @@ export function getLegacyPromptCompletionTokens(log: UsageLog): number {
   return clampTokenCount(log.prompt_tokens) + clampTokenCount(log.completion_tokens)
 }
 
-export function formatRatioCompact(ratio: number): string {
-  return ratio % 1 === 0
-    ? String(ratio)
-    : ratio.toFixed(4).replace(/\.?0+$/, '')
-}
 
 export function getTokenNameMeta(
   other: LogOtherData | null,
   showSensitive: boolean
 ): string[] {
-  const meta: string[] = []
-  const group = other?.group?.trim()
-  if (group) meta.push(group)
-
-  if (!showSensitive || !other) return meta
-
-  const userGroupRatio = other.user_group_ratio
-  if (
-    userGroupRatio != null &&
-    userGroupRatio !== -1 &&
-    Number.isFinite(userGroupRatio)
-  ) {
-    meta.push(`${formatRatioCompact(userGroupRatio)}x`)
-    return meta
-  }
-
-  const groupRatio = other.group_ratio
-  if (groupRatio != null && groupRatio !== 1 && Number.isFinite(groupRatio)) {
-    meta.push(`${formatRatioCompact(groupRatio)}x`)
-  }
-
-  return meta
+  if (!showSensitive || !other) return []
+  return []
 }
 
 export function getLogTokenUsage(

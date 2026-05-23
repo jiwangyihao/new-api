@@ -53,7 +53,6 @@ import {
   IconSave,
   IconClose,
   IconLink,
-  IconUserGroup,
   IconEdit,
 } from '@douyinfe/semi-icons';
 import UserBindingManagementModal from './UserBindingManagementModal';
@@ -70,7 +69,6 @@ const EditUserModal = (props) => {
   const [adjustMode, setAdjustMode] = useState('add');
   const [adjustLoading, setAdjustLoading] = useState(false);
   const isMobile = useIsMobile();
-  const [groupOptions, setGroupOptions] = useState([]);
   const [bindingModalVisible, setBindingModalVisible] = useState(false);
   const formApiRef = useRef(null);
   const [showAdjustQuotaRaw, setShowAdjustQuotaRaw] = useState(false);
@@ -92,18 +90,9 @@ const EditUserModal = (props) => {
     email: '',
     quota: 0,
     quota_amount: 0,
-    group: 'default',
     remark: '',
   });
 
-  const fetchGroups = async () => {
-    try {
-      let res = await API.get(`/api/group/`);
-      setGroupOptions(res.data.data.map((g) => ({ label: g, value: g })));
-    } catch (e) {
-      showError(e.message);
-    }
-  };
 
   const handleCancel = () => props.handleClose();
 
@@ -132,7 +121,6 @@ const EditUserModal = (props) => {
 
   useEffect(() => {
     loadUser();
-    if (userId) fetchGroups();
     setBindingModalVisible(false);
   }, [props.editingUser.id]);
 
@@ -343,31 +331,19 @@ const EditUserModal = (props) => {
                         color='green'
                         className='mr-2 shadow-md'
                       >
-                        <IconUserGroup size={16} />
+                        <IconUser size={16} />
                       </Avatar>
                       <div>
                         <Text className='text-lg font-medium'>
                           {t('权限设置')}
                         </Text>
                         <div className='text-xs text-gray-600'>
-                          {t('用户分组和额度管理')}
+                          {t('用户额度管理')}
                         </div>
                       </div>
                     </div>
 
                     <Row gutter={12}>
-                      <Col span={24}>
-                        <Form.Select
-                          field='group'
-                          label={t('分组')}
-                          placeholder={t('请选择分组')}
-                          optionList={groupOptions}
-                          allowAdditions
-                          search
-                          rules={[{ required: true, message: t('请选择分组') }]}
-                        />
-                      </Col>
-
                       <Col span={10}>
                         <Form.InputNumber
                           field='quota_amount'

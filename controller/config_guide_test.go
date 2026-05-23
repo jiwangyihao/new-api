@@ -488,9 +488,9 @@ func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
 		{name: "expired status", tokenStatus: common.TokenStatusExpired, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
 		{name: "expired time", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: 1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
 		{name: "user disabled", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusDisabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
-		{name: "deprecated token group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "deprecated token group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
-		{name: "deprecated user group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
+		{name: "deprecated user group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusTooManyRequests},
 		{name: "enabled zero quota ok", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", remainQuota: 0, target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "suffix key accepted like TokenAuth", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken-extra-suffix", wantStatus: http.StatusOK},
@@ -524,6 +524,22 @@ func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigGuideIgnoresUserTokenAndAbilityGroups(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "gone", common.UserStatusEnabled)
+	seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusEnabled, -1, "gone", true, "", nil)
+	seedConfigGuideAbility(t, db, "legacy", "gpt-5.5")
+	seedConfigGuideAbility(t, db, "legacy", "gpt-5.4-mini")
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 0)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "gpt-5.5")
+	require.Contains(t, recorder.Body.String(), "gpt-5.4-mini")
 }
 
 func TestConfigGuidePublicAPIKeyUsesEffectiveModels(t *testing.T) {

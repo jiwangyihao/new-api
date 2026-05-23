@@ -146,16 +146,6 @@ const SubscriptionPurchaseModal = ({
                   )}
                 </div>
               </div>
-              {plan?.upgrade_group ? (
-                <div className='flex justify-between items-center'>
-                  <Text strong className='text-slate-700 dark:text-slate-200'>
-                    {t('升级分组')}：
-                  </Text>
-                  <Text className='text-slate-900 dark:text-slate-100'>
-                    {plan.upgrade_group}
-                  </Text>
-                </div>
-              ) : null}
               <Divider margin={8} />
               <div className='flex justify-between items-center'>
                 <Text strong className='text-slate-700 dark:text-slate-200'>

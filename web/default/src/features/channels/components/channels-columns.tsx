@@ -46,7 +46,6 @@ import {
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { DataTableColumnHeader } from '@/components/data-table/column-header'
-import { GroupBadge } from '@/components/group-badge'
 import {
   StatusBadge,
   dotColorMap,
@@ -64,7 +63,6 @@ import {
   getResponseTimeConfig,
   isMultiKeyChannel,
   parseModelsList,
-  parseGroupsList,
   parseChannelSettings,
   handleUpdateChannelField,
   handleUpdateTagField,
@@ -889,47 +887,6 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         )
       },
       size: 200,
-      enableSorting: false,
-    },
-
-    // Group column
-    {
-      accessorKey: 'group',
-      meta: { label: t('Groups'), mobileHidden: true },
-      header: t('Groups'),
-      cell: ({ row }) => {
-        const group = row.getValue('group') as string
-        const groupArray = parseGroupsList(group)
-
-        const groupBadges = groupArray.map((g) => (
-          <GroupBadge key={g} group={g} size='sm' />
-        ))
-
-        return (
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger render={<div />}>
-                {renderLimitedItems(groupBadges, 2)}
-              </TooltipTrigger>
-              {groupArray.length > 2 && (
-                <TooltipContent
-                  side='top'
-                  className='border-border bg-popover max-h-48 max-w-[320px] overflow-y-auto p-2'
-                >
-                  <div className='flex flex-wrap gap-1'>{groupBadges}</div>
-                </TooltipContent>
-              )}
-            </Tooltip>
-          </TooltipProvider>
-        )
-      },
-      filterFn: (row, id, value) => {
-        if (!value || value.length === 0 || value.includes('all')) return true
-        const group = row.getValue(id) as string
-        const groupArray = parseGroupsList(group)
-        return groupArray.some((g) => value.includes(g))
-      },
-      size: 150,
       enableSorting: false,
     },
 

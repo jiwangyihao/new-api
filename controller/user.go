@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -36,7 +34,7 @@ func Login(c *gin.Context) {
 		return
 	}
 	var loginRequest LoginRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&loginRequest)
+	err := common.DecodeJson(c.Request.Body, &loginRequest)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -98,7 +96,6 @@ func setupLogin(user *model.User, c *gin.Context) {
 	session.Set("username", user.Username)
 	session.Set("role", user.Role)
 	session.Set("status", user.Status)
-	session.Set("group", user.Group)
 	err := session.Save()
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserSessionSaveFailed)
@@ -113,7 +110,6 @@ func setupLogin(user *model.User, c *gin.Context) {
 			"display_name": user.DisplayName,
 			"role":         user.Role,
 			"status":       user.Status,
-			"group":        user.Group,
 		},
 	})
 }
@@ -244,9 +240,6 @@ func Register(c *gin.Context) {
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
 		}
-		if setting.DefaultUseAutoGroup {
-			token.Group = "auto"
-		}
 		if err := token.Insert(); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgCreateDefaultTokenErr)
 			return
@@ -277,9 +270,8 @@ func GetAllUsers(c *gin.Context) {
 
 func SearchUsers(c *gin.Context) {
 	keyword := c.Query("keyword")
-	group := c.Query("group")
 	pageInfo := common.GetPageQuery(c)
-	users, total, err := model.SearchUsers(keyword, group, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	users, total, err := model.SearchUsers(keyword, "", pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -429,7 +421,6 @@ func GetSelf(c *gin.Context) {
 		"oidc_id":               user.OidcId,
 		"wechat_id":             user.WeChatId,
 		"telegram_id":           user.TelegramId,
-		"group":                 user.Group,
 		"quota":                 user.Quota,
 		"used_quota":            user.UsedQuota,
 		"request_count":         user.RequestCount,
@@ -539,7 +530,7 @@ func generateDefaultSidebarConfig(userRole int) string {
 	// 普通用户不包含admin区域
 
 	// 转换为JSON字符串
-	configBytes, err := json.Marshal(defaultConfig)
+	configBytes, err := common.Marshal(defaultConfig)
 	if err != nil {
 		common.SysLog("生成默认边栏配置失败: " + err.Error())
 		return ""
@@ -553,20 +544,11 @@ func GetUserModels(c *gin.Context) {
 	if err != nil {
 		id = c.GetInt("id")
 	}
-	user, err := model.GetUserCache(id)
-	if err != nil {
+	if _, err := model.GetUserCache(id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
-	var models []string
-	for group := range groups {
-		for _, g := range model.GetGroupEnabledModels(group) {
-			if !common.StringsContains(models, g) {
-				models = append(models, g)
-			}
-		}
-	}
+	models := model.GetEnabledModels()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -577,7 +559,7 @@ func GetUserModels(c *gin.Context) {
 
 func UpdateUser(c *gin.Context) {
 	var updatedUser model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&updatedUser)
+	err := common.DecodeJson(c.Request.Body, &updatedUser)
 	if err != nil || updatedUser.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
@@ -868,7 +850,7 @@ func DeleteSelf(c *gin.Context) {
 
 func CreateUser(c *gin.Context) {
 	var user model.User
-	err := json.NewDecoder(c.Request.Body).Decode(&user)
+	err := common.DecodeJson(c.Request.Body, &user)
 	user.Username = strings.TrimSpace(user.Username)
 	if err != nil || user.Username == "" || user.Password == "" {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
@@ -915,7 +897,7 @@ type ManageRequest struct {
 // ManageUser Only admin user can do this
 func ManageUser(c *gin.Context) {
 	var req ManageRequest
-	err := json.NewDecoder(c.Request.Body).Decode(&req)
+	err := common.DecodeJson(c.Request.Body, &req)
 
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)

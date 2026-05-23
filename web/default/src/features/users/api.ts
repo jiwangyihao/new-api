@@ -46,15 +46,17 @@ export async function getUsers(
 }
 
 /**
- * Search users by keyword or group
+ * Search users by keyword
  */
 export async function searchUsers(
   params: SearchUsersParams
 ): Promise<GetUsersResponse> {
-  const { keyword = '', group = '', p = 1, page_size = 10 } = params
-  const res = await api.get(
-    `/api/user/search?keyword=${keyword}&group=${group}&p=${p}&page_size=${page_size}`
-  )
+  const { keyword = '', p = 1, page_size = 10 } = params
+  const queryParams = new URLSearchParams()
+  queryParams.set('keyword', keyword)
+  queryParams.set('p', String(p))
+  queryParams.set('page_size', String(page_size))
+  const res = await api.get(`/api/user/search?${queryParams.toString()}`)
   return res.data
 }
 
@@ -93,7 +95,6 @@ export async function getAdminAnalyticsUsersDrilldown(
   appendUserIdsParam(queryParams, params.user_id)
   appendNumberParam(queryParams, 'plan_id', params.plan_id)
   appendNumberParam(queryParams, 'inviter_id', params.inviter_id)
-  appendStringParam(queryParams, 'user_group', params.user_group)
   appendStringParam(queryParams, 'user_status', params.user_status)
   appendNumberParam(queryParams, 'limit', params.limit)
   appendNumberParam(queryParams, 'offset', params.offset)
@@ -178,13 +179,6 @@ export async function resetUserTwoFA(id: number): Promise<ApiResponse> {
   return res.data
 }
 
-/**
- * Get all available groups
- */
-export async function getGroups(): Promise<ApiResponse<string[]>> {
-  const res = await api.get('/api/group/')
-  return res.data
-}
 
 // ============================================================================
 // Admin Binding Management APIs

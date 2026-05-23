@@ -56,10 +56,7 @@ const CONTEXT_KEY_PRESETS = [
   'id',
   'token_id',
   'token_key',
-  'token_group',
-  'group',
   'username',
-  'user_group',
   'user_email',
   'specific_channel_id',
 ]
@@ -72,7 +69,6 @@ interface RuleFormValues {
   value_regex: string
   ttl_seconds: number
   skip_retry_on_failure: boolean
-  include_using_group: boolean
   include_model_name: boolean
   include_rule_name: boolean
   param_override_template_json: string
@@ -116,7 +112,6 @@ export function RuleEditorDialog(props: Props) {
       value_regex: '',
       ttl_seconds: 0,
       skip_retry_on_failure: false,
-      include_using_group: true,
       include_model_name: false,
       include_rule_name: true,
       param_override_template_json: '',
@@ -132,7 +127,6 @@ export function RuleEditorDialog(props: Props) {
       value_regex: r.value_regex || '',
       ttl_seconds: r.ttl_seconds || 0,
       skip_retry_on_failure: !!r.skip_retry_on_failure,
-      include_using_group: r.include_using_group ?? true,
       include_model_name: !!r.include_model_name,
       include_rule_name: r.include_rule_name ?? true,
       param_override_template_json: r.param_override_template
@@ -160,7 +154,6 @@ export function RuleEditorDialog(props: Props) {
         value_regex: '',
         ttl_seconds: 0,
         skip_retry_on_failure: false,
-        include_using_group: true,
         include_model_name: false,
         include_rule_name: true,
         param_override_template_json: '',
@@ -214,7 +207,6 @@ export function RuleEditorDialog(props: Props) {
       value_regex: values.value_regex.trim(),
       ttl_seconds: Number(values.ttl_seconds || 0),
       skip_retry_on_failure: values.skip_retry_on_failure,
-      include_using_group: values.include_using_group,
       include_model_name: values.include_model_name,
       include_rule_name: values.include_rule_name,
       param_override_template: paramTemplate,
@@ -410,16 +402,7 @@ export function RuleEditorDialog(props: Props) {
                 />
               </div>
 
-              <div className='grid grid-cols-3 gap-3'>
-                <div className='flex items-center gap-2'>
-                  <Switch
-                    checked={form.watch('include_using_group')}
-                    onCheckedChange={(v) =>
-                      form.setValue('include_using_group', v)
-                    }
-                  />
-                  <Label className='text-xs'>{t('Include Group')}</Label>
-                </div>
+              <div className='grid grid-cols-2 gap-3'>
                 <div className='flex items-center gap-2'>
                   <Switch
                     checked={form.watch('include_model_name')}

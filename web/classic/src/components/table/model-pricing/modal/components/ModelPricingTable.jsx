@@ -26,92 +26,39 @@ const { Text } = Typography;
 
 const ModelPricingTable = ({
   modelData,
-  groupRatio,
   currency,
   siteDisplayType,
   tokenUnit,
   displayPrice,
-  showRatio,
-  usableGroup,
-  autoGroups = [],
   t,
 }) => {
-  const modelEnableGroups = Array.isArray(modelData?.enable_groups)
-    ? modelData.enable_groups
-    : [];
-  const autoChain = autoGroups.filter((g) => modelEnableGroups.includes(g));
-  const renderGroupPriceTable = () => {
-    // 仅展示模型可用的分组：模型 enable_groups 与用户可用分组的交集
+  const priceData = modelData
+    ? calculateModelPrice({
+        record: modelData,
+        tokenUnit,
+        displayPrice,
+        currency,
+        quotaDisplayType: siteDisplayType,
+      })
+    : { price: '-' };
 
-    const availableGroups = Object.keys(usableGroup || {})
-      .filter((g) => g !== '')
-      .filter((g) => g !== 'auto')
-      .filter((g) => modelEnableGroups.includes(g));
+  const tableData = [
+    {
+      key: modelData?.model_name || 'model',
+      billingType:
+        modelData?.billing_mode === 'tiered_expr'
+          ? t('动态计费')
+          : modelData?.quota_type === 0
+            ? t('按量计费')
+            : modelData?.quota_type === 1
+              ? t('按次计费')
+              : '-',
+      priceItems: getModelPriceItems(priceData, t, siteDisplayType),
+    },
+  ];
 
-    // 准备表格数据
-    const tableData = availableGroups.map((group) => {
-      const priceData = modelData
-        ? calculateModelPrice({
-            record: modelData,
-            selectedGroup: group,
-            groupRatio,
-            tokenUnit,
-            displayPrice,
-            currency,
-            quotaDisplayType: siteDisplayType,
-          })
-        : { inputPrice: '-', outputPrice: '-', price: '-' };
-
-      // 获取分组倍率
-      const groupRatioValue =
-        groupRatio && groupRatio[group] ? groupRatio[group] : 1;
-
-      return {
-        key: group,
-        group: group,
-        ratio: groupRatioValue,
-        billingType:
-          modelData?.billing_mode === 'tiered_expr'
-            ? t('动态计费')
-            : modelData?.quota_type === 0
-              ? t('按量计费')
-              : modelData?.quota_type === 1
-                ? t('按次计费')
-                : '-',
-        priceItems: getModelPriceItems(priceData, t, siteDisplayType),
-      };
-    });
-
-    // 定义表格列
-    const columns = [
-      {
-        title: t('分组'),
-        dataIndex: 'group',
-        render: (text) => (
-          <Tag color='white' size='small' shape='circle'>
-            {text}
-            {t('分组')}
-          </Tag>
-        ),
-      },
-    ];
-
-    const isDynamic = modelData?.billing_mode === 'tiered_expr';
-
-    // 动态计费时始终显示倍率列，否则根据设置
-    if (showRatio || isDynamic) {
-      columns.push({
-        title: t('分组倍率'),
-        dataIndex: 'ratio',
-        render: (text) => (
-          <Tag color='blue' size='small' shape='circle'>
-            {text}x
-          </Tag>
-        ),
-      });
-    }
-
-    columns.push({
+  const columns = [
+    {
       title: t('计费类型'),
       dataIndex: 'billingType',
       render: (text) => {
@@ -125,9 +72,8 @@ const ModelPricingTable = ({
           </Tag>
         );
       },
-    });
-
-    columns.push({
+    },
+    {
       title: siteDisplayType === 'TOKENS' ? t('计费摘要') : t('价格摘要'),
       dataIndex: 'priceItems',
       render: (items) => {
@@ -151,19 +97,8 @@ const ModelPricingTable = ({
           </div>
         );
       },
-    });
-
-    return (
-      <Table
-        dataSource={tableData}
-        columns={columns}
-        pagination={false}
-        size='small'
-        bordered={false}
-        className='!rounded-lg'
-      />
-    );
-  };
+    },
+  ];
 
   return (
     <div>
@@ -172,28 +107,20 @@ const ModelPricingTable = ({
           <IconCoinMoneyStroked size={16} />
         </Avatar>
         <div>
-          <Text className='text-lg font-medium'>{t('分组价格')}</Text>
+          <Text className='text-lg font-medium'>{t('模型价格')}</Text>
           <div className='text-xs text-gray-600'>
-            {t('不同用户分组的价格信息')}
+            {t('当前模型的价格信息')}
           </div>
         </div>
       </div>
-      {autoChain.length > 0 && (
-        <div className='flex flex-wrap items-center gap-1 mb-4'>
-          <span className='text-sm text-gray-600'>{t('auto分组调用链路')}</span>
-          <span className='text-sm'>→</span>
-          {autoChain.map((g, idx) => (
-            <React.Fragment key={g}>
-              <Tag color='white' size='small' shape='circle'>
-                {g}
-                {t('分组')}
-              </Tag>
-              {idx < autoChain.length - 1 && <span className='text-sm'>→</span>}
-            </React.Fragment>
-          ))}
-        </div>
-      )}
-      {renderGroupPriceTable()}
+      <Table
+        dataSource={tableData}
+        columns={columns}
+        pagination={false}
+        size='small'
+        bordered={false}
+        className='!rounded-lg'
+      />
     </div>
   );
 };

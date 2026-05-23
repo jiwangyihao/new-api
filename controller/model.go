@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,7 +15,6 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/moonshot"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
-	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -152,33 +150,7 @@ func ListModels(c *gin.Context, modelType int) {
 			}
 		}
 	} else {
-		userId := c.GetInt("id")
-		userGroup, err := model.GetUserGroup(userId, false)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "get user group failed",
-			})
-			return
-		}
-		group := userGroup
-		tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-		if tokenGroup != "" {
-			group = tokenGroup
-		}
-		var models []string
-		if tokenGroup == "auto" {
-			for _, autoGroup := range service.GetUserAutoGroup(userGroup) {
-				groupModels := model.GetGroupEnabledModels(autoGroup)
-				for _, g := range groupModels {
-					if !common.StringsContains(models, g) {
-						models = append(models, g)
-					}
-				}
-			}
-		} else {
-			models = model.GetGroupEnabledModels(group)
-		}
+		models := model.GetEnabledModels()
 		for _, modelName := range models {
 			if !acceptUnsetRatioModel {
 				if !helper.HasModelBillingConfig(modelName) {

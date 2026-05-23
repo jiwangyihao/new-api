@@ -217,10 +217,10 @@ This ensures that heavy cache usage doesn't cause the tier condition to incorrec
 Expression coefficients are $/1M tokens. Conversion to internal quota:
 
 ```
-quota = exprOutput / 1,000,000 * QuotaPerUnit * groupRatio
+quota = exprOutput / 1,000,000 * QuotaPerUnit
 ```
 
-This matches the per-call billing pattern: `quota = modelPrice * QuotaPerUnit * groupRatio`.
+This matches the per-call fixed-price conversion pattern after business-group multipliers were retired.
 
 ### Expression Versioning
 

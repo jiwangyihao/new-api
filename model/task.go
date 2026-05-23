@@ -48,7 +48,7 @@ type Task struct {
 	TaskID     string                `json:"task_id" gorm:"type:varchar(191);index"` // 第三方id，不一定有/ song id\ Task id
 	Platform   constant.TaskPlatform `json:"platform" gorm:"type:varchar(30);index"` // 平台
 	UserId     int                   `json:"user_id" gorm:"index"`
-	Group      string                `json:"group" gorm:"type:varchar(50)"` // 修正计费用
+	Group      string                `json:"-" gorm:"type:varchar(50)"` // legacy business group column; ignored at runtime
 	ChannelId  int                   `json:"channel_id" gorm:"index"`
 	Quota      int                   `json:"quota"`
 	Action     string                `json:"action" gorm:"type:varchar(40);index"` // 任务类型, song, lyrics, description-mode
@@ -110,7 +110,7 @@ type TaskPrivateData struct {
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
 	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
+	QuotaMultiplier float64            `json:"-"`                           // legacy business group ratio; ignored at runtime
 	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
 	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
@@ -196,7 +196,6 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	t := &Task{
 		TaskID:      taskID,
 		UserId:      relayInfo.UserId,
-		Group:       relayInfo.UsingGroup,
 		SubmitTime:  time.Now().Unix(),
 		Status:      TaskStatusNotStart,
 		Progress:    "0%",

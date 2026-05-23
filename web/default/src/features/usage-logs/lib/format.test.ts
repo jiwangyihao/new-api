@@ -46,7 +46,6 @@ function makeUsageLog(overrides: Partial<UsageLog>): UsageLog {
     channel: 1,
     channel_name: 'test-channel',
     token_id: 1,
-    group: 'default',
     ip: '',
     request_id: '',
     upstream_request_id: '',
@@ -113,11 +112,11 @@ test('shouldShowCostDetails only allows admins', () => {
   assert.equal(shouldShowCostDetails(true), true)
 })
 
-test('getTokenNameMeta hides ratios for non-admin users', () => {
-  const other = { group_ratio: 2, user_group_ratio: 3, group: 'default' }
+test('getTokenNameMeta does not expose legacy group metadata', () => {
+  const other = { model_ratio: 2 }
 
-  assert.deepEqual(getTokenNameMeta(other, false), ['default'])
-  assert.deepEqual(getTokenNameMeta(other, true), ['default', '3x'])
+  assert.deepEqual(getTokenNameMeta(other, false), [])
+  assert.deepEqual(getTokenNameMeta(other, true), [])
 })
 
 test('getLogTokenUsageColumnValue sorts by helper result instead of quota', () => {

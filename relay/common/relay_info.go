@@ -85,12 +85,13 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
-	TokenId           int
-	TokenKey          string
+	TokenId  int
+	TokenKey string
+	UserId   int
+	// Legacy group fields remain for older call sites; GenRelayInfo no longer assigns business groups.
 	TokenGroup        string
-	UserId            int
-	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
-	UserGroup         string // 用户所在分组
+	UsingGroup        string
+	UserGroup         string
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
@@ -146,17 +147,17 @@ type RelayInfo struct {
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
 	// SubscriptionToken* fields are authoritative only for distributor token billing.
-	SubscriptionTokenLimit                   int64
-	SubscriptionTokenUsedAfterPreConsume     int64
-	SubscriptionTokenUnlimited               bool
-	SubscriptionDistributorTokenBilling      bool
-	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
-	IsChannelTest                         bool // channel test request
-	RetryIndex                            int
-	LastError                             *types.NewAPIError
-	RuntimeHeadersOverride                map[string]interface{}
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	SubscriptionTokenLimit               int64
+	SubscriptionTokenUsedAfterPreConsume int64
+	SubscriptionTokenUnlimited           bool
+	SubscriptionDistributorTokenBilling  bool
+	IsClaudeBetaQuery                    bool // /v1/messages?beta=true
+	IsChannelTest                        bool // channel test request
+	RetryIndex                           int
+	LastError                            *types.NewAPIError
+	RuntimeHeadersOverride               map[string]interface{}
+	UseRuntimeHeadersOverride            bool
+	ParamOverrideAudit                   []string
 
 	PriceData types.PriceData
 
@@ -259,8 +260,8 @@ func (info *RelayInfo) ToString() string {
 	fmt.Fprintf(b, "FinalPreConsumedQuota: %d, ", info.FinalPreConsumedQuota)
 
 	// User & token info (mask secrets)
-	fmt.Fprintf(b, "User{ Id: %d, Email: %q, Group: %q, UsingGroup: %q, Quota: %d }, ",
-		info.UserId, common.MaskEmail(info.UserEmail), info.UserGroup, info.UsingGroup, info.UserQuota)
+	fmt.Fprintf(b, "User{ Id: %d, Email: %q, Quota: %d }, ",
+		info.UserId, common.MaskEmail(info.UserEmail), info.UserQuota)
 	fmt.Fprintf(b, "Token{ Id: %d, Unlimited: %t, Key: ***masked*** }, ", info.TokenId, info.TokenUnlimited)
 
 	// Time info
@@ -433,12 +434,6 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	//channelId := common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	//paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 
-	tokenGroup := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-	// 当令牌分组为空时，表示使用用户分组
-	if tokenGroup == "" {
-		tokenGroup = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	}
-
 	startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 	if startTime.IsZero() {
 		startTime = time.Now()
@@ -460,19 +455,16 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	info := &RelayInfo{
 		Request: request,
 
-		RequestId:  reqId,
-		UserId:     common.GetContextKeyInt(c, constant.ContextKeyUserId),
-		UsingGroup: common.GetContextKeyString(c, constant.ContextKeyUsingGroup),
-		UserGroup:  common.GetContextKeyString(c, constant.ContextKeyUserGroup),
-		UserQuota:  common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
-		UserEmail:  common.GetContextKeyString(c, constant.ContextKeyUserEmail),
+		RequestId: reqId,
+		UserId:    common.GetContextKeyInt(c, constant.ContextKeyUserId),
+		UserQuota: common.GetContextKeyInt(c, constant.ContextKeyUserQuota),
+		UserEmail: common.GetContextKeyString(c, constant.ContextKeyUserEmail),
 
 		OriginModelName: common.GetContextKeyString(c, constant.ContextKeyOriginalModel),
 
 		TokenId:        common.GetContextKeyInt(c, constant.ContextKeyTokenId),
 		TokenKey:       common.GetContextKeyString(c, constant.ContextKeyTokenKey),
 		TokenUnlimited: common.GetContextKeyBool(c, constant.ContextKeyTokenUnlimited),
-		TokenGroup:     tokenGroup,
 
 		isFirstResponse: true,
 		RelayMode:       relayconstant.Path2RelayMode(c.Request.URL.Path),

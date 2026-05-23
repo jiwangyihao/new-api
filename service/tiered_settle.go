@@ -107,10 +107,10 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 	if err != nil {
 		quota = relayInfo.FinalPreConsumedQuota
 		if quota <= 0 {
-			quota = snap.EstimatedQuotaAfterGroup
+			quota = snap.EstimatedQuota
 		}
 		return true, quota, nil
 	}
 
-	return true, tr.ActualQuotaAfterGroup, &tr
+	return true, tr.ActualQuota, &tr
 }

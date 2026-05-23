@@ -32,7 +32,7 @@ func TestModelMetaExactCodexDefaultIncludesCompactEndpoint(t *testing.T) {
 	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
 }
 
-func TestModelMetaCustomEndpointsOverrideCompactEndpoint(t *testing.T) {
+func TestModelMetaCustomEndpointsDoNotGateCompactEndpoint(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 2311, Type: constant.ChannelTypeCodex, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default", Name: "codex"}).Error)
 	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: 2311, Enabled: true}).Error)
@@ -47,10 +47,10 @@ func TestModelMetaCustomEndpointsOverrideCompactEndpoint(t *testing.T) {
 
 	endpoints := decodeModelMetaEndpoints(t, m.Endpoints)
 	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponse)
-	assert.NotContains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
+	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
 }
 
-func TestModelMetaRuleModelUsesEffectiveEndpointSemantics(t *testing.T) {
+func TestModelMetaRuleModelUsesChannelCapabilitySemantics(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.Create(&model.Channel{Id: 2321, Type: constant.ChannelTypeCodex, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default", Name: "codex"}).Error)
 	require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: 2321, Enabled: true}).Error)
@@ -65,7 +65,7 @@ func TestModelMetaRuleModelUsesEffectiveEndpointSemantics(t *testing.T) {
 
 	endpoints := decodeModelMetaEndpoints(t, m.Endpoints)
 	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponse)
-	assert.NotContains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
+	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
 }
 
 func TestGetModelMetaUsesCommonJSONForEndpoints(t *testing.T) {

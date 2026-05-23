@@ -55,7 +55,7 @@ func endpointStringsForTest(endpoints map[string]any) string {
 	return string(data)
 }
 
-func TestChannelSupportsEndpointHonorsModelEndpointsOverride(t *testing.T) {
+func TestChannelSupportsEndpointIgnoresModelEndpointMetadata(t *testing.T) {
 	db := setupEndpointSupportTestDB(t)
 	channel := &Channel{Id: 1, Type: constant.ChannelTypeCodex, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default"}
 	require.NoError(t, db.Create(channel).Error)
@@ -67,7 +67,86 @@ func TestChannelSupportsEndpointHonorsModelEndpointsOverride(t *testing.T) {
 	RefreshEndpointSupportCache()
 
 	assert.True(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponse))
-	assert.False(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponseCompact))
+	assert.True(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponseCompact))
+}
+
+func TestChannelSupportsEndpointUsesChannelSettingsBeforeTypeDefaults(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	channel := &Channel{
+		Id:     4,
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-5.5",
+		Group:  "default",
+		OtherSettings: endpointStringsForTest(map[string]any{
+			"supported_endpoint_types": []string{string(constant.EndpointTypeOpenAI), string(constant.EndpointTypeOpenAIResponseCompact)},
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "gpt-5.5", ChannelId: channel.Id, Enabled: true}).Error)
+	RefreshEndpointSupportCache()
+
+	assert.True(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponseCompact))
+	assert.False(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponse))
+}
+
+func TestModelEndpointMetadataDoesNotGateChannelSupport(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	channel := &Channel{
+		Id:     5,
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-5.5",
+		Group:  "default",
+		OtherSettings: endpointStringsForTest(map[string]any{
+			"supported_endpoint_types": []string{string(constant.EndpointTypeOpenAIResponseCompact)},
+		}),
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "gpt-5.5", ChannelId: channel.Id, Enabled: true}).Error)
+	require.NoError(t, db.Create(&Model{ModelName: "gpt-5.5", NameRule: NameRuleExact, Status: 1, Endpoints: endpointStringsForTest(map[string]any{
+		string(constant.EndpointTypeOpenAIResponse): "/v1/responses",
+	})}).Error)
+	RefreshEndpointSupportCache()
+
+	assert.True(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponseCompact))
+}
+
+func TestEndpointDisplayTypesDoNotExposeUnsupportedModelMetadata(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	channel := &Channel{
+		Id:     7,
+		Type:   constant.ChannelTypeOpenAI,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-5.5",
+		Group:  "default",
+	}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "gpt-5.5", ChannelId: channel.Id, Enabled: true}).Error)
+	require.NoError(t, db.Create(&Model{ModelName: "gpt-5.5", NameRule: NameRuleExact, Status: 1, Endpoints: endpointStringsForTest(map[string]any{
+		string(constant.EndpointTypeOpenAIResponseCompact): "/custom/compact",
+	})}).Error)
+	RefreshEndpointSupportCache()
+
+	endpoints := GetEndpointDisplayTypes(channel, "gpt-5.5")
+
+	assert.Contains(t, endpoints, constant.EndpointTypeOpenAI)
+	assert.NotContains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
+}
+
+func TestGetChannelForEndpointUsesChannelSettings(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	require.NoError(t, db.Create(&Channel{Id: 6, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default", OtherSettings: endpointStringsForTest(map[string]any{
+		"supported_endpoint_types": []string{string(constant.EndpointTypeOpenAIResponse), string(constant.EndpointTypeOpenAIResponseCompact)},
+	})}).Error)
+	require.NoError(t, db.Create(&Ability{Group: "default", Model: "gpt-5.5", ChannelId: 6, Enabled: true}).Error)
+	RefreshEndpointSupportCache()
+
+	channel, err := GetChannelForEndpoint("default", "gpt-5.5", 0, constant.EndpointTypeOpenAIResponseCompact)
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 6, channel.Id)
 }
 
 func TestGetChannelForEndpointFiltersBeforePrioritySelection(t *testing.T) {

@@ -91,21 +91,26 @@ func TestGetPricingIncludesCodexCompactSupportedEndpoint(t *testing.T) {
 	assert.Equal(t, "POST", compact["method"])
 }
 
-func TestGetPricingCustomEndpointsOverrideCompactExposure(t *testing.T) {
+func TestGetPricingCustomEndpointsDoNotGateCompactExposure(t *testing.T) {
 	setupCompactPricingTest(t)
 	seedCompactPricingUser(t, 2211, "default")
 	seedCompactPricingCodex(t, "default", 2212)
 	require.NoError(t, model.DB.Create(&model.Model{ModelName: "gpt-5.5", NameRule: model.NameRuleExact, Status: 1, Endpoints: endpointStringsForControllerTest(t, map[string]any{
-		string(constant.EndpointTypeOpenAIResponse): "/v1/responses",
+		string(constant.EndpointTypeOpenAIResponse): "/custom/responses",
 	})}).Error)
 	model.InvalidatePricingCache()
 	model.GetPricing()
 
 	payload := performGetPricingForDirectoryTest(t, common.GetPointer(2211))
 	item := pricingDirectoryItemByName(t, payload, "gpt-5.5")
-	assertPricingItemLacksEndpoint(t, item, constant.EndpointTypeOpenAIResponseCompact)
-	_, ok := supportedEndpointMap(t, payload)[string(constant.EndpointTypeOpenAIResponseCompact)]
-	assert.False(t, ok)
+	assertPricingItemHasEndpoint(t, item, constant.EndpointTypeOpenAIResponseCompact)
+	supported := supportedEndpointMap(t, payload)
+	response, ok := supported[string(constant.EndpointTypeOpenAIResponse)].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/responses", response["path"])
+	compact, ok := supported[string(constant.EndpointTypeOpenAIResponseCompact)].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "/v1/responses/compact", compact["path"])
 }
 
 func TestGetPricingCustomCompactEndpointInfo(t *testing.T) {
@@ -123,6 +128,24 @@ func TestGetPricingCustomCompactEndpointInfo(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "/custom/compact", compact["path"])
 	assert.Equal(t, "POST", compact["method"])
+}
+
+func TestGetPricingCustomCompactEndpointInfoRequiresChannelCapability(t *testing.T) {
+	setupCompactPricingTest(t)
+	seedCompactPricingUser(t, 2223, "default")
+	require.NoError(t, model.DB.Create(&model.Channel{Id: 2224, Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default", Name: "openai-default"}).Error)
+	require.NoError(t, model.DB.Create(&model.Ability{Group: "default", Model: "gpt-5.5", ChannelId: 2224, Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.Model{ModelName: "gpt-5.5", NameRule: model.NameRuleExact, Status: 1, Endpoints: endpointStringsForControllerTest(t, map[string]any{
+		string(constant.EndpointTypeOpenAIResponseCompact): map[string]any{"path": "/custom/compact", "method": "post"},
+	})}).Error)
+	model.InvalidatePricingCache()
+	model.GetPricing()
+
+	payload := performGetPricingForDirectoryTest(t, common.GetPointer(2223))
+	item := pricingDirectoryItemByName(t, payload, "gpt-5.5")
+	assertPricingItemLacksEndpoint(t, item, constant.EndpointTypeOpenAIResponseCompact)
+	_, ok := supportedEndpointMap(t, payload)[string(constant.EndpointTypeOpenAIResponseCompact)]
+	assert.False(t, ok)
 }
 
 func TestGetPricingSupportedEndpointMapIsScopedToUsableGroups(t *testing.T) {

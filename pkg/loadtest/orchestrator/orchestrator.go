@@ -293,7 +293,9 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 			ports = waitCleanupPortsClosed(ctx, deps, rc, checkPorts, cleanupPortsTimeout)
 		}
 		if opts.ArtifactDir != "" {
-			_ = deps.WriteJSON(filepath.Join(opts.ArtifactDir, "ports-closed.json"), ports)
+			if err := deps.WriteJSON(filepath.Join(opts.ArtifactDir, "ports-closed.json"), ports); err != nil && code == 0 {
+				return 1
+			}
 		}
 		if !ports.Passed && code == 0 {
 			return 2
@@ -332,14 +334,14 @@ func Run(ctx context.Context, opts Options, deps Dependencies) (artifact.SweepRe
 		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 	}
 	limitResult, limitErr := deps.ApplyLimits(server.PID(), p.ServerLimits)
-	if limitErr != nil || limitResult.ShouldFailOrchestrator() {
-		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
-	}
 	limitsArtifact = resource.BuildLimitsArtifact(rc, p.ServerLimits, limitResult)
 	if opts.ArtifactDir != "" {
 		if err := deps.WriteJSON(filepath.Join(opts.ArtifactDir, "resource-limits.json"), limitsArtifact); err != nil {
 			return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 		}
+	}
+	if limitErr != nil || limitResult.ShouldFailOrchestrator() {
+		return artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc}, cleanup(rc, 1)
 	}
 
 	result := artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Scenario: opts.Scenario, Path: opts.Path, TokenProfile: opts.TokenProfile, RunID: time.Now().UTC().Format("20060102T150405Z") + "-" + sanitizeName(opts.Scenario)}

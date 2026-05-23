@@ -205,10 +205,14 @@ func updatePricing() {
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 
-	// 先根据已有能力填充有效端点，models.endpoints 有效配置按覆盖语义替换默认端点
+	// 先根据渠道侧能力填充有效端点；models.endpoints 仅覆盖展示信息，不参与选渠能力裁剪。
 	for _, ability := range enableAbilities {
+		channel := Channel{}
+		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		for _, endpointType := range GetEffectiveEndpointTypes(ability.ChannelType, ability.Model) {
+		for _, endpointType := range GetEndpointDisplayTypes(&channel, ability.Model) {
 			if !common.StringsContains(endpoints, string(endpointType)) {
 				endpoints = append(endpoints, string(endpointType))
 			}

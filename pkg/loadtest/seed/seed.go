@@ -58,6 +58,9 @@ func Apply(ctx context.Context, db *gorm.DB, cfg Config) (artifact.SeedOutput, e
 	}); err != nil {
 		return artifact.SeedOutput{}, err
 	}
+	if common.MemoryCacheEnabled {
+		model.InitChannelCache()
+	}
 	return seedOutput(cfg), nil
 }
 
@@ -237,8 +240,9 @@ func isolateRoute(tx *gorm.DB, cfg Config) error {
 	baseURL := cfg.MockBaseURL
 	priority := int64(1000)
 	weight := uint(100)
-	channel := model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-loadtest-mock", Status: common.ChannelStatusEnabled, Name: "loadtest-loopback-openai", BaseURL: &baseURL, Models: cfg.Model, Group: cfg.Group, Priority: &priority, Weight: &weight}
-	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "key", "status", "name", "base_url", "models", "group", "priority", "weight"})}).Create(&channel).Error; err != nil {
+	settings := fmt.Sprintf(`{"supported_endpoint_types":[%q]}`, constant.EndpointTypeOpenAIResponse)
+	channel := model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-loadtest-mock", Status: common.ChannelStatusEnabled, Name: "loadtest-loopback-openai", BaseURL: &baseURL, Models: cfg.Model, Group: cfg.Group, Priority: &priority, Weight: &weight, OtherSettings: settings}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, DoUpdates: clause.AssignmentColumns([]string{"type", "key", "status", "name", "base_url", "models", "group", "priority", "weight", "settings"})}).Create(&channel).Error; err != nil {
 		return err
 	}
 	ability := model.Ability{Group: cfg.Group, Model: cfg.Model, ChannelId: channelID, Enabled: true, Priority: &priority, Weight: weight}

@@ -93,6 +93,7 @@ export interface ChannelOtherSettings {
   vertex_key_type?: 'json' | 'api_key'
   openrouter_enterprise?: boolean
   aws_key_type?: 'ak_sk' | 'api_key'
+  supported_endpoint_types?: string[]
   allow_service_tier?: boolean
   disable_store?: boolean
   allow_safety_identifier?: boolean

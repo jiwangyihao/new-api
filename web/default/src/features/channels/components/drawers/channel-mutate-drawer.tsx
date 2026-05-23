@@ -215,6 +215,20 @@ const MODEL_MAPPING_PREVIEW_FALLBACK: Array<{
   target: string
 }> = [{ source: 'client-model', target: 'upstream-model' }]
 
+const CHANNEL_ENDPOINT_OPTIONS = [
+  { value: 'openai', label: 'OpenAI (/v1/chat/completions)' },
+  { value: 'openai-response', label: 'OpenAI Responses (/v1/responses)' },
+  {
+    value: 'openai-response-compact',
+    label: 'OpenAI Responses Compact (/v1/responses/compact)',
+  },
+  { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
+  { value: 'gemini', label: 'Gemini generateContent' },
+  { value: 'jina-rerank', label: 'Jina Rerank (/rerank)' },
+  { value: 'image-generation', label: 'Image Generation' },
+  { value: 'embeddings', label: 'Embeddings' },
+]
+
 const ADVANCED_SETTINGS_EXPANDED_KEY = 'channel-advanced-settings-expanded'
 const UPSTREAM_DETECTED_MODEL_PREVIEW_LIMIT = 8
 
@@ -2872,6 +2886,38 @@ export function ChannelMutateDrawer({
                       title={t('Channel Extra Settings')}
                       icon={<Settings className='h-4 w-4' />}
                     />
+                    <div className='space-y-3 rounded-lg border p-4'>
+                      <SubHeading
+                        title={t('Endpoint Capabilities')}
+                        icon={<Route className='h-3.5 w-3.5' />}
+                      />
+                      <FormField
+                        control={form.control}
+                        name='supported_endpoint_types'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Supported Endpoint Types')}</FormLabel>
+                            <FormControl>
+                              <MultiSelect
+                                options={CHANNEL_ENDPOINT_OPTIONS.map((option) => ({
+                                  value: option.value,
+                                  label: t(option.label),
+                                }))}
+                                selected={field.value || []}
+                                onChange={field.onChange}
+                                placeholder={t('Use channel type defaults')}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              {t(
+                                'Leave empty to use channel type defaults. Select values to explicitly declare which endpoints this upstream supports.'
+                              )}
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                     {(currentType === 1 || currentType === 14) && (
                       <div className='space-y-3 rounded-lg border p-4'>
                         <SubHeading

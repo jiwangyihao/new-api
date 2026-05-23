@@ -371,6 +371,51 @@ func TestRunWritesPartialLimitArtifactWhenApplyLimitsReportsNestedJob(t *testing
 	}
 }
 
+func TestRunWritesLimitArtifactBeforeFailingApplyLimitError(t *testing.T) {
+	cfg := orchestratorTestConfig(t)
+	var calls []string
+	var wroteLimits artifact.ResourceLimitsArtifact
+	deps := testDependencies(&calls, func(ctx context.Context, opts PointOptions) (artifact.PointResult, artifact.PointAnalysis, artifact.ResourceSamplesArtifact, error) {
+		return artifact.PointResult{Concurrency: opts.Concurrency, Passed: true, Gate: artifact.GateResult{Passed: true}}, artifact.PointAnalysis{}, artifact.ResourceSamplesArtifact{}, nil
+	})
+	deps.ApplyLimits = func(pid int, limits profile.ServerLimits) (resource.ApplyResult, error) {
+		return resource.ApplyResult{Status: "partial", Reason: "set job object memory limit: injected", ProcessMemoryLimitBytes: limits.ProcessMemoryLimitBytes, CPUAffinityCores: limits.CPUAffinityCores}, errors.New("apply server limits: injected")
+	}
+	deps.WriteJSON = func(path string, v any) error {
+		if strings.HasSuffix(path, "resource-limits.json") {
+			wroteLimits = v.(artifact.ResourceLimitsArtifact)
+		}
+		return nil
+	}
+
+	_, code := Run(context.Background(), Options{Config: cfg, Profile: "benchmark", Points: []int{2}, ArtifactDir: t.TempDir(), APIKey: loadtestconfig.SubscriptionAPIKey, TokenProfile: "subscription", Scenario: "benchmark", Path: "/v1/responses", MockProfile: "s2-short-stream"}, deps)
+	if code == 0 {
+		t.Fatalf("limit error returned success; calls=%v", calls)
+	}
+	if wroteLimits.Status != "partial" || wroteLimits.Reason != "set job object memory limit: injected" {
+		t.Fatalf("limit failure artifact was not written before exit: %#v", wroteLimits)
+	}
+}
+
+func TestRunFailsWhenPortsClosedArtifactCannotBeWritten(t *testing.T) {
+	cfg := orchestratorTestConfig(t)
+	var calls []string
+	deps := testDependencies(&calls, func(ctx context.Context, opts PointOptions) (artifact.PointResult, artifact.PointAnalysis, artifact.ResourceSamplesArtifact, error) {
+		return artifact.PointResult{Concurrency: opts.Concurrency, Passed: true, Gate: artifact.GateResult{Passed: true}}, artifact.PointAnalysis{}, artifact.ResourceSamplesArtifact{}, nil
+	})
+	deps.WriteJSON = func(path string, v any) error {
+		if strings.HasSuffix(path, "ports-closed.json") {
+			return errors.New("write ports artifact: injected")
+		}
+		return nil
+	}
+
+	_, code := Run(context.Background(), Options{Config: cfg, Profile: "benchmark", Points: []int{2}, ArtifactDir: t.TempDir(), APIKey: loadtestconfig.SubscriptionAPIKey, TokenProfile: "subscription", Scenario: "benchmark", Path: "/v1/responses", MockProfile: "s2-short-stream"}, deps)
+	if code == 0 {
+		t.Fatalf("ports artifact write failure returned success; calls=%v", calls)
+	}
+}
+
 func TestRunWithExternalInfraDoesNotRequireInfraPortsClosed(t *testing.T) {
 	cfg := orchestratorTestConfig(t)
 	var calls []string

@@ -39,6 +39,22 @@ func TestSeedIsIdempotentAndCreatesBillingObjects(t *testing.T) {
 	assertSubscriptionConcurrencyPositive(t, db)
 }
 
+func TestApplyRefreshesRuntimeChannelCache(t *testing.T) {
+	db := openSeedTestDB(t)
+	oldMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemoryCache })
+	model.InitChannelCache()
+
+	_, err := Apply(context.Background(), db, Config{Model: "gpt-5.5", Group: "default", MockBaseURL: "http://127.0.0.1:19080", SubscriptionKey: loadtestconfig.SubscriptionAPIKey, CompatKey: loadtestconfig.CompatAPIKey})
+	require.NoError(t, err)
+
+	channel, err := model.GetRandomSatisfiedChannelForEndpoint("default", "gpt-5.5", 0, constant.EndpointTypeOpenAIResponse)
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	require.Equal(t, channelID, channel.Id)
+}
+
 func TestSeedDisablesUnsafeChannelsForModelRoute(t *testing.T) {
 	db := openSeedTestDB(t)
 	unsafeURL := "https://api.openai.com"

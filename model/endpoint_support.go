@@ -101,16 +101,49 @@ func endpointTypesFromOverride(endpoints string) []constant.EndpointType {
 	return out
 }
 
-func GetEffectiveEndpointTypes(channelType int, modelName string) []constant.EndpointType {
+func appendEndpointIfMissing(endpoints []constant.EndpointType, seen map[constant.EndpointType]struct{}, endpoint constant.EndpointType) []constant.EndpointType {
+	if endpoint == "" {
+		return endpoints
+	}
+	if _, ok := seen[endpoint]; ok {
+		return endpoints
+	}
+	seen[endpoint] = struct{}{}
+	return append(endpoints, endpoint)
+}
+
+func modelEndpointOverrideTypes(modelName string) []constant.EndpointType {
 	cache := getEndpointSupportCache()
 	if meta := matchEndpointMeta(modelName, cache); meta != nil {
 		if meta.Status != 1 {
 			return []constant.EndpointType{}
 		}
-		if endpoints := endpointTypesFromOverride(meta.Endpoints); len(endpoints) > 0 {
-			return endpoints
-		}
+		return endpointTypesFromOverride(meta.Endpoints)
 	}
+	return nil
+}
+
+func GetChannelEndpointTypes(channel *Channel, modelName string) []constant.EndpointType {
+	if channel == nil {
+		return []constant.EndpointType{}
+	}
+	settings := channel.GetOtherSettings()
+	if len(settings.SupportedEndpointTypes) > 0 {
+		endpoints := make([]constant.EndpointType, 0, len(settings.SupportedEndpointTypes))
+		seen := make(map[constant.EndpointType]struct{}, len(settings.SupportedEndpointTypes))
+		for _, endpoint := range settings.SupportedEndpointTypes {
+			endpoints = appendEndpointIfMissing(endpoints, seen, endpoint)
+		}
+		return endpoints
+	}
+	return common.GetEndpointTypesByChannelType(channel.Type, modelName)
+}
+
+func GetEndpointDisplayTypes(channel *Channel, modelName string) []constant.EndpointType {
+	return GetChannelEndpointTypes(channel, modelName)
+}
+
+func GetEffectiveEndpointTypes(channelType int, modelName string) []constant.EndpointType {
 	return common.GetEndpointTypesByChannelType(channelType, modelName)
 }
 
@@ -130,22 +163,25 @@ func GetEffectiveEndpointTypesForModel(modelName string) []constant.EndpointType
 	endpoints := make([]constant.EndpointType, 0)
 	seen := make(map[constant.EndpointType]struct{})
 	for _, ability := range abilities {
-		for _, endpoint := range GetEffectiveEndpointTypes(ability.ChannelType, ability.Model) {
-			if _, ok := seen[endpoint]; ok {
-				continue
-			}
-			seen[endpoint] = struct{}{}
-			endpoints = append(endpoints, endpoint)
+		channel := Channel{}
+		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil || channel.Status != common.ChannelStatusEnabled {
+			continue
+		}
+		for _, endpoint := range GetEndpointDisplayTypes(&channel, ability.Model) {
+			endpoints = appendEndpointIfMissing(endpoints, seen, endpoint)
 		}
 	}
 	return endpoints
 }
 
 func ChannelSupportsEndpoint(channel *Channel, modelName string, endpointType constant.EndpointType) bool {
+	if endpointType == "" {
+		return channel != nil && channel.Status == common.ChannelStatusEnabled
+	}
 	if channel == nil {
 		return false
 	}
-	for _, endpoint := range GetEffectiveEndpointTypes(channel.Type, modelName) {
+	for _, endpoint := range GetChannelEndpointTypes(channel, modelName) {
 		if endpoint == endpointType {
 			return true
 		}
@@ -173,12 +209,8 @@ func GetModelSupportEndpointTypesForGroups(modelName string, usableGroups map[st
 		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil || channel.Status != common.ChannelStatusEnabled {
 			continue
 		}
-		for _, endpoint := range GetEffectiveEndpointTypes(channel.Type, modelName) {
-			if _, ok := seen[endpoint]; ok {
-				continue
-			}
-			seen[endpoint] = struct{}{}
-			endpoints = append(endpoints, endpoint)
+		for _, endpoint := range GetEndpointDisplayTypes(&channel, modelName) {
+			endpoints = appendEndpointIfMissing(endpoints, seen, endpoint)
 		}
 	}
 	return endpoints

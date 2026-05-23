@@ -66,6 +66,7 @@ export const channelFormSchema = z.object({
   vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
   aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
   azure_responses_version: z.string().optional(), // Azure specific
+  supported_endpoint_types: z.array(z.string()).optional(), // Channel endpoint capabilities
   // Field passthrough controls (stored in settings JSON)
   allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
   disable_store: z.boolean().optional(), // OpenAI only
@@ -124,6 +125,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   vertex_key_type: 'json',
   aws_key_type: 'ak_sk',
   azure_responses_version: '',
+  supported_endpoint_types: [],
   // Field passthrough controls
   allow_service_tier: false,
   disable_store: false,
@@ -189,6 +191,7 @@ export function transformChannelToFormDefaults(
   let upstreamModelUpdateCheckEnabled = false
   let upstreamModelUpdateAutoSyncEnabled = false
   let upstreamModelUpdateIgnoredModels = ''
+  let supportedEndpointTypes: string[] = []
 
   if (channel.settings) {
     try {
@@ -213,6 +216,11 @@ export function transformChannelToFormDefaults(
       )
         ? parsed.upstream_model_update_ignored_models.join(',')
         : ''
+      supportedEndpointTypes = Array.isArray(parsed.supported_endpoint_types)
+        ? parsed.supported_endpoint_types
+            .map((endpoint: unknown) => String(endpoint || '').trim())
+            .filter(Boolean)
+        : []
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error('Failed to parse channel settings:', error)
@@ -252,6 +260,7 @@ export function transformChannelToFormDefaults(
     vertex_key_type: vertexKeyType,
     azure_responses_version: azureResponsesVersion,
     aws_key_type: awsKeyType,
+    supported_endpoint_types: supportedEndpointTypes,
     allow_service_tier: allowServiceTier,
     disable_store: disableStore,
     allow_include_obfuscation: allowIncludeObfuscation,
@@ -322,6 +331,18 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     settingsObj.aws_key_type = formData.aws_key_type || 'ak_sk'
   } else if ('aws_key_type' in settingsObj) {
     delete settingsObj.aws_key_type
+  }
+
+  if (formData.supported_endpoint_types && formData.supported_endpoint_types.length > 0) {
+    settingsObj.supported_endpoint_types = Array.from(
+      new Set(
+        formData.supported_endpoint_types
+          .map((endpoint) => endpoint.trim())
+          .filter(Boolean)
+      )
+    )
+  } else if ('supported_endpoint_types' in settingsObj) {
+    delete settingsObj.supported_endpoint_types
   }
 
   // Field passthrough controls:

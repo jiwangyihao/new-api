@@ -34,6 +34,33 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 	return filtered
 }
 
+func applyVisibleEndpointTypes(pricing []model.Pricing, usableGroup map[string]string) []model.Pricing {
+	visible := make([]model.Pricing, 0, len(pricing))
+	for _, item := range pricing {
+		item.SupportedEndpointTypes = model.GetModelSupportEndpointTypesForGroups(item.ModelName, usableGroup)
+		visible = append(visible, item)
+	}
+	return visible
+}
+
+func buildSupportedEndpointMapForPricing(pricing []model.Pricing) map[string]common.EndpointInfo {
+	supported := make(map[string]common.EndpointInfo)
+	global := model.GetSupportedEndpointMap()
+	for _, item := range pricing {
+		for _, endpointType := range item.SupportedEndpointTypes {
+			key := string(endpointType)
+			if info, ok := global[key]; ok {
+				supported[key] = info
+				continue
+			}
+			if info, ok := common.GetDefaultEndpointInfo(endpointType); ok {
+				supported[key] = info
+			}
+		}
+	}
+	return supported
+}
+
 type pricingDirectoryItem struct {
 	ModelName              string                  `json:"model_name"`
 	Description            string                  `json:"description,omitempty"`
@@ -92,6 +119,7 @@ func GetPricing(c *gin.Context) {
 
 	usableGroup = service.GetUserUsableGroups(group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
+	pricing = applyVisibleEndpointTypes(pricing, usableGroup)
 	// check groupRatio contains usableGroup
 	for group := range ratio_setting.GetGroupRatioCopy() {
 		if _, ok := usableGroup[group]; !ok {
@@ -104,7 +132,7 @@ func GetPricing(c *gin.Context) {
 		"data":               toPricingDirectoryItems(pricing),
 		"vendors":            model.GetVendors(),
 		"usable_group":       usableGroup,
-		"supported_endpoint": model.GetSupportedEndpointMap(),
+		"supported_endpoint": buildSupportedEndpointMapForPricing(pricing),
 		"auto_groups":        service.GetUserAutoGroup(group),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
 	}

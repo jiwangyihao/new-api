@@ -91,6 +91,7 @@ type RelayInfo struct {
 	UserId            int
 	UsingGroup        string // 使用的分组，当auto跨分组重试时，会变动
 	UserGroup         string // 用户所在分组
+	BillingModelName  string
 	TokenUnlimited    bool
 	StartTime         time.Time
 	FirstResponseTime time.Time
@@ -146,17 +147,17 @@ type RelayInfo struct {
 	SubscriptionAmountTotal               int64
 	SubscriptionAmountUsedAfterPreConsume int64
 	// SubscriptionToken* fields are authoritative only for distributor token billing.
-	SubscriptionTokenLimit                   int64
-	SubscriptionTokenUsedAfterPreConsume     int64
-	SubscriptionTokenUnlimited               bool
-	SubscriptionDistributorTokenBilling      bool
-	IsClaudeBetaQuery                     bool // /v1/messages?beta=true
-	IsChannelTest                         bool // channel test request
-	RetryIndex                            int
-	LastError                             *types.NewAPIError
-	RuntimeHeadersOverride                map[string]interface{}
-	UseRuntimeHeadersOverride             bool
-	ParamOverrideAudit                    []string
+	SubscriptionTokenLimit               int64
+	SubscriptionTokenUsedAfterPreConsume int64
+	SubscriptionTokenUnlimited           bool
+	SubscriptionDistributorTokenBilling  bool
+	IsClaudeBetaQuery                    bool // /v1/messages?beta=true
+	IsChannelTest                        bool // channel test request
+	RetryIndex                           int
+	LastError                            *types.NewAPIError
+	RuntimeHeadersOverride               map[string]interface{}
+	UseRuntimeHeadersOverride            bool
+	ParamOverrideAudit                   []string
 
 	PriceData types.PriceData
 
@@ -183,6 +184,20 @@ type RelayInfo struct {
 	*ResponsesUsageInfo
 	*ChannelMeta
 	*TaskRelayInfo
+}
+
+func (info *RelayInfo) EndpointType() constant.EndpointType {
+	if info == nil {
+		return ""
+	}
+	switch info.RelayMode {
+	case relayconstant.RelayModeResponsesCompact:
+		return constant.EndpointTypeOpenAIResponseCompact
+	case relayconstant.RelayModeResponses:
+		return constant.EndpointTypeOpenAIResponse
+	default:
+		return ""
+	}
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

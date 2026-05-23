@@ -3,11 +3,13 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
-
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -101,6 +103,94 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	}
 
 	return channelQuery, nil
+}
+
+func getEndpointFilteredAbilities(group string, model string, endpointType constant.EndpointType) ([]Ability, error) {
+	var abilities []Ability
+	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).Find(&abilities).Error
+	if err != nil {
+		return nil, err
+	}
+	filtered := abilities[:0]
+	for _, ability := range abilities {
+		channel := Channel{}
+		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil {
+			return nil, err
+		}
+		if channel.Status == common.ChannelStatusEnabled && ChannelSupportsEndpoint(&channel, model, endpointType) {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered, nil
+}
+
+func selectChannelFromEndpointFilteredAbilities(abilities []Ability, retry int) (*Channel, error) {
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+	prioritySet := map[int64]struct{}{}
+	for _, ability := range abilities {
+		if ability.Priority == nil {
+			prioritySet[0] = struct{}{}
+			continue
+		}
+		prioritySet[*ability.Priority] = struct{}{}
+	}
+	priorities := make([]int64, 0, len(prioritySet))
+	for priority := range prioritySet {
+		priorities = append(priorities, priority)
+	}
+	sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+	if retry >= len(priorities) {
+		retry = len(priorities) - 1
+	}
+	targetPriority := priorities[retry]
+	targetAbilities := abilities[:0]
+	for _, ability := range abilities {
+		priority := int64(0)
+		if ability.Priority != nil {
+			priority = *ability.Priority
+		}
+		if priority == targetPriority {
+			targetAbilities = append(targetAbilities, ability)
+		}
+	}
+	weightSum := uint(0)
+	for _, ability := range targetAbilities {
+		weightSum += ability.Weight + 10
+	}
+	weight := common.GetRandomInt(int(weightSum))
+	selectedID := 0
+	for _, ability := range targetAbilities {
+		weight -= int(ability.Weight) + 10
+		if weight <= 0 {
+			selectedID = ability.ChannelId
+			break
+		}
+	}
+	if selectedID == 0 {
+		return nil, nil
+	}
+	channel := Channel{}
+	err := DB.First(&channel, "id = ?", selectedID).Error
+	return &channel, err
+}
+
+func GetChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {
+	abilities, err := getEndpointFilteredAbilities(group, model, endpointType)
+	if err != nil {
+		return nil, err
+	}
+	if len(abilities) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		if normalizedModel != model {
+			abilities, err = getEndpointFilteredAbilities(group, normalizedModel, endpointType)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return selectChannelFromEndpointFilteredAbilities(abilities, retry)
 }
 
 func GetChannel(group string, model string, retry int) (*Channel, error) {

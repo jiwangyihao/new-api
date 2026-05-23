@@ -150,6 +150,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	relayInfo.SetEstimatePromptTokens(tokens)
+	if relayInfo.RelayMode == relayconstant.RelayModeResponsesCompact {
+		if err := helper.SetCompactBillingModelFromMapping(relayInfo, common.GetContextKeyString(c, constant.ContextKeyChannelModelMapping)); err != nil {
+			newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
+			return
+		}
+	}
 
 	priceData, err := helper.ModelPriceHelper(c, relayInfo, tokens, meta)
 	if err != nil {
@@ -192,10 +198,11 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}()
 
 	retryParam := &service.RetryParam{
-		Ctx:        c,
-		TokenGroup: relayInfo.TokenGroup,
-		ModelName:  relayInfo.OriginModelName,
-		Retry:      common.GetPointer(0),
+		Ctx:          c,
+		TokenGroup:   relayInfo.TokenGroup,
+		ModelName:    relayInfo.OriginModelName,
+		Retry:        common.GetPointer(0),
+		EndpointType: relayInfo.EndpointType(),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil

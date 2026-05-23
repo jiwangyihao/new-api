@@ -132,9 +132,6 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			requestPath = "/v1/responses/compact"
 		}
 	}
-	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
-		testModel = ratio_setting.WithCompactModelSuffix(testModel)
-	}
 
 	c.Request = &http.Request{
 		Method: "POST",
@@ -220,6 +217,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	request := buildTestRequest(testModel, endpointType, channel, isStream)
+	c.Set("relay_mode", relayconstant.Path2RelayMode(c.Request.URL.Path))
 
 	info, err := relaycommon.GenRelayInfo(c, relayFormat, request, nil)
 

@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -84,6 +83,10 @@ func InvalidatePricingCache() {
 	pricingMap = nil
 	vendorsList = nil
 	lastGetPricingTime = time.Time{}
+	endpointSupportLock.Lock()
+	endpointSupportCache = endpointMetaCache{}
+	endpointSupportReady = false
+	endpointSupportLock.Unlock()
 }
 
 // GetVendors 返回当前定价接口使用到的供应商信息
@@ -202,38 +205,15 @@ func updatePricing() {
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
 
-	// 先根据已有能力填充原生端点
+	// 先根据已有能力填充有效端点，models.endpoints 有效配置按覆盖语义替换默认端点
 	for _, ability := range enableAbilities {
 		endpoints := modelSupportEndpointsStr[ability.Model]
-		channelTypes := common.GetEndpointTypesByChannelType(ability.ChannelType, ability.Model)
-		for _, channelType := range channelTypes {
-			if !common.StringsContains(endpoints, string(channelType)) {
-				endpoints = append(endpoints, string(channelType))
+		for _, endpointType := range GetEffectiveEndpointTypes(ability.ChannelType, ability.Model) {
+			if !common.StringsContains(endpoints, string(endpointType)) {
+				endpoints = append(endpoints, string(endpointType))
 			}
 		}
 		modelSupportEndpointsStr[ability.Model] = endpoints
-	}
-
-	// 再补充模型自定义端点：若配置有效则替换默认端点，不做合并
-	for modelName, meta := range metaMap {
-		if strings.TrimSpace(meta.Endpoints) == "" {
-			continue
-		}
-		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
-			endpoints := make([]string, 0, len(raw))
-			for k, v := range raw {
-				switch v.(type) {
-				case string, map[string]interface{}:
-					if !common.StringsContains(endpoints, k) {
-						endpoints = append(endpoints, k)
-					}
-				}
-			}
-			if len(endpoints) > 0 {
-				modelSupportEndpointsStr[modelName] = endpoints
-			}
-		}
 	}
 
 	modelSupportEndpointTypes = make(map[string][]constant.EndpointType)
@@ -264,7 +244,7 @@ func updatePricing() {
 			continue
 		}
 		var raw map[string]interface{}
-		if err := json.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
+		if err := common.Unmarshal([]byte(meta.Endpoints), &raw); err == nil {
 			for k, v := range raw {
 				switch val := v.(type) {
 				case string:

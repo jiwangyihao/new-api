@@ -27,11 +27,24 @@ type ModelRequest struct {
 	Group string `json:"group,omitempty"`
 }
 
+func endpointTypeFromRequest(c *gin.Context) (constant.EndpointType, bool) {
+	path := c.Request.URL.Path
+	switch {
+	case strings.HasPrefix(path, "/v1/responses/compact"):
+		return constant.EndpointTypeOpenAIResponseCompact, true
+	case strings.HasPrefix(path, "/v1/responses"):
+		return constant.EndpointTypeOpenAIResponse, true
+	default:
+		return "", false
+	}
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
+		endpointType, hasEndpointType := endpointTypeFromRequest(c)
 		if err != nil {
 			abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 			return
@@ -48,6 +61,10 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 			if channel.Status != common.ChannelStatusEnabled {
+				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
+				return
+			}
+			if hasEndpointType && !model.ChannelSupportsEndpoint(channel, modelRequest.Model, endpointType) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
 			}
@@ -111,7 +128,7 @@ func Distribute() func(c *gin.Context) {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
 							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) && (!hasEndpointType || model.ChannelSupportsEndpoint(preferred, modelRequest.Model, endpointType)) {
 									selectGroup = g
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
@@ -119,7 +136,7 @@ func Distribute() func(c *gin.Context) {
 									break
 								}
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) && (!hasEndpointType || model.ChannelSupportsEndpoint(preferred, modelRequest.Model, endpointType)) {
 							channel = preferred
 							selectGroup = usingGroup
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
@@ -129,10 +146,11 @@ func Distribute() func(c *gin.Context) {
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:        c,
-						ModelName:  modelRequest.Model,
-						TokenGroup: usingGroup,
-						Retry:      common.GetPointer(0),
+						Ctx:          c,
+						ModelName:    modelRequest.Model,
+						TokenGroup:   usingGroup,
+						Retry:        common.GetPointer(0),
+						EndpointType: endpointType,
 					})
 					if err != nil {
 						showGroup := usingGroup
@@ -336,9 +354,6 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 		common.SetContextKey(c, constant.ContextKeyTokenGroup, modelRequest.Group)
 	}
 
-	if strings.HasPrefix(c.Request.URL.Path, "/v1/responses/compact") && modelRequest.Model != "" {
-		modelRequest.Model = ratio_setting.WithCompactModelSuffix(modelRequest.Model)
-	}
 	return &modelRequest, shouldSelectChannel, nil
 }
 

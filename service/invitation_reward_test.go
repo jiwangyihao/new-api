@@ -80,35 +80,35 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		assert.Equal(t, int64(0), count)
 	})
 
-	t.Run("ignores active subscriptions without successful paid orders", func(t *testing.T) {
+	t.Run("counts redemption and admin granted active paid plans", func(t *testing.T) {
 		truncate(t)
 		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 		seedInvitationRewardUsers(t, 1301, 1302, 1303)
-		seedInvitationRewardPlan(t, 2301, "basic_monthly", true)
+		seedInvitationRewardPlan(t, 2301, "trial_monthly", false)
 		paidPlan := seedInvitationRewardPlan(t, 2302, "standard_monthly", true)
-		seedPaidInviteeSubscription(t, 1302, paidPlan.Id, at)
-		seedActiveInviteeSubscription(t, 1303, paidPlan.Id, at, "order", "order")
+		seedActiveInviteeSubscription(t, 1302, paidPlan.Id, at, "redemption", "redemption")
+		seedActiveInviteeSubscription(t, 1303, paidPlan.Id, at, "admin", "admin")
 
 		status, err := EnsureMonthlyInvitationEntitlement(1301, at)
 
 		require.NoError(t, err)
-		assert.False(t, status.Entitled)
-		assert.Equal(t, 1, status.QualifiedActiveCount)
-		var entCount int64
-		require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", 1301).Count(&entCount).Error)
-		assert.Equal(t, int64(0), entCount)
+		assert.True(t, status.Entitled)
+		assert.Equal(t, 2, status.QualifiedActiveCount)
+		assert.Equal(t, paidPlan.Id, status.RewardPlanId)
 	})
 
-	t.Run("ignores zero money successful orders", func(t *testing.T) {
+	t.Run("excludes trial and invitation reward subscriptions", func(t *testing.T) {
 		truncate(t)
 		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
-		seedInvitationRewardUsers(t, 1401, 1402, 1403)
-		seedInvitationRewardPlan(t, 2401, "basic_monthly", true)
+		seedInvitationRewardUsers(t, 1401, 1402, 1403, 1404)
+		trialPlan := seedInvitationRewardPlan(t, 2401, "trial_monthly", true)
+		require.NoError(t, model.DB.Model(trialPlan).Update("is_trial", true).Error)
 		paidPlan := seedInvitationRewardPlan(t, 2402, "standard_monthly", true)
-		seedPaidInviteeSubscription(t, 1402, paidPlan.Id, at)
-		seedInviteeSubscriptionWithOrder(t, 1403, paidPlan.Id, at, 0, common.TopUpStatusSuccess, "order", "order")
+		seedActiveInviteeSubscription(t, 1402, trialPlan.Id, at, "redemption", "redemption")
+		seedActiveInviteeSubscription(t, 1403, paidPlan.Id, at, model.SubscriptionGrantMonthlyInviteEntitlement, model.SubscriptionGrantMonthlyInviteEntitlement)
+		seedActiveInviteeSubscription(t, 1404, paidPlan.Id, at, "redemption", "redemption")
 
 		status, err := EnsureMonthlyInvitationEntitlement(1401, at)
 
@@ -157,7 +157,8 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 		require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
 		at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 		seedInvitationRewardUsers(t, 1561, 1562, 1563, 1564)
-		trialPlan := seedInvitationRewardPlan(t, 2561, "trial_monthly", false)
+		trialPlan := seedInvitationRewardPlan(t, 2561, "trial_monthly", true)
+		require.NoError(t, model.DB.Model(trialPlan).Update("is_trial", true).Error)
 		paidPlan := seedInvitationRewardPlan(t, 2562, "standard_monthly", true)
 		seedActiveInviteeSubscription(t, 1562, trialPlan.Id, at, "redemption", "redemption")
 		seedActiveInviteeSubscription(t, 1563, paidPlan.Id, at, "monthly_invite_entitlement", "monthly_invite_entitlement")

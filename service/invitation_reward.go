@@ -53,6 +53,16 @@ type qualifiedInviteePlanEndTime struct {
 	ConcurrencyLimit  int
 }
 
+func eligibleInvitationRewardSubscriptionScope(tx *gorm.DB, now int64) *gorm.DB {
+	return tx.
+		Where("user_subscriptions.status = ?", "active").
+		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
+		Where("subscription_plans.reward_eligible = ?", true).
+		Where("subscription_plans.is_trial = ?", false).
+		Where("(user_subscriptions.grant_reason = '' OR user_subscriptions.grant_reason <> ?)", model.SubscriptionGrantMonthlyInviteEntitlement).
+		Where("(user_subscriptions.source = '' OR user_subscriptions.source <> ?)", model.SubscriptionGrantMonthlyInviteEntitlement)
+}
+
 func (c invitationRewardCandidate) applyToStatus(status *InvitationEntitlementStatus) {
 	status.RewardPlanId = c.Plan.Id
 	status.RewardPlanTitle = c.Plan.Title
@@ -185,15 +195,10 @@ func countDirectInviteesTx(tx *gorm.DB, inviterId int) (int, error) {
 
 func countQualifiedActiveInviteesTx(tx *gorm.DB, inviterId int, now int64) (int, error) {
 	var count int64
-	err := tx.Model(&model.User{}).
+	err := eligibleInvitationRewardSubscriptionScope(tx.Model(&model.User{}), now).
 		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
 		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
 		Where("users.inviter_id = ?", inviterId).
-		Where("user_subscriptions.status = ?", "active").
-		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
-		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", model.SubscriptionGrantOrder, "", model.SubscriptionGrantOrder).
-		Where("subscription_plans.reward_eligible = ?", true).
-		Where("EXISTS (SELECT 1 FROM subscription_orders WHERE subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id AND subscription_orders.status = ? AND subscription_orders.money > ?)", common.TopUpStatusSuccess, 0).
 		Distinct("users.id").
 		Count(&count).Error
 	if err != nil {
@@ -204,16 +209,11 @@ func countQualifiedActiveInviteesTx(tx *gorm.DB, inviterId int, now int64) (int,
 
 func listInvitationRewardCandidatesTx(tx *gorm.DB, inviterId int, now int64) ([]invitationRewardCandidate, error) {
 	var rows []qualifiedInviteePlanEndTime
-	err := tx.Table("users").
+	err := eligibleInvitationRewardSubscriptionScope(tx.Table("users"), now).
 		Select("users.id AS invitee_id, subscription_plans.id AS plan_id, MAX(user_subscriptions.end_time) AS end_time, subscription_plans.sort_order, subscription_plans.price_amount, subscription_plans.monthly_token_limit, subscription_plans.concurrency_limit").
 		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
 		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
 		Where("users.inviter_id = ?", inviterId).
-		Where("user_subscriptions.status = ?", "active").
-		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
-		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", model.SubscriptionGrantOrder, "", model.SubscriptionGrantOrder).
-		Where("subscription_plans.reward_eligible = ?", true).
-		Where("EXISTS (SELECT 1 FROM subscription_orders WHERE subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id AND subscription_orders.status = ? AND subscription_orders.money > ?)", common.TopUpStatusSuccess, 0).
 		Group("users.id, subscription_plans.id, subscription_plans.sort_order, subscription_plans.price_amount, subscription_plans.monthly_token_limit, subscription_plans.concurrency_limit").
 		Scan(&rows).Error
 	if err != nil {

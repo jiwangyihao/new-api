@@ -82,4 +82,13 @@ describe('wallet page layout', () => {
     assert.match(source, /two longest valid paid referrals/)
     assert.match(source, /same tier/)
   })
+
+  test('affiliate card focuses referral copy on the link', () => {
+    const source = readAffiliateRewardsSource()
+    assert.match(source, /赔钱GPT超低价稳定GPT服务/)
+    assert.doesNotMatch(source, /t\('Pending'\), formatQuota/)
+    assert.doesNotMatch(source, /t\('Total Earned'\), formatQuota/)
+    assert.doesNotMatch(source, /t\('Invites'\), String/)
+    assert.doesNotMatch(source, /Transfer to Balance/)
+  })
 })

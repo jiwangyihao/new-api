@@ -343,14 +343,13 @@ func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
 		Select("users.inviter_id, count(distinct users.id) as count").
 		Joins("JOIN user_subscriptions ON user_subscriptions.user_id = users.id").
 		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
-		Joins("JOIN subscription_orders ON subscription_orders.user_id = users.id AND subscription_orders.plan_id = user_subscriptions.plan_id").
 		Where("users.inviter_id IN ?", userIds).
 		Where("user_subscriptions.status = ?", "active").
 		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
-		Where("(user_subscriptions.grant_reason = ? OR (user_subscriptions.grant_reason = ? AND user_subscriptions.source = ?))", SubscriptionGrantOrder, "", SubscriptionGrantOrder).
 		Where("subscription_plans.reward_eligible = ?", true).
-		Where("subscription_orders.status = ?", common.TopUpStatusSuccess).
-		Where("subscription_orders.money > ?", 0).
+		Where("subscription_plans.is_trial = ?", false).
+		Where("(user_subscriptions.grant_reason = '' OR user_subscriptions.grant_reason <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
+		Where("(user_subscriptions.source = '' OR user_subscriptions.source <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
 		Group("users.inviter_id").
 		Scan(&qualifiedRows).Error; err != nil {
 		return err

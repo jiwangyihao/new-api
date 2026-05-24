@@ -18,27 +18,21 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { CalendarCheck, Share2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota } from '@/lib/format'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { CopyButton } from '@/components/copy-button'
 import { formatAffiliateEntitlementEndTime } from '../lib'
-import type { InvitationEntitlement, UserWalletData } from '../types'
+import type { InvitationEntitlement } from '../types'
 
 interface AffiliateRewardsCardProps {
-  user: UserWalletData | null
   affiliateLink: string
-  onTransfer: () => void
   entitlement?: InvitationEntitlement | null
   loading?: boolean
 }
 
 export function AffiliateRewardsCard({
-  user,
   affiliateLink,
-  onTransfer,
   entitlement,
   loading,
 }: AffiliateRewardsCardProps) {
@@ -58,7 +52,9 @@ export function AffiliateRewardsCard({
     )
   }
 
-  const hasRewards = (user?.aff_quota ?? 0) > 0
+  const referralCopy = t(
+    '赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：'
+  )
   const currentRewardTitle = entitlement?.entitled
     ? entitlement.reward_plan_title || t('Granted')
     : t('Not granted')
@@ -86,28 +82,15 @@ export function AffiliateRewardsCard({
           </div>
         </div>
 
-        <div className='grid grid-cols-3 gap-1.5 text-center'>
-          {[
-            [t('Pending'), formatQuota(user?.aff_quota ?? 0)],
-            [t('Total Earned'), formatQuota(user?.aff_history_quota ?? 0)],
-            [t('Invites'), String(user?.aff_count ?? 0)],
-          ].map(([label, value]) => (
-            <div key={label}>
-              <div className='text-muted-foreground truncate text-[10px] font-medium tracking-wider uppercase'>
-                {label}
-              </div>
-              <div className='mt-0.5 truncate text-sm font-semibold tabular-nums'>
-                {value}
-              </div>
-            </div>
-          ))}
+        <div className='text-muted-foreground text-xs lg:text-right'>
+          {referralCopy}
         </div>
 
         <div className='grid grid-cols-2 gap-2 text-xs lg:col-span-3 lg:grid-cols-6'>
           <div className='bg-background/60 rounded-lg border p-2'>
             <div className='text-muted-foreground'>{t('Direct invites')}</div>
             <div className='mt-1 font-semibold tabular-nums'>
-              {entitlement?.direct_invite_count ?? user?.aff_count ?? 0}
+              {entitlement?.direct_invite_count ?? 0}
             </div>
           </div>
           <div className='bg-background/60 rounded-lg border p-2'>
@@ -156,29 +139,25 @@ export function AffiliateRewardsCard({
           )}
         </div>
 
-        <div className='flex items-center gap-2 lg:col-span-3'>
-          <Input
-            value={affiliateLink}
-            readOnly
-            className='border-muted bg-background/70 h-9 min-w-0 flex-1 font-mono text-xs'
-          />
-          <CopyButton
-            value={affiliateLink}
-            variant='outline'
-            className='bg-background size-9 shrink-0'
-            iconClassName='size-4'
-            tooltip={t('Copy referral link')}
-            aria-label={t('Copy referral link')}
-          />
-          {hasRewards && (
-            <Button
-              onClick={onTransfer}
-              className='h-9 shrink-0 px-3'
-              size='sm'
-            >
-              {t('Transfer to Balance')}
-            </Button>
-          )}
+        <div className='flex flex-col gap-2 lg:col-span-3'>
+          <div className='text-muted-foreground text-xs sm:hidden'>
+            {referralCopy}
+          </div>
+          <div className='flex items-center gap-2'>
+            <Input
+              value={affiliateLink}
+              readOnly
+              className='border-muted bg-background/70 h-9 min-w-0 flex-1 font-mono text-xs'
+            />
+            <CopyButton
+              value={`${referralCopy}${affiliateLink}`}
+              variant='outline'
+              className='bg-background size-9 shrink-0'
+              iconClassName='size-4'
+              tooltip={t('Copy referral link')}
+              aria-label={t('Copy referral link')}
+            />
+          </div>
         </div>
 
         <div className='bg-background/60 rounded-lg border p-3 text-xs lg:col-span-3'>

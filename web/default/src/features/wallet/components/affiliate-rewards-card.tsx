@@ -55,6 +55,7 @@ export function AffiliateRewardsCard({
   const referralCopy = t(
     '赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：'
   )
+  const referralShareText = `${referralCopy}${affiliateLink}`
   const currentRewardTitle = entitlement?.entitled
     ? entitlement.reward_plan_title || t('Granted')
     : t('Not granted')
@@ -82,9 +83,6 @@ export function AffiliateRewardsCard({
           </div>
         </div>
 
-        <div className='text-muted-foreground text-xs lg:text-right'>
-          {referralCopy}
-        </div>
 
         <div className='grid grid-cols-2 gap-2 text-xs lg:col-span-3 lg:grid-cols-6'>
           <div className='bg-background/60 rounded-lg border p-2'>
@@ -140,17 +138,14 @@ export function AffiliateRewardsCard({
         </div>
 
         <div className='flex flex-col gap-2 lg:col-span-3'>
-          <div className='text-muted-foreground text-xs sm:hidden'>
-            {referralCopy}
-          </div>
           <div className='flex items-center gap-2'>
             <Input
-              value={affiliateLink}
+              value={referralShareText}
               readOnly
               className='border-muted bg-background/70 h-9 min-w-0 flex-1 font-mono text-xs'
             />
             <CopyButton
-              value={`${referralCopy}${affiliateLink}`}
+              value={referralShareText}
               variant='outline'
               className='bg-background size-9 shrink-0'
               iconClassName='size-4'

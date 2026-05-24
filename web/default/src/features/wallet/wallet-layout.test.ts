@@ -90,5 +90,7 @@ describe('wallet page layout', () => {
     assert.doesNotMatch(source, /t\('Total Earned'\), formatQuota/)
     assert.doesNotMatch(source, /t\('Invites'\), String/)
     assert.doesNotMatch(source, /Transfer to Balance/)
+    assert.match(source, /value=\{referralShareText\}/)
+    assert.match(source, /CopyButton[\s\S]*value=\{referralShareText\}/)
   })
 })

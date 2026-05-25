@@ -43,7 +43,7 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 	cost, trace, _ := billingexpr.RunExpr(expr, billingexpr.TokenParams{P: float64(estPrompt), C: float64(estCompletion)})
 	quotaBeforeRatio := cost / 1_000_000 * testQuotaPerUnit
 	snap.EstimatedQuotaBeforeRatio = quotaBeforeRatio
-	snap.EstimatedQuota = billingexpr.QuotaRound(quotaBeforeRatio * groupRatio)
+	snap.EstimatedQuota = billingexpr.QuotaRound(quotaBeforeRatio)
 	snap.EstimatedTier = trace.MatchedTier
 	return &relaycommon.RelayInfo{
 		TieredBillingSnapshot: snap,
@@ -307,31 +307,32 @@ func TestTryTieredSettle_NoRequestInput_FallsBackToDefault(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Group ratio tests
+// Legacy quota multiplier compatibility tests. Business-group multipliers are retired,
+// so a stale snapshot multiplier must not affect settlement.
 // ---------------------------------------------------------------------------
 
-func TestTryTieredSettle_GroupRatioScaling(t *testing.T) {
+func TestTryTieredSettle_IgnoresLegacyQuotaMultiplier(t *testing.T) {
 	info := makeRelayInfo(flatExpr, 1.5, 1000, 500)
 
 	ok, quota, _ := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 500})
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	// exprCost = 7000, quotaBeforeGroup = 3500, afterGroup = round(3500 * 1.5) = 5250
-	if quota != 5250 {
-		t.Fatalf("quota = %d, want 5250", quota)
+	// exprCost = 7000, quota = 3500. The stale snapshot multiplier is ignored.
+	if quota != 3500 {
+		t.Fatalf("quota = %d, want 3500", quota)
 	}
 }
 
-func TestTryTieredSettle_GroupRatioZero(t *testing.T) {
+func TestTryTieredSettle_LegacyZeroMultiplierStillBillsExpressionCost(t *testing.T) {
 	info := makeRelayInfo(flatExpr, 0, 1000, 500)
 
 	ok, quota, _ := TryTieredSettle(info, billingexpr.TokenParams{P: 1000, C: 500})
 	if !ok {
 		t.Fatal("expected tiered settle")
 	}
-	if quota != 0 {
-		t.Fatalf("quota = %d, want 0 (group ratio = 0)", quota)
+	if quota != 3500 {
+		t.Fatalf("quota = %d, want 3500", quota)
 	}
 }
 
@@ -415,11 +416,11 @@ func TestTryTieredSettle_ErrorFallbackToEstimatedQuota(t *testing.T) {
 // BuildTieredTokenParams: token normalization and ratio parity tests
 // ---------------------------------------------------------------------------
 
-func tieredQuota(exprStr string, usage *dto.Usage, isClaudeSemantic bool, groupRatio float64) float64 {
+func tieredQuota(exprStr string, usage *dto.Usage, isClaudeSemantic bool) float64 {
 	usedVars := billingexpr.UsedVars(exprStr)
 	params := BuildTieredTokenParams(usage, isClaudeSemantic, usedVars)
 	cost, _, _ := billingexpr.RunExpr(exprStr, params)
-	return cost / 1_000_000 * testQuotaPerUnit * groupRatio
+	return cost / 1_000_000 * testQuotaPerUnit
 }
 
 func ratioQuota(usage *dto.Usage, isClaudeSemantic bool, modelRatio, completionRatio, cacheRatio, imageRatio, groupRatio float64) float64 {
@@ -462,7 +463,7 @@ func TestBuildTieredTokenParams_GPT_WithCache(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 2.5 + c * 15 + cr * 0.25)`
-	got := tieredQuota(expr, usage, false, 1.0)
+	got := tieredQuota(expr, usage, false)
 	// P=800, C=500, CR=200 → (800*2.5 + 500*15 + 200*0.25) * 0.5 = 4775
 	want := 4775.0
 	if math.Abs(got-want) > 0.01 {
@@ -480,7 +481,7 @@ func TestBuildTieredTokenParams_GPT_NoCacheVar(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 2.5 + c * 15)`
-	got := tieredQuota(expr, usage, false, 1.0)
+	got := tieredQuota(expr, usage, false)
 	// No cr → P=1000 (cache stays in P), C=500 → (1000*2.5 + 500*15) * 0.5 = 5000
 	want := 5000.0
 	if math.Abs(got-want) > 0.01 {
@@ -498,7 +499,7 @@ func TestBuildTieredTokenParams_GPT_WithImage(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 2 + c * 8 + img * 2.5)`
-	got := tieredQuota(expr, usage, false, 1.0)
+	got := tieredQuota(expr, usage, false)
 	// P=800, C=500, Img=200 → (800*2 + 500*8 + 200*2.5) * 0.5 = 3050
 	want := 3050.0
 	if math.Abs(got-want) > 0.01 {
@@ -516,7 +517,7 @@ func TestBuildTieredTokenParams_Claude_WithCache(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 3 + c * 15 + cr * 0.3)`
-	got := tieredQuota(expr, usage, true, 1.0)
+	got := tieredQuota(expr, usage, true)
 	// Claude: P=800 (no subtraction), C=500, CR=200 → (800*3 + 500*15 + 200*0.3) * 0.5 = 4980
 	want := 4980.0
 	if math.Abs(got-want) > 0.01 {
@@ -534,7 +535,7 @@ func TestBuildTieredTokenParams_GPT_AudioOutput(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 2 + c * 10 + ao * 50)`
-	got := tieredQuota(expr, usage, false, 1.0)
+	got := tieredQuota(expr, usage, false)
 	// C=600-100=500, AO=100 → (1000*2 + 500*10 + 100*50) * 0.5 = 6000
 	want := 6000.0
 	if math.Abs(got-want) > 0.01 {
@@ -552,7 +553,7 @@ func TestBuildTieredTokenParams_GPT_AudioOutputNoVar(t *testing.T) {
 		},
 	}
 	expr := `tier("base", p * 2 + c * 10)`
-	got := tieredQuota(expr, usage, false, 1.0)
+	got := tieredQuota(expr, usage, false)
 	// No ao → C=600 (audio stays in C) → (1000*2 + 600*10) * 0.5 = 4000
 	want := 4000.0
 	if math.Abs(got-want) > 0.01 {
@@ -573,13 +574,11 @@ func TestBuildTieredTokenParams_ParityWithRatio(t *testing.T) {
 	}
 	expr := `tier("base", p * 2.5 + c * 15 + cr * 0.25)`
 
-	for _, gr := range []float64{1.0, 1.5, 2.0, 0.5} {
-		tq := tieredQuota(expr, usage, false, gr)
-		rq := ratioQuota(usage, false, 1.25, 6, 0.1, 0, gr)
+	tq := tieredQuota(expr, usage, false)
+	rq := ratioQuota(usage, false, 1.25, 6, 0.1, 0, 1)
 
-		if math.Abs(tq-rq) > 0.01 {
-			t.Fatalf("groupRatio=%v: tiered=%f ratio=%f (mismatch)", gr, tq, rq)
-		}
+	if math.Abs(tq-rq) > 0.01 {
+		t.Fatalf("tiered=%f ratio=%f (mismatch)", tq, rq)
 	}
 }
 
@@ -596,7 +595,7 @@ func TestBuildTieredTokenParams_ParityWithRatio_Image(t *testing.T) {
 	}
 	expr := `tier("base", p * 2 + c * 8 + img * 2.5)`
 
-	tq := tieredQuota(expr, usage, false, 1.0)
+	tq := tieredQuota(expr, usage, false)
 	rq := ratioQuota(usage, false, 1.0, 4, 0, 1.25, 1.0)
 
 	if math.Abs(tq-rq) > 0.01 {
@@ -745,7 +744,6 @@ func TestStress_TieredBilling_1000Concurrent(t *testing.T) {
 
 			for j := 0; j < 100; j++ {
 				usage := randomUsage(rng)
-				groupRatio := 0.5 + rng.Float64()*2.0
 
 				params := BuildTieredTokenParams(usage, false, usedVars)
 				cost, trace, err := billingexpr.RunExpr(complexTieredExpr, params)
@@ -758,7 +756,7 @@ func TestStress_TieredBilling_1000Concurrent(t *testing.T) {
 					return
 				}
 
-				quota := billingexpr.QuotaRound(cost / 1_000_000 * testQuotaPerUnit * groupRatio)
+				quota := billingexpr.QuotaRound(cost / 1_000_000 * testQuotaPerUnit)
 				if quota < 0 {
 					errCh <- "negative quota"
 					return

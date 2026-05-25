@@ -11,11 +11,17 @@ const (
 )
 
 type ServerLimits struct {
-	GOMAXPROCS              string
-	GOGC                    string
-	GOMEMLIMIT              string
-	ProcessMemoryLimitBytes uint64
-	CPUAffinityCores        int
+	GOMAXPROCS               string
+	GOGC                     string
+	GOMEMLIMIT               string
+	ProcessMemoryLimitBytes  uint64
+	CPUAffinityCores         int
+	SQLMaxOpenConns          string
+	SQLMaxIdleConns          string
+	RedisPoolSize            string
+	RedisIdleTimeoutSeconds  string
+	RelayMaxIdleConns        string
+	RelayMaxIdleConnsPerHost string
 }
 
 type Transport struct {
@@ -48,15 +54,15 @@ func Benchmark() Profile {
 		Name:             "benchmark",
 		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
-		RampStep:         25,
+		RampStep:         125,
 		RampInterval:     200 * time.Millisecond,
-		Duration:         45 * time.Second,
+		Duration:         75 * time.Second,
 		Timeout:          120 * time.Second,
 		Transport: Transport{
 			Mode:                TransportH1KeepAlive,
-			MaxConnsPerHost:     1024,
-			MaxIdleConns:        1024,
-			MaxIdleConnsPerHost: 1024,
+			MaxConnsPerHost:     2000,
+			MaxIdleConns:        2000,
+			MaxIdleConnsPerHost: 2000,
 		},
 		Relay: Relay{
 			MaxIdleConns:        1024,
@@ -104,10 +110,16 @@ func ProfileByName(name string) (Profile, error) {
 
 func benchmarkServerLimits() ServerLimits {
 	return ServerLimits{
-		GOMAXPROCS:              "2",
-		GOGC:                    "100",
-		GOMEMLIMIT:              "384MiB",
-		ProcessMemoryLimitBytes: 512 * 1024 * 1024,
-		CPUAffinityCores:        2,
+		GOMAXPROCS:               "2",
+		GOGC:                     "100",
+		GOMEMLIMIT:               "384MiB",
+		ProcessMemoryLimitBytes:  512 * 1024 * 1024,
+		CPUAffinityCores:         2,
+		SQLMaxOpenConns:          "64",
+		SQLMaxIdleConns:          "64",
+		RedisPoolSize:            "256",
+		RedisIdleTimeoutSeconds:  "1",
+		RelayMaxIdleConns:        "1024",
+		RelayMaxIdleConnsPerHost: "1024",
 	}
 }

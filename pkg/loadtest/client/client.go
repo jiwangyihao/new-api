@@ -387,11 +387,11 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 		defer ownedTransport.CloseIdleConnections()
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
 	if opts.Duration > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, opts.Duration)
+		dispatchCtx, cancelDispatch = context.WithTimeout(ctx, opts.Duration)
 	}
-	defer cancel()
+	defer cancelDispatch()
 
 	startedAt := time.Now()
 	jobs := make(chan int, opts.Concurrency)
@@ -404,17 +404,20 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 		go func(workerID int) {
 			defer wg.Done()
 			for {
-				if err := waitForRamp(runCtx, workerID, startedAt, opts); err != nil {
+				if err := waitForRamp(dispatchCtx, workerID, startedAt, opts); err != nil {
 					return
 				}
 				select {
-				case <-runCtx.Done():
+				case <-dispatchCtx.Done():
 					return
 				case requestIndex, ok := <-jobs:
 					if !ok {
 						return
 					}
-					results <- doOne(runCtx, httpClient, opts, requestIndex, &state)
+					results <- doOne(ctx, httpClient, opts, requestIndex, &state)
+					if dispatchCtx.Err() != nil {
+						return
+					}
 				}
 			}
 		}(workerID)
@@ -441,19 +444,19 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 			}
 			if ticker != nil {
 				select {
-				case <-runCtx.Done():
+				case <-dispatchCtx.Done():
 					return
 				case <-ticker.C:
 				}
 			}
 			select {
-			case <-runCtx.Done():
+			case <-dispatchCtx.Done():
 				return
 			default:
 			}
 			sent++
 			select {
-			case <-runCtx.Done():
+			case <-dispatchCtx.Done():
 				return
 			case jobs <- sent:
 			}
@@ -471,7 +474,7 @@ func RunLoad(ctx context.Context, opts Options) (artifact.Summary, error) {
 	}
 	endedAt := time.Now()
 
-	summary := buildSummary(opts, requestResults, state.maxInFlight.Load(), startedAt, endedAt, runCtx.Err())
+	summary := buildSummary(opts, requestResults, state.maxInFlight.Load(), startedAt, endedAt, dispatchCtx.Err())
 	if hasNetworkRuntimeFailure(requestResults) {
 		return summary, runtimeErrorf("one or more requests failed before receiving an HTTP response")
 	}

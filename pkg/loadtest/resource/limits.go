@@ -39,9 +39,15 @@ func (r *ApplyResult) markNestedJobAssignmentDenied() {
 
 func ServerEnv(limits profile.ServerLimits) map[string]string {
 	return map[string]string{
-		"GOMAXPROCS": limits.GOMAXPROCS,
-		"GOGC":       limits.GOGC,
-		"GOMEMLIMIT": limits.GOMEMLIMIT,
+		"GOMAXPROCS":                    limits.GOMAXPROCS,
+		"GOGC":                          limits.GOGC,
+		"GOMEMLIMIT":                    limits.GOMEMLIMIT,
+		"SQL_MAX_OPEN_CONNS":            limits.SQLMaxOpenConns,
+		"SQL_MAX_IDLE_CONNS":            limits.SQLMaxIdleConns,
+		"REDIS_POOL_SIZE":               limits.RedisPoolSize,
+		"REDIS_IDLE_TIMEOUT_SECONDS":    limits.RedisIdleTimeoutSeconds,
+		"RELAY_MAX_IDLE_CONNS":          limits.RelayMaxIdleConns,
+		"RELAY_MAX_IDLE_CONNS_PER_HOST": limits.RelayMaxIdleConnsPerHost,
 	}
 }
 

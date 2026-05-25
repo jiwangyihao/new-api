@@ -55,7 +55,7 @@ func TestResourceSweepReportReadsAnalysesSamplesLimitsAndPorts(t *testing.T) {
 	writeReportCommandJSON(t, filepath.Join(pointsDir, "c4-resource-samples.json"), artifact.ResourceSamplesArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 4, Peaks: artifact.ResourcePeaks{RSSPeakBytes: 256 << 20, CPUPercentPeak: 90, HeapAllocPeakBytes: 64 << 20, RedisUsedMemoryPeakBytes: 10 << 20, PostgresActiveConnectionsPeak: 9}})
 	limitsPath := filepath.Join(dir, "resource-limits.json")
 	portsPath := filepath.Join(dir, "ports-closed.json")
-	writeReportCommandJSON(t, limitsPath, artifact.ResourceLimitsArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, ServerEnv: map[string]string{"GOMEMLIMIT": "384MiB"}, Statused: artifact.Statused{Status: "ok"}})
+	writeReportCommandJSON(t, limitsPath, artifact.ResourceLimitsArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, ServerEnv: map[string]string{"GOMEMLIMIT": "384MiB", "SQL_MAX_OPEN_CONNS": "64", "REDIS_POOL_SIZE": "256", "REDIS_IDLE_TIMEOUT_SECONDS": "1", "RELAY_MAX_IDLE_CONNS": "1024"}, Statused: artifact.Statused{Status: "ok"}})
 	writeReportCommandJSON(t, portsPath, artifact.PortsClosedArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Ports: map[string]string{"13080": "closed"}, Passed: true})
 
 	var stdout, stderr bytes.Buffer
@@ -63,7 +63,7 @@ func TestResourceSweepReportReadsAnalysesSamplesLimitsAndPorts(t *testing.T) {
 	if exit != 0 {
 		t.Fatalf("exit=%d stderr=%s", exit, stderr.String())
 	}
-	for _, want := range []string{"最高通过并发", "failure_class", "capacity_limit", "GOMEMLIMIT=384MiB", "RSS peak", "ports closed"} {
+	for _, want := range []string{"最高通过并发", "failure_class", "capacity_limit", "GOMEMLIMIT=384MiB", "SQL_MAX_OPEN_CONNS=64", "REDIS_POOL_SIZE=256", "REDIS_IDLE_TIMEOUT_SECONDS=1", "RELAY_MAX_IDLE_CONNS=1024", "RSS peak", "ports closed"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("report missing %q:\n%s", want, stdout.String())
 		}

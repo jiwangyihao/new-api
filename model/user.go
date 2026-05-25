@@ -1105,7 +1105,7 @@ func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
 		addNewRecord(BatchUpdateTypeRequestCount, id, 1)
 		return
 	}
-	updateUserUsedQuotaAndRequestCount(id, quota, 1)
+	userUsageCounterCoalescer.add(id, quota, 1)
 }
 
 func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {

@@ -27,7 +27,7 @@ func TestRunWritesBenchmarkProfileEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := string(content)
-	for _, want := range []string{"REDIS_POOL_SIZE=2048", "SQL_MAX_OPEN_CONNS=256", "SQL_MAX_IDLE_CONNS=64", "RELAY_MAX_IDLE_CONNS=1024", "RELAY_MAX_IDLE_CONNS_PER_HOST=1024", "GOMEMLIMIT=384MiB"} {
+	for _, want := range []string{"REDIS_POOL_SIZE=256", "REDIS_IDLE_TIMEOUT_SECONDS=1", "SQL_MAX_OPEN_CONNS=64", "SQL_MAX_IDLE_CONNS=64", "RELAY_MAX_IDLE_CONNS=1024", "RELAY_MAX_IDLE_CONNS_PER_HOST=1024", "GOMEMLIMIT=384MiB"} {
 		if !strings.Contains(env, want+"\n") {
 			t.Fatalf("env missing %q:\n%s", want, env)
 		}
@@ -74,13 +74,13 @@ profiles:
   benchmark:
     points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
-    ramp_step: 25
+    ramp_step: 125
     ramp_interval: "200ms"
-    duration: "45s"
+    duration: "75s"
     timeout: "120s"
-    transport: {mode: "h1_keepalive", max_conns_per_host: 1024, max_idle_conns: 1024, max_idle_conns_per_host: 1024}
+    transport: {mode: "h1_keepalive", max_conns_per_host: 2000, max_idle_conns: 2000, max_idle_conns_per_host: 2000}
     relay: {max_idle_conns: 1024, max_idle_conns_per_host: 1024}
-    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2}
+    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2, sql_max_open_conns: "64", sql_max_idle_conns: "64", redis_pool_size: "256", redis_idle_timeout_seconds: "1", relay_max_idle_conns: "1024", relay_max_idle_conns_per_host: "1024"}
 thresholds:
   latency_p95_regression_ratio: 1.10
   ttft_p95_regression_ratio: 1.10

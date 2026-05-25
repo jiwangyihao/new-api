@@ -102,7 +102,6 @@ func (s *Server) handleMain(w http.ResponseWriter, r *http.Request, responses bo
 	w.Header().Set(upstreamRequestIDHeader, requestID)
 	if injectedStatus != 0 {
 		s.writeInjectedError(w, injectedStatus)
-		_ = s.WriteStats()
 		return
 	}
 
@@ -111,7 +110,6 @@ func (s *Server) handleMain(w http.ResponseWriter, r *http.Request, responses bo
 	} else {
 		s.writeChatCompletionsStream(w, attempt)
 	}
-	_ = s.WriteStats()
 }
 
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {

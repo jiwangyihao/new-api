@@ -115,11 +115,8 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.DistributorTokenBilling = res.DistributorTokenBilling
 	s.concurrencyLimit = res.ConcurrencyLimit
 	s.TokenRemaining = res.TokenRemaining
-	// 获取订阅计划信息
-	if planInfo, err := model.GetSubscriptionPlanInfoByUserSubscriptionId(res.UserSubscriptionId); err == nil && planInfo != nil {
-		s.PlanId = planInfo.PlanId
-		s.PlanTitle = planInfo.PlanTitle
-	}
+	s.PlanId = res.PlanId
+	s.PlanTitle = res.PlanTitle
 	return nil
 }
 
@@ -127,7 +124,31 @@ func (s *SubscriptionFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	return model.PostConsumeUserSubscriptionDelta(s.subscriptionId, int64(delta))
+	if s.DistributorTokenBilling {
+		if err := model.PostConsumeUserSubscriptionTokenDelta(s.subscriptionId, int64(delta)); err != nil {
+			return err
+		}
+	} else if err := model.PostConsumeUserSubscriptionAmountDelta(s.subscriptionId, int64(delta)); err != nil {
+		return err
+	}
+	if s.DistributorTokenBilling {
+		s.TokenUsedAfter += int64(delta)
+		if s.TokenUsedAfter < 0 {
+			s.TokenUsedAfter = 0
+		}
+		if s.TokenLimit > 0 {
+			s.TokenRemaining = s.TokenLimit - s.TokenUsedAfter
+			if s.TokenRemaining < 0 {
+				s.TokenRemaining = 0
+			}
+		}
+	} else {
+		s.AmountUsedAfter += int64(delta)
+		if s.AmountUsedAfter < 0 {
+			s.AmountUsedAfter = 0
+		}
+	}
+	return nil
 }
 
 func (s *SubscriptionFunding) Refund() error {

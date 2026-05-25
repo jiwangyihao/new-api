@@ -3,6 +3,8 @@ package mockopenai
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -34,6 +36,37 @@ func TestResponsesSSEContractAndUsage(t *testing.T) {
 	stats := srv.(*Server).Snapshot()
 	if stats.AttemptsTotal != 1 || len(stats.Attempts) != 1 || stats.Attempts[0].UpstreamRequestID != "upstream-loadtest-1" {
 		t.Fatalf("bad stats: %#v", stats)
+	}
+}
+
+func TestResponsesDoesNotWriteStatsFilePerRequest(t *testing.T) {
+	statsPath := filepath.Join(t.TempDir(), "mock-stats.json")
+	srv := NewServer(Config{RunContext: testRunContext(), StatsOut: statsPath, OutputBytes: 1})
+	if err := srv.(*Server).WriteStats(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(statsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true,"input":"hello"}`))
+	srv.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rr.Code, rr.Body.String())
+	}
+
+	after, err := os.Stat(statsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Fatalf("stats file changed during request: before size=%d mod=%s after size=%d mod=%s", before.Size(), before.ModTime(), after.Size(), after.ModTime())
+	}
+	stats := srv.(*Server).Snapshot()
+	if stats.AttemptsTotal != 1 {
+		t.Fatalf("in-memory stats not updated: %#v", stats)
 	}
 }
 

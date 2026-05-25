@@ -172,6 +172,7 @@ func TestPostConsumeQuotaSubscriptionDoesNotConsumeTokenKeyQuota(t *testing.T) {
 	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, "sk-sub-post", "wallet_only")
 	relayInfo.BillingSource = BillingSourceSubscription
 	relayInfo.SubscriptionId = subID
+	relayInfo.SubscriptionDistributorTokenBilling = true
 
 	require.NoError(t, PostConsumeQuota(relayInfo, 7, 0, false))
 
@@ -180,4 +181,28 @@ func TestPostConsumeQuotaSubscriptionDoesNotConsumeTokenKeyQuota(t *testing.T) {
 	assert.Equal(t, 0, token.RemainQuota)
 	assert.Equal(t, 0, token.UsedQuota)
 	assert.Equal(t, int64(7), getSubscriptionTokenUsed(t, subID))
+}
+
+func TestPostConsumeQuotaLegacySubscriptionUsesAmountUsed(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9331
+	const tokenID = 9332
+	const planID = 9333
+	const subID = 9334
+	rewardEligible := false
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "legacy_sub_post", Quota: 0, Status: common.UserStatusEnabled, AffCode: "aff9331"}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-legacy-sub-post", Status: common.TokenStatusEnabled, RemainQuota: 0}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Legacy", Enabled: true, TotalAmount: 100, RewardEligible: rewardEligible}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, AmountTotal: 100, AmountUsed: 10, TokenLimit: 0, TokenUsed: 0, Status: "active", StartTime: time.Now().Add(-time.Hour).Unix(), EndTime: time.Now().Add(time.Hour).Unix(), GrantReason: "order"}).Error)
+	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, "sk-legacy-sub-post", "wallet_only")
+	relayInfo.BillingSource = BillingSourceSubscription
+	relayInfo.SubscriptionId = subID
+
+	require.NoError(t, PostConsumeQuota(relayInfo, 7, 0, false))
+
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, subID).Error)
+	assert.Equal(t, int64(17), sub.AmountUsed)
+	assert.Equal(t, int64(0), sub.TokenUsed)
+	assert.Equal(t, int64(7), relayInfo.SubscriptionPostDelta)
 }

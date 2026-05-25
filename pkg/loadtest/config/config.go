@@ -17,6 +17,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const benchmarkConnectionLimitMaximum = 2000
+
 const (
 	SubscriptionAPIKey = "sk-loadtestsub"
 	CompatAPIKey       = "sk-loadtestcompat"
@@ -34,6 +36,7 @@ var EnvKeys = []string{
 	"LOG_SQL_DSN",
 	"REDIS_CONN_STRING",
 	"REDIS_POOL_SIZE",
+	"REDIS_IDLE_TIMEOUT_SECONDS",
 	"ENABLE_PPROF",
 	"LOADTEST_RUNTIME_STATS_ENABLED",
 	"LOADTEST_PROFILE_BLOCK_RATE",
@@ -134,11 +137,17 @@ type RelayConfig struct {
 }
 
 type ServerLimitsConfig struct {
-	GOMAXPROCS              string `json:"gomaxprocs" yaml:"gomaxprocs"`
-	GOGC                    string `json:"gogc" yaml:"gogc"`
-	GOMEMLIMIT              string `json:"gomemlimit" yaml:"gomemlimit"`
-	ProcessMemoryLimitBytes uint64 `json:"process_memory_limit_bytes" yaml:"process_memory_limit_bytes"`
-	CPUAffinityCores        int    `json:"cpu_affinity_cores" yaml:"cpu_affinity_cores"`
+	GOMAXPROCS               string `json:"gomaxprocs" yaml:"gomaxprocs"`
+	GOGC                     string `json:"gogc" yaml:"gogc"`
+	GOMEMLIMIT               string `json:"gomemlimit" yaml:"gomemlimit"`
+	ProcessMemoryLimitBytes  uint64 `json:"process_memory_limit_bytes" yaml:"process_memory_limit_bytes"`
+	CPUAffinityCores         int    `json:"cpu_affinity_cores" yaml:"cpu_affinity_cores"`
+	SQLMaxOpenConns          string `json:"sql_max_open_conns" yaml:"sql_max_open_conns"`
+	SQLMaxIdleConns          string `json:"sql_max_idle_conns" yaml:"sql_max_idle_conns"`
+	RedisPoolSize            string `json:"redis_pool_size" yaml:"redis_pool_size"`
+	RedisIdleTimeoutSeconds  string `json:"redis_idle_timeout_seconds" yaml:"redis_idle_timeout_seconds"`
+	RelayMaxIdleConns        string `json:"relay_max_idle_conns" yaml:"relay_max_idle_conns"`
+	RelayMaxIdleConnsPerHost string `json:"relay_max_idle_conns_per_host" yaml:"relay_max_idle_conns_per_host"`
 }
 
 type ProfileConfig struct {
@@ -335,7 +344,8 @@ func (f File) NewAPIEnv() map[string]string {
 		"SQL_DSN":                         f.Postgres.DSN,
 		"LOG_SQL_DSN":                     f.LogPostgres.DSN,
 		"REDIS_CONN_STRING":               redisConnString(f.Redis.Addr),
-		"REDIS_POOL_SIZE":                 "2048",
+		"REDIS_POOL_SIZE":                 "256",
+		"REDIS_IDLE_TIMEOUT_SECONDS":      "1",
 		"ENABLE_PPROF":                    "true",
 		"LOADTEST_RUNTIME_STATS_ENABLED":  boolEnv(f.Server.RuntimeStatsEnabled),
 		"LOADTEST_PROFILE_BLOCK_RATE":     strconv.Itoa(f.Server.ProfileBlockRate),
@@ -346,7 +356,7 @@ func (f File) NewAPIEnv() map[string]string {
 		"NODE_TYPE":                       "slave",
 		"BATCH_UPDATE_ENABLED":            "false",
 		"BATCH_UPDATE_INTERVAL":           "1",
-		"SQL_MAX_OPEN_CONNS":              "256",
+		"SQL_MAX_OPEN_CONNS":              "64",
 		"SQL_MAX_IDLE_CONNS":              "64",
 		"SQL_MAX_LIFETIME":                "60",
 		"CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED": "false",
@@ -400,11 +410,27 @@ func (f File) NewAPIEnvForProfile(name string) (map[string]string, error) {
 	if p.ServerLimits.GOMEMLIMIT != "" {
 		env["GOMEMLIMIT"] = p.ServerLimits.GOMEMLIMIT
 	}
+	if p.ServerLimits.SQLMaxOpenConns != "" {
+		env["SQL_MAX_OPEN_CONNS"] = p.ServerLimits.SQLMaxOpenConns
+	}
+	if p.ServerLimits.SQLMaxIdleConns != "" {
+		env["SQL_MAX_IDLE_CONNS"] = p.ServerLimits.SQLMaxIdleConns
+	}
+	if p.ServerLimits.RedisPoolSize != "" {
+		env["REDIS_POOL_SIZE"] = p.ServerLimits.RedisPoolSize
+	}
+	if p.ServerLimits.RedisIdleTimeoutSeconds != "" {
+		env["REDIS_IDLE_TIMEOUT_SECONDS"] = p.ServerLimits.RedisIdleTimeoutSeconds
+	}
 	if p.Relay.MaxIdleConns > 0 {
 		env["RELAY_MAX_IDLE_CONNS"] = strconv.Itoa(p.Relay.MaxIdleConns)
+	} else if p.ServerLimits.RelayMaxIdleConns != "" {
+		env["RELAY_MAX_IDLE_CONNS"] = p.ServerLimits.RelayMaxIdleConns
 	}
 	if p.Relay.MaxIdleConnsPerHost > 0 {
 		env["RELAY_MAX_IDLE_CONNS_PER_HOST"] = strconv.Itoa(p.Relay.MaxIdleConnsPerHost)
+	} else if p.ServerLimits.RelayMaxIdleConnsPerHost != "" {
+		env["RELAY_MAX_IDLE_CONNS_PER_HOST"] = p.ServerLimits.RelayMaxIdleConnsPerHost
 	}
 	return env, nil
 }
@@ -632,10 +658,10 @@ func validateProfileConfigPositive(name string, cfg ProfileConfig) error {
 	if cfg.Relay.MaxIdleConns <= 0 || cfg.Relay.MaxIdleConnsPerHost <= 0 {
 		return fmt.Errorf("profiles.%s relay connection limits must be positive", name)
 	}
-	if cfg.Transport.MaxConnsPerHost > 1024 || cfg.Transport.MaxIdleConns > 1024 || cfg.Transport.MaxIdleConnsPerHost > 1024 || cfg.Relay.MaxIdleConns > 1024 || cfg.Relay.MaxIdleConnsPerHost > 1024 {
+	if cfg.Transport.MaxConnsPerHost > benchmarkConnectionLimitMaximum || cfg.Transport.MaxIdleConns > benchmarkConnectionLimitMaximum || cfg.Transport.MaxIdleConnsPerHost > benchmarkConnectionLimitMaximum || cfg.Relay.MaxIdleConns > benchmarkConnectionLimitMaximum || cfg.Relay.MaxIdleConnsPerHost > benchmarkConnectionLimitMaximum {
 		return fmt.Errorf("profiles.%s connection limits exceed benchmark maximum", name)
 	}
-	if cfg.ServerLimits.GOMAXPROCS == "" || cfg.ServerLimits.GOGC == "" || cfg.ServerLimits.GOMEMLIMIT == "" || cfg.ServerLimits.ProcessMemoryLimitBytes == 0 || cfg.ServerLimits.CPUAffinityCores <= 0 {
+	if cfg.ServerLimits.GOMAXPROCS == "" || cfg.ServerLimits.GOGC == "" || cfg.ServerLimits.GOMEMLIMIT == "" || cfg.ServerLimits.ProcessMemoryLimitBytes == 0 || cfg.ServerLimits.CPUAffinityCores <= 0 || cfg.ServerLimits.SQLMaxOpenConns == "" || cfg.ServerLimits.SQLMaxIdleConns == "" || cfg.ServerLimits.RedisPoolSize == "" || cfg.ServerLimits.RedisIdleTimeoutSeconds == "" || cfg.ServerLimits.RelayMaxIdleConns == "" || cfg.ServerLimits.RelayMaxIdleConnsPerHost == "" {
 		return fmt.Errorf("profiles.%s server limits must be fully specified", name)
 	}
 	return nil
@@ -666,7 +692,13 @@ func profileConfigMatchesProfile(cfg ProfileConfig, want profile.Profile) bool {
 		cfg.ServerLimits.GOGC == want.ServerLimits.GOGC &&
 		cfg.ServerLimits.GOMEMLIMIT == want.ServerLimits.GOMEMLIMIT &&
 		cfg.ServerLimits.ProcessMemoryLimitBytes == want.ServerLimits.ProcessMemoryLimitBytes &&
-		cfg.ServerLimits.CPUAffinityCores == want.ServerLimits.CPUAffinityCores
+		cfg.ServerLimits.CPUAffinityCores == want.ServerLimits.CPUAffinityCores &&
+		cfg.ServerLimits.SQLMaxOpenConns == want.ServerLimits.SQLMaxOpenConns &&
+		cfg.ServerLimits.SQLMaxIdleConns == want.ServerLimits.SQLMaxIdleConns &&
+		cfg.ServerLimits.RedisPoolSize == want.ServerLimits.RedisPoolSize &&
+		cfg.ServerLimits.RedisIdleTimeoutSeconds == want.ServerLimits.RedisIdleTimeoutSeconds &&
+		cfg.ServerLimits.RelayMaxIdleConns == want.ServerLimits.RelayMaxIdleConns &&
+		cfg.ServerLimits.RelayMaxIdleConnsPerHost == want.ServerLimits.RelayMaxIdleConnsPerHost
 }
 
 func sameIntSlice(a, b []int) bool {
@@ -702,11 +734,17 @@ func profileFromConfig(name string, cfg ProfileConfig) profile.Profile {
 			MaxIdleConnsPerHost: cfg.Relay.MaxIdleConnsPerHost,
 		},
 		ServerLimits: profile.ServerLimits{
-			GOMAXPROCS:              cfg.ServerLimits.GOMAXPROCS,
-			GOGC:                    cfg.ServerLimits.GOGC,
-			GOMEMLIMIT:              cfg.ServerLimits.GOMEMLIMIT,
-			ProcessMemoryLimitBytes: cfg.ServerLimits.ProcessMemoryLimitBytes,
-			CPUAffinityCores:        cfg.ServerLimits.CPUAffinityCores,
+			GOMAXPROCS:               cfg.ServerLimits.GOMAXPROCS,
+			GOGC:                     cfg.ServerLimits.GOGC,
+			GOMEMLIMIT:               cfg.ServerLimits.GOMEMLIMIT,
+			ProcessMemoryLimitBytes:  cfg.ServerLimits.ProcessMemoryLimitBytes,
+			CPUAffinityCores:         cfg.ServerLimits.CPUAffinityCores,
+			SQLMaxOpenConns:          cfg.ServerLimits.SQLMaxOpenConns,
+			SQLMaxIdleConns:          cfg.ServerLimits.SQLMaxIdleConns,
+			RedisPoolSize:            cfg.ServerLimits.RedisPoolSize,
+			RedisIdleTimeoutSeconds:  cfg.ServerLimits.RedisIdleTimeoutSeconds,
+			RelayMaxIdleConns:        cfg.ServerLimits.RelayMaxIdleConns,
+			RelayMaxIdleConnsPerHost: cfg.ServerLimits.RelayMaxIdleConnsPerHost,
 		},
 	}
 }

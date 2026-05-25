@@ -24,6 +24,10 @@ import (
 
 var findExecutableFn = findExecutable
 var managedRedisCommand = exec.Command
+var createdbCommand = exec.CommandContext
+var waitPostgresFn = waitPostgres
+
+const managedPostgresConnectionHeadroom = 64
 
 func startManagedInfraProcesses(ctx context.Context, opts Options, cfg loadtestconfig.File) (Process, error) {
 	if err := ensureManagedInfraPortsClosed(ctx, cfg); err != nil {
@@ -79,7 +83,9 @@ func startManagedRedis(ctx context.Context, opts Options, cfg loadtestconfig.Fil
 		return nil, err
 	}
 	confPath := filepath.Join(dir, "redis.conf")
-	conf := fmt.Sprintf("bind 127.0.0.1\nport %d\ndir %s\nsave \"\"\nappendonly no\nprotected-mode yes\ndaemonize no\n", port, filepath.ToSlash(dir))
+	redisDir := filepath.ToSlash(dir)
+	redisDir = strings.ReplaceAll(redisDir, "\"", "\\\"")
+	conf := fmt.Sprintf("bind 127.0.0.1\nport %d\ndir \"%s\"\nsave \"\"\nappendonly no\nprotected-mode yes\ndaemonize no\nmaxclients 768\ntimeout 1\n", port, redisDir)
 	if err := os.WriteFile(confPath, []byte(conf), 0o600); err != nil {
 		return nil, err
 	}
@@ -133,7 +139,8 @@ func startManagedPostgres(ctx context.Context, opts Options, cfg loadtestconfig.
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, pgCtlPath, "start", "-D", dataDir, "-l", logPath, "-o", fmt.Sprintf("-h 127.0.0.1 -p %d", managedPostgresPort), "-w", "-t", "30")
+	postgresOptions := managedPostgresStartOptions(cfg)
+	cmd := exec.CommandContext(ctx, pgCtlPath, "start", "-D", dataDir, "-l", logPath, "-o", postgresOptions, "-w", "-t", "30")
 	if err := runCommandRedacted(cmd); err != nil {
 		return nil, err
 	}
@@ -142,11 +149,25 @@ func startManagedPostgres(ctx context.Context, opts Options, cfg loadtestconfig.
 		_ = proc.Stop(ctx)
 		return nil, err
 	}
-	if err := waitPostgres(ctx, cfg.Postgres.DSN, 10*time.Second); err != nil {
+	if err := waitPostgresFn(ctx, cfg.Postgres.DSN, 10*time.Second); err != nil {
 		_ = proc.Stop(ctx)
 		return nil, err
 	}
 	return proc, nil
+}
+
+func managedPostgresStartOptions(cfg loadtestconfig.File) string {
+	return fmt.Sprintf("-h 127.0.0.1 -p %d -c max_connections=%d", managedPostgresPort, managedPostgresMaxConnections(cfg))
+}
+
+func managedPostgresMaxConnections(cfg loadtestconfig.File) int {
+	maxOpen := 256
+	if p, err := cfg.Profile("benchmark"); err == nil {
+		if parsed, parseErr := strconv.Atoi(strings.TrimSpace(p.ServerLimits.SQLMaxOpenConns)); parseErr == nil && parsed > 0 {
+			maxOpen = parsed
+		}
+	}
+	return maxOpen + managedPostgresConnectionHeadroom
 }
 
 func processLogs(artifactDir string, name string) (*os.File, *os.File, error) {
@@ -256,7 +277,7 @@ func waitFor(ctx context.Context, timeout time.Duration, probe func(context.Cont
 }
 
 func createLoadtestDatabase(ctx context.Context, createdbPath string, targetDSN string) error {
-	if err := waitPostgres(ctx, postgresAdminDSNString(targetDSN), 10*time.Second); err != nil {
+	if err := waitPostgresFn(ctx, postgresAdminDSNString(targetDSN), 10*time.Second); err != nil {
 		return err
 	}
 	cmd, err := buildCreateDatabaseCommand(ctx, createdbPath, targetDSN)
@@ -264,7 +285,7 @@ func createLoadtestDatabase(ctx context.Context, createdbPath string, targetDSN 
 		return err
 	}
 	if err := runCommandRedacted(cmd); err != nil {
-		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "已存在") {
+		if isCreateDatabaseAlreadyExistsError(err.Error()) {
 			return nil
 		}
 		return err
@@ -272,12 +293,20 @@ func createLoadtestDatabase(ctx context.Context, createdbPath string, targetDSN 
 	return nil
 }
 
+func isCreateDatabaseAlreadyExistsError(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "already exists") ||
+		strings.Contains(message, "已存在") ||
+		strings.Contains(message, "already-exists") ||
+		strings.Contains(message, "数据库") && strings.Contains(message, "存在")
+}
+
 func buildCreateDatabaseCommand(ctx context.Context, createdbPath string, targetDSN string) (*exec.Cmd, error) {
 	adminDSN, err := postgresAdminDSN(targetDSN)
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, createdbPath, "--maintenance-db", adminDSN, postgresLoadtestDatabase), nil
+	return createdbCommand(ctx, createdbPath, "--maintenance-db", adminDSN, postgresLoadtestDatabase), nil
 }
 
 func postgresAdminDSNString(raw string) string {

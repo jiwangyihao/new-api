@@ -356,7 +356,7 @@ func TestComputeTieredQuota_SameTier(t *testing.T) {
 	}
 
 	wantBefore := (80000*1.5 + 2000*7.5) / 1_000_000 * 500_000
-	wantAfter := billingexpr.QuotaRound(wantBefore * 1.5)
+	wantAfter := billingexpr.QuotaRound(wantBefore)
 	if result.ActualQuota != wantAfter {
 		t.Errorf("quota: got %d, want %d", result.ActualQuota, wantAfter)
 	}
@@ -581,7 +581,7 @@ func TestComputeTieredQuota_WithCacheCrossTier(t *testing.T) {
 	}
 
 	wantBefore := (300000*3.0 + 10000*11.25 + 50000*0.3 + 10000*3.75) / 1_000_000 * 500_000
-	wantAfter := billingexpr.QuotaRound(wantBefore * 2.0)
+	wantAfter := billingexpr.QuotaRound(wantBefore)
 	if math.Abs(result.ActualQuotaBeforeRatio-wantBefore) > 1e-6 {
 		t.Errorf("before ratio: got %f, want %f", result.ActualQuotaBeforeRatio, wantBefore)
 	}
@@ -646,7 +646,7 @@ func TestFuzz_SettlementConsistency(t *testing.T) {
 			CR: math.Round(rng.Float64() * 100000),
 			CC: math.Round(rng.Float64() * 30000),
 		}
-		quotaMultiplier := 0.5 + rng.Float64()*2.0
+		legacyMultiplier := 0.5 + rng.Float64()*2.0
 
 		estCost, estTrace, _ := billingexpr.RunExpr(claudeWithCacheExpr, estParams)
 
@@ -655,11 +655,11 @@ func TestFuzz_SettlementConsistency(t *testing.T) {
 			BillingMode:               "tiered_expr",
 			ExprString:                claudeWithCacheExpr,
 			ExprHash:                  billingexpr.ExprHashString(claudeWithCacheExpr),
-			QuotaMultiplier:           quotaMultiplier,
+			QuotaMultiplier:           legacyMultiplier,
 			EstimatedPromptTokens:     int(estParams.P),
 			EstimatedCompletionTokens: int(estParams.C),
 			EstimatedQuotaBeforeRatio: estCost / 1_000_000 * qpu,
-			EstimatedQuota:            billingexpr.QuotaRound(estCost / 1_000_000 * qpu * quotaMultiplier),
+			EstimatedQuota:            billingexpr.QuotaRound(estCost / 1_000_000 * qpu),
 			EstimatedTier:             estTrace.MatchedTier,
 			QuotaPerUnit:              qpu,
 		}
@@ -670,7 +670,7 @@ func TestFuzz_SettlementConsistency(t *testing.T) {
 		}
 
 		directCost, _, _ := billingexpr.RunExpr(claudeWithCacheExpr, actParams)
-		directQuota := billingexpr.QuotaRound(directCost / 1_000_000 * qpu * quotaMultiplier)
+		directQuota := billingexpr.QuotaRound(directCost / 1_000_000 * qpu)
 
 		if result.ActualQuota != directQuota {
 			t.Errorf("iter %d: settlement %d != direct %d", i, result.ActualQuota, directQuota)
@@ -708,7 +708,7 @@ func TestComputeTieredQuota_BasicSettlement(t *testing.T) {
 	}
 }
 
-func TestComputeTieredQuota_WithQuotaMultiplier(t *testing.T) {
+func TestComputeTieredQuota_IgnoresLegacyQuotaMultiplier(t *testing.T) {
 	exprStr := `tier("default", p + c)`
 	snap := &billingexpr.BillingSnapshot{
 		BillingMode:     "tiered_expr",
@@ -722,9 +722,9 @@ func TestComputeTieredQuota_WithQuotaMultiplier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// exprOutput = 1500; quotaBeforeRatio = 750; quota = round(750 * 2.0) = 1500
-	if result.ActualQuota != 1500 {
-		t.Errorf("quota = %d, want 1500", result.ActualQuota)
+	// exprOutput = 1500; quotaBeforeRatio = 750; legacy multiplier is ignored.
+	if result.ActualQuota != 750 {
+		t.Errorf("quota = %d, want 750", result.ActualQuota)
 	}
 }
 

@@ -37,6 +37,10 @@ type PreConsumeRow struct {
 }
 
 func LoadBusinessRows(db *gorm.DB, summary artifact.Summary) ([]ConsumeLogRow, []PreConsumeRow, error) {
+	return LoadBusinessRowsWithLogDB(db, db, summary)
+}
+
+func LoadBusinessRowsWithLogDB(db *gorm.DB, logDB *gorm.DB, summary artifact.Summary) ([]ConsumeLogRow, []PreConsumeRow, error) {
 	ids := make([]string, 0, len(summary.Requests))
 	for _, req := range summary.Requests {
 		if req.NewAPIRequestID != "" {
@@ -46,8 +50,14 @@ func LoadBusinessRows(db *gorm.DB, summary artifact.Summary) ([]ConsumeLogRow, [
 	if len(ids) == 0 {
 		return nil, nil, nil
 	}
+	if db == nil {
+		return nil, nil, fmt.Errorf("database is not configured")
+	}
+	if logDB == nil {
+		logDB = db
+	}
 	var logRows []model.Log
-	if err := db.Model(&model.Log{}).Where("request_id IN ? AND type = ?", ids, model.LogTypeConsume).Find(&logRows).Error; err != nil {
+	if err := logDB.Model(&model.Log{}).Where("request_id IN ? AND type = ?", ids, model.LogTypeConsume).Find(&logRows).Error; err != nil {
 		return nil, nil, err
 	}
 	logs := make([]ConsumeLogRow, 0, len(logRows))
@@ -114,8 +124,15 @@ func LoadBusinessSnapshot(db *gorm.DB, seed artifact.SeedOutput) (artifact.Busin
 }
 
 func BusinessDrainSample(db *gorm.DB, tokenProfile string) (monitor.DrainSample, error) {
+	return BusinessDrainSampleWithLogDB(db, db, tokenProfile)
+}
+
+func BusinessDrainSampleWithLogDB(db *gorm.DB, logDB *gorm.DB, tokenProfile string) (monitor.DrainSample, error) {
 	if db == nil {
 		return monitor.DrainSample{}, fmt.Errorf("database is not configured")
+	}
+	if logDB == nil {
+		logDB = db
 	}
 	switch tokenProfile {
 	case "subscription", "compat":
@@ -125,7 +142,7 @@ func BusinessDrainSample(db *gorm.DB, tokenProfile string) (monitor.DrainSample,
 		return monitor.DrainSample{}, fmt.Errorf("unsupported token profile %q", tokenProfile)
 	}
 	var sample monitor.DrainSample
-	if err := db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&sample.ConsumeLogs).Error; err != nil {
+	if err := logDB.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&sample.ConsumeLogs).Error; err != nil {
 		return monitor.DrainSample{}, err
 	}
 	if err := db.Model(&model.SubscriptionPreConsumeRecord{}).Count(&sample.PreConsumeRecords).Error; err != nil {

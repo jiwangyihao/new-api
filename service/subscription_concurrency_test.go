@@ -1,12 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -167,6 +170,31 @@ func TestSubscriptionConcurrencyFailClosedWhenRedisCommandFails(t *testing.T) {
 	subscriptionConcurrencyRedis = brokenRedisEvaler{}
 	_, err := AcquireUserConcurrency(context.Background(), 7504, "req", 1)
 	require.ErrorIs(t, err, ErrSubscriptionConcurrencyUnavailable)
+}
+
+func TestSubscriptionConcurrencyFailClosedLogsRedisErrorClass(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	common.RedisEnabled = true
+	common.SubscriptionConcurrencyFailOpen = false
+	subscriptionConcurrencyRedis = brokenRedisEvaler{}
+
+	oldWriter := gin.DefaultWriter
+	var buf bytes.Buffer
+	common.LogWriterMu.Lock()
+	gin.DefaultWriter = &buf
+	common.LogWriterMu.Unlock()
+	t.Cleanup(func() {
+		common.LogWriterMu.Lock()
+		gin.DefaultWriter = oldWriter
+		common.LogWriterMu.Unlock()
+	})
+
+	_, err := AcquireUserConcurrency(context.Background(), 7506, "req", 1)
+	require.ErrorIs(t, err, ErrSubscriptionConcurrencyUnavailable)
+	logLine := buf.String()
+	if !strings.Contains(logLine, "subscription concurrency redis error; fail-closed") || !strings.Contains(logLine, "class=redis down") {
+		t.Fatalf("missing redis diagnostic log: %q", logLine)
+	}
 }
 
 func TestSubscriptionConcurrencyFailOpenWhenRedisCommandFails(t *testing.T) {

@@ -40,7 +40,7 @@ func int64FromOtherValue(t *testing.T, value interface{}) int64 {
 
 func TestAppendBillingInfoWritesSubscriptionTokenFields(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
-		BillingSource:                       "subscription",
+		BillingSource:                        "subscription",
 		SubscriptionId:                       10,
 		SubscriptionPlanId:                   2,
 		SubscriptionPlanTitle:                "Basic",
@@ -52,7 +52,7 @@ func TestAppendBillingInfoWritesSubscriptionTokenFields(t *testing.T) {
 		SubscriptionDistributorTokenBilling:  true,
 	}
 	testRelayInfoStartTimes(relayInfo)
-	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0, 0, 0)
+	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0)
 
 	assert.Equal(t, int64(1000000000), int64FromOtherValue(t, other["subscription_token_limit"]))
 	assert.Equal(t, int64(2048), int64FromOtherValue(t, other["subscription_tokens_consumed"]))
@@ -63,7 +63,7 @@ func TestAppendBillingInfoWritesSubscriptionTokenFields(t *testing.T) {
 
 func TestAppendBillingInfoClampsNegativeSubscriptionTokenConsumption(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
-		BillingSource:                       "subscription",
+		BillingSource:                        "subscription",
 		SubscriptionId:                       10,
 		SubscriptionPreConsumed:              10,
 		SubscriptionPostDelta:                -50,
@@ -73,7 +73,7 @@ func TestAppendBillingInfoClampsNegativeSubscriptionTokenConsumption(t *testing.
 	}
 	testRelayInfoStartTimes(relayInfo)
 
-	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0, 0, 0)
+	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0)
 
 	assert.Equal(t, int64(0), int64FromOtherValue(t, other["subscription_tokens_consumed"]))
 	assert.Equal(t, int64(0), int64FromOtherValue(t, other["subscription_token_used"]))
@@ -83,14 +83,14 @@ func TestAppendBillingInfoClampsNegativeSubscriptionTokenConsumption(t *testing.
 func TestAppendBillingInfoDoesNotWriteTokenFieldsForLegacyAmountSubscription(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		BillingSource:                         "subscription",
-		SubscriptionPreConsumed:                30,
-		SubscriptionPostDelta:                  20,
-		SubscriptionAmountTotal:                100,
+		SubscriptionPreConsumed:               30,
+		SubscriptionPostDelta:                 20,
+		SubscriptionAmountTotal:               100,
 		SubscriptionAmountUsedAfterPreConsume: 50,
 	}
 	testRelayInfoStartTimes(relayInfo)
 
-	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0, 0, 0)
+	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0)
 
 	for _, key := range []string{
 		"subscription_tokens_consumed",

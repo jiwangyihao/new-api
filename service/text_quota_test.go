@@ -358,7 +358,7 @@ func TestComposeTieredTextQuotaKeepsToolCallSurcharges(t *testing.T) {
 	}
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	quota := composeTieredTextQuota(relayInfo, summary, 1000, &billingexpr.TieredResult{
+	quota := composeTieredTextQuota(summary, 1000, &billingexpr.TieredResult{
 		ActualQuotaBeforeRatio: 1000,
 		ActualQuota:            1000,
 	})
@@ -395,7 +395,7 @@ func TestComposeTieredTextQuotaFallbackKeepsToolCallSurcharges(t *testing.T) {
 	}
 
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	quota := composeTieredTextQuota(relayInfo, summary, 1000, nil)
+	quota := composeTieredTextQuota(summary, 1000, nil)
 
 	require.Equal(t, int64(10000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 11000, quota)
@@ -433,7 +433,7 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	// tieredResult=nil simulates a settlement error where TryTieredSettle
 	// falls back to FinalPreConsumedQuota (2000), which differs from frozen estimate (1000).
 	preConsumedFallback := 2000
-	quota := composeTieredTextQuota(relayInfo, summary, preConsumedFallback, nil)
+	quota := composeTieredTextQuota(summary, preConsumedFallback, nil)
 
 	require.Equal(t, int64(10000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 12000, quota)

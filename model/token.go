@@ -8,8 +8,11 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/bytedance/gopkg/util/gopool"
+	"golang.org/x/sync/singleflight"
 	"gorm.io/gorm"
 )
+
+var tokenLookupGroup singleflight.Group
 
 type Token struct {
 	Id                 int            `json:"id"`
@@ -262,8 +265,25 @@ func GetTokenByKey(key string, fromDB bool) (token *Token, err error) {
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+	token, err = getTokenByKeyFromDBCoalesced(key)
 	return token, err
+}
+
+func getTokenByKeyFromDBCoalesced(key string) (*Token, error) {
+	value, err, _ := tokenLookupGroup.Do(key, func() (interface{}, error) {
+		var token *Token
+		err := DB.Where(commonKeyCol+" = ?", key).First(&token).Error
+		return token, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	loaded, ok := value.(*Token)
+	if !ok || loaded == nil {
+		return nil, gorm.ErrRecordNotFound
+	}
+	token := *loaded
+	return &token, nil
 }
 
 func (token *Token) Insert() error {

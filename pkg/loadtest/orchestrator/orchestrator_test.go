@@ -586,6 +586,52 @@ func TestBuildCreateDatabaseCommandUsesPostgresAdminDatabase(t *testing.T) {
 	}
 }
 
+func TestManagedPostgresStartOptionsReserveConnectionsForBenchmarkPool(t *testing.T) {
+	cfg := orchestratorTestConfig(t)
+	maxConnections := managedPostgresMaxConnections(cfg)
+	if maxConnections != 128 {
+		t.Fatalf("managed PostgreSQL max_connections = %d, want SQL_MAX_OPEN_CONNS plus monitor/admin headroom", maxConnections)
+	}
+
+	options := managedPostgresStartOptions(cfg)
+	for _, want := range []string{
+		"-h 127.0.0.1",
+		fmt.Sprintf("-p %d", managedPostgresPort),
+		fmt.Sprintf("-c max_connections=%d", maxConnections),
+	} {
+		if !strings.Contains(options, want) {
+			t.Fatalf("managed PostgreSQL start options %q missing %q", options, want)
+		}
+	}
+}
+
+func TestCreateLoadtestDatabaseIgnoresLocalizedAlreadyExists(t *testing.T) {
+	if os.Getenv("GO_WANT_FAKE_CREATEDB_ALREADY_EXISTS") == "1" {
+		_, _ = fmt.Fprintln(os.Stderr, `createdb: 错误: 创建数据库失败: 错误: 数据库 "new_api_loadtest" 已经存在`)
+		os.Exit(1)
+	}
+	cmdPath := os.Args[0]
+	t.Setenv("GO_WANT_FAKE_CREATEDB_ALREADY_EXISTS", "1")
+	oldWaitPostgres := waitPostgresFn
+	waitPostgresFn = func(context.Context, string, time.Duration) error { return nil }
+	oldCreatedbCommand := createdbCommand
+	createdbCommand = func(ctx context.Context, name string, arg ...string) *exec.Cmd {
+		args := append([]string{"-test.run=^TestCreateLoadtestDatabaseIgnoresLocalizedAlreadyExists$", "--"}, arg...)
+		cmd := exec.CommandContext(ctx, name, args...)
+		cmd.Env = append(cmd.Environ(), "GO_WANT_FAKE_CREATEDB_ALREADY_EXISTS=1")
+		return cmd
+	}
+	t.Cleanup(func() {
+		waitPostgresFn = oldWaitPostgres
+		createdbCommand = oldCreatedbCommand
+	})
+	ctx := context.Background()
+	err := createLoadtestDatabase(ctx, cmdPath, "postgresql://new_api_loadtest:loadtest@127.0.0.1:15432/new_api_loadtest?sslmode=disable")
+	if err != nil {
+		t.Fatalf("localized already-exists error was not ignored: %v", err)
+	}
+}
+
 func TestRedisPortUsesConfiguredAddress(t *testing.T) {
 	got, err := redisPort("redis://127.0.0.1:16444/0")
 	if err != nil {
@@ -683,6 +729,73 @@ func TestStartManagedRedisOutlivesStartupContextCancellation(t *testing.T) {
 	}
 	if err := waitRedis(context.Background(), "redis://"+addr+"/0", time.Second); err != nil {
 		t.Fatalf("managed redis process did not survive startup context cancellation: %v", err)
+	}
+}
+
+func TestStartManagedRedisConfiguresLoadtestClientCeiling(t *testing.T) {
+	t.Setenv("GO_WANT_FAKE_REDIS_SERVER", "1")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	oldFindExecutable := findExecutableFn
+	findExecutableFn = func(name string, windowsName string, candidates []string) (string, error) {
+		if name == "redis-server" || windowsName == "redis-server.exe" {
+			return os.Args[0], nil
+		}
+		return oldFindExecutable(name, windowsName, candidates)
+	}
+	oldManagedRedisCommand := managedRedisCommand
+	managedRedisCommand = func(name string, arg ...string) *exec.Cmd {
+		args := append([]string{"-test.run=^TestHelperProcess$", "--"}, arg...)
+		cmd := exec.Command(name, args...)
+		cmd.Env = append(cmd.Environ(), "GO_WANT_FAKE_REDIS_SERVER=1", "GO_WANT_HELPER_PROCESS=")
+		return cmd
+	}
+	t.Cleanup(func() {
+		findExecutableFn = oldFindExecutable
+		managedRedisCommand = oldManagedRedisCommand
+	})
+
+	artifactDir := t.TempDir()
+	proc, err := startManagedRedis(context.Background(), Options{ArtifactDir: artifactDir}, loadtestconfig.File{Redis: loadtestconfig.RedisConfig{Addr: "redis://" + addr + "/0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = proc.Stop(context.Background()) }()
+	conf, err := os.ReadFile(filepath.Join(artifactDir, "infra", "redis", "redis.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(conf)
+	confDir := filepath.ToSlash(filepath.Join(artifactDir, "infra", "redis"))
+	confDir = strings.ReplaceAll(confDir, "\"", "\\\"")
+	for _, want := range []string{"dir \"" + confDir + "\"", "maxclients 768", "timeout 1"} {
+		if !strings.Contains(text, want+"\n") {
+			t.Fatalf("redis.conf missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPgCtlProcessStopIgnoresStartupContextCancellation(t *testing.T) {
+	if os.Getenv("GO_WANT_FAKE_PG_CTL_STOP") == "1" {
+		if len(os.Args) < 2 || os.Args[len(os.Args)-1] != "30" {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+
+	t.Setenv("GO_WANT_FAKE_PG_CTL_STOP", "1")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := (&pgCtlProcess{pgCtl: os.Args[0], dataDir: t.TempDir()}).Stop(ctx)
+	if err != nil {
+		t.Fatalf("pg_ctl stop used cancelled startup context: %v", err)
 	}
 }
 

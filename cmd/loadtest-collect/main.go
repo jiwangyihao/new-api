@@ -64,6 +64,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 	}
 	var db *gorm.DB
+	var logDB *gorm.DB
 	if cfg != nil {
 		opened, err := gorm.Open(postgres.Open(cfg.Postgres.DSN), &gorm.Config{})
 		if err != nil {
@@ -71,6 +72,15 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 			return 1
 		}
 		db = opened
+		logDB = db
+		if cfg.LogPostgres.DSN != "" && cfg.LogPostgres.DSN != cfg.Postgres.DSN {
+			openedLog, err := gorm.Open(postgres.Open(cfg.LogPostgres.DSN), &gorm.Config{})
+			if err != nil {
+				writeErr(stderr, err)
+				return 1
+			}
+			logDB = openedLog
+		}
 	}
 	var seed artifact.SeedOutput
 	if *seedOutputPath != "" {
@@ -89,7 +99,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 				writeErr(stderr, err)
 				return 1
 			}
-			postgresSnapshot = monitor.LoadPostgresSnapshot(db, nil)
+			postgresSnapshot = monitor.LoadPostgresSnapshotWithLogDB(db, logDB, nil)
 		}
 		processSnapshot, err := collectProcessSnapshot(*pidFilePath)
 		if err != nil {
@@ -152,7 +162,7 @@ func Run(args []string, stdout io.Writer, stderr io.Writer) int {
 		var preRows []metrics.PreConsumeRow
 		if db != nil {
 			var err error
-			logRows, preRows, err = metrics.LoadBusinessRows(db, summary)
+			logRows, preRows, err = metrics.LoadBusinessRowsWithLogDB(db, logDB, summary)
 			if err != nil {
 				writeErr(stderr, err)
 				return 1

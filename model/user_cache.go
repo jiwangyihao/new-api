@@ -11,7 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"golang.org/x/sync/singleflight"
 )
+
+var userCacheLookupGroup singleflight.Group
 
 // UserBase struct remains the same as it represents the cached data structure
 type UserBase struct {
@@ -109,7 +112,7 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 
 	// If Redis fails, get from DB
 	fromDB = true
-	user, err = GetUserById(userId, false)
+	user, err = getUserByIDCoalesced(userId)
 	if err != nil {
 		return nil, err // Return nil and error if DB lookup fails
 	}
@@ -126,6 +129,21 @@ func GetUserCache(userId int) (userCache *UserBase, err error) {
 	}
 
 	return userCache, nil
+}
+
+func getUserByIDCoalesced(userId int) (*User, error) {
+	value, err, _ := userCacheLookupGroup.Do(fmt.Sprintf("%d", userId), func() (interface{}, error) {
+		return GetUserById(userId, false)
+	})
+	if err != nil {
+		return nil, err
+	}
+	user, ok := value.(*User)
+	if !ok || user == nil {
+		return nil, fmt.Errorf("user %d not found", userId)
+	}
+	loaded := *user
+	return &loaded, nil
 }
 
 func cacheGetUserBase(userId int) (*UserBase, error) {

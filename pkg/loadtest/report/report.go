@@ -111,18 +111,8 @@ func RenderResourceSweep(input ResourceSweepReportInput) string {
 	b.WriteString("\n## Resource Limits\n\n")
 	if input.Limits.Status != "" && input.Limits.Status != "ok" {
 		b.WriteString(statusLine("limits", input.Limits.Statused))
-	} else {
-		gomem := input.Limits.ServerEnv["GOMEMLIMIT"]
-		if gomem != "" {
-			b.WriteString(fmt.Sprintf("- GOMEMLIMIT=%s\n", gomem))
-		}
-		if input.Limits.ServerProcessMemoryLimitBytes > 0 {
-			b.WriteString(fmt.Sprintf("- process_memory_limit_bytes: %d\n", input.Limits.ServerProcessMemoryLimitBytes))
-		}
-		if input.Limits.ServerCPUAffinityCores > 0 {
-			b.WriteString(fmt.Sprintf("- cpu_affinity_cores: %d\n", input.Limits.ServerCPUAffinityCores))
-		}
 	}
+	writeServerLimits(&b, input.Limits)
 
 	b.WriteString("\n## Points\n\n")
 	b.WriteString("| concurrency | passed | failure_class | RSS peak | CPU peak | runtime heap | Redis used_memory | PostgreSQL active |\n")
@@ -176,11 +166,29 @@ func RenderResourceSweep(input ResourceSweepReportInput) string {
 	return b.String()
 }
 
-func statusLine(name string, status artifact.Statused) string {
-	if status.Reason != "" {
-		return fmt.Sprintf("- %s: %s - %s\n", name, status.Status, status.Reason)
+func writeServerLimits(b *strings.Builder, limits artifact.ResourceLimitsArtifact) {
+	gomem := limits.ServerEnv["GOMEMLIMIT"]
+	if gomem != "" {
+		b.WriteString(fmt.Sprintf("- GOMEMLIMIT=%s\n", gomem))
 	}
-	return fmt.Sprintf("- %s: %s\n", name, status.Status)
+	for _, key := range []string{"SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "REDIS_POOL_SIZE", "REDIS_IDLE_TIMEOUT_SECONDS", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
+		if value := limits.ServerEnv[key]; value != "" {
+			b.WriteString(fmt.Sprintf("- %s=%s\n", key, value))
+		}
+	}
+	if limits.ServerProcessMemoryLimitBytes > 0 {
+		b.WriteString(fmt.Sprintf("- process_memory_limit_bytes: %d\n", limits.ServerProcessMemoryLimitBytes))
+	}
+	if limits.ServerCPUAffinityCores > 0 {
+		b.WriteString(fmt.Sprintf("- cpu_affinity_cores: %d\n", limits.ServerCPUAffinityCores))
+	}
+}
+
+func statusLine(name string, status artifact.Statused) string {
+	if status.Reason == "" {
+		return fmt.Sprintf("- %s: %s\n", name, status.Status)
+	}
+	return fmt.Sprintf("- %s: %s - %s\n", name, status.Status, status.Reason)
 }
 
 func valueOrUnavailable(value string) string {

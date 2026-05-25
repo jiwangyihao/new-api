@@ -1,13 +1,16 @@
 package service
 
 import (
+	"context"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
+	appLogger "github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -15,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func ensureSubscriptionBillingTables(t *testing.T) {
@@ -35,6 +39,7 @@ func seedDistributorPlan(t *testing.T, id int, code string, tokenLimit int64) {
 		BusinessCode:      &code,
 	}
 	require.NoError(t, model.DB.Create(plan).Error)
+	model.InvalidateSubscriptionPlanCache(id)
 }
 
 func seedLegacySubscriptionPlan(t *testing.T, id int, title string) {
@@ -46,6 +51,7 @@ func seedLegacySubscriptionPlan(t *testing.T, id int, title string) {
 		Enabled: true,
 	}
 	require.NoError(t, model.DB.Create(plan).Error)
+	model.InvalidateSubscriptionPlanCache(id)
 }
 
 func seedLegacySubscription(t *testing.T, id int, userId int, planId int, amountTotal int64, amountUsed int64) {
@@ -177,6 +183,87 @@ func TestSubscriptionBillingPreConsumesEstimatedTokens(t *testing.T) {
 
 	assert.Equal(t, int64(10), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
+}
+
+type subscriptionPlanInfoReadLogger struct {
+	gormlogger.Interface
+	reads atomic.Int64
+}
+
+func (l *subscriptionPlanInfoReadLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	if strings.Contains(sql, "FROM `user_subscriptions`") && strings.Contains(sql, "WHERE id = 8044") {
+		l.reads.Add(1)
+	}
+	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+}
+
+type subscriptionSettleSQLLogger struct {
+	gormlogger.Interface
+	reads atomic.Int64
+}
+
+func (l *subscriptionSettleSQLLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	if strings.Contains(sql, "FROM `user_subscriptions`") && strings.Contains(sql, "WHERE id = 8054") {
+		l.reads.Add(1)
+	}
+	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+}
+
+func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
+	truncate(t)
+	const userID = 8051
+	const tokenID = 8052
+	const planID = 8053
+	const subID = 8054
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-settle-no-read", 10_000)
+	seedDistributorPlan(t, planID, "plan-settle-no-read", 5_000)
+	seedDistributorSubscription(t, subID, userID, planID, 5_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-settle-no-read", "req-settle-no-read", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+
+	readLogger := &subscriptionSettleSQLLogger{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+	restoreLogger := model.DB.Config.Logger
+	model.DB.Config.Logger = readLogger
+	t.Cleanup(func() { model.DB.Config.Logger = restoreLogger })
+
+	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{SubscriptionTokens: 28}))
+
+	assert.Equal(t, int64(0), readLogger.reads.Load(), "settlement should use preconsume snapshot and avoid rereading the hot subscription row")
+	assert.Equal(t, int64(28), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(10), relayInfo.SubscriptionTokenUsedAfterPreConsume)
+	assert.Equal(t, int64(18), relayInfo.SubscriptionPostDelta)
+}
+
+func TestSubscriptionBillingPreConsumeUsesReturnedPlanMetadata(t *testing.T) {
+	truncate(t)
+	const userID = 8041
+	const tokenID = 8042
+	const planID = 8043
+	const subID = 8044
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-plan-metadata", 10_000)
+	seedDistributorPlan(t, planID, "plan-metadata", 5_000)
+	seedDistributorSubscription(t, subID, userID, planID, 5_000, 0)
+
+	readLogger := &subscriptionPlanInfoReadLogger{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+	restoreLogger := model.DB.Config.Logger
+	model.DB.Config.Logger = readLogger
+	t.Cleanup(func() { model.DB.Config.Logger = restoreLogger })
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-plan-metadata", "req-plan-metadata", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 1000)
+
+	assert.Equal(t, planID, relayInfo.SubscriptionPlanId)
+	assert.Equal(t, "plan-metadata", relayInfo.SubscriptionPlanTitle)
+	assert.Equal(t, int64(0), readLogger.reads.Load(), "preconsume should not reread the chosen subscription only to get plan metadata")
 }
 
 func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *testing.T) {
@@ -353,7 +440,6 @@ func TestPostTextConsumeQuotaResponsesAndChatSettleUsageTotalTokens(t *testing.T
 	}
 }
 
-
 func TestSubscriptionBillingRejectsNativeGeminiEmbeddingRelay(t *testing.T) {
 	truncate(t)
 	const userID = 8106
@@ -439,7 +525,7 @@ func TestLegacySubscriptionNotificationUsesQuotaFormatting(t *testing.T) {
 	}
 	remaining := relayInfo.SubscriptionAmountTotal - (relayInfo.SubscriptionAmountUsedAfterPreConsume + relayInfo.SubscriptionPostDelta)
 	remainingText := subscriptionRemainingText(false, remaining)
-	assert.Equal(t, logger.FormatQuota(1), remainingText)
+	assert.Equal(t, appLogger.FormatQuota(1), remainingText)
 }
 
 func TestDistributorSubscriptionNotificationUsesTokenFormatting(t *testing.T) {

@@ -44,8 +44,20 @@ func TestBuildLimitsArtifactRecordsServerOnlyScope(t *testing.T) {
 	if got.ServerCPUAffinityCores != 2 || got.ServerCPUAffinityMask != 3 {
 		t.Fatalf("CPU fields not recorded: cores=%d mask=%d", got.ServerCPUAffinityCores, got.ServerCPUAffinityMask)
 	}
-	if got.ServerEnv["GOMAXPROCS"] != "2" || got.ServerEnv["GOGC"] != "100" || got.ServerEnv["GOMEMLIMIT"] != "384MiB" {
-		t.Fatalf("server env mismatch: %#v", got.ServerEnv)
+	for key, want := range map[string]string{
+		"GOMAXPROCS":                    "2",
+		"GOGC":                          "100",
+		"GOMEMLIMIT":                    "384MiB",
+		"SQL_MAX_OPEN_CONNS":            "64",
+		"SQL_MAX_IDLE_CONNS":            "64",
+		"REDIS_POOL_SIZE":               "256",
+		"REDIS_IDLE_TIMEOUT_SECONDS":    "1",
+		"RELAY_MAX_IDLE_CONNS":          "1024",
+		"RELAY_MAX_IDLE_CONNS_PER_HOST": "1024",
+	} {
+		if got.ServerEnv[key] != want {
+			t.Fatalf("server env %s = %q, want %q in %#v", key, got.ServerEnv[key], want, got.ServerEnv)
+		}
 	}
 	if got.Status != "applied" || got.Reason != "test" {
 		t.Fatalf("status mismatch: %#v", got.Statused)

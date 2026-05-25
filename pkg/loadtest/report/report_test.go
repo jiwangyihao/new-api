@@ -76,13 +76,34 @@ func TestRenderResourceSweepReportIncludesCapacityAndResources(t *testing.T) {
 			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 250, Peaks: artifact.ResourcePeaks{RSSPeakBytes: 128 << 20, CPUPercentPeak: 95.5, HeapAllocPeakBytes: 48 << 20, RedisUsedMemoryPeakBytes: 12 << 20, PostgresActiveConnectionsPeak: 7}},
 			{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Concurrency: 500, Peaks: artifact.ResourcePeaks{RSSPeakBytes: 256 << 20, CPUPercentPeak: 99.9, HeapAllocPeakBytes: 96 << 20, RedisUsedMemoryPeakBytes: 18 << 20, PostgresActiveConnectionsPeak: 10}},
 		},
-		Limits: artifact.ResourceLimitsArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, ServerEnv: map[string]string{"GOMEMLIMIT": "384MiB"}, ServerProcessMemoryLimitBytes: 512 << 20, ServerCPUAffinityCores: 2, Statused: artifact.Statused{Status: "ok"}},
+		Limits: artifact.ResourceLimitsArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, ServerEnv: map[string]string{"GOMEMLIMIT": "384MiB", "SQL_MAX_OPEN_CONNS": "64", "SQL_MAX_IDLE_CONNS": "64", "REDIS_POOL_SIZE": "256", "REDIS_IDLE_TIMEOUT_SECONDS": "1", "RELAY_MAX_IDLE_CONNS": "1024", "RELAY_MAX_IDLE_CONNS_PER_HOST": "1024"}, ServerProcessMemoryLimitBytes: 512 << 20, ServerCPUAffinityCores: 2, Statused: artifact.Statused{Status: "ok"}},
 		Ports:  artifact.PortsClosedArtifact{SchemaVersion: artifact.SchemaVersion, RunContext: rc, Ports: map[string]string{"13080": "closed", "15432": "closed"}, Passed: true},
 	}
 	md := RenderResourceSweep(input)
-	for _, want := range []string{"最高通过并发", "第一失败并发", "failure_class", "GOMEMLIMIT=384MiB", "RSS peak", "CPU peak", "runtime heap", "Redis used_memory", "PostgreSQL active", "ports closed", "capacity_limit"} {
+	for _, want := range []string{"最高通过并发", "第一失败并发", "failure_class", "GOMEMLIMIT=384MiB", "SQL_MAX_OPEN_CONNS=64", "REDIS_POOL_SIZE=256", "REDIS_IDLE_TIMEOUT_SECONDS=1", "RELAY_MAX_IDLE_CONNS=1024", "RSS peak", "CPU peak", "runtime heap", "Redis used_memory", "PostgreSQL active", "ports closed", "capacity_limit"} {
 		if !strings.Contains(md, want) {
 			t.Fatalf("report missing %q:\n%s", want, md)
+		}
+	}
+}
+
+func TestRenderResourceSweepReportIncludesCapacityEnvWhenLimitsPartial(t *testing.T) {
+	rc := testRunContext()
+	input := ResourceSweepReportInput{
+		Sweep: artifact.SweepResult{SchemaVersion: artifact.SchemaVersion, RunContext: rc},
+		Limits: artifact.ResourceLimitsArtifact{
+			SchemaVersion:                 artifact.SchemaVersion,
+			RunContext:                    rc,
+			ServerEnv:                     map[string]string{"GOMEMLIMIT": "384MiB", "SQL_MAX_OPEN_CONNS": "64", "REDIS_POOL_SIZE": "256", "REDIS_IDLE_TIMEOUT_SECONDS": "1", "RELAY_MAX_IDLE_CONNS": "1024"},
+			ServerProcessMemoryLimitBytes: 512 << 20,
+			ServerCPUAffinityCores:        2,
+			Statused:                      artifact.Statused{Status: "partial", Reason: "job object assignment denied"},
+		},
+	}
+	md := RenderResourceSweep(input)
+	for _, want := range []string{"limits: partial - job object assignment denied", "GOMEMLIMIT=384MiB", "SQL_MAX_OPEN_CONNS=64", "REDIS_POOL_SIZE=256", "REDIS_IDLE_TIMEOUT_SECONDS=1", "RELAY_MAX_IDLE_CONNS=1024", "process_memory_limit_bytes: 536870912", "cpu_affinity_cores: 2"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("partial report missing %q:\n%s", want, md)
 		}
 	}
 }

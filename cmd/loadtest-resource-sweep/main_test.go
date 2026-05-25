@@ -364,13 +364,13 @@ profiles:
   benchmark:
     points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
-    ramp_step: 25
+    ramp_step: 125
     ramp_interval: "200ms"
-    duration: "45s"
+    duration: "75s"
     timeout: "120s"
-    transport: {mode: "h1_keepalive", max_conns_per_host: 1024, max_idle_conns: 1024, max_idle_conns_per_host: 1024}
+    transport: {mode: "h1_keepalive", max_conns_per_host: 2000, max_idle_conns: 2000, max_idle_conns_per_host: 2000}
     relay: {max_idle_conns: 1024, max_idle_conns_per_host: 1024}
-    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2}
+    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2, sql_max_open_conns: "64", sql_max_idle_conns: "64", redis_pool_size: "256", redis_idle_timeout_seconds: "1", relay_max_idle_conns: "1024", relay_max_idle_conns_per_host: "1024"}
 mock_profiles:
   s1-smoke: {first_token_delay: 50ms, stream_duration: 500ms, chunk_interval: 50ms, output_bytes: 128, prompt_tokens: 11, completion_tokens: 17, status_rate: {429: 0, 502: 0}, seed: 1}
   s2-short-stream: {first_token_delay: 1ms, stream_duration: 1ms, chunk_interval: 1ms, output_bytes: 32, prompt_tokens: 11, completion_tokens: 17, status_rate: {429: 0, 502: 0}, seed: 1}

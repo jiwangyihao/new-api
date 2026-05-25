@@ -1,16 +1,19 @@
 package model
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestCreateUserSubscriptionFromPlanTx_DistributorSnapshot(t *testing.T) {
@@ -292,6 +295,25 @@ func TestPreConsumeUserSubscriptionByUnits_UsesUnitsForSelectedDistributor(t *te
 	assert.Equal(t, int64(10), record.PreConsumed)
 }
 
+func TestPreConsumeUserSubscriptionByUnitsReturnsPlanMetadata(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7631, Username: "plan_meta_user", Status: common.UserStatusEnabled, AffCode: "aff7631"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7632, "plan-meta", 100)
+	seedUserSubscriptionForDistributorTest(t, 7633, 7631, 7632, 100, 0, 1, "order")
+
+	pre, err := PreConsumeUserSubscriptionByUnits("plan-meta-ok", 7631, "gpt-4o", 0, 0, 10)
+	require.NoError(t, err)
+
+	assert.Equal(t, 7632, pre.PlanId)
+	assert.Equal(t, "plan-meta", pre.PlanTitle)
+
+	repeat, err := PreConsumeUserSubscriptionByUnits("plan-meta-ok", 7631, "gpt-4o", 0, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, 7632, repeat.PlanId)
+	assert.Equal(t, "plan-meta", repeat.PlanTitle)
+}
+
 func TestPreConsumeUserSubscriptionByUnitsRejectsLegacyAmountSubscriptions(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7471, Username: "mixed_legacy", Status: common.UserStatusEnabled, AffCode: "aff7471"}).Error)
@@ -365,6 +387,64 @@ func TestPostConsumeUserSubscriptionDeltaSQLUsesAtomicIncrement(t *testing.T) {
 	}
 }
 
+func TestPostConsumeUserSubscriptionDeltaSQLAvoidsPreUpdateRowLockRead(t *testing.T) {
+	stmt := DB.Session(&gorm.Session{DryRun: true}).Model(&UserSubscription{}).
+		Where("id = ?", 7483).
+		Where("token_limit <= 0 OR token_used + ? <= token_limit", int64(7)).
+		Updates(map[string]interface{}{
+			"token_used": tokenUsedDeltaExpr(7),
+			"updated_at": 123,
+		}).Statement
+	require.NoError(t, stmt.Error)
+	sql := stmt.SQL.String()
+	if strings.Contains(sql, "FOR UPDATE") || strings.Contains(sql, "SELECT") {
+		t.Fatalf("subscription delta should be a single conditional UPDATE without pre-lock SELECT, got SQL: %s", sql)
+	}
+	if !strings.Contains(sql, "token_limit") || !strings.Contains(sql, "token_used") || !strings.Contains(sql, "+") {
+		t.Fatalf("subscription token delta SQL must atomically guard and increment token_used, got SQL: %s", sql)
+	}
+}
+
+type sqlCaptureLogger struct {
+	logger.Interface
+	statements []string
+}
+
+func (l *sqlCaptureLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, _ := fc()
+	l.statements = append(l.statements, sql)
+	if l.Interface != nil {
+		l.Interface.Trace(ctx, begin, fc, err)
+	}
+}
+
+func TestPostConsumeUserSubscriptionDeltaDoesNotPreLockRead(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7641, Username: "delta_no_select_user", Status: common.UserStatusEnabled, AffCode: "aff7641"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7642, "delta-no-select", 100)
+	seedUserSubscriptionForDistributorTest(t, 7643, 7641, 7642, 100, 10, 1, "order")
+
+	capture := &sqlCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	originalDB := DB
+	DB = DB.Session(&gorm.Session{Logger: capture})
+	t.Cleanup(func() { DB = originalDB })
+
+	require.NoError(t, PostConsumeUserSubscriptionDelta(7643, 7))
+
+	for _, sql := range capture.statements {
+		upper := strings.ToUpper(sql)
+		if strings.Contains(upper, "SELECT") && strings.Contains(sql, "user_subscriptions") {
+			t.Fatalf("subscription delta should avoid pre-lock SELECT on hot user_subscriptions row; saw SQL: %s; all SQL: %#v", sql, capture.statements)
+		}
+	}
+	if len(capture.statements) != 1 || !strings.Contains(strings.ToUpper(capture.statements[0]), "UPDATE") || !strings.Contains(capture.statements[0], "user_subscriptions") {
+		t.Fatalf("subscription delta should execute one hot-row UPDATE, got SQL: %#v", capture.statements)
+	}
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7643).Error)
+	assert.Equal(t, int64(17), got.TokenUsed)
+}
+
 func TestPreConsumeUserSubscriptionDoesNotClobberConcurrentPostDelta(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
@@ -392,6 +472,57 @@ func TestPreConsumeUserSubscriptionDoesNotClobberConcurrentPostDelta(t *testing.
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, 7489).Error)
 	assert.Equal(t, int64(28), got.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsRejectsStaleSelectionWhenConditionalUpdateMatchesNoRows(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&User{Id: 7491, Username: "preconsume_conditional_user", Status: common.UserStatusEnabled, AffCode: "aff7491"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7492, "preconsume-conditional", 3)
+	seedUserSubscriptionForDistributorTest(t, 7493, 7491, 7492, 3, 1, 1, "order")
+
+	const callbackName = "loadtest:consume_remaining_before_preconsume_update"
+	var injected atomic.Bool
+	var injectedErr atomic.Value
+	require.NoError(t, DB.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" {
+			return
+		}
+		if !injected.CompareAndSwap(false, true) {
+			return
+		}
+		if err := tx.Exec("UPDATE user_subscriptions SET token_used = token_used + ? WHERE id = ?", 2, 7493).Error; err != nil {
+			injectedErr.Store(err.Error())
+		}
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Update().Remove(callbackName) })
+
+	_, err := PreConsumeUserSubscriptionByUnits("preconsume-conditional", 7491, "gpt-4o", 0, 0, 2)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "subscription token quota insufficient")
+	require.True(t, injected.Load(), "test callback did not exercise the stale update window")
+	if value := injectedErr.Load(); value != nil {
+		t.Fatalf("failed to inject concurrent subscription update: %v", value)
+	}
+
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7493).Error)
+	assert.Equal(t, int64(1), got.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsDryRunContainsConditionalTokenGuard(t *testing.T) {
+	stmt := DB.Session(&gorm.Session{DryRun: true}).Model(&UserSubscription{}).
+		Where("id = ?", 7493).
+		Where("token_limit <= 0 OR token_used + ? <= token_limit", int64(2)).
+		Updates(map[string]interface{}{
+			"token_used": tokenUsedDeltaExpr(2),
+			"updated_at": 123,
+		}).Statement
+	require.NoError(t, stmt.Error)
+	sql := stmt.SQL.String()
+	if !strings.Contains(sql, "token_used") || !strings.Contains(sql, "token_limit") {
+		t.Fatalf("conditional preconsume SQL must guard token_used against token_limit, got SQL: %s", sql)
+	}
 }
 
 func TestPostConsumeUserSubscriptionDeltaConcurrentSettlePreservesEveryIncrement(t *testing.T) {
@@ -428,6 +559,66 @@ func TestPostConsumeUserSubscriptionDeltaConcurrentSettlePreservesEveryIncrement
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, 7486).Error)
 	assert.Equal(t, int64(280), got.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsReusesCachedPrimarySelection(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&User{Id: 7496, Username: "cached_selection", Status: common.UserStatusEnabled, AffCode: "aff7496"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7497, "cached-selection", 1000)
+	seedUserSubscriptionForDistributorTest(t, 7498, 7496, 7497, 1000, 0, 1, "order")
+
+	first, err := PreConsumeUserSubscriptionByUnits("cached-selection-1", 7496, "gpt-4o", 0, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, 7498, first.UserSubscriptionId)
+
+	subscriptionQueryCount := 0
+	selectionQueryCount := 0
+	callbackName := "loadtest:count_cached_selection_subscription_query"
+	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" {
+			return
+		}
+		subscriptionQueryCount++
+		if _, ok := tx.Statement.Clauses["ORDER BY"]; ok {
+			selectionQueryCount++
+		}
+	}))
+	t.Cleanup(func() { _ = DB.Callback().Query().Remove(callbackName) })
+
+	second, err := PreConsumeUserSubscriptionByUnits("cached-selection-2", 7496, "gpt-4o", 0, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, 7498, second.UserSubscriptionId)
+	assert.Equal(t, 1, subscriptionQueryCount, "cached selection should only refresh subscription usage counters")
+	assert.Equal(t, 0, selectionQueryCount, "cached selection should skip ordered user_subscriptions hot-row selection query")
+
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7498).Error)
+	assert.Equal(t, int64(4), got.TokenUsed)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsCacheHonorsActiveSubscriptionSetting(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	user := User{Id: 7499, Username: "cached_setting", Status: common.UserStatusEnabled, AffCode: "aff7499"}
+	require.NoError(t, DB.Create(&user).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7500, "cached-setting-a", 1000)
+	seedDistributorSubscriptionPlanForTest(t, 7501, "cached-setting-b", 1000)
+	seedUserSubscriptionForDistributorTest(t, 7502, 7499, 7500, 1000, 0, 1, "order")
+	seedUserSubscriptionForDistributorTest(t, 7503, 7499, 7501, 1000, 0, 1, "order")
+
+	first, err := PreConsumeUserSubscriptionByUnits("cached-setting-1", 7499, "gpt-4o", 0, 0, 2)
+	require.NoError(t, err)
+	require.Equal(t, 7502, first.UserSubscriptionId)
+
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = 7503
+	user.SetSetting(setting)
+	require.NoError(t, DB.Save(&user).Error)
+
+	second, err := PreConsumeUserSubscriptionByUnits("cached-setting-2", 7499, "gpt-4o", 0, 0, 2)
+	require.NoError(t, err)
+	assert.Equal(t, 7503, second.UserSubscriptionId)
 }
 
 func TestRefundUserSubscription_UsesRequestIDForDistributor(t *testing.T) {

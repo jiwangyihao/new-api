@@ -59,8 +59,9 @@ var (
 	subscriptionPlanCacheOnce     sync.Once
 	subscriptionPlanInfoCacheOnce sync.Once
 
-	subscriptionPlanCache     *cachex.HybridCache[SubscriptionPlan]
-	subscriptionPlanInfoCache *cachex.HybridCache[SubscriptionPlanInfo]
+	subscriptionPlanCache            *cachex.HybridCache[SubscriptionPlan]
+	subscriptionPlanInfoCache        *cachex.HybridCache[SubscriptionPlanInfo]
+	primaryBillableSubscriptionCache sync.Map
 )
 
 func subscriptionPlanCacheTTL() time.Duration {
@@ -1019,6 +1020,8 @@ type SubscriptionPreConsumeResult struct {
 	TokenRemaining          int64
 	DistributorTokenBilling bool
 	ConcurrencyLimit        int
+	PlanId                  int
+	PlanTitle               string
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -1215,6 +1218,82 @@ type primaryBillableSubscription struct {
 	TokenUsedBefore  int64
 }
 
+type primaryBillableSubscriptionCacheEntry struct {
+	setting string
+	loaded  primaryBillableSubscription
+}
+
+func primaryBillableSubscriptionCacheKey(userId int) string {
+	return strconv.Itoa(userId)
+}
+
+func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting string, requiredTokens int64, now int64) (*primaryBillableSubscription, bool) {
+	if tx == nil {
+		return nil, false
+	}
+	value, ok := primaryBillableSubscriptionCache.Load(primaryBillableSubscriptionCacheKey(userId))
+	if !ok {
+		return nil, false
+	}
+	entry, ok := value.(primaryBillableSubscriptionCacheEntry)
+	if !ok || entry.setting != setting {
+		return nil, false
+	}
+	selection := entry.loaded
+	sub := selection.Subscription
+	if sub.Status != "active" || sub.EndTime <= now {
+		return nil, false
+	}
+	var usage struct {
+		AmountUsed int64
+		TokenUsed  int64
+	}
+	if err := tx.Model(&UserSubscription{}).Select("amount_used", "token_used").Where("id = ?", sub.Id).Take(&usage).Error; err != nil {
+		return nil, false
+	}
+	sub.AmountUsed = usage.AmountUsed
+	sub.TokenUsed = usage.TokenUsed
+	if ok, unlimited := isBillableSubscriptionCandidate(&sub, selection.Plan, requiredTokens); !ok {
+		return nil, false
+	} else {
+		selection.TokenUnlimited = unlimited
+	}
+	selection.Subscription = sub
+	selection.AmountUsedBefore = sub.AmountUsed
+	selection.TokenUsedBefore = sub.TokenUsed
+	return &selection, true
+}
+
+func setCachedPrimaryBillableSubscription(userId int, setting string, selection *primaryBillableSubscription) {
+	if selection == nil {
+		return
+	}
+	loaded := *selection
+	primaryBillableSubscriptionCache.Store(primaryBillableSubscriptionCacheKey(userId), primaryBillableSubscriptionCacheEntry{setting: setting, loaded: loaded})
+}
+
+func ClearPrimaryBillableSubscriptionCacheForTest() {
+	primaryBillableSubscriptionCache = sync.Map{}
+}
+
+func cachePrimaryBillableSelectionTx(tx *gorm.DB, userId int, sub *UserSubscription, plan *SubscriptionPlan, distributor bool) {
+	if tx == nil || sub == nil || userId <= 0 {
+		return
+	}
+	var user User
+	if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
+		return
+	}
+	setCachedPrimaryBillableSubscription(userId, user.Setting, &primaryBillableSubscription{
+		Subscription:     *sub,
+		Plan:             plan,
+		Distributor:      distributor,
+		TokenUnlimited:   sub.TokenLimit == 0,
+		AmountUsedBefore: sub.AmountUsed,
+		TokenUsedBefore:  sub.TokenUsed,
+	})
+}
+
 func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool) (*primaryBillableSubscription, bool, error) {
 	if tx == nil {
 		tx = DB
@@ -1223,7 +1302,13 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
 		return nil, false, err
 	}
+	setting := user.Setting
 	activeSubscriptionId := user.GetSetting().ActiveSubscriptionId
+	if forUpdate {
+		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, setting, requiredTokens, now); ok && (activeSubscriptionId <= 0 || cached.Subscription.Id == activeSubscriptionId) {
+			return cached, true, nil
+		}
+	}
 	var subs []UserSubscription
 	query := tx
 	if forUpdate {
@@ -1258,7 +1343,11 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		}
 		entry := billableSubscriptionCandidate{sub: sub, plan: plan, distributor: distributor, unlimited: unlimited, index: i}
 		if activeSubscriptionId > 0 && sub.Id == activeSubscriptionId {
-			return buildPrimaryBillableSubscription(entry), sawDistributorSubscription, nil
+			selection := buildPrimaryBillableSubscription(entry)
+			if forUpdate {
+				setCachedPrimaryBillableSubscription(userId, setting, selection)
+			}
+			return selection, sawDistributorSubscription, nil
 		}
 		candidates = append(candidates, entry)
 	}
@@ -1268,13 +1357,21 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 			for i := 1; i < len(candidates); i++ {
 				candidate := candidates[i]
 				if isInvitationRewardSubscription(&candidate.sub) && subscriptionTierKey(candidate.plan) == tier {
-					return buildPrimaryBillableSubscription(candidate), sawDistributorSubscription, nil
+					selection := buildPrimaryBillableSubscription(candidate)
+					if forUpdate {
+						setCachedPrimaryBillableSubscription(userId, setting, selection)
+					}
+					return selection, sawDistributorSubscription, nil
 				}
 			}
 		}
 	}
 	if len(candidates) > 0 {
-		return buildPrimaryBillableSubscription(candidates[0]), sawDistributorSubscription, nil
+		selection := buildPrimaryBillableSubscription(candidates[0])
+		if forUpdate {
+			setCachedPrimaryBillableSubscription(userId, setting, selection)
+		}
+		return selection, sawDistributorSubscription, nil
 	}
 	return nil, sawDistributorSubscription, nil
 }
@@ -1342,7 +1439,7 @@ func HasActiveDistributorSubscription(userId int) (bool, error) {
 	return false, nil
 }
 
-func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, preConsumed int64, amountBefore int64, tokenBefore int64, distributor bool) {
+func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub *UserSubscription, plan *SubscriptionPlan, preConsumed int64, amountBefore int64, tokenBefore int64, distributor bool) {
 	if result == nil || sub == nil {
 		return
 	}
@@ -1356,6 +1453,10 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.TokenUsedBefore = tokenBefore
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor
+	result.PlanId = sub.PlanId
+	if plan != nil {
+		result.PlanTitle = plan.Title
+	}
 	if sub.TokenLimit > 0 {
 		remaining := sub.TokenLimit - sub.TokenUsed
 		if remaining < 0 {
@@ -1570,7 +1671,8 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			if err != nil {
 				return err
 			}
-			fillSubscriptionPreConsumeResult(returnValue, &sub, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
+			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
+			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
 			return nil
 		}
 
@@ -1602,26 +1704,29 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 				if dup.Status == "refunded" {
 					return errors.New("subscription pre-consume already refunded")
 				}
-				fillSubscriptionPreConsumeResult(returnValue, &sub, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
+				fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
+				cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 				return nil
 			}
 			return err
 		}
-		updates := map[string]interface{}{"updated_at": common.GetTimestamp()}
-		if distributor {
-			updates["token_used"] = tokenUsedDeltaExpr(consumeAmount)
-		} else {
-			updates["amount_used"] = amountUsedDeltaExpr(consumeAmount)
-		}
-		if err := tx.Model(&UserSubscription{}).Where("id = ?", sub.Id).Updates(updates).Error; err != nil {
+		rows, err := applySubscriptionPreConsumeUpdateTx(tx, sub.Id, distributor, consumeAmount)
+		if err != nil {
 			return err
+		}
+		if rows == 0 {
+			if distributor {
+				return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+			}
+			return fmt.Errorf("subscription quota insufficient, need=%d", consumeAmount)
 		}
 		if distributor {
 			sub.TokenUsed += consumeAmount
 		} else {
 			sub.AmountUsed += consumeAmount
 		}
-		fillSubscriptionPreConsumeResult(returnValue, &sub, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
+		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
+		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
 	})
 	if err != nil {
@@ -1751,14 +1856,45 @@ func amountUsedDeltaExpr(delta int64) clause.Expr {
 	return gorm.Expr("? + ?", clause.Column{Name: "amount_used"}, delta)
 }
 
-// Update subscription used amount by delta (positive consume more, negative refund).
+func applySubscriptionPreConsumeUpdateTx(tx *gorm.DB, userSubscriptionId int, distributor bool, consumeAmount int64) (int64, error) {
+	if tx == nil {
+		return 0, errors.New("tx is nil")
+	}
+	updates := map[string]interface{}{"updated_at": common.GetTimestamp()}
+	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
+	if distributor {
+		updates["token_used"] = tokenUsedDeltaExpr(consumeAmount)
+		query = query.Where("token_limit <= 0 OR token_used + ? <= token_limit", consumeAmount)
+	} else {
+		updates["amount_used"] = amountUsedDeltaExpr(consumeAmount)
+		query = query.Where("amount_total <= 0 OR amount_used + ? <= amount_total", consumeAmount)
+	}
+	res := query.Updates(updates)
+	return res.RowsAffected, res.Error
+}
+
+// Update subscription token_used by delta (positive consume more, negative refund).
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
+	return PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)
+}
+
+func PostConsumeUserSubscriptionTokenDelta(userSubscriptionId int, delta int64) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
 	}
 	if delta == 0 {
 		return nil
 	}
+	if delta > 0 {
+		if delta > int64(^uint(0)>>1) {
+			return fmt.Errorf("subscription token delta out of int range: %d", delta)
+		}
+		return subscriptionTokenDeltaCoalescer.add(userSubscriptionId, delta)
+	}
+	return postConsumeUserSubscriptionTokenDeltaDirect(userSubscriptionId, delta)
+}
+
+func postConsumeUserSubscriptionTokenDeltaDirect(userSubscriptionId int, delta int64) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
 	})
@@ -1768,43 +1904,56 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if tx == nil {
 		return errors.New("tx is nil")
 	}
-	var sub UserSubscription
-	if err := tx.Set("gorm:query_option", "FOR UPDATE").
-		Where("id = ?", userSubscriptionId).
-		First(&sub).Error; err != nil {
-		return err
+	updatedAt := common.GetTimestamp()
+	updates := map[string]interface{}{
+		"token_used": tokenUsedDeltaExpr(delta),
+		"updated_at": updatedAt,
 	}
-	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
-	if err != nil && sub.PlanId > 0 {
-		return err
+	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
+	if delta > 0 {
+		query = query.Where("token_limit <= 0 OR token_used + ? <= token_limit", delta)
+	}
+	res := query.Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 && delta > 0 {
+		return fmt.Errorf("subscription token used exceeds limit, delta=%d", delta)
+	}
+	return nil
+}
+
+func PostConsumeUserSubscriptionAmountDelta(userSubscriptionId int, delta int64) error {
+	if userSubscriptionId <= 0 {
+		return errors.New("invalid userSubscriptionId")
+	}
+	if delta == 0 {
+		return nil
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		return postConsumeUserSubscriptionAmountDeltaTx(tx, userSubscriptionId, delta)
+	})
+}
+
+func postConsumeUserSubscriptionAmountDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
+	if tx == nil {
+		return errors.New("tx is nil")
 	}
 	updatedAt := common.GetTimestamp()
-	if isDistributorSubscription(&sub, plan) {
-		newUsed := sub.TokenUsed + delta
-		if newUsed < 0 {
-			newUsed = 0
-		}
-		if sub.TokenLimit > 0 && newUsed > sub.TokenLimit {
-			return fmt.Errorf("subscription token used exceeds limit, used=%d limit=%d", newUsed, sub.TokenLimit)
-		}
-		return tx.Model(&UserSubscription{}).
-			Where("id = ?", userSubscriptionId).
-			Updates(map[string]interface{}{
-				"token_used": tokenUsedDeltaExpr(delta),
-				"updated_at": updatedAt,
-			}).Error
+	updates := map[string]interface{}{
+		"amount_used": amountUsedDeltaExpr(delta),
+		"updated_at":  updatedAt,
 	}
-	newUsed := sub.AmountUsed + delta
-	if newUsed < 0 {
-		newUsed = 0
+	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
+	if delta > 0 {
+		query = query.Where("amount_total <= 0 OR amount_used + ? <= amount_total", delta)
 	}
-	if sub.AmountTotal > 0 && newUsed > sub.AmountTotal {
-		return fmt.Errorf("subscription used exceeds total, used=%d total=%d", newUsed, sub.AmountTotal)
+	res := query.Updates(updates)
+	if res.Error != nil {
+		return res.Error
 	}
-	return tx.Model(&UserSubscription{}).
-		Where("id = ?", userSubscriptionId).
-		Updates(map[string]interface{}{
-			"amount_used": amountUsedDeltaExpr(delta),
-			"updated_at":  updatedAt,
-		}).Error
+	if res.RowsAffected == 0 && delta > 0 {
+		return fmt.Errorf("subscription used exceeds total, delta=%d", delta)
+	}
+	return nil
 }

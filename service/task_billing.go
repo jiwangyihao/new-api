@@ -106,7 +106,7 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 		if taskUsesDistributorSubscription(task) {
 			return fmt.Errorf("非文本异步任务不支持分销订阅扣费")
 		}
-		return model.PostConsumeUserSubscriptionDelta(task.PrivateData.SubscriptionId, int64(delta))
+		return model.PostConsumeUserSubscriptionAmountDelta(task.PrivateData.SubscriptionId, int64(delta))
 	}
 	if delta > 0 {
 		return model.DecreaseUserQuota(task.UserId, delta, false)

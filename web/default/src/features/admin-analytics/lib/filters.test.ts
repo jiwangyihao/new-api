@@ -5,8 +5,8 @@ import {
   buildAdminAnalyticsCanonicalFilters,
 } from './filters'
 
-const deprecatedUserGroupsParam = 'user_' + 'groups'
-const deprecatedRequestGroupsParam = 'request_' + 'groups'
+const deprecatedUserDimensionParam = 'user_' + 'groups'
+const deprecatedRequestDimensionParam = 'request_' + 'groups'
 
 test('empty search defaults to overview and recent 30 days', () => {
   const filters = buildAdminAnalyticsCanonicalFilters({}, 1_000_000)
@@ -16,15 +16,15 @@ test('empty search defaults to overview and recent 30 days', () => {
   assert.equal(filters.start_timestamp, 1_000_000 - 30 * 24 * 60 * 60)
 })
 
-test('business group params are ignored while repeated params are deduped and sorted', () => {
+test('deprecated analytics params are ignored while repeated params are deduped and sorted', () => {
   const filters = buildAdminAnalyticsCanonicalFilters({
-    [deprecatedUserGroupsParam]: ['vip', '', 'default', 'vip'],
-    [deprecatedRequestGroupsParam]: ['api', 'web', 'api'],
+    [deprecatedUserDimensionParam]: ['vip', '', 'default', 'vip'],
+    [deprecatedRequestDimensionParam]: ['api', 'web', 'api'],
     plan_ids: ['2', '1', '2'],
   })
   assert.deepEqual(filters.plan_ids, [1, 2])
-  assert.equal(deprecatedUserGroupsParam in filters, false)
-  assert.equal(deprecatedRequestGroupsParam in filters, false)
+  assert.equal(deprecatedUserDimensionParam in filters, false)
+  assert.equal(deprecatedRequestDimensionParam in filters, false)
 })
 
 test('canonical filters preserve repeated params and serialize repeated api keys', () => {
@@ -33,8 +33,8 @@ test('canonical filters preserve repeated params and serialize repeated api keys
     token_ids: ['10', '2', '10', ''],
     channel_ids: ['7', 'x', '5', '7'],
     plan_ids: ['4', '2', '4'],
-    [deprecatedUserGroupsParam]: ['vip', '', 'default', 'vip'],
-    [deprecatedRequestGroupsParam]: ['web', 'api', 'web'],
+    [deprecatedUserDimensionParam]: ['vip', '', 'default', 'vip'],
+    [deprecatedRequestDimensionParam]: ['web', 'api', 'web'],
     sources: ['system', 'unknown', 'invalid', 'admin', 'system'],
     subscription_statuses: ['active', '', 'expired', 'active'],
     user_statuses: ['enabled', 'disabled', 'enabled'],
@@ -48,8 +48,8 @@ test('canonical filters preserve repeated params and serialize repeated api keys
   assert.deepEqual(filters.token_ids, [2, 10])
   assert.deepEqual(filters.channel_ids, [5, 7])
   assert.deepEqual(filters.plan_ids, [2, 4])
-  assert.equal(deprecatedUserGroupsParam in filters, false)
-  assert.equal(deprecatedRequestGroupsParam in filters, false)
+  assert.equal(deprecatedUserDimensionParam in filters, false)
+  assert.equal(deprecatedRequestDimensionParam in filters, false)
   assert.deepEqual(filters.sources, ['admin', 'system', 'unknown'])
   assert.deepEqual(filters.subscription_statuses, ['active', 'expired'])
   assert.deepEqual(filters.user_statuses, ['disabled', 'enabled'])
@@ -66,8 +66,8 @@ test('canonical filters preserve repeated params and serialize repeated api keys
   assert.deepEqual(params.getAll('token_ids'), ['2', '10'])
   assert.deepEqual(params.getAll('channel_ids'), ['5', '7'])
   assert.deepEqual(params.getAll('plan_ids'), ['2', '4'])
-  assert.equal(params.has(deprecatedUserGroupsParam), false)
-  assert.equal(params.has(deprecatedRequestGroupsParam), false)
+  assert.equal(params.has(deprecatedUserDimensionParam), false)
+  assert.equal(params.has(deprecatedRequestDimensionParam), false)
   assert.deepEqual(params.getAll('sources'), ['admin', 'system', 'unknown'])
   assert.deepEqual(params.getAll('subscription_statuses'), [
     'active',
@@ -97,14 +97,14 @@ test('canonical filters preserve user status enum values', () => {
   assert.deepEqual(params.getAll('user_statuses'), ['disabled', 'enabled'])
 })
 
-test('api params omit deprecated business group params', () => {
+test('api params omit deprecated analytics params', () => {
   const filters = buildAdminAnalyticsCanonicalFilters({
-    [deprecatedUserGroupsParam]: ['vip', 'default'],
-    [deprecatedRequestGroupsParam]: ['api'],
+    [deprecatedUserDimensionParam]: ['vip', 'default'],
+    [deprecatedRequestDimensionParam]: ['api'],
   })
   const params = buildAdminAnalyticsApiParams(filters)
-  assert.equal(params.has(deprecatedUserGroupsParam), false)
-  assert.equal(params.has(deprecatedRequestGroupsParam), false)
+  assert.equal(params.has(deprecatedUserDimensionParam), false)
+  assert.equal(params.has(deprecatedRequestDimensionParam), false)
   assert.equal(params.has('groups'), false)
 })
 

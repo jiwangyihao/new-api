@@ -263,7 +263,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := LOG_DB.Create(log).Error
+	err := consumeLogCoalescer.add(log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}

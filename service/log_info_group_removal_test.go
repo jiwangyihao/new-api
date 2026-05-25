@@ -11,7 +11,7 @@ func TestGenerateTextOtherInfoOmitsBusinessGroupRatios(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{}
 	testRelayInfoStartTimes(relayInfo)
 
-	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 2, 9, 3, 4, 5, 6, 7)
+	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 2, 3, 4, 5, 6)
 
 	assert.Equal(t, float64(2), other["model_ratio"])
 	assert.Equal(t, float64(3), other["completion_ratio"])

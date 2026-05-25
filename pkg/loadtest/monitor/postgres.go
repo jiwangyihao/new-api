@@ -12,8 +12,15 @@ import (
 var defaultPostgresTables = []string{"consume_logs", "subscription_pre_consume_records", "user_subscriptions", "tokens"}
 
 func LoadPostgresSnapshot(db *gorm.DB, tableNames []string) artifact.PostgresSnapshot {
+	return LoadPostgresSnapshotWithLogDB(db, db, tableNames)
+}
+
+func LoadPostgresSnapshotWithLogDB(db *gorm.DB, logDB *gorm.DB, tableNames []string) artifact.PostgresSnapshot {
 	if db == nil {
 		return artifact.PostgresSnapshot{Statused: artifact.Statused{Status: "unavailable", Reason: "postgres database is not configured"}}
+	}
+	if logDB == nil {
+		logDB = db
 	}
 	if len(tableNames) == 0 {
 		tableNames = defaultPostgresTables
@@ -44,7 +51,7 @@ func LoadPostgresSnapshot(db *gorm.DB, tableNames []string) artifact.PostgresSna
 		if !allowedPostgresSnapshotTable(table) {
 			return postgresUnavailable("unsupported table %q", table)
 		}
-		count, err := countPostgresSnapshotRows(db, table)
+		count, err := countPostgresSnapshotRows(db, logDB, table)
 		if err != nil {
 			return postgresUnavailable("%s rows: %v", table, err)
 		}
@@ -62,11 +69,11 @@ func allowedPostgresSnapshotTable(table string) bool {
 	return false
 }
 
-func countPostgresSnapshotRows(db *gorm.DB, table string) (int64, error) {
+func countPostgresSnapshotRows(db *gorm.DB, logDB *gorm.DB, table string) (int64, error) {
 	var count int64
 	switch table {
 	case "consume_logs":
-		return count, db.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&count).Error
+		return count, logDB.Model(&model.Log{}).Where("type = ?", model.LogTypeConsume).Count(&count).Error
 	case "subscription_pre_consume_records":
 		return count, db.Model(&model.SubscriptionPreConsumeRecord{}).Count(&count).Error
 	case "user_subscriptions":

@@ -103,9 +103,11 @@ func newRedisClient(addr string) (*redis.Client, error) {
 		options.DialTimeout = 500 * time.Millisecond
 		options.ReadTimeout = 500 * time.Millisecond
 		options.WriteTimeout = 500 * time.Millisecond
+		options.PoolSize = 1
+		options.MinIdleConns = 0
 		return redis.NewClient(options), nil
 	}
-	return redis.NewClient(&redis.Options{Addr: addr, DialTimeout: 500 * time.Millisecond, ReadTimeout: 500 * time.Millisecond, WriteTimeout: 500 * time.Millisecond}), nil
+	return redis.NewClient(&redis.Options{Addr: addr, PoolSize: 1, MinIdleConns: 0, DialTimeout: 500 * time.Millisecond, ReadTimeout: 500 * time.Millisecond, WriteTimeout: 500 * time.Millisecond}), nil
 }
 
 func parseRedisKeyspaceKeys(value string) (int64, bool) {

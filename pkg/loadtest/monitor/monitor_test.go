@@ -52,6 +52,23 @@ func TestParseRedisInfoExtractsMemoryClientsAndCommands(t *testing.T) {
 	}
 }
 
+func TestNewRedisClientUsesSingleConnectionPool(t *testing.T) {
+	addr := startFakeRedisInfoServer(t, redisInfoFixture)
+	for _, rawAddr := range []string{addr, "redis://" + addr + "/0"} {
+		t.Run(rawAddr, func(t *testing.T) {
+			client, err := newRedisClient(rawAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
+			opt := client.Options()
+			if opt.PoolSize != 1 || opt.MinIdleConns != 0 {
+				t.Fatalf("redis monitor pool = size:%d min_idle:%d", opt.PoolSize, opt.MinIdleConns)
+			}
+		})
+	}
+}
+
 func TestResourcePeaksUsesMaxAcrossSamples(t *testing.T) {
 	samples := []artifact.ResourceSample{
 		{

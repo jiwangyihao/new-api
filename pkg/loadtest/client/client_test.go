@@ -178,12 +178,16 @@ func TestRunLoadClassifiesRequestTimeout(t *testing.T) {
 	}
 }
 
-func TestRunLoadClassifiesLoadDurationCancellationWithoutRuntimeError(t *testing.T) {
+func TestRunLoadDurationDoesNotCancelHTTPDoInFlightRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
-		case <-time.After(time.Second):
+			t.Fatal("in-flight request context was canceled by load duration")
+		case <-time.After(50 * time.Millisecond):
 		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
 	}))
 	defer server.Close()
 
@@ -204,15 +208,12 @@ func TestRunLoadClassifiesLoadDurationCancellationWithoutRuntimeError(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.StopReason != "duration" || summary.Total >= 10 {
-		t.Fatalf("summary stop/total = %q/%d", summary.StopReason, summary.Total)
-	}
-	if summary.ErrorReasons["client_duration"] == 0 || summary.ErrorReasons["request_timeout"] != 0 {
-		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
+	if summary.StopReason != "duration" || summary.Total != 1 || summary.Success != 1 || summary.Errors != 0 {
+		t.Fatalf("summary = %#v", summary)
 	}
 }
 
-func TestRunLoadClassifiesStreamReadCanceledByLoadDuration(t *testing.T) {
+func TestRunLoadDurationDoesNotCancelStreamReadInFlightRequest(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Oneapi-Request-Id", "rid-duration")
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -244,14 +245,82 @@ func TestRunLoadClassifiesStreamReadCanceledByLoadDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.StopReason != "duration" || summary.Total >= 10 {
-		t.Fatalf("summary stop/total = %q/%d", summary.StopReason, summary.Total)
+	if summary.StopReason != "duration" || summary.Total != 1 || summary.Success != 0 || summary.ErrorReasons["json_error"] != 1 {
+		t.Fatalf("summary = %#v", summary)
 	}
-	if summary.ErrorReasons["client_duration"] == 0 || summary.ErrorReasons["json_error"] != 0 {
-		t.Fatalf("error reasons = %#v", summary.ErrorReasons)
-	}
-	if len(summary.FirstErrorSamples) != 1 || summary.FirstErrorSamples[0].Reason != "client_duration" || summary.FirstErrorSamples[0].StatusCode != http.StatusOK || summary.FirstErrorSamples[0].RequestID != "rid-duration" {
+	if len(summary.FirstErrorSamples) != 1 || summary.FirstErrorSamples[0].Reason != "json_error" || summary.FirstErrorSamples[0].StatusCode != http.StatusOK || summary.FirstErrorSamples[0].RequestID != "rid-duration" {
 		t.Fatalf("samples = %#v", summary.FirstErrorSamples)
+	}
+}
+
+func TestRunLoadDurationStopsDispatchWithoutCancelingInFlightRequests(t *testing.T) {
+	started := make(chan struct{}, 1)
+	released := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	loadDone := make(chan struct{})
+	var summary artifact.Summary
+	var runErr error
+	go func() {
+		defer close(loadDone)
+		summary, runErr = RunLoad(context.Background(), Options{
+			BaseURL:      server.URL,
+			APIKey:       "sk-loadtestsub",
+			TokenProfile: "subscription",
+			Path:         "/v1/responses",
+			Model:        "gpt-5.5",
+			Scenario:     "test",
+			Concurrency:  1,
+			MaxRequests:  10,
+			Duration:     20 * time.Millisecond,
+			Timeout:      time.Second,
+			Stream:       true,
+			Transport:    TransportOptions{Mode: "h1_keepalive", MaxConnsPerHost: 1},
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("request did not start")
+	}
+	releaseOnce := func() {
+		select {
+		case <-released:
+		default:
+			close(released)
+			close(release)
+		}
+	}
+	defer releaseOnce()
+	select {
+	case <-loadDone:
+		releaseOnce()
+		t.Fatalf("load returned before in-flight request completed: summary=%#v err=%v", summary, runErr)
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseOnce()
+	select {
+	case <-loadDone:
+	case <-time.After(time.Second):
+		t.Fatal("load did not return after in-flight request completed")
+	}
+	if runErr != nil {
+		t.Fatal(runErr)
+	}
+	if summary.Total != 1 || summary.Success != 1 || summary.StopReason != "duration" {
+		t.Fatalf("summary = %#v", summary)
 	}
 }
 

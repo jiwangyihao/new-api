@@ -2,8 +2,12 @@ package model
 
 import (
 	"bytes"
+	"context"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,6 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func resetLogStatTokenTestData(t *testing.T) {
@@ -277,4 +282,70 @@ func TestRecordConsumeLogStdoutSummaryDoesNotSerializeFullParams(t *testing.T) {
 			t.Fatalf("consume log stdout missing %q in %s", want, out)
 		}
 	}
+}
+
+type consumeLogInsertCounter struct {
+	gormlogger.Interface
+	inserts atomic.Int64
+}
+
+func (l *consumeLogInsertCounter) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	lower := strings.ToLower(sql)
+	if strings.Contains(lower, "insert") && strings.Contains(lower, "logs") {
+		l.inserts.Add(1)
+	}
+	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+}
+
+func TestRecordConsumeLogCoalescesConcurrentInserts(t *testing.T) {
+	resetLogStatTokenTestData(t)
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	oldDataExportEnabled := common.DataExportEnabled
+	common.LogConsumeEnabled = true
+	common.DataExportEnabled = false
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+		common.DataExportEnabled = oldDataExportEnabled
+	})
+
+	counter := &consumeLogInsertCounter{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+	restoreLogger := LOG_DB.Config.Logger
+	LOG_DB.Config.Logger = counter
+	t.Cleanup(func() { LOG_DB.Config.Logger = restoreLogger })
+
+	const workers = 32
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := 0; i < workers; i++ {
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			ctx := testRecordConsumeLogContext(t, "coalesced-log-user")
+			ctx.Set(common.RequestIdKey, "coalesced-log-request-"+strconv.Itoa(i))
+			RecordConsumeLog(ctx, 910001, RecordConsumeLogParams{
+				ChannelId:        910020,
+				PromptTokens:     11,
+				CompletionTokens: 17,
+				ModelName:        "gpt-5.5",
+				TokenName:        "loadtest subscription",
+				Quota:            113,
+				TokenId:          1,
+				UseTimeSeconds:   2,
+				IsStream:         true,
+				Other: map[string]interface{}{
+					"billing_source":               "subscription",
+					"subscription_tokens_consumed": int64(28),
+				},
+			})
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	var count int64
+	require.NoError(t, LOG_DB.Model(&Log{}).Where("user_id = ?", 910001).Count(&count).Error)
+	assert.Equal(t, int64(workers), count)
+	require.LessOrEqual(t, counter.inserts.Load(), int64(4), "consume logs should be batch-inserted under concurrent hot writes")
 }

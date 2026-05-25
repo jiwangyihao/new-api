@@ -23,7 +23,7 @@ func ComputeTieredQuotaWithRequest(snap *BillingSnapshot, params TokenParams, re
 	}
 
 	quotaBeforeRatio := quotaConversion(cost, snap)
-	quota := QuotaRound(quotaBeforeRatio * snap.QuotaMultiplier)
+	quota := QuotaRound(quotaBeforeRatio)
 	crossed := trace.MatchedTier != snap.EstimatedTier
 
 	return TieredResult{

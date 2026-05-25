@@ -612,6 +612,9 @@ func closeDB(db *gorm.DB) error {
 }
 
 func CloseDB() error {
+	FlushUsageCounterUpdates()
+	FlushSubscriptionTokenDeltaUpdates()
+	FlushConsumeLogUpdates()
 	if LOG_DB != DB {
 		err := closeDB(LOG_DB)
 		if err != nil {

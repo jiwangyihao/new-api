@@ -24,17 +24,18 @@ import (
 // BillingSession 封装单次请求的预扣费/结算/退款生命周期。
 // 实现 relaycommon.BillingSettler 接口。
 type BillingSession struct {
-	relayInfo                  *relaycommon.RelayInfo
-	funding                    FundingSource
-	preConsumedQuota           int   // 实际预扣额度（信任用户可能为 0）
-	preConsumedSubscription    int64 // 订阅资金来源预扣 token 数；钱包路径不用
-	extraReserved              int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
-	realtimeSubscriptionTokens int64
-	trusted                    bool // 是否命中信任额度旁路
-	fundingSettled             bool // funding.Settle 已成功，资金来源已提交
-	settled                    bool // Settle 全部完成
-	refunded                   bool // Refund 已调用
-	mu                         sync.Mutex
+	relayInfo                   *relaycommon.RelayInfo
+	funding                     FundingSource
+	preConsumedQuota            int   // 实际预扣额度（信任用户可能为 0）
+	preConsumedSubscription     int64 // 订阅资金来源预扣 token 数；钱包路径不用
+	extraReserved               int   // 发送前补充预扣的额度（订阅退款时需要单独回滚）
+	realtimeSubscriptionTokens  int64
+	committedSubscriptionTokens int64
+	trusted                     bool // 是否命中信任额度旁路
+	fundingSettled              bool // funding.Settle 已成功，资金来源已提交
+	settled                     bool // Settle 全部完成
+	refunded                    bool // Refund 已调用
+	mu                          sync.Mutex
 }
 
 // Settle 根据实际消耗额度进行结算。
@@ -75,11 +76,13 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 			return err
 		}
 		s.fundingSettled = true
+		s.syncRelayInfoPreservingPostDelta()
 	}
 
 	// 2) 更新 relayInfo 上的订阅 PostDelta（用于日志）。
 	if s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(fundingDelta)
+		s.syncRelayInfoToActualUsed()
 	}
 	s.settled = true
 	return nil
@@ -102,7 +105,9 @@ func (s *BillingSession) SettleSubscriptionIncrement(deltaTokens int64) error {
 	if err := s.funding.Settle(int(deltaTokens)); err != nil {
 		return err
 	}
+
 	s.realtimeSubscriptionTokens += deltaTokens
+	s.committedSubscriptionTokens += deltaTokens
 	s.relayInfo.SubscriptionPostDelta += deltaTokens
 	return nil
 }
@@ -140,6 +145,7 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	// 复制需要的值到闭包中
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
+	committedSubscriptionTokens := s.committedSubscriptionTokens
 	funding := s.funding
 
 	gopool.Go(func() {
@@ -147,8 +153,21 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
+		if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+			err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -committedSubscriptionTokens)
+			if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
+				err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -committedSubscriptionTokens)
+			}
+			if err != nil {
+				common.SysLog("error refunding committed subscription tokens: " + err.Error())
+			}
+		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
+			err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -int64(extraReserved))
+			if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
+				err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -int64(extraReserved))
+			}
+			if err != nil {
 				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
 			}
 		}
@@ -164,14 +183,28 @@ func (s *BillingSession) refundSync() {
 	s.refunded = true
 	extraReserved := s.extraReserved
 	subscriptionId := s.relayInfo.SubscriptionId
+	committedSubscriptionTokens := s.committedSubscriptionTokens
 	funding := s.funding
 	s.mu.Unlock()
 
 	if err := funding.Refund(); err != nil {
 		common.SysLog("error refunding billing source: " + err.Error())
 	}
+	if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+		err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -committedSubscriptionTokens)
+		if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
+			err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -committedSubscriptionTokens)
+		}
+		if err != nil {
+			common.SysLog("error refunding committed subscription tokens: " + err.Error())
+		}
+	}
 	if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-		if err := model.PostConsumeUserSubscriptionDelta(subscriptionId, -int64(extraReserved)); err != nil {
+		err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -int64(extraReserved))
+		if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
+			err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -int64(extraReserved))
+		}
+		if err != nil {
 			common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
 		}
 	}
@@ -253,7 +286,7 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	}
 	s.preConsumedQuota += delta
 	s.extraReserved += delta
-	s.syncRelayInfo()
+	s.syncRelayInfoPreservingPostDelta()
 	return nil
 }
 
@@ -322,7 +355,11 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
-		if err := model.PostConsumeUserSubscriptionDelta(funding.subscriptionId, int64(delta)); err != nil {
+		err := model.PostConsumeUserSubscriptionAmountDelta(funding.subscriptionId, int64(delta))
+		if funding.DistributorTokenBilling {
+			err = model.PostConsumeUserSubscriptionTokenDelta(funding.subscriptionId, int64(delta))
+		}
+		if err != nil {
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
 				types.ErrorCodeInsufficientUserQuota,
@@ -400,6 +437,35 @@ func (s *BillingSession) syncRelayInfo() {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
 	}
+}
+
+func (s *BillingSession) syncRelayInfoPreservingPostDelta() {
+	postDelta := s.relayInfo.SubscriptionPostDelta
+	s.syncRelayInfo()
+	s.relayInfo.SubscriptionPostDelta = postDelta
+}
+
+func (s *BillingSession) syncRelayInfoToActualUsed() {
+	postDelta := s.relayInfo.SubscriptionPostDelta
+	s.syncRelayInfo()
+	if sub, ok := s.funding.(*SubscriptionFunding); ok {
+		if sub.DistributorTokenBilling {
+			s.relayInfo.SubscriptionAmountUsedAfterPreConsume -= postDelta
+			s.relayInfo.SubscriptionTokenUsedAfterPreConsume -= postDelta
+			if s.relayInfo.SubscriptionAmountUsedAfterPreConsume < 0 {
+				s.relayInfo.SubscriptionAmountUsedAfterPreConsume = 0
+			}
+			if s.relayInfo.SubscriptionTokenUsedAfterPreConsume < 0 {
+				s.relayInfo.SubscriptionTokenUsedAfterPreConsume = 0
+			}
+		} else {
+			s.relayInfo.SubscriptionAmountUsedAfterPreConsume -= postDelta
+			if s.relayInfo.SubscriptionAmountUsedAfterPreConsume < 0 {
+				s.relayInfo.SubscriptionAmountUsedAfterPreConsume = 0
+			}
+		}
+	}
+	s.relayInfo.SubscriptionPostDelta = postDelta
 }
 
 func clearRelayBillingState(info *relaycommon.RelayInfo) {

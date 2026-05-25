@@ -312,13 +312,13 @@ profiles:
   benchmark:
     points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
-    ramp_step: 25
+    ramp_step: 125
     ramp_interval: "200ms"
-    duration: "45s"
+    duration: "75s"
     timeout: "120s"
-    transport: {mode: "h1_keepalive", max_conns_per_host: 1024, max_idle_conns: 1024, max_idle_conns_per_host: 1024}
+    transport: {mode: "h1_keepalive", max_conns_per_host: 2000, max_idle_conns: 2000, max_idle_conns_per_host: 2000}
     relay: {max_idle_conns: 1024, max_idle_conns_per_host: 1024}
-    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2}
+    server_limits: {gomaxprocs: "2", gogc: "100", gomemlimit: "384MiB", process_memory_limit_bytes: 536870912, cpu_affinity_cores: 2, sql_max_open_conns: "64", sql_max_idle_conns: "64", redis_pool_size: "256", redis_idle_timeout_seconds: "1", relay_max_idle_conns: "1024", relay_max_idle_conns_per_host: "1024"}
 `
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -423,26 +423,32 @@ func benchmarkProfileConfig() loadtestconfig.ProfileConfig {
 	return loadtestconfig.ProfileConfig{
 		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
-		RampStep:         25,
+		RampStep:         125,
 		RampInterval:     loadtestconfig.Duration{Duration: 200 * time.Millisecond},
-		Duration:         loadtestconfig.Duration{Duration: 45 * time.Second},
+		Duration:         loadtestconfig.Duration{Duration: 75 * time.Second},
 		Timeout:          loadtestconfig.Duration{Duration: 120 * time.Second},
 		Transport: loadtestconfig.TransportConfig{
 			Mode:                "h1_keepalive",
-			MaxConnsPerHost:     1024,
-			MaxIdleConns:        1024,
-			MaxIdleConnsPerHost: 1024,
+			MaxConnsPerHost:     2000,
+			MaxIdleConns:        2000,
+			MaxIdleConnsPerHost: 2000,
 		},
 		Relay: loadtestconfig.RelayConfig{
 			MaxIdleConns:        1024,
 			MaxIdleConnsPerHost: 1024,
 		},
 		ServerLimits: loadtestconfig.ServerLimitsConfig{
-			GOMAXPROCS:              "2",
-			GOGC:                    "100",
-			GOMEMLIMIT:              "384MiB",
-			ProcessMemoryLimitBytes: 536870912,
-			CPUAffinityCores:        2,
+			GOMAXPROCS:               "2",
+			GOGC:                     "100",
+			GOMEMLIMIT:               "384MiB",
+			ProcessMemoryLimitBytes:  536870912,
+			CPUAffinityCores:         2,
+			SQLMaxOpenConns:          "64",
+			SQLMaxIdleConns:          "64",
+			RedisPoolSize:            "256",
+			RedisIdleTimeoutSeconds:  "1",
+			RelayMaxIdleConns:        "1024",
+			RelayMaxIdleConnsPerHost: "1024",
 		},
 	}
 }

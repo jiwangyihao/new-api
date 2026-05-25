@@ -280,7 +280,15 @@ func handleSubscriptionConcurrencyRedisError(err error) (ConcurrencyLease, error
 		common.SysLog("subscription concurrency redis error; fail-open: " + err.Error())
 		return noopConcurrencyLease{}, nil
 	}
+	common.SysLog("subscription concurrency redis error; fail-closed: class=" + subscriptionConcurrencyRedisErrorClass(err))
 	return nil, ErrSubscriptionConcurrencyUnavailable
+}
+
+func subscriptionConcurrencyRedisErrorClass(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	return common.MaskSensitiveInfo(err.Error())
 }
 
 type redisAcquireStatus int

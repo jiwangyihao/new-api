@@ -18,7 +18,7 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := file.NewAPIEnv()
-	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "NODE_TYPE", "BATCH_UPDATE_ENABLED", "BATCH_UPDATE_INTERVAL", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
+	for _, key := range []string{"HOST", "PORT", "PPROF_ADDR", "SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "REDIS_IDLE_TIMEOUT_SECONDS", "ENABLE_PPROF", "LOADTEST_RUNTIME_STATS_ENABLED", "LOADTEST_PROFILE_BLOCK_RATE", "LOADTEST_PROFILE_MUTEX_FRACTION", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "NODE_TYPE", "BATCH_UPDATE_ENABLED", "BATCH_UPDATE_INTERVAL", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "SQL_MAX_LIFETIME", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "CHANNEL_UPDATE_FREQUENCY", "UPDATE_TASK", "CHANNEL_TEST_FREQUENCY", "PYROSCOPE_URL", "SYNC_UPSTREAM_BASE", "RetryTimes", "AutomaticRetryStatusCodes", "MEMORY_CACHE_ENABLED", "RELAY_MAX_IDLE_CONNS", "RELAY_MAX_IDLE_CONNS_PER_HOST"} {
 		if _, ok := env[key]; !ok {
 			t.Fatalf("missing env %s", key)
 		}
@@ -29,11 +29,14 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	if env["MEMORY_CACHE_ENABLED"] != "true" {
 		t.Fatalf("loadtest runtime guard not set: %#v", env)
 	}
-	if env["REDIS_POOL_SIZE"] != "2048" {
-		t.Fatalf("redis pool size not raised for benchmark: %#v", env)
+	if env["REDIS_POOL_SIZE"] != "256" {
+		t.Fatalf("redis pool size not bounded for benchmark: %#v", env)
 	}
-	if env["SQL_MAX_OPEN_CONNS"] != "256" || env["SQL_MAX_IDLE_CONNS"] != "64" {
-		t.Fatalf("loadtest SQL pool must cover benchmark concurrency: %#v", env)
+	if env["REDIS_IDLE_TIMEOUT_SECONDS"] != "1" {
+		t.Fatalf("redis idle timeout not bounded for benchmark: %#v", env)
+	}
+	if env["SQL_MAX_OPEN_CONNS"] != "64" || env["SQL_MAX_IDLE_CONNS"] != "64" {
+		t.Fatalf("loadtest SQL pool must use a bounded reusable connection set: %#v", env)
 	}
 	if env["RELAY_MAX_IDLE_CONNS"] != "64" || env["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "16" {
 		t.Fatalf("unsafe relay connection limits: %#v", env)
@@ -44,8 +47,8 @@ func TestLoadValidateAndWriteEnv(t *testing.T) {
 	if env["NODE_TYPE"] != "slave" {
 		t.Fatalf("loadtest must run as a non-master node: %#v", env)
 	}
-	if env["REDIS_POOL_SIZE"] != "2048" {
-		t.Fatalf("loadtest Redis pool must cover benchmark concurrency: %#v", env)
+	if env["REDIS_POOL_SIZE"] != "256" {
+		t.Fatalf("loadtest Redis pool must remain below managed Redis crash threshold: %#v", env)
 	}
 	rc, err := file.BaseRunContext("abcdef0")
 	if err != nil {
@@ -133,7 +136,7 @@ func TestBenchmarkProfileAllowsExplicitHighCapacityConnectionLimits(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Transport.MaxConnsPerHost != 1024 || p.Transport.MaxIdleConns != 1024 || p.Transport.MaxIdleConnsPerHost != 1024 {
+	if p.Transport.MaxConnsPerHost != 2000 || p.Transport.MaxIdleConns != 2000 || p.Transport.MaxIdleConnsPerHost != 2000 {
 		t.Fatalf("benchmark transport limits = %#v", p.Transport)
 	}
 	if p.Relay.MaxIdleConns != 1024 || p.Relay.MaxIdleConnsPerHost != 1024 || p.ServerLimits.GOMEMLIMIT != "384MiB" {
@@ -168,7 +171,10 @@ func TestNewAPIEnvForProfileOnlyRaisesRelayPoolForBenchmark(t *testing.T) {
 	if profileEnv["RELAY_MAX_IDLE_CONNS"] != "1024" || profileEnv["RELAY_MAX_IDLE_CONNS_PER_HOST"] != "1024" || profileEnv["GOMEMLIMIT"] != "384MiB" {
 		t.Fatalf("benchmark env mismatch: %#v", profileEnv)
 	}
-	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "REDIS_POOL_SIZE", "SQL_MAX_OPEN_CONNS", "SQL_MAX_IDLE_CONNS", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
+	if profileEnv["SQL_MAX_OPEN_CONNS"] != "64" || profileEnv["SQL_MAX_IDLE_CONNS"] != "64" {
+		t.Fatalf("benchmark env must cap SQL open connections at idle capacity: %#v", profileEnv)
+	}
+	for _, key := range []string{"SQL_DSN", "LOG_SQL_DSN", "REDIS_CONN_STRING", "CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", "RetryTimes", "AutomaticRetryStatusCodes"} {
 		if profileEnv[key] != base[key] {
 			t.Fatalf("profile env changed safety key %s: %q != %q", key, profileEnv[key], base[key])
 		}
@@ -190,6 +196,21 @@ func TestNewAPIEnvForProfileOnlyRaisesRelayPoolForBenchmark(t *testing.T) {
 	}
 	if base["RELAY_MAX_IDLE_CONNS"] != "64" {
 		t.Fatalf("base env was mutated: %#v", base)
+	}
+}
+
+func TestBenchmarkProfileCapsRedisPoolBelowManagedRedisCrashThreshold(t *testing.T) {
+	f := validFile()
+	f.Profiles = map[string]ProfileConfig{"benchmark": benchmarkProfileConfig()}
+	profileEnv, err := f.NewAPIEnvForProfile("benchmark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profileEnv["REDIS_POOL_SIZE"] != "256" {
+		t.Fatalf("benchmark Redis pool size = %s, want bounded 256", profileEnv["REDIS_POOL_SIZE"])
+	}
+	if profileEnv["REDIS_IDLE_TIMEOUT_SECONDS"] != "1" {
+		t.Fatalf("benchmark Redis idle timeout = %s, want 1", profileEnv["REDIS_IDLE_TIMEOUT_SECONDS"])
 	}
 }
 
@@ -356,15 +377,15 @@ profiles:
   benchmark:
     points: [250, 500, 750, 1000, 1250, 1500, 1750, 2000]
     requests_per_point: 3000
-    ramp_step: 25
+    ramp_step: 125
     ramp_interval: 200ms
-    duration: 45s
+    duration: 75s
     timeout: 120s
     transport:
       mode: h1_keepalive
-      max_conns_per_host: 1024
-      max_idle_conns: 1024
-      max_idle_conns_per_host: 1024
+      max_conns_per_host: 2000
+      max_idle_conns: 2000
+      max_idle_conns_per_host: 2000
     relay:
       max_idle_conns: 1024
       max_idle_conns_per_host: 1024
@@ -374,6 +395,12 @@ profiles:
       gomemlimit: "384MiB"
       process_memory_limit_bytes: 536870912
       cpu_affinity_cores: 2
+      sql_max_open_conns: "64"
+      sql_max_idle_conns: "64"
+      redis_pool_size: "256"
+      redis_idle_timeout_seconds: "1"
+      relay_max_idle_conns: "1024"
+      relay_max_idle_conns_per_host: "1024"
 thresholds:
   latency_p95_regression_ratio: 1.10
   ttft_p95_regression_ratio: 1.10
@@ -392,26 +419,32 @@ func benchmarkProfileConfig() ProfileConfig {
 	return ProfileConfig{
 		Points:           []int{250, 500, 750, 1000, 1250, 1500, 1750, 2000},
 		RequestsPerPoint: 3000,
-		RampStep:         25,
+		RampStep:         125,
 		RampInterval:     mustDuration("200ms"),
-		Duration:         mustDuration("45s"),
+		Duration:         mustDuration("75s"),
 		Timeout:          mustDuration("120s"),
 		Transport: TransportConfig{
 			Mode:                "h1_keepalive",
-			MaxConnsPerHost:     1024,
-			MaxIdleConns:        1024,
-			MaxIdleConnsPerHost: 1024,
+			MaxConnsPerHost:     2000,
+			MaxIdleConns:        2000,
+			MaxIdleConnsPerHost: 2000,
 		},
 		Relay: RelayConfig{
 			MaxIdleConns:        1024,
 			MaxIdleConnsPerHost: 1024,
 		},
 		ServerLimits: ServerLimitsConfig{
-			GOMAXPROCS:              "2",
-			GOGC:                    "100",
-			GOMEMLIMIT:              "384MiB",
-			ProcessMemoryLimitBytes: 536870912,
-			CPUAffinityCores:        2,
+			GOMAXPROCS:               "2",
+			GOGC:                     "100",
+			GOMEMLIMIT:               "384MiB",
+			ProcessMemoryLimitBytes:  536870912,
+			CPUAffinityCores:         2,
+			SQLMaxOpenConns:          "64",
+			SQLMaxIdleConns:          "64",
+			RedisPoolSize:            "256",
+			RedisIdleTimeoutSeconds:  "1",
+			RelayMaxIdleConns:        "1024",
+			RelayMaxIdleConnsPerHost: "1024",
 		},
 	}
 }

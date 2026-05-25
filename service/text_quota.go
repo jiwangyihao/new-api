@@ -139,19 +139,16 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	return surcharge
 }
 
-func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
+func composeTieredTextQuota(summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
 	if summary.ToolCallSurchargeQuota.IsZero() {
 		return tieredQuota
 	}
 
 	if tieredResult != nil {
-		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
-			return int(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeRatio).
-				Mul(decimal.NewFromFloat(snap.QuotaMultiplier)).
-				Add(summary.ToolCallSurchargeQuota).
-				Round(0).
-				IntPart())
-		}
+		return int(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeRatio).
+			Add(summary.ToolCallSurchargeQuota).
+			Round(0).
+			IntPart())
 	}
 
 	return tieredQuota + int(summary.ToolCallSurchargeQuota.Round(0).IntPart())
@@ -385,7 +382,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if tieredOk {
 			tieredBillingApplied = true
 			tieredResult = tieredRes
-			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
+			summary.Quota = composeTieredTextQuota(summary, tieredQuota, tieredRes)
 		}
 	}
 
@@ -432,15 +429,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	var other map[string]interface{}
 	if summary.IsClaudeUsageSemantic {
 		other = GenerateClaudeOtherInfo(ctx, relayInfo,
-			summary.ModelRatio, 1, summary.CompletionRatio,
+			summary.ModelRatio, summary.CompletionRatio,
 			summary.CacheTokens, summary.CacheRatio,
 			summary.CacheCreationTokens, summary.CacheCreationRatio,
 			summary.CacheCreationTokens5m, summary.CacheCreationRatio5m,
 			summary.CacheCreationTokens1h, summary.CacheCreationRatio1h,
-			summary.ModelPrice, relayInfo.PriceData.QuotaMultiplierInfo.SpecialRatio)
+			summary.ModelPrice)
 		other["usage_semantic"] = "anthropic"
 	} else {
-		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, 1, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice, 1)
+		other = GenerateTextOtherInfo(ctx, relayInfo, summary.ModelRatio, summary.CompletionRatio, summary.CacheTokens, summary.CacheRatio, summary.ModelPrice)
 	}
 	if usageEstimated {
 		other["usage_estimated"] = true

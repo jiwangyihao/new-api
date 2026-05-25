@@ -62,7 +62,7 @@ func TestRealtimeRefundReturnsInitialPreconsumeAfterChunkSettlementFailure(t *te
 	require.Eventually(t, func() bool {
 		var sub model.UserSubscription
 		require.NoError(t, model.DB.Select("token_used").Where("id = ?", subID).First(&sub).Error)
-		return sub.TokenUsed == 3
+		return sub.TokenUsed == 0
 	}, time.Second, 10*time.Millisecond)
 }
 

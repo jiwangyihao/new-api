@@ -44,6 +44,7 @@ type RunPointOptions struct {
 	Transport        artifact.TransportProfile
 	Seed             artifact.SeedOutput
 	DB               *gorm.DB
+	LogDB            *gorm.DB
 	InputBytes       int
 	StdoutLog        string
 	StderrLog        string
@@ -73,12 +74,14 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 	if err := writeJSONFile(point.MetricsBeforePath, beforeSnapshot); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
-	drainBaseline, _ := metrics.BusinessDrainSample(opts.DB, opts.TokenProfile)
+	drainBaseline, _ := metrics.BusinessDrainSampleWithLogDB(opts.DB, opts.LogDB, opts.TokenProfile)
 	stopSampler := monitor.NewSampler(monitor.SamplerOptions{
 		Interval: 200 * time.Millisecond,
 		Process:  func() artifact.ProcessSnapshot { return resource.SampleProcess(opts.ServerPID) },
 		Runtime:  func() artifact.RuntimeSnapshot { return monitor.ReadRuntimeSnapshot(ctx, opts.RuntimeURL) },
-		Postgres: func() artifact.PostgresSnapshot { return monitor.LoadPostgresSnapshot(opts.DB, nil) },
+		Postgres: func() artifact.PostgresSnapshot {
+			return monitor.LoadPostgresSnapshotWithLogDB(opts.DB, opts.LogDB, nil)
+		},
 		Redis: func() artifact.RedisSnapshot {
 			if opts.Config == nil {
 				return artifact.RedisSnapshot{Statused: artifact.Statused{Status: "unavailable", Reason: "config is not provided"}}
@@ -148,7 +151,7 @@ func RunPoint(ctx context.Context, opts RunPointOptions) (artifact.PointResult, 
 	if err := writeJSONFile(point.MetricsAfterPath, afterSnapshot); err != nil {
 		return failedRunPoint(point, opts, err)
 	}
-	logRows, preRows, err := metrics.LoadBusinessRows(opts.DB, summary)
+	logRows, preRows, err := metrics.LoadBusinessRowsWithLogDB(opts.DB, opts.LogDB, summary)
 	if err != nil {
 		return failedRunPoint(point, opts, err)
 	}
@@ -191,7 +194,7 @@ func waitDrain(ctx context.Context, opts RunPointOptions, baseline monitor.Drain
 			first = false
 			return baseline
 		}
-		sample, err := metrics.BusinessDrainSample(opts.DB, opts.TokenProfile)
+		sample, err := metrics.BusinessDrainSampleWithLogDB(opts.DB, opts.LogDB, opts.TokenProfile)
 		if err != nil {
 			return baseline
 		}

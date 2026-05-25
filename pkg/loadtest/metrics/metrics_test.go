@@ -102,8 +102,8 @@ func TestBuildDiffDoesNotTreatClientParserFailuresAsRefundableUpstreamFailures(t
 		Errors:     1,
 		Requests: []artifact.RequestRecord{{
 			NewAPIRequestID: "rid-1",
-			StatusCode:       http.StatusOK,
-			ErrorReason:      "missing_done",
+			StatusCode:      http.StatusOK,
+			ErrorReason:     "missing_done",
 		}},
 	}
 	mock := artifact.MockStatsDelta{SchemaVersion: 1, RunContext: rc, Path: "c1-mock-stats-delta.json", Hash: "sha256:mockdelta", UpstreamAttemptsTotal: 1}
@@ -179,6 +179,102 @@ func TestLoadBusinessRowsAndSnapshotUseDatabaseRows(t *testing.T) {
 	}
 }
 
+func TestLoadBusinessRowsReadsConsumeLogsFromSeparateLogDB(t *testing.T) {
+	businessDB := openMetricsTestDB(t)
+	logDB := openMetricsTestDB(t)
+
+	if err := businessDB.Create(&model.SubscriptionPreConsumeRecord{RequestId: "rid-log-db", PreConsumed: 28, Status: "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := logDB.Create(&model.Log{RequestId: "rid-log-db", Type: model.LogTypeConsume, Quota: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	summary := artifact.Summary{Requests: []artifact.RequestRecord{{NewAPIRequestID: "rid-log-db"}}}
+	logs, records, err := LoadBusinessRowsWithLogDB(businessDB, logDB, summary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 || logs[0].RequestID != "rid-log-db" || logs[0].Quota != 28 {
+		t.Fatalf("consume logs must come from log DB: %#v", logs)
+	}
+	if len(records) != 1 || records[0].RequestID != "rid-log-db" || records[0].PreConsumed != 28 {
+		t.Fatalf("pre-consume records must come from business DB: %#v", records)
+	}
+}
+
+func TestBusinessDrainSampleCountsConsumeLogsFromSeparateLogDB(t *testing.T) {
+	businessDB := openMetricsTestDB(t)
+	logDB := openMetricsTestDB(t)
+
+	if err := businessDB.Create(&model.SubscriptionPreConsumeRecord{RequestId: "rid-drain", PreConsumed: 28, Status: "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := businessDB.Create(&model.UserSubscription{Id: 100, UserId: 200, Status: "active", TokenUsed: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := logDB.Create(&model.Log{RequestId: "rid-drain", Type: model.LogTypeConsume, Quota: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	sample, err := BusinessDrainSampleWithLogDB(businessDB, logDB, "subscription")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.ConsumeLogs != 1 || sample.PreConsumeRecords != 1 || sample.SubscriptionTokenUsed != 28 {
+		t.Fatalf("bad drain sample: %#v", sample)
+	}
+}
+
+func TestBusinessDrainSampleDoesNotReadLogsFromBusinessDBWhenLogDBIsSeparate(t *testing.T) {
+	businessDB := openMetricsNamedTestDB(t, "business")
+	logDB := openMetricsNamedTestDB(t, "log")
+
+	if err := businessDB.Migrator().DropTable(&model.Log{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := businessDB.Create(&model.SubscriptionPreConsumeRecord{RequestId: "rid-drain-separate", PreConsumed: 28, Status: "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := businessDB.Create(&model.UserSubscription{Id: 101, UserId: 201, Status: "active", TokenUsed: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := logDB.Create(&model.Log{RequestId: "rid-drain-separate", Type: model.LogTypeConsume, Quota: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	sample, err := BusinessDrainSampleWithLogDB(businessDB, logDB, "subscription")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sample.ConsumeLogs != 1 || sample.PreConsumeRecords != 1 || sample.SubscriptionTokenUsed != 28 {
+		t.Fatalf("bad drain sample: %#v", sample)
+	}
+}
+
+func TestLoadBusinessRowsDoesNotReadLogsFromBusinessDBWhenLogDBIsSeparate(t *testing.T) {
+	businessDB := openMetricsNamedTestDB(t, "business")
+	logDB := openMetricsNamedTestDB(t, "log")
+
+	if err := businessDB.Migrator().DropTable(&model.Log{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := businessDB.Create(&model.SubscriptionPreConsumeRecord{RequestId: "rid-rows-separate", PreConsumed: 28, Status: "consumed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := logDB.Create(&model.Log{RequestId: "rid-rows-separate", Type: model.LogTypeConsume, Quota: 28}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	logs, records, err := LoadBusinessRowsWithLogDB(businessDB, logDB, artifact.Summary{Requests: []artifact.RequestRecord{{NewAPIRequestID: "rid-rows-separate"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 || logs[0].RequestID != "rid-rows-separate" || len(records) != 1 || records[0].RequestID != "rid-rows-separate" {
+		t.Fatalf("bad business rows: %#v %#v", logs, records)
+	}
+}
+
 func TestServerLogScanningUsesStdoutAndStderr(t *testing.T) {
 	got := ScanServerLogs("record consume log: userId=1", "failed to flush perf metric bucket: column reference")
 	if got.StdoutFullParamsLines != 0 || got.PerfMetricUpsertErrors != 1 {
@@ -192,7 +288,12 @@ func TestServerLogScanningUsesStdoutAndStderr(t *testing.T) {
 
 func openMetricsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
+	return openMetricsNamedTestDB(t, "default")
+}
+
+func openMetricsNamedTestDB(t *testing.T, name string) *gorm.DB {
+	t.Helper()
+	dsn := "file:" + strings.ReplaceAll(t.Name()+"_"+name, "/", "_") + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)

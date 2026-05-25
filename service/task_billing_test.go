@@ -87,6 +87,7 @@ func truncate(t *testing.T) {
 			}
 		}
 	})
+	model.ClearPrimaryBillableSubscriptionCacheForTest()
 }
 
 func seedUser(t *testing.T, id int, quota int) {

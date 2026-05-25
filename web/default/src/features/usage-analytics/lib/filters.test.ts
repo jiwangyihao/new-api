@@ -95,7 +95,7 @@ test('clamps excessive limit to backend maximum', () => {
   assert.equal(canonical.sort_by, 'quota')
 })
 
-test('serializes api params without deprecated business group params', () => {
+test('serializes api params without deprecated dimension params', () => {
   const canonical = buildUsageAnalyticsCanonicalFilters(
     { model_names: ['gpt-4', 'claude'], groups: ['a,b', 'default'] },
     1_779_321_600

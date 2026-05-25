@@ -792,7 +792,7 @@ func UpdateChannelUsedQuota(id int, quota int) {
 		addNewRecord(BatchUpdateTypeChannelUsedQuota, id, quota)
 		return
 	}
-	updateChannelUsedQuota(id, quota)
+	channelUsageCounterCoalescer.add(id, quota, 0)
 }
 
 func updateChannelUsedQuota(id int, quota int) {

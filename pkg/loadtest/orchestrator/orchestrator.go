@@ -117,11 +117,11 @@ type pgCtlProcess struct {
 
 func (p *pgCtlProcess) PID() int { return 0 }
 
-func (p *pgCtlProcess) Stop(ctx context.Context) error {
+func (p *pgCtlProcess) Stop(context.Context) error {
 	if p == nil || p.pgCtl == "" || p.dataDir == "" {
 		return nil
 	}
-	cmd := exec.CommandContext(ctx, p.pgCtl, "stop", "-D", p.dataDir, "-m", "fast", "-w", "-t", "30")
+	cmd := exec.CommandContext(context.Background(), p.pgCtl, "stop", "-D", p.dataDir, "-m", "fast", "-w", "-t", "30")
 	return runCommandRedacted(cmd)
 }
 
@@ -178,6 +178,7 @@ type PointOptions struct {
 	Transport        artifact.TransportProfile
 	Seed             artifact.SeedOutput
 	DB               *gorm.DB
+	LogDB            *gorm.DB
 	ServerPID        int
 }
 
@@ -539,6 +540,7 @@ func pointOptions(opts Options, cfg loadtestconfig.File, p profile.Profile, rc a
 		Transport:        artifact.TransportProfile{Mode: p.Transport.Mode, MaxConnsPerHost: p.Transport.MaxConnsPerHost, MaxIdleConns: p.Transport.MaxIdleConns, MaxIdleConnsPerHost: p.Transport.MaxIdleConnsPerHost},
 		Seed:             seed,
 		DB:               openDBUnchecked(cfg.Postgres.DSN),
+		LogDB:            openLogDBUnchecked(cfg),
 		ServerPID:        serverPID,
 	}
 }
@@ -608,6 +610,14 @@ func runtimeURL(cfg loadtestconfig.File) string {
 func openDBUnchecked(dsn string) *gorm.DB {
 	db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	return db
+}
+
+func openLogDBUnchecked(cfg loadtestconfig.File) *gorm.DB {
+	dsn := strings.TrimSpace(cfg.LogPostgres.DSN)
+	if dsn == "" || dsn == strings.TrimSpace(cfg.Postgres.DSN) {
+		return openDBUnchecked(cfg.Postgres.DSN)
+	}
+	return openDBUnchecked(dsn)
 }
 
 func buildOrVerifyBinary(ctx context.Context, opts Options) error {
@@ -871,6 +881,7 @@ func runPoint(ctx context.Context, opts PointOptions) (artifact.PointResult, art
 		Transport:        opts.Transport,
 		Seed:             opts.Seed,
 		DB:               opts.DB,
+		LogDB:            opts.LogDB,
 		ServerPID:        opts.ServerPID,
 	})
 }

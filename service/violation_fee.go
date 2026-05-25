@@ -81,16 +81,12 @@ func shouldChargeViolationFee(err *types.NewAPIError) bool {
 	return HasCSAMViolationMarker(err)
 }
 
-func calcViolationFeeQuota(amount, groupRatio float64) int {
+func calcViolationFeeQuota(amount float64, _ float64) int {
 	if amount <= 0 {
-		return 0
-	}
-	if groupRatio <= 0 {
 		return 0
 	}
 	quota := decimal.NewFromFloat(amount).
 		Mul(decimal.NewFromFloat(common.QuotaPerUnit)).
-		Mul(decimal.NewFromFloat(groupRatio)).
 		Round(0).
 		IntPart()
 	if quota <= 0 {

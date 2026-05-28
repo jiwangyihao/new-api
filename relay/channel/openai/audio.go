@@ -27,8 +27,6 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	// and can be terminated directly.
 	defer service.CloseResponseBodyGracefully(resp)
 	usage := &dto.Usage{}
-	usage.PromptTokens = info.GetEstimatePromptTokens()
-	usage.TotalTokens = info.GetEstimatePromptTokens()
 	for k, v := range resp.Header {
 		if !service.ShouldCopyUpstreamHeader(c, k, v) {
 			continue
@@ -140,9 +138,5 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 		}
 	}
 
-	usage := &dto.Usage{}
-	usage.PromptTokens = info.GetEstimatePromptTokens()
-	usage.CompletionTokens = 0
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-	return nil, usage
+	return nil, &dto.Usage{}
 }

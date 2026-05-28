@@ -603,20 +603,20 @@ func TestSubscriptionBillingUsesMeteredTokens(t *testing.T) {
 	}
 }
 
-func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
+func TestSubscriptionBillingDoesNotChargeWhenUsageMissing(t *testing.T) {
 	truncate(t)
 	const userID = 8011
 	const tokenID = 8012
 	const planID = 8013
 	const subID = 8014
 	seedUser(t, userID, 10_000)
-	seedToken(t, tokenID, userID, "sk-estimated", 10_000)
+	seedToken(t, tokenID, userID, "sk-missing-usage", 10_000)
 	seedChannel(t, 8015)
-	seedDistributorPlan(t, planID, "plan-estimated", 1_000)
+	seedDistributorPlan(t, planID, "plan-missing-usage", 1_000)
 	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
 
 	ctx := newBillingTestContext(t)
-	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-estimated", "req-estimated", "subscription_only")
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-missing-usage", "req-missing-usage", "subscription_only")
 	relayInfo.ChannelId = 8015
 	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
 	relayInfo.SetEstimatePromptTokens(6)
@@ -624,13 +624,52 @@ func TestSubscriptionBillingUsesEstimatedTokensWhenUsageMissing(t *testing.T) {
 
 	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, nil, nil))
 
-	assert.Equal(t, int64(6), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not use token key quota")
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, 10_000, getUserQuota(t, userID), "missing usage must not deduct wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "missing usage must not use token key quota")
 	log := getLastLog(t)
 	require.NotNil(t, log)
+	assert.Equal(t, 0, log.Quota)
+	assert.Equal(t, 0, log.PromptTokens)
+	assert.Equal(t, 0, log.CompletionTokens)
+	other, err := common.StrToMap(log.Other)
+	require.NoError(t, err)
+	assert.Equal(t, true, other["usage_unavailable"])
+	assert.Nil(t, other["usage_estimated"])
+}
+
+func TestSubscriptionBillingDoesNotChargeLocalCountUsage(t *testing.T) {
+	truncate(t)
+	const userID = 8021
+	const tokenID = 8022
+	const planID = 8023
+	const subID = 8024
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-local-usage", 10_000)
+	seedChannel(t, 8025)
+	seedDistributorPlan(t, planID, "plan-local-usage", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-local-usage", "req-local-usage", "subscription_only")
+	relayInfo.ChannelId = 8025
+	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	usage := ResponseText2Usage(ctx, "locally counted response", relayInfo.OriginModelName, relayInfo.GetEstimatePromptTokens())
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, usage, nil))
+
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, 0, log.Quota)
+	assert.Equal(t, 0, log.PromptTokens)
+	assert.Equal(t, 0, log.CompletionTokens)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, true, other["usage_estimated"])
+	assert.Equal(t, true, other["usage_unavailable"])
 }
 
 func TestPostTextConsumeQuotaReturnsSettleErrorWhenSubscriptionTokensExhausted(t *testing.T) {

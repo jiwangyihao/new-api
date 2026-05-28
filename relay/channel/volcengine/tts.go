@@ -183,11 +183,7 @@ func handleTTSResponse(c *gin.Context, resp *http.Response, info *relaycommon.Re
 	c.Header("Content-Type", contentType)
 	c.Data(http.StatusOK, contentType, audioData)
 
-	usage = &dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: 0,
-		TotalTokens:      info.GetEstimatePromptTokens(),
-	}
+	usage = &dto.Usage{}
 
 	return usage, nil
 }
@@ -283,11 +279,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 
 			if msg.Sequence < 0 {
 				c.Status(http.StatusOK)
-				usage = &dto.Usage{
-					PromptTokens:     info.GetEstimatePromptTokens(),
-					CompletionTokens: 0,
-					TotalTokens:      info.GetEstimatePromptTokens(),
-				}
+				usage = &dto.Usage{}
 				return usage, nil
 			}
 		default:
@@ -296,10 +288,6 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 	}
 
 	c.Status(http.StatusOK)
-	usage = &dto.Usage{
-		PromptTokens:     info.GetEstimatePromptTokens(),
-		CompletionTokens: 0,
-		TotalTokens:      info.GetEstimatePromptTokens(),
-	}
+	usage = &dto.Usage{}
 	return usage, nil
 }

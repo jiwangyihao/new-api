@@ -102,7 +102,6 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	scanner.Split(bufio.ScanLines)
 	helper.SetEventStreamHeaders(c)
 	id := helper.GetResponseID(c)
-	var responseText string
 
 	var currentEvent string
 	var currentData string
@@ -114,7 +113,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 		if line == "" {
 			if currentEvent != "" && currentData != "" {
 				// handle last event
-				handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
+				handleCozeEvent(c, currentEvent, currentData, usage, id, info)
 				currentEvent = ""
 				currentData = ""
 			}
@@ -134,7 +133,7 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 
 	// Last event
 	if currentEvent != "" && currentData != "" {
-		handleCozeEvent(c, currentEvent, currentData, &responseText, usage, id, info)
+		handleCozeEvent(c, currentEvent, currentData, usage, id, info)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -142,14 +141,10 @@ func cozeChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *ht
 	}
 	helper.Done(c)
 
-	if usage.TotalTokens == 0 {
-		usage = service.ResponseText2Usage(c, responseText, info.UpstreamModelName, c.GetInt("coze_input_count"))
-	}
-
 	return usage, nil
 }
 
-func handleCozeEvent(c *gin.Context, event string, data string, responseText *string, usage *dto.Usage, id string, info *relaycommon.RelayInfo) {
+func handleCozeEvent(c *gin.Context, event string, data string, usage *dto.Usage, id string, info *relaycommon.RelayInfo) {
 	switch event {
 	case "conversation.chat.completed":
 		// 将 data 解析为 CozeChatResponseData
@@ -183,8 +178,6 @@ func handleCozeEvent(c *gin.Context, event string, data string, responseText *st
 			common.SysLog("error_unmarshalling_stream_response: " + err.Error())
 			return
 		}
-
-		*responseText += content
 
 		openaiResponse := dto.ChatCompletionsStreamResponse{
 			Id:      id,

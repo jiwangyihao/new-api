@@ -174,7 +174,7 @@ func TestGeminiTextGenerationHandlerPromptTokensIncludeToolUsePromptTokens(t *te
 	require.Equal(t, 1120, usage.CompletionTokenDetails.ReasoningTokens)
 }
 
-func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
+func TestGeminiChatHandlerDoesNotEstimatePromptTokensWhenUsagePromptMissing(t *testing.T) {
 	t.Parallel()
 
 	gin.SetMode(gin.TestMode)
@@ -220,12 +220,12 @@ func TestGeminiChatHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *tes
 	usage, newAPIError := GeminiChatHandler(c, info, resp)
 	require.Nil(t, newAPIError)
 	require.NotNil(t, usage)
-	require.Equal(t, 20, usage.PromptTokens)
+	require.Equal(t, 0, usage.PromptTokens)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }
 
-func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
+func TestGeminiStreamHandlerDoesNotEstimatePromptTokensWhenUsagePromptMissing(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
@@ -277,12 +277,12 @@ func TestGeminiStreamHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *t
 	})
 	require.Nil(t, newAPIError)
 	require.NotNil(t, usage)
-	require.Equal(t, 20, usage.PromptTokens)
+	require.Equal(t, 0, usage.PromptTokens)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }
 
-func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMissing(t *testing.T) {
+func TestGeminiTextGenerationHandlerDoesNotEstimatePromptTokensWhenUsagePromptMissing(t *testing.T) {
 	t.Parallel()
 
 	gin.SetMode(gin.TestMode)
@@ -327,7 +327,7 @@ func TestGeminiTextGenerationHandlerUsesEstimatedPromptTokensWhenUsagePromptMiss
 	usage, newAPIError := GeminiTextGenerationHandler(c, info, resp)
 	require.Nil(t, newAPIError)
 	require.NotNil(t, usage)
-	require.Equal(t, 20, usage.PromptTokens)
+	require.Equal(t, 0, usage.PromptTokens)
 	require.Equal(t, 100, usage.CompletionTokens)
 	require.Equal(t, 110, usage.TotalTokens)
 }

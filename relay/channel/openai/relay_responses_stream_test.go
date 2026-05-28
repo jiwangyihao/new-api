@@ -60,3 +60,31 @@ func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing
 	assert.True(t, info.StreamStatus.IsNormalEnd())
 	assert.False(t, info.StreamStatus.HasErrors())
 }
+
+func TestOaiResponsesStreamHandlerDoesNotEstimatePromptTokens(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.completed","response":{"usage":{"output_tokens":2,"total_tokens":2},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:  &relaycommon.ChannelMeta{},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 0, usage.PromptTokens)
+	assert.Equal(t, 2, usage.CompletionTokens)
+	assert.Equal(t, 2, usage.TotalTokens)
+}

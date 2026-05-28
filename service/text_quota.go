@@ -173,11 +173,7 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 	summary.IsClaudeUsageSemantic = summary.UsageSemantic == "anthropic"
 
 	if usage == nil {
-		usage = &dto.Usage{
-			PromptTokens:     relayInfo.GetEstimatePromptTokens(),
-			CompletionTokens: 0,
-			TotalTokens:      relayInfo.GetEstimatePromptTokens(),
-		}
+		usage = &dto.Usage{}
 	}
 
 	summary.PromptTokens = usage.PromptTokens
@@ -355,25 +351,30 @@ func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens in
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
 	originUsage := usage
-	if usage == nil {
+	usageEstimated := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
+	usageUnavailable := usage == nil || usageEstimated
+	if usageUnavailable {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
-	if originUsage != nil {
+	if originUsage != nil && !usageEstimated {
 		ObserveChannelAffinityUsageCacheByRelayFormat(ctx, usage, relayInfo.GetFinalRequestRelayFormat())
 	}
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	usageEstimated := originUsage == nil
 	subscriptionTokens := SubscriptionMeteredTokens(usage)
-	if usageEstimated && subscriptionTokens == 0 {
-		subscriptionTokens = int64(summary.PromptTokens + summary.CompletionTokens)
+	if usageUnavailable {
+		summary.PromptTokens = 0
+		summary.CompletionTokens = 0
+		summary.TotalTokens = 0
+		summary.Quota = 0
+		subscriptionTokens = 0
 	}
 	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens, summary.Quota)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
-	if originUsage != nil {
+	if originUsage != nil && !usageUnavailable {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
@@ -441,6 +442,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	}
 	if usageEstimated {
 		other["usage_estimated"] = true
+	}
+	if usageUnavailable {
+		other["usage_unavailable"] = true
 	}
 	if adminRejectReason != "" {
 		other["reject_reason"] = adminRejectReason

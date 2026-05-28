@@ -54,12 +54,10 @@ func RerankHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 			}
 			jinaRespResults[i] = respResult
 		}
+		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		jinaResp = dto.RerankResponse{
 			Results: jinaRespResults,
-			Usage: dto.Usage{
-				PromptTokens: info.GetEstimatePromptTokens(),
-				TotalTokens:  info.GetEstimatePromptTokens(),
-			},
+			Usage:   dto.Usage{},
 		}
 	} else {
 		err = common.Unmarshal(responseBody, &jinaResp)

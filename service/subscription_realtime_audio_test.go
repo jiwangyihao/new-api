@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -93,6 +95,33 @@ func TestPostTextConsumeQuotaSettlesAudioChatWithSubscriptionTokens(t *testing.T
 
 	assert.Equal(t, int64(20), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "audio chat subscription settlement must not consume token key quota")
+}
+
+func TestPostTextConsumeQuotaDoesNotChargeExplicitLocalCountUsage(t *testing.T) {
+	truncate(t)
+	const userID = 8201
+	const tokenID = 8202
+	const planID = 8203
+	const subID = 8204
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-explicit-local-count", 10_000)
+	seedDistributorPlan(t, planID, "plan-explicit-local-count", 100)
+	seedDistributorSubscription(t, subID, userID, planID, 100, 0)
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-explicit-local-count", "req-explicit-local-count", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+	common.SetContextKey(ctx, constant.ContextKeyLocalCountTokens, true)
+
+	usage := &dto.Usage{PromptTokens: 6, CompletionTokens: 1, TotalTokens: 7}
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, usage, nil))
+
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, 0, log.Quota)
+	assert.Equal(t, 0, log.PromptTokens)
+	assert.Equal(t, 0, log.CompletionTokens)
 }
 
 func TestPostSettleErrorToOpenAIErrorPreventsRefundAfterDeliveredResponse(t *testing.T) {

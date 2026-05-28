@@ -28,6 +28,7 @@ type PublicSubscriptionPlan struct {
 	MonthlyTokenLimit int64   `json:"monthly_token_limit"`
 	ConcurrencyLimit  int     `json:"concurrency_limit"`
 	PublicVisible     bool    `json:"public_visible"`
+	QueueCapacity     int     `json:"queue_capacity"`
 }
 
 type PublicSubscriptionPlanDTO struct {
@@ -47,6 +48,7 @@ func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDT
 			CustomSeconds:     p.CustomSeconds,
 			MonthlyTokenLimit: p.MonthlyTokenLimit,
 			ConcurrencyLimit:  p.ConcurrencyLimit,
+			QueueCapacity:     p.QueueCapacity,
 			PublicVisible:     p.PublicVisible,
 		},
 	}
@@ -239,6 +241,10 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.UpgradeGroup = ""
+	if req.Plan.QueueCapacity < 0 {
+		common.ApiErrorMsg(c, "排队容量不能为负数")
+		return
+	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
@@ -293,6 +299,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.UpgradeGroup = ""
+	if req.Plan.QueueCapacity < 0 {
+		common.ApiErrorMsg(c, "排队容量不能为负数")
+		return
+	}
 	req.Plan.QuotaResetPeriod = model.NormalizeResetPeriod(req.Plan.QuotaResetPeriod)
 	if req.Plan.QuotaResetPeriod == model.SubscriptionResetCustom && req.Plan.QuotaResetCustomSeconds <= 0 {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
@@ -320,6 +330,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
 			"monthly_token_limit":        req.Plan.MonthlyTokenLimit,
 			"concurrency_limit":          req.Plan.ConcurrencyLimit,
+			"queue_capacity":             req.Plan.QueueCapacity,
 			"is_trial":                   req.Plan.IsTrial,
 			"invite_trial":               req.Plan.InviteTrial,
 			"public_visible":             req.Plan.PublicVisible,

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import type { SubscriptionPlan } from '../types'
 import {
   PLAN_FORM_DEFAULTS,
   formValuesToPlanPayload,
   planToFormValues,
   type PlanFormValues,
 } from './plan-form'
-import type { SubscriptionPlan } from '../types'
 
 describe('subscription plan distributor form mapping', () => {
   test('maps backend distributor fields into form values', () => {
@@ -24,6 +24,7 @@ describe('subscription plan distributor form mapping', () => {
       total_amount: 0,
       monthly_token_limit: 0,
       concurrency_limit: 1,
+      queue_capacity: 8,
       is_trial: true,
       public_visible: false,
       trial_duration_hours: 24,
@@ -36,6 +37,7 @@ describe('subscription plan distributor form mapping', () => {
 
     assert.equal(values.monthly_token_limit, 0)
     assert.equal(values.concurrency_limit, 1)
+    assert.equal(values.queue_capacity, 8)
     assert.equal(values.is_trial, true)
     assert.equal(values.public_visible, false)
     assert.equal(values.trial_duration_hours, 24)
@@ -51,6 +53,7 @@ describe('subscription plan distributor form mapping', () => {
       price_amount: 40,
       monthly_token_limit: 1_000_000_000,
       concurrency_limit: 1,
+      queue_capacity: 10,
       is_trial: false,
       public_visible: true,
       trial_duration_hours: 0,
@@ -63,6 +66,7 @@ describe('subscription plan distributor form mapping', () => {
 
     assert.equal(payload.plan.monthly_token_limit, 1_000_000_000)
     assert.equal(payload.plan.concurrency_limit, 1)
+    assert.equal(payload.plan.queue_capacity, 10)
     assert.equal(payload.plan.is_trial, false)
     assert.equal(payload.plan.public_visible, true)
     assert.equal(payload.plan.trial_duration_hours, 0)

@@ -187,6 +187,7 @@ type SubscriptionPlan struct {
 
 	MonthlyTokenLimit  int64   `json:"monthly_token_limit" gorm:"type:bigint;not null;default:0"`
 	ConcurrencyLimit   int     `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
+	QueueCapacity      int     `json:"queue_capacity" gorm:"type:int;not null;default:0"`
 	IsTrial            bool    `json:"is_trial" gorm:"default:false"`
 	InviteTrial        bool    `json:"invite_trial" gorm:"default:false"`
 	PublicVisible      bool    `json:"public_visible" gorm:"default:true"`
@@ -310,6 +311,7 @@ type PublicUserSubscription struct {
 	TokenLimit        int64  `json:"token_limit"`
 	TokenUsed         int64  `json:"token_used"`
 	ConcurrencyLimit  int    `json:"concurrency_limit"`
+	QueueCapacity     int    `json:"queue_capacity"`
 	GrantReason       string `json:"grant_reason"`
 	GrantSourceUserId int    `json:"grant_source_user_id"`
 	StartTime         int64  `json:"start_time"`
@@ -344,6 +346,7 @@ type SelfSubscriptionSummary struct {
 	TokenRemaining       int64  `json:"token_remaining"`
 	TokenUnlimited       bool   `json:"token_unlimited"`
 	ConcurrencyLimit     int    `json:"concurrency_limit"`
+	QueueCapacity        int    `json:"queue_capacity"`
 	NextResetTime        int64  `json:"next_reset_time,omitempty"`
 	EndTime              int64  `json:"end_time,omitempty"`
 }
@@ -918,7 +921,8 @@ func toPublicUserSubscription(sub *UserSubscription, plan *SubscriptionPlan, act
 		AmountUsed:        sub.AmountUsed,
 		TokenLimit:        sub.TokenLimit,
 		TokenUsed:         sub.TokenUsed,
-		ConcurrencyLimit:  sub.ConcurrencyLimit,
+		ConcurrencyLimit:  livePlanConcurrencyLimit(sub, plan),
+		QueueCapacity:     livePlanQueueCapacity(plan),
 		GrantReason:       sub.GrantReason,
 		GrantSourceUserId: sub.GrantSourceUserId,
 		StartTime:         sub.StartTime,
@@ -1020,6 +1024,7 @@ type SubscriptionPreConsumeResult struct {
 	TokenRemaining          int64
 	DistributorTokenBilling bool
 	ConcurrencyLimit        int
+	QueueCapacity           int
 	PlanId                  int
 	PlanTitle               string
 }
@@ -1098,7 +1103,7 @@ func isDistributorSubscription(sub *UserSubscription, plan *SubscriptionPlan) bo
 	if sub == nil {
 		return false
 	}
-	if sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 {
+	if sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 || (plan != nil && plan.ConcurrencyLimit > 0) {
 		return true
 	}
 	if plan != nil && plan.BusinessCode != nil && strings.TrimSpace(*plan.BusinessCode) != "" {
@@ -1253,7 +1258,12 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 	}
 	sub.AmountUsed = usage.AmountUsed
 	sub.TokenUsed = usage.TokenUsed
-	if ok, unlimited := isBillableSubscriptionCandidate(&sub, selection.Plan, requiredTokens); !ok {
+	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
+	if err != nil {
+		return nil, false
+	}
+	selection.Plan = plan
+	if ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens); !ok {
 		return nil, false
 	} else {
 		selection.TokenUnlimited = unlimited
@@ -1408,7 +1418,8 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 		} else if sub.TokenLimit > sub.TokenUsed {
 			summary.TokenRemaining = sub.TokenLimit - sub.TokenUsed
 		}
-		summary.ConcurrencyLimit = sub.ConcurrencyLimit
+		summary.ConcurrencyLimit = livePlanConcurrencyLimit(&sub, selection.Plan)
+		summary.QueueCapacity = livePlanQueueCapacity(selection.Plan)
 		summary.NextResetTime = sub.NextResetTime
 		summary.EndTime = sub.EndTime
 		return nil
@@ -1449,7 +1460,8 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.AmountUsedBefore = amountBefore
 	result.AmountUsedAfter = sub.AmountUsed
 	result.TokenLimit = sub.TokenLimit
-	result.ConcurrencyLimit = sub.ConcurrencyLimit
+	result.ConcurrencyLimit = livePlanConcurrencyLimit(sub, plan)
+	result.QueueCapacity = livePlanQueueCapacity(plan)
 	result.TokenUsedBefore = tokenBefore
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor
@@ -1464,6 +1476,23 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 		}
 		result.TokenRemaining = remaining
 	}
+}
+
+func livePlanConcurrencyLimit(sub *UserSubscription, plan *SubscriptionPlan) int {
+	if plan != nil {
+		return plan.ConcurrencyLimit
+	}
+	if sub != nil {
+		return sub.ConcurrencyLimit
+	}
+	return 0
+}
+
+func livePlanQueueCapacity(plan *SubscriptionPlan) int {
+	if plan != nil {
+		return plan.QueueCapacity
+	}
+	return 0
 }
 func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
 	if tx == nil || sub == nil || plan == nil {

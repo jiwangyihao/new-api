@@ -41,6 +41,7 @@ export const subscriptionPlanSchema = z.object({
   creem_product_id: z.string().optional(),
   monthly_token_limit: z.number().optional(),
   concurrency_limit: z.number().optional(),
+  queue_capacity: z.number().optional(),
   is_trial: z.boolean().optional(),
   invite_trial: z.boolean().optional(),
   public_visible: z.boolean().optional(),
@@ -66,6 +67,7 @@ export interface PublicSubscriptionPlan {
   custom_seconds: number
   monthly_token_limit: number
   concurrency_limit: number
+  queue_capacity: number
   public_visible: boolean
 }
 
@@ -91,6 +93,7 @@ export const userSubscriptionSchema = z.object({
   token_used: z.number().optional(),
   token_limit: z.number().optional(),
   concurrency_limit: z.number().optional(),
+  queue_capacity: z.number().optional(),
   grant_reason: z.string().optional(),
   grant_source_user_id: z.number().optional(),
   effective_end_time: z.number().optional(),
@@ -145,7 +148,8 @@ export interface SubscriptionOrderRecord {
   provider_payload: string
 }
 
-export type SubscriptionBalancePayResponse = ApiResponse<SubscriptionOrderRecord>
+export type SubscriptionBalancePayResponse =
+  ApiResponse<SubscriptionOrderRecord>
 
 export interface SubscriptionPayResponse {
   success: boolean
@@ -176,6 +180,7 @@ export interface SelfSubscriptionSummary {
   token_remaining: number
   token_unlimited: boolean
   concurrency_limit: number
+  queue_capacity?: number
   next_reset_time?: number
   end_time?: number
 }

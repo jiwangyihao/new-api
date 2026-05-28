@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { formatConcurrencyLimit, formatPlanPrice, formatTokenLimit } from './format'
+import {
+  formatConcurrencyLimit,
+  formatPlanPrice,
+  formatQueueCapacity,
+  formatTokenLimit,
+} from './format'
 
 const t = (key: string, values?: Record<string, unknown>) =>
-  key.replace(/{{(\w+)}}/g, (_match, name: string) => String(values?.[name] ?? ''))
+  key.replace(/{{(\w+)}}/g, (_match, name: string) =>
+    String(values?.[name] ?? '')
+  )
 
 describe('subscription distributor format helpers', () => {
   test('formats zero monthly token limit as unlimited tokens', () => {
@@ -18,6 +25,11 @@ describe('subscription distributor format helpers', () => {
   test('formats concurrency limit with unlimited fallback', () => {
     assert.equal(formatConcurrencyLimit(0, t), 'Unlimited concurrency')
     assert.equal(formatConcurrencyLimit(5, t), '5 concurrent requests')
+  })
+
+  test('formats queue capacity with global fallback', () => {
+    assert.equal(formatQueueCapacity(0, t), 'Use global queue capacity')
+    assert.equal(formatQueueCapacity(12, t), '12 queued requests')
   })
 
   test('formats plan prices by plan currency', () => {

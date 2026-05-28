@@ -32,6 +32,7 @@
   "OhMyGPT": "OhMyGPT",
   "Ollama": "Ollama",
   "OpenAI": "OpenAI",
+  "OpenAI Responses (/v1/responses)": "OpenAI Responses (/v1/responses)",
   "OpenAIMax": "OpenAIMax",
   "OpenRouter": "OpenRouter",
   "Passkey": "Passkey",
@@ -90,6 +91,5 @@
   "price_xxx": "price_xxx",
   "smtp.example.com": "smtp.example.com",
   "socks5://user:pass@host:port": "socks5://user:pass@host:port",
-  "whsec_xxx": "whsec_xxx",
-  "OpenAI Responses (/v1/responses)": "OpenAI Responses (/v1/responses)"
+  "whsec_xxx": "whsec_xxx"
 }

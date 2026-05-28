@@ -86,6 +86,7 @@ type SubscriptionFunding struct {
 	PlanId                  int
 	PlanTitle               string
 	concurrencyLimit        int
+	queueCapacity           int
 }
 
 func (s *SubscriptionFunding) ConcurrencyLimit() int {
@@ -98,6 +99,12 @@ func (s *SubscriptionFunding) ConcurrencyLimit() int {
 	return 0
 }
 
+func (s *SubscriptionFunding) QueueCapacity() int {
+	if s == nil || !s.DistributorTokenBilling {
+		return 0
+	}
+	return s.queueCapacity
+}
 func (s *SubscriptionFunding) Source() string { return BillingSourceSubscription }
 
 func (s *SubscriptionFunding) PreConsume(_ int) error {
@@ -114,6 +121,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.TokenUsedAfter = res.TokenUsedAfter
 	s.DistributorTokenBilling = res.DistributorTokenBilling
 	s.concurrencyLimit = res.ConcurrencyLimit
+	s.queueCapacity = res.QueueCapacity
 	s.TokenRemaining = res.TokenRemaining
 	s.PlanId = res.PlanId
 	s.PlanTitle = res.PlanTitle

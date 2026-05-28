@@ -39,6 +39,7 @@
   "Ollama": "Ollama",
   "One API": "One API",
   "OpenAI": "OpenAI",
+  "OpenAI Responses (/v1/responses)": "OpenAI Responses (/v1/responses)",
   "OpenAIMax": "OpenAIMax",
   "OpenRouter": "OpenRouter",
   "Passkey": "Passkey",
@@ -101,6 +102,5 @@
   "socks5://user:pass@host:port": "socks5://user:pass@host:port",
   "usageAnalytics.groupBy.token": "API Key",
   "whsec_xxx": "whsec_xxx",
-  "{\"original-model\": \"replacement-model\"}": "{\"original-model\": \"replacement-model\"}",
-  "OpenAI Responses (/v1/responses)": "OpenAI Responses (/v1/responses)"
+  "{\"original-model\": \"replacement-model\"}": "{\"original-model\": \"replacement-model\"}"
 }

@@ -335,6 +335,32 @@ export function SubscriptionsMutateDrawer({
 
                 <FormField
                   control={form.control}
+                  name='queue_capacity'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('Queue Capacity')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min={0}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('0 means use global queue capacity')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+                <FormField
+                  control={form.control}
                   name='business_code'
                   render={({ field }) => (
                     <FormItem>
@@ -392,7 +418,6 @@ export function SubscriptionsMutateDrawer({
               </div>
 
               <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
-
                 <FormField
                   control={form.control}
                   name='public_visible'
@@ -404,11 +429,12 @@ export function SubscriptionsMutateDrawer({
                           onCheckedChange={field.onChange}
                         />
                       </FormControl>
-                      <FormLabel className='!mt-0'>{t('Public Visible')}</FormLabel>
+                      <FormLabel className='!mt-0'>
+                        {t('Public Visible')}
+                      </FormLabel>
                     </FormItem>
                   )}
                 />
-
               </div>
 
               <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>

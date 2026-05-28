@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -40,6 +41,7 @@ func newConcurrencyRelayInfoForTest(limit int) *relaycommon.RelayInfo {
 			preConsumed:             1,
 			DistributorTokenBilling: true,
 			concurrencyLimit:        limit,
+			queueCapacity:           0,
 		}},
 	}
 }
@@ -74,6 +76,48 @@ func TestAcquireSubscriptionConcurrencyReturns429WhenExceeded(t *testing.T) {
 	})
 	require.NotNil(t, apiErr)
 	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+}
+
+func TestAcquireSubscriptionConcurrencyUsesSubscriptionQueueCapacity(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	common.SubscriptionConcurrencyQueueCapacity = 0
+	relayInfo := newConcurrencyRelayInfoForTest(1)
+	relayInfo.RequestId = "req-queue-capacity-1"
+	lease, apiErr := AcquireSubscriptionConcurrency(context.Background(), relayInfo)
+	require.Nil(t, apiErr)
+
+	queuedDone := make(chan *types.NewAPIError, 1)
+	go func() {
+		_, err := AcquireSubscriptionConcurrency(context.Background(), &relaycommon.RelayInfo{
+			BillingSource: BillingSourceSubscription,
+			RelayMode:     relayconstant.RelayModeChatCompletions,
+			UserId:        1,
+			RequestId:     "req-queue-capacity-2",
+			Billing: &BillingSession{funding: &SubscriptionFunding{
+				subscriptionId:          2,
+				preConsumed:             1,
+				DistributorTokenBilling: true,
+				concurrencyLimit:        1,
+				queueCapacity:           1,
+			}},
+		})
+		queuedDone <- err
+	}()
+
+	select {
+	case err := <-queuedDone:
+		require.Nil(t, err)
+		t.Fatal("queued request acquired before active lease release")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	require.NoError(t, lease.Release(context.Background()))
+	select {
+	case err := <-queuedDone:
+		require.Nil(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("queued request did not acquire after active lease release")
+	}
 }
 
 func TestAcquireSubscriptionConcurrencyReturns503WhenUnavailable(t *testing.T) {

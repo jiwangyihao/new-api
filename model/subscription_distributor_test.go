@@ -45,6 +45,47 @@ func TestCreateUserSubscriptionFromPlanTx_DistributorSnapshot(t *testing.T) {
 	assert.Equal(t, "order", sub.GrantReason)
 }
 
+func TestPreConsumeUserSubscriptionUsesLivePlanConcurrencyAndQueueCapacity(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	realTimeCode := "realtime-plan-limits"
+	require.NoError(t, DB.Create(&User{Id: 7102, Username: "realtime_plan_user", Status: common.UserStatusEnabled, AffCode: "aff7102"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7202, Title: "Realtime", Enabled: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, QueueCapacity: 2, BusinessCode: &realTimeCode}).Error)
+	staleSub := &UserSubscription{Id: 7203, UserId: 7102, PlanId: 7202, Status: "active", TokenLimit: 1000, TokenUsed: 0, ConcurrencyLimit: 99, EndTime: common.GetTimestamp() + 3600, GrantReason: "order"}
+	require.NoError(t, DB.Create(staleSub).Error)
+
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", 7202).Updates(map[string]any{"concurrency_limit": 7, "queue_capacity": 13}).Error)
+	InvalidateSubscriptionPlanCache(7202)
+
+	pre, err := PreConsumeUserSubscription("live-plan-limits", 7102, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7203, pre.UserSubscriptionId)
+	assert.Equal(t, 7, pre.ConcurrencyLimit)
+	assert.Equal(t, 13, pre.QueueCapacity)
+}
+
+func TestPreConsumeUserSubscriptionRefreshesPlanLimitsWhenPrimarySelectionCached(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	realTimeCode := "cached-plan-limits"
+	require.NoError(t, DB.Create(&User{Id: 7103, Username: "cached_plan_user", Status: common.UserStatusEnabled, AffCode: "aff7103"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7204, Title: "Cached", Enabled: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 2, QueueCapacity: 3, BusinessCode: &realTimeCode}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7205, UserId: 7103, PlanId: 7204, Status: "active", TokenLimit: 1000, TokenUsed: 0, ConcurrencyLimit: 99, EndTime: common.GetTimestamp() + 3600, GrantReason: "order"}).Error)
+
+	first, err := PreConsumeUserSubscription("cached-plan-limits-first", 7103, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 2, first.ConcurrencyLimit)
+	assert.Equal(t, 3, first.QueueCapacity)
+
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", 7204).Updates(map[string]any{"concurrency_limit": 8, "queue_capacity": 21}).Error)
+	InvalidateSubscriptionPlanCache(7204)
+
+	second, err := PreConsumeUserSubscription("cached-plan-limits-second", 7103, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 8, second.ConcurrencyLimit)
+	assert.Equal(t, 21, second.QueueCapacity)
+}
+
 func TestCreateUserSubscriptionFromPlanTx_RejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7301, Username: "extend_user", Status: common.UserStatusEnabled}).Error)

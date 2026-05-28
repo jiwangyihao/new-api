@@ -23,6 +23,7 @@ import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import {
   formatConcurrencyLimit,
+  formatQueueCapacity,
   formatPlanPrice,
   formatDuration,
   formatResetPeriod,
@@ -203,6 +204,19 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
         cell: ({ row }) => (
           <span className='text-muted-foreground'>
             {formatConcurrencyLimit(row.original.plan.concurrency_limit, t)}
+          </span>
+        ),
+        size: 140,
+      },
+      {
+        id: 'queue_capacity',
+        meta: { label: t('Queue Capacity'), mobileHidden: true },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} title={t('Queue Capacity')} />
+        ),
+        cell: ({ row }) => (
+          <span className='text-muted-foreground'>
+            {formatQueueCapacity(row.original.plan.queue_capacity, t)}
           </span>
         ),
         size: 140,

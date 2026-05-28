@@ -95,6 +95,14 @@ export function formatConcurrencyLimit(
   return t('{{count}} concurrent requests', { count: limit })
 }
 
+export function formatQueueCapacity(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const capacity = Number(value || 0)
+  if (capacity <= 0) return t('Use global queue capacity')
+  return t('{{count}} queued requests', { count: capacity })
+}
 export function formatPlanPrice(
   amount: number | null | undefined,
   currency: string | null | undefined = 'CNY'
@@ -107,7 +115,10 @@ export function formatPlanPrice(
 
 function formatCompactNumber(value: number): string {
   if (Number.isInteger(value)) return String(value)
-  return value.toFixed(2).replace(/\.0+$/, '').replace(/(\.\d*[1-9])0+$/, '$1')
+  return value
+    .toFixed(2)
+    .replace(/\.0+$/, '')
+    .replace(/(\.\d*[1-9])0+$/, '$1')
 }
 
 export function formatTimestamp(ts: number): string {

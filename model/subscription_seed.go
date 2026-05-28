@@ -16,6 +16,7 @@ type distributorDefaultPlan struct {
 	MonthlyTokenLimit  int64
 	ConcurrencyLimit   int
 	IsTrial            bool
+	QueueCapacity      int
 	PublicVisible      bool
 	TrialDurationHours int
 	RewardEligible     bool
@@ -24,11 +25,11 @@ type distributorDefaultPlan struct {
 }
 
 var distributorDefaultPlans = []distributorDefaultPlan{
-	{BusinessCode: "trial_24h", Title: "试用装可乐", PriceAmount: 0, Currency: "CNY", DurationUnit: SubscriptionDurationHour, DurationValue: 24, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, IsTrial: true, PublicVisible: false, TrialDurationHours: 24, RewardEligible: false, SortOrder: 1000, QuotaResetPeriod: SubscriptionResetNever},
-	{BusinessCode: "basic_monthly", Title: "Basic", PriceAmount: 40, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1_000_000_000, ConcurrencyLimit: 1, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 900, QuotaResetPeriod: SubscriptionResetMonthly},
-	{BusinessCode: "standard_monthly", Title: "Standard", PriceAmount: 80, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2_000_000_000, ConcurrencyLimit: 5, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 800, QuotaResetPeriod: SubscriptionResetMonthly},
-	{BusinessCode: "pro_monthly", Title: "Pro", PriceAmount: 160, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 5_000_000_000, ConcurrencyLimit: 10, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 700, QuotaResetPeriod: SubscriptionResetMonthly},
-	{BusinessCode: "max_monthly", Title: "Max", PriceAmount: 660, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 10_000_000_000, ConcurrencyLimit: 50, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 600, QuotaResetPeriod: SubscriptionResetMonthly},
+	{BusinessCode: "trial_24h", Title: "试用装可乐", PriceAmount: 0, Currency: "CNY", DurationUnit: SubscriptionDurationHour, DurationValue: 24, MonthlyTokenLimit: 0, ConcurrencyLimit: 1, QueueCapacity: 0, IsTrial: true, PublicVisible: false, TrialDurationHours: 24, RewardEligible: false, SortOrder: 1000, QuotaResetPeriod: SubscriptionResetNever},
+	{BusinessCode: "basic_monthly", Title: "Basic", PriceAmount: 40, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1_000_000_000, ConcurrencyLimit: 1, QueueCapacity: 10, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 900, QuotaResetPeriod: SubscriptionResetMonthly},
+	{BusinessCode: "standard_monthly", Title: "Standard", PriceAmount: 80, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2_000_000_000, ConcurrencyLimit: 5, QueueCapacity: 25, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 800, QuotaResetPeriod: SubscriptionResetMonthly},
+	{BusinessCode: "pro_monthly", Title: "Pro", PriceAmount: 160, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 5_000_000_000, ConcurrencyLimit: 10, QueueCapacity: 50, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 700, QuotaResetPeriod: SubscriptionResetMonthly},
+	{BusinessCode: "max_monthly", Title: "Max", PriceAmount: 660, Currency: "CNY", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 10_000_000_000, ConcurrencyLimit: 50, QueueCapacity: 200, IsTrial: false, PublicVisible: true, TrialDurationHours: 0, RewardEligible: true, SortOrder: 600, QuotaResetPeriod: SubscriptionResetMonthly},
 }
 
 func migrateLegacyTrialPlanTitle() error {
@@ -60,6 +61,7 @@ func EnsureDistributorDefaultPlans() error {
 				SortOrder:          seed.SortOrder,
 				MonthlyTokenLimit:  seed.MonthlyTokenLimit,
 				ConcurrencyLimit:   seed.ConcurrencyLimit,
+				QueueCapacity:      seed.QueueCapacity,
 				IsTrial:            seed.IsTrial,
 				PublicVisible:      seed.PublicVisible,
 				TrialDurationHours: seed.TrialDurationHours,
@@ -67,7 +69,7 @@ func EnsureDistributorDefaultPlans() error {
 				BusinessCode:       &businessCode,
 				QuotaResetPeriod:   seed.QuotaResetPeriod,
 			}
-			if err := tx.Select("Title", "PriceAmount", "Currency", "DurationUnit", "DurationValue", "Enabled", "SortOrder", "MonthlyTokenLimit", "ConcurrencyLimit", "IsTrial", "PublicVisible", "TrialDurationHours", "RewardEligible", "BusinessCode", "QuotaResetPeriod").Create(plan).Error; err != nil {
+			if err := tx.Select("Title", "PriceAmount", "Currency", "DurationUnit", "DurationValue", "Enabled", "SortOrder", "MonthlyTokenLimit", "ConcurrencyLimit", "QueueCapacity", "IsTrial", "PublicVisible", "TrialDurationHours", "RewardEligible", "BusinessCode", "QuotaResetPeriod").Create(plan).Error; err != nil {
 				return err
 			}
 			if err := tx.Model(plan).Updates(map[string]any{"is_trial": seed.IsTrial, "public_visible": seed.PublicVisible, "reward_eligible": seed.RewardEligible}).Error; err != nil {

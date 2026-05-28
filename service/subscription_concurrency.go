@@ -224,10 +224,16 @@ return 1
 `
 
 func AcquireUserConcurrency(ctx context.Context, userId int, requestId string, limit int) (ConcurrencyLease, error) {
+	return AcquireUserConcurrencyWithQueueCapacity(ctx, userId, requestId, limit, common.SubscriptionConcurrencyQueueCapacity)
+}
+
+func AcquireUserConcurrencyWithQueueCapacity(ctx context.Context, userId int, requestId string, limit int, queueCapacity int) (ConcurrencyLease, error) {
 	if limit <= 0 || userId <= 0 || requestId == "" {
 		return noopConcurrencyLease{}, nil
 	}
-	queueCapacity := common.SubscriptionConcurrencyQueueCapacity
+	if queueCapacity <= 0 {
+		queueCapacity = common.SubscriptionConcurrencyQueueCapacity
+	}
 	if common.RedisEnabled {
 		return acquireRedisUserConcurrency(ctx, userId, requestId, limit, queueCapacity)
 	}
@@ -382,7 +388,7 @@ func AcquireSubscriptionConcurrency(ctx context.Context, relayInfo *relaycommon.
 	if limit <= 0 {
 		return noopConcurrencyLease{}, nil
 	}
-	lease, err := AcquireUserConcurrency(ctx, relayInfo.UserId, relayInfo.RequestId, limit)
+	lease, err := AcquireUserConcurrencyWithQueueCapacity(ctx, relayInfo.UserId, relayInfo.RequestId, limit, session.SubscriptionQueueCapacity())
 	if err == nil {
 		return lease, nil
 	}

@@ -197,6 +197,39 @@ func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *test
 	assert.Equal(t, at.Add(20*24*time.Hour).Unix(), readStatus.EntitlementEndTime)
 }
 
+func TestMonthlyInvitationEntitlementNextResetUsesShanghaiNaturalMonth(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 1651, 1652, 1653)
+	plan := seedInvitationRewardPlan(t, 2651, "standard_monthly", true)
+	require.NoError(t, model.DB.Model(plan).Update("quota_reset_period", model.SubscriptionResetMonthly).Error)
+	end := time.Date(2026, 7, 10, 0, 0, 0, 0, time.UTC).Unix()
+	seedPaidInviteeSubscriptionWithEnd(t, 1652, plan.Id, at, end)
+	seedPaidInviteeSubscriptionWithEnd(t, 1653, plan.Id, at, end)
+
+	status, err := EnsureMonthlyInvitationEntitlement(1651, at)
+
+	require.NoError(t, err)
+	require.True(t, status.Entitled)
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.First(&sub, status.RewardSubscriptionId).Error)
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, shanghai).Unix(), sub.NextResetTime)
+}
+
+func TestNextInvitationEntitlementRefreshAtUsesShanghaiMidnight(t *testing.T) {
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+
+	got := nextInvitationEntitlementRefreshAt(time.Date(2026, 5, 28, 15, 30, 0, 0, time.UTC))
+	assert.Equal(t, time.Date(2026, 5, 29, 0, 0, 0, 0, shanghai).Unix(), got.Unix())
+
+	got = nextInvitationEntitlementRefreshAt(time.Date(2026, 5, 28, 16, 0, 0, 0, time.UTC))
+	assert.Equal(t, time.Date(2026, 5, 30, 0, 0, 0, 0, shanghai).Unix(), got.Unix())
+}
+
 func TestMonthlyInvitationEntitlementSelectsHighestQualifiedPaidTierAndDowngrade(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))

@@ -2,8 +2,10 @@ package service
 
 import (
 	"errors"
+	"fmt"
 	"sort"
-	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,8 +14,14 @@ import (
 )
 
 const (
-	monthlyInviteEntitlementReason = "monthly_invite_entitlement"
-	monthlyInviteQualifiedCount    = 2
+	monthlyInviteEntitlementReason      = "monthly_invite_entitlement"
+	monthlyInviteQualifiedCount         = 2
+	invitationEntitlementSweepBatchSize = 300
+)
+
+var (
+	invitationEntitlementRefreshOnce    sync.Once
+	invitationEntitlementRefreshRunning atomic.Bool
 )
 
 type InvitationEntitlementStatus struct {
@@ -169,7 +177,7 @@ func RunMonthlyInvitationEntitlementSweep(at time.Time, limit int) (int, error) 
 	if at.IsZero() {
 		at = time.Now()
 	}
-	query := model.DB.Model(&model.User{}).Where("inviter_id > 0").Distinct("inviter_id")
+	query := model.DB.Model(&model.User{}).Where("inviter_id > 0").Distinct("inviter_id").Order("inviter_id asc")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
@@ -183,6 +191,55 @@ func RunMonthlyInvitationEntitlementSweep(at time.Time, limit int) (int, error) 
 		}
 	}
 	return len(inviterIds), nil
+}
+
+func StartInvitationEntitlementRefreshTask() {
+	invitationEntitlementRefreshOnce.Do(func() {
+		if !common.IsMasterNode {
+			return
+		}
+
+		go func() {
+			common.SysLog("invitation entitlement refresh task started")
+			for {
+				next := nextInvitationEntitlementRefreshAt(time.Now())
+				timer := time.NewTimer(time.Until(next))
+				<-timer.C
+				runInvitationEntitlementRefreshOnce()
+			}
+		}()
+	})
+}
+
+func runInvitationEntitlementRefreshOnce() {
+	if !invitationEntitlementRefreshRunning.CompareAndSwap(false, true) {
+		return
+	}
+	defer invitationEntitlementRefreshRunning.Store(false)
+
+	processed := 0
+	for {
+		n, err := RunMonthlyInvitationEntitlementSweep(time.Now(), invitationEntitlementSweepBatchSize)
+		if err != nil {
+			common.SysError(fmt.Sprintf("invitation entitlement refresh failed: %v", err))
+			return
+		}
+		processed += n
+		if n < invitationEntitlementSweepBatchSize {
+			break
+		}
+	}
+	common.SysLog(fmt.Sprintf("invitation entitlement refresh finished: processed=%d", processed))
+}
+
+func nextInvitationEntitlementRefreshAt(now time.Time) time.Time {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	local := now.In(loc)
+	next := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, loc)
+	return next
 }
 
 func countDirectInviteesTx(tx *gorm.DB, inviterId int) (int, error) {
@@ -395,25 +452,36 @@ func calcInvitationRewardNextResetTime(now int64, plan *model.SubscriptionPlan, 
 	if plan == nil || endTime <= now {
 		return 0
 	}
-	if plan.QuotaResetPeriod == model.SubscriptionResetNever || strings.TrimSpace(plan.QuotaResetPeriod) == "" {
+	period := model.NormalizeResetPeriod(plan.QuotaResetPeriod)
+	if period == model.SubscriptionResetNever {
 		return 0
 	}
-	resetTime := now
-	switch plan.QuotaResetPeriod {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	base := time.Unix(now, 0).In(loc)
+	var reset time.Time
+	switch period {
 	case model.SubscriptionResetDaily:
-		resetTime += 86400
+		reset = time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, loc)
 	case model.SubscriptionResetWeekly:
-		resetTime += 7 * 86400
+		weekday := int(base.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		reset = time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 8-weekday)
 	case model.SubscriptionResetMonthly:
-		resetTime = time.Unix(now, 0).AddDate(0, 1, 0).Unix()
+		reset = time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, loc)
 	case model.SubscriptionResetCustom:
 		if plan.QuotaResetCustomSeconds <= 0 {
 			return 0
 		}
-		resetTime += plan.QuotaResetCustomSeconds
+		reset = time.Unix(now+plan.QuotaResetCustomSeconds, 0)
 	default:
 		return 0
 	}
+	resetTime := reset.Unix()
 	if resetTime > endTime {
 		return endTime
 	}

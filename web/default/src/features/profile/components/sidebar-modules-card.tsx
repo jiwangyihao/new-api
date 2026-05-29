@@ -154,7 +154,19 @@ export function SidebarModulesCard() {
         {
           key: 'subscription',
           title: t('Subscription Plans'),
-          description: t('Manage subscription plan creation, pricing and status'),
+          description: t(
+            'Manage subscription plan creation, pricing and status'
+          ),
+        },
+        {
+          key: 'analytics',
+          title: t('adminAnalytics.title'),
+          description: t('adminAnalytics.description'),
+        },
+        {
+          key: 'ops',
+          title: t('adminOps.title'),
+          description: t('adminOps.description'),
         },
         {
           key: 'user',

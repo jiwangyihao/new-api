@@ -110,10 +110,16 @@ func Query(params QueryParams) (QueryResult, error) {
 		return true
 	})
 
+	mergeRedisActiveBuckets(merged, params, startTs, endTs)
+
 	return buildQueryResult(params.Model, merged), nil
 }
 
 func QuerySummaryAll(hours int) (SummaryAllResult, error) {
+	return querySummaryAllWithRedisReader(hours, livePerfMetricsRedisReader{})
+}
+
+func querySummaryAllWithRedisReader(hours int, reader perfMetricsRedisReader) (SummaryAllResult, error) {
 	if hours <= 0 {
 		hours = 24
 	}
@@ -130,15 +136,19 @@ func QuerySummaryAll(hours int) (SummaryAllResult, error) {
 
 	totals := map[string]counters{}
 	for _, row := range rows {
-		totals[row.ModelName] = counters{
+		mergeSummaryCounter(totals, row.ModelName, counters{
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
+			ttftSumMs:      row.TtftSumMs,
+			ttftCount:      row.TtftCount,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
-		}
+		})
 	}
 
+	activeBucketTs := bucketStart(time.Now().Unix())
+	localActiveModels := map[string]struct{}{}
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
 		if k.bucketTs < startTs || k.bucketTs > endTs {
@@ -148,40 +158,53 @@ func QuerySummaryAll(hours int) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
-		cur := totals[k.model]
-		cur.requestCount += snap.requestCount
-		cur.successCount += snap.successCount
-		cur.totalLatencyMs += snap.totalLatencyMs
-		cur.outputTokens += snap.outputTokens
-		cur.generationMs += snap.generationMs
-		totals[k.model] = cur
+		mergeSummaryCounter(totals, k.model, snap)
+		if k.bucketTs == activeBucketTs {
+			localActiveModels[k.model] = struct{}{}
+		}
 		return true
 	})
+
+	mergeRedisActiveSummary(totals, localActiveModels, reader, startTs, endTs)
 
 	models := make([]ModelSummary, 0, len(totals))
 	for name, total := range totals {
 		if total.requestCount == 0 {
 			continue
 		}
-		avgLatency := total.totalLatencyMs / total.requestCount
-		successRate := float64(total.successCount) / float64(total.requestCount) * 100
-		avgTps := 0.0
-		if total.generationMs > 0 {
-			avgTps = float64(total.outputTokens) / (float64(total.generationMs) / 1000.0)
-		}
-		models = append(models, ModelSummary{
-			ModelName:    name,
-			AvgLatencyMs: avgLatency,
-			SuccessRate:  math.Round(successRate*100) / 100,
-			AvgTps:       math.Round(avgTps*100) / 100,
-			RequestCount: total.requestCount,
-		})
+		models = append(models, buildModelSummary(name, total))
 	}
 	sort.Slice(models, func(i, j int) bool {
 		return models[i].RequestCount > models[j].RequestCount
 	})
 
 	return SummaryAllResult{Models: models}, nil
+}
+
+func buildModelSummary(modelName string, total counters) ModelSummary {
+	return ModelSummary{
+		ModelName:    modelName,
+		AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
+		AvgTtftMs:    avg(total.ttftSumMs, total.ttftCount),
+		SuccessRate:  math.Round(successRate(total)*100) / 100,
+		AvgTps:       math.Round(avgTps(total)*100) / 100,
+		RequestCount: total.requestCount,
+	}
+}
+
+func mergeSummaryCounter(totals map[string]counters, modelName string, value counters) {
+	if value.requestCount == 0 || modelName == "" {
+		return
+	}
+	cur := totals[modelName]
+	cur.requestCount += value.requestCount
+	cur.successCount += value.successCount
+	cur.totalLatencyMs += value.totalLatencyMs
+	cur.ttftSumMs += value.ttftSumMs
+	cur.ttftCount += value.ttftCount
+	cur.outputTokens += value.outputTokens
+	cur.generationMs += value.generationMs
+	totals[modelName] = cur
 }
 
 func bucketStart(ts int64) int64 {
@@ -305,6 +328,70 @@ func recordRedis(key bucketKey, sample Sample) {
 	}
 	pipe.Expire(ctx, redisKey, time.Hour)
 	_, _ = pipe.Exec(ctx)
+
+	pipe = common.RDB.TxPipeline()
+	pipe.SAdd(ctx, perfMetricsActiveModelsKey(), key.model)
+	pipe.Expire(ctx, perfMetricsActiveModelsKey(), time.Hour)
+	_, _ = pipe.Exec(ctx)
+}
+
+type perfMetricsRedisReader interface {
+	HGetAll(ctx context.Context, key string) (map[string]string, error)
+	SMembers(ctx context.Context, key string) ([]string, error)
+}
+
+type livePerfMetricsRedisReader struct{}
+
+func (livePerfMetricsRedisReader) HGetAll(ctx context.Context, key string) (map[string]string, error) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil, nil
+	}
+	return common.RDB.HGetAll(ctx, key).Result()
+}
+
+func (livePerfMetricsRedisReader) SMembers(ctx context.Context, key string) ([]string, error) {
+	if !common.RedisEnabled || common.RDB == nil {
+		return nil, nil
+	}
+	return common.RDB.SMembers(ctx, key).Result()
+}
+
+func mergeRedisActiveSummary(totals map[string]counters, localActiveModels map[string]struct{}, reader perfMetricsRedisReader, startTs int64, endTs int64) {
+	if reader == nil {
+		return
+	}
+	active := bucketStart(time.Now().Unix())
+	if active < startTs || active > endTs {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	models, err := reader.SMembers(ctx, perfMetricsActiveModelsKey())
+	if err != nil || len(models) == 0 {
+		return
+	}
+	seen := make(map[string]struct{}, len(models))
+	for _, modelName := range models {
+		if modelName == "" {
+			continue
+		}
+		if _, ok := seen[modelName]; ok {
+			continue
+		}
+		seen[modelName] = struct{}{}
+		if _, hasLocalActive := localActiveModels[modelName]; hasLocalActive {
+			continue
+		}
+		values, err := reader.HGetAll(ctx, redisBucketKey(bucketKey{model: modelName, bucketTs: active}))
+		if err != nil || len(values) == 0 {
+			continue
+		}
+		mergeSummaryCounter(totals, modelName, redisCounters(values))
+	}
+}
+
+func perfMetricsActiveModelsKey() string {
+	return "perf:metrics:active_models"
 }
 
 func mergeRedisActiveBuckets(merged map[bucketKey]counters, params QueryParams, startTs int64, endTs int64) {

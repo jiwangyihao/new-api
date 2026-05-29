@@ -122,6 +122,48 @@ func TestUpsertPerfMetricPostgresSQLQualifiesConflictColumns(t *testing.T) {
 	}
 }
 
+func TestGetPerfMetricsSummaryAllIncludesTtftCounters(t *testing.T) {
+	truncateTables(t)
+	requireNoErrorPerfMetricTest(t, DB.AutoMigrate(&PerfMetric{}))
+	requireNoErrorPerfMetricTest(t, DB.Exec("DELETE FROM perf_metrics").Error)
+
+	requireNoErrorPerfMetricTest(t, DB.Create(&PerfMetric{
+		ModelName:      "ops-db-ttft",
+		BucketTs:       1779190200,
+		RequestCount:   2,
+		SuccessCount:   2,
+		TotalLatencyMs: 300,
+		TtftSumMs:      40,
+		TtftCount:      1,
+		OutputTokens:   20,
+		GenerationMs:   200,
+	}).Error)
+	requireNoErrorPerfMetricTest(t, DB.Create(&PerfMetric{
+		ModelName:      "ops-db-ttft",
+		BucketTs:       1779193800,
+		RequestCount:   3,
+		SuccessCount:   2,
+		TotalLatencyMs: 700,
+		TtftSumMs:      140,
+		TtftCount:      2,
+		OutputTokens:   70,
+		GenerationMs:   600,
+	}).Error)
+
+	summaries, err := GetPerfMetricsSummaryAll(1779190000, 1779194000)
+	requireNoErrorPerfMetricTest(t, err)
+	for _, summary := range summaries {
+		if summary.ModelName != "ops-db-ttft" {
+			continue
+		}
+		if summary.TtftSumMs != 180 || summary.TtftCount != 3 {
+			t.Fatalf("unexpected ttft summary: %+v", summary)
+		}
+		return
+	}
+	t.Fatalf("missing ops-db-ttft summary: %+v", summaries)
+}
+
 func requireNoErrorPerfMetricTest(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

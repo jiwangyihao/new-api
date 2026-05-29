@@ -65,6 +65,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     setting: true,
     subscription: true,
     analytics: true,
+    ops: true,
   },
 }
 
@@ -124,6 +125,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/keys': { section: 'console', module: 'token' },
   '/usage-analytics': { section: 'console', module: 'log' },
   '/admin-analytics': { section: 'admin', module: 'analytics' },
+  '/admin-ops': { section: 'admin', module: 'ops' },
   '/usage-logs': { section: 'console', module: 'log' },
   '/usage-logs/common': { section: 'console', module: 'log' },
   '/usage-logs/drawing': { section: 'console', module: 'midjourney' },

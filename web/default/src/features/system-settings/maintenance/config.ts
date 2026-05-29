@@ -81,6 +81,8 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     user: true,
     setting: true,
     subscription: true,
+    analytics: true,
+    ops: true,
   },
 }
 
@@ -91,13 +93,15 @@ const REMOVED_SIDEBAR_MODULES: Record<string, readonly string[]> = {
 function removeRemovedSidebarModules(
   config: SidebarModulesAdminConfig
 ): SidebarModulesAdminConfig {
-  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(([sectionKey, moduleKeys]) => {
-    const section = config[sectionKey]
-    if (!section) return
-    moduleKeys.forEach((moduleKey) => {
-      delete section[moduleKey]
-    })
-  })
+  Object.entries(REMOVED_SIDEBAR_MODULES).forEach(
+    ([sectionKey, moduleKeys]) => {
+      const section = config[sectionKey]
+      if (!section) return
+      moduleKeys.forEach((moduleKey) => {
+        delete section[moduleKey]
+      })
+    }
+  )
   return config
 }
 

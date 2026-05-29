@@ -202,6 +202,13 @@ func SetApiRouter(router *gin.Engine) {
 			adminAnalyticsRoute.GET("/drilldown/invitations", controller.GetAdminAnalyticsDrilldownInvitations)
 		}
 
+		adminOpsRoute := apiRouter.Group("/admin-ops")
+		adminOpsRoute.Use(middleware.AdminAuth())
+		{
+			adminOpsRoute.GET("/snapshot", controller.GetAdminOpsSnapshot)
+			adminOpsRoute.GET("/concurrency", controller.GetAdminOpsConcurrency)
+		}
+
 		trialCodeAdminRoute := apiRouter.Group("/trial-codes/admin")
 		trialCodeAdminRoute.Use(middleware.AdminAuth())
 		{

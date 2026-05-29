@@ -148,6 +148,11 @@ export function useSidebarData(): SidebarData {
             icon: BarChart3,
           },
           {
+            title: t('adminOps.title'),
+            url: '/admin-ops',
+            icon: Activity,
+          },
+          {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,

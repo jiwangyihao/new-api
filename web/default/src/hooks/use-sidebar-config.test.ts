@@ -151,4 +151,54 @@ describe('sidebar config defaults', () => {
 
     assert.equal(filtered.length, 0)
   })
+
+  test('keeps admin ops visible in the default admin sidebar', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Admin Ops',
+            url: '/admin-ops',
+          },
+        ],
+      },
+    ]
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, null)
+
+    assert.equal(filtered[0]?.items[0]?.url, '/admin-ops')
+  })
+
+  test('lets user config explicitly hide admin ops', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Admin Ops',
+            url: '/admin-ops',
+          },
+        ],
+      },
+    ]
+    const userConfig = {
+      admin: {
+        enabled: true,
+        ops: false,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig
+    )
+
+    assert.equal(filtered.length, 0)
+  })
 })

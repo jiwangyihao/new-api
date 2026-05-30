@@ -68,14 +68,35 @@ func TestGetAdminOpsUserConcurrencyLimitsPrefersPlanValues(t *testing.T) {
 	now := GetDBTimestamp()
 	code := "admin-ops-plan"
 	require.NoError(t, DB.Create(&User{Id: 7101, Username: "ops-user", Status: common.UserStatusEnabled, AffCode: "ops-user-aff"}).Error)
-	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7102, Title: "Ops Plan", Enabled: true, ConcurrencyLimit: 7, QueueCapacity: 9, BusinessCode: &code}).Error)
-	require.NoError(t, DB.Create(&UserSubscription{Id: 7103, UserId: 7101, PlanId: 7102, Status: "active", StartTime: now - 60, EndTime: now + 3600, ConcurrencyLimit: 2, GrantReason: "order"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7102, Title: "Ops Plan", Enabled: true, MonthlyTokenLimit: 500, ConcurrencyLimit: 7, QueueCapacity: 9, BusinessCode: &code}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7103, UserId: 7101, PlanId: 7102, Status: "active", StartTime: now - 60, EndTime: now + 3600, TokenLimit: 500, TokenUsed: 0, ConcurrencyLimit: 2, GrantReason: "order"}).Error)
 
 	limits, err := GetAdminOpsUserConcurrencyLimits([]int{7101})
 
 	require.NoError(t, err)
 	assert.Equal(t, 7, limits[7101].Limit)
 	assert.Equal(t, 9, limits[7101].QueueCapacity)
+}
+
+func TestGetAdminOpsUserConcurrencyLimitsIncludesPlanAndUsage(t *testing.T) {
+	setupAdminOpsModelTestDBs(t)
+	now := GetDBTimestamp()
+	code := "ops-plus"
+	require.NoError(t, DB.Create(&User{Id: 7301, Username: "ops-plus-user", Status: common.UserStatusEnabled, AffCode: "ops-plus-aff"}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7302, Title: "Ops Plus", Enabled: true, TotalAmount: 1000, MonthlyTokenLimit: 500, ConcurrencyLimit: 8, QueueCapacity: 10, BusinessCode: &code}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7303, UserId: 7301, PlanId: 7302, Status: "active", StartTime: now - 60, EndTime: now + 3600, AmountTotal: 1000, AmountUsed: 250, TokenLimit: 500, TokenUsed: 125, ConcurrencyLimit: 2, GrantReason: "order"}).Error)
+
+	limits, err := GetAdminOpsUserConcurrencyLimits([]int{7301})
+
+	require.NoError(t, err)
+	limit := limits[7301]
+	assert.Equal(t, 7302, limit.PlanID)
+	assert.Equal(t, "Ops Plus", limit.PlanTitle)
+	assert.Equal(t, code, limit.PlanCode)
+	assert.EqualValues(t, 1000, limit.AmountTotal)
+	assert.EqualValues(t, 250, limit.AmountUsed)
+	assert.EqualValues(t, 500, limit.TokenLimit)
+	assert.EqualValues(t, 125, limit.TokenUsed)
 }
 
 func TestGetAdminOpsUserConcurrencyLimitsFallsBackToRuntimeDefaultQueueCapacity(t *testing.T) {
@@ -85,7 +106,7 @@ func TestGetAdminOpsUserConcurrencyLimitsFallsBackToRuntimeDefaultQueueCapacity(
 	common.SubscriptionConcurrencyQueueCapacity = 6
 	t.Cleanup(func() { common.SubscriptionConcurrencyQueueCapacity = oldDefaultQueueCapacity })
 	require.NoError(t, DB.Create(&User{Id: 7104, Username: "ops-fallback", Status: common.UserStatusEnabled, AffCode: "ops-fallback-aff"}).Error)
-	require.NoError(t, DB.Create(&UserSubscription{Id: 7105, UserId: 7104, Status: "active", StartTime: now - 60, EndTime: now + 3600, ConcurrencyLimit: 2, GrantReason: "order"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7105, UserId: 7104, Status: "active", StartTime: now - 60, EndTime: now + 3600, TokenLimit: 100, TokenUsed: 0, ConcurrencyLimit: 2, GrantReason: "order"}).Error)
 
 	limits, err := GetAdminOpsUserConcurrencyLimits([]int{7104})
 

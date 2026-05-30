@@ -57,3 +57,10 @@ export function formatAdminOpsBytes(value: number): string {
   if (unitIndex === 0) return `${Math.round(current)} ${units[unitIndex]}`
   return `${current.toFixed(1)} ${units[unitIndex]}`
 }
+
+export function formatAdminOpsUsage(used: number, total: number): string {
+  if (!Number.isFinite(used) || used < 0) used = 0
+  if (!Number.isFinite(total) || total <= 0)
+    return `${formatAdminOpsCount(used)}/∞`
+  return `${formatAdminOpsCount(used)}/${formatAdminOpsCount(total)}`
+}

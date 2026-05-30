@@ -4685,7 +4685,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "gpt-3.5-turbo": "gpt-3.5-turbo",
     "gpt-3.5-turbo-0125": "gpt-3.5-turbo-0125",
     "gpt-4": "gpt-4",
@@ -4863,6 +4863,15 @@
     "© 2025 Your Company. All rights reserved.": "© 2025 您的公司。保留所有权利。",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：",
     "Amount is required": "金额为必填项",
-    "Local top-up product ID is required": "本地充值档位 ID 为必填项"
+    "Local top-up product ID is required": "本地充值档位 ID 为必填项",
+    "adminOps.concurrency.plan": "套餐",
+    "adminOps.concurrency.usage": "用量",
+    "adminOps.concurrency.filters.search": "搜索用户或套餐",
+    "adminOps.concurrency.filters.plan": "套餐",
+    "adminOps.concurrency.filters.status": "状态",
+    "adminOps.concurrency.filters.minActiveOrQueued": "最小活跃或排队数",
+    "adminOps.concurrency.filters.allPlans": "全部套餐",
+    "adminOps.concurrency.filters.allStatuses": "全部状态",
+    "adminOps.concurrency.filters.clear": "清除筛选"
   }
 }

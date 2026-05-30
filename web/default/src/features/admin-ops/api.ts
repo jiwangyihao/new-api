@@ -32,6 +32,9 @@ export type AdminOpsConcurrencyParams = {
   limit: number
   include_users: boolean
   min_active_or_queued: number
+  plan_id?: number
+  status?: string
+  search?: string
 }
 
 export async function getAdminOpsSnapshot(

@@ -101,6 +101,16 @@ type AdminOpsConcurrencyUser struct {
 	Limit               int     `json:"limit"`
 	Queued              int64   `json:"queued"`
 	QueueCapacity       int     `json:"queue_capacity"`
+	PlanID              int     `json:"plan_id"`
+	PlanTitle           string  `json:"plan_title"`
+	PlanCode            string  `json:"plan_code"`
+	AmountTotal         int64   `json:"amount_total"`
+	AmountUsed          int64   `json:"amount_used"`
+	TokenLimit          int64   `json:"token_limit"`
+	TokenUsed           int64   `json:"token_used"`
+	Usage               float64 `json:"usage"`
+	UsageUsed           int64   `json:"usage_used"`
+	UsageTotal          int64   `json:"usage_total"`
 	OldestQueuedSeconds int64   `json:"oldest_queued_seconds"`
 	Utilization         float64 `json:"utilization"`
 	QueueUtilization    float64 `json:"queue_utilization"`

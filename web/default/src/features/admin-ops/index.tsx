@@ -19,17 +19,25 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { SectionPageLayout } from '@/components/layout'
 import { Button } from '@/components/ui/button'
 import { ErrorState } from '@/components/error-state'
+import { SectionPageLayout } from '@/components/layout'
+import { getAdminPlans } from '@/features/subscriptions/api'
 import { getAdminOpsConcurrency, getAdminOpsSnapshot } from './api'
 import { AdminOpsHeader } from './components/admin-ops-header'
 import { ChannelHealthCard } from './components/channel-health-card'
-import { ConcurrencyQueueCard } from './components/concurrency-queue-card'
+import {
+  ConcurrencyQueueCard,
+  type AdminOpsConcurrencyFilters,
+} from './components/concurrency-queue-card'
 import { HealthSummaryCards } from './components/health-summary-cards'
 import { PerformanceModelsCard } from './components/performance-models-card'
 import { RealtimeTrafficCard } from './components/realtime-traffic-card'
 import { RecentErrorsCard } from './components/recent-errors-card'
+import {
+  DEFAULT_ADMIN_OPS_CONCURRENCY_FILTERS,
+  isDefaultAdminOpsConcurrencyFilters,
+} from './page-state'
 
 const SNAPSHOT_REFETCH_MS = 30_000
 const CONCURRENCY_REFETCH_MS = 5_000
@@ -38,6 +46,8 @@ export function AdminOpsPage() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [concurrencyFilters, setConcurrencyFilters] =
+    useState<AdminOpsConcurrencyFilters>(DEFAULT_ADMIN_OPS_CONCURRENCY_FILTERS)
 
   const snapshotQuery = useQuery({
     queryKey: ['admin-ops', 'snapshot', 300, 5],
@@ -46,13 +56,22 @@ export function AdminOpsPage() {
     refetchIntervalInBackground: false,
   })
 
+  const plansQuery = useQuery({
+    queryKey: ['admin-ops', 'plans'],
+    queryFn: getAdminPlans,
+    staleTime: 5 * 60_000,
+  })
+
   const concurrencyQuery = useQuery({
-    queryKey: ['admin-ops', 'concurrency', 20, true, 1],
+    queryKey: ['admin-ops', 'concurrency', concurrencyFilters],
     queryFn: () =>
       getAdminOpsConcurrency({
         limit: 20,
         include_users: true,
-        min_active_or_queued: 1,
+        min_active_or_queued: concurrencyFilters.minActiveOrQueued,
+        plan_id: concurrencyFilters.planId || undefined,
+        status: concurrencyFilters.status || undefined,
+        search: concurrencyFilters.search || undefined,
       }),
     refetchInterval: autoRefresh ? CONCURRENCY_REFETCH_MS : false,
     refetchIntervalInBackground: false,
@@ -60,10 +79,14 @@ export function AdminOpsPage() {
 
   const snapshot =
     snapshotQuery.data?.success === true ? snapshotQuery.data.data : undefined
+  const canUseSnapshotConcurrency =
+    isDefaultAdminOpsConcurrencyFilters(concurrencyFilters)
   const concurrency =
     concurrencyQuery.data?.success === true
       ? concurrencyQuery.data.data
-      : snapshot?.concurrency
+      : canUseSnapshotConcurrency
+        ? snapshot?.concurrency
+        : undefined
   const hasError =
     snapshotQuery.isError ||
     concurrencyQuery.isError ||
@@ -73,6 +96,19 @@ export function AdminOpsPage() {
   const generatedAt = useMemo(
     () => Math.max(snapshot?.generated_at ?? 0, concurrency?.generated_at ?? 0),
     [snapshot?.generated_at, concurrency?.generated_at]
+  )
+  const planOptions = useMemo(
+    () =>
+      plansQuery.data?.success === true
+        ? (plansQuery.data.data ?? []).map((record) => ({
+            id: record.plan.id,
+            label:
+              record.plan.title ||
+              record.plan.business_code ||
+              `#${record.plan.id}`,
+          }))
+        : [],
+    [plansQuery.data]
   )
 
   function refreshAll() {
@@ -109,6 +145,9 @@ export function AdminOpsPage() {
           <ConcurrencyQueueCard
             concurrency={concurrency}
             loading={concurrencyQuery.isLoading && !concurrency}
+            filters={concurrencyFilters}
+            onFiltersChange={setConcurrencyFilters}
+            planOptions={planOptions}
           />
           <div className='grid grid-cols-1 gap-4 xl:grid-cols-2'>
             <RealtimeTrafficCard

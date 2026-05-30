@@ -54,6 +54,17 @@ func parseAdminOpsConcurrencyQuery(c *gin.Context) service.AdminOpsConcurrencyQu
 			query.MinActiveOrQueued = parsed
 		}
 	}
+	if raw := strings.TrimSpace(c.Query("plan_id")); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			query.PlanID = parsed
+		}
+	}
+	if raw := strings.TrimSpace(c.Query("status")); raw != "" {
+		query.Status = raw
+	}
+	if raw := strings.TrimSpace(c.Query("search")); raw != "" {
+		query.Search = raw
+	}
 	return query
 }
 

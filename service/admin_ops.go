@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,6 +25,9 @@ type AdminOpsConcurrencyQuery struct {
 	Limit             int
 	IncludeUsers      bool
 	MinActiveOrQueued int64
+	PlanID            int
+	Status            string
+	Search            string
 }
 
 type adminOpsHealthSeverity int
@@ -83,7 +87,7 @@ func GetAdminOpsSnapshot(ctx context.Context, query AdminOpsSnapshotQuery) (*dto
 	}
 
 	runtimeStats := buildAdminOpsRuntime(generatedAt)
-	system := buildAdminOpsSystem(common.GetSystemStatus())
+	system := buildAdminOpsSystem(common.RefreshSystemStatus())
 	traffic := buildAdminOpsTraffic(query.WindowSeconds, trafficStats)
 	channels := dto.AdminOpsChannels{
 		Total:          channelStats.Total,
@@ -95,7 +99,7 @@ func GetAdminOpsSnapshot(ctx context.Context, query AdminOpsSnapshotQuery) (*dto
 	}
 	performance := buildAdminOpsPerformance(perfSummary, query.Top)
 	errorsDTO := buildAdminOpsRecentErrors(recentErrors)
-	reasons := buildAdminOpsSnapshotHealthReasons(dependencies, system, concurrency.Summary, concurrency.Counters, channels, traffic)
+	reasons := buildAdminOpsSnapshotHealthReasons(dependencies, system, concurrency.Counters, channels, traffic)
 
 	return &dto.AdminOpsSnapshotResponse{
 		GeneratedAt:  generatedAt,
@@ -147,7 +151,7 @@ func GetAdminOpsConcurrency(ctx context.Context, query AdminOpsConcurrencyQuery)
 	}
 	response.Summary = buildAdminOpsConcurrencySummary(users)
 	if query.IncludeUsers {
-		response.Users = limitAdminOpsConcurrencyUsers(filterAdminOpsConcurrencyUsers(users, query.MinActiveOrQueued), query.Limit)
+		response.Users = limitAdminOpsConcurrencyUsers(filterAdminOpsConcurrencyUsers(users, query), query.Limit)
 	}
 	return response, nil
 }
@@ -174,6 +178,8 @@ func normalizeAdminOpsConcurrencyQuery(query AdminOpsConcurrencyQuery) AdminOpsC
 	if query.Limit > 100 {
 		query.Limit = 100
 	}
+	query.Status = strings.TrimSpace(query.Status)
+	query.Search = strings.TrimSpace(query.Search)
 	if query.MinActiveOrQueued < 0 {
 		query.MinActiveOrQueued = 1
 	}
@@ -203,25 +209,13 @@ func buildAdminOpsHealth(reasons []adminOpsHealthReason) dto.AdminOpsHealth {
 	return dto.AdminOpsHealth{Status: status, Score: score, Reasons: codes}
 }
 
-func adminOpsConcurrencyHealthReasons(summary dto.AdminOpsConcurrencySummary, counters dto.AdminOpsConcurrencyCounters) []adminOpsHealthReason {
-	reasons := make([]adminOpsHealthReason, 0, 6)
+func adminOpsConcurrencyHealthReasons(counters dto.AdminOpsConcurrencyCounters) []adminOpsHealthReason {
+	reasons := make([]adminOpsHealthReason, 0, 2)
 	if counters.RedisErrorsTotal > 0 {
 		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_redis_errors", Severity: adminOpsHealthSeverityCritical})
 	}
-	if counters.QueueFullRejectionsTotal > 0 {
-		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_queue_full_rejections", Severity: adminOpsHealthSeverityCritical})
-	}
 	if counters.UnavailableRejectionsTotal > 0 {
 		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_unavailable_rejections", Severity: adminOpsHealthSeverityCritical})
-	}
-	if summary.TotalQueued > 0 {
-		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_queue_not_empty", Severity: adminOpsHealthSeverityDegraded})
-	}
-	if summary.SaturatedUsers > 0 {
-		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_saturated_users", Severity: adminOpsHealthSeverityDegraded})
-	}
-	if summary.QueuePressure >= 0.5 {
-		reasons = append(reasons, adminOpsHealthReason{Code: "concurrency_queue_pressure_high", Severity: adminOpsHealthSeverityDegraded})
 	}
 	return reasons
 }
@@ -315,17 +309,39 @@ func limitAdminOpsConcurrencyUsers(users []dto.AdminOpsConcurrencyUser, limit in
 	return users[:limit]
 }
 
-func filterAdminOpsConcurrencyUsers(users []dto.AdminOpsConcurrencyUser, minActiveOrQueued int64) []dto.AdminOpsConcurrencyUser {
-	if minActiveOrQueued <= 0 {
+func filterAdminOpsConcurrencyUsers(users []dto.AdminOpsConcurrencyUser, query AdminOpsConcurrencyQuery) []dto.AdminOpsConcurrencyUser {
+	status := strings.TrimSpace(query.Status)
+	search := strings.ToLower(strings.TrimSpace(query.Search))
+	if query.MinActiveOrQueued <= 0 && query.PlanID <= 0 && status == "" && search == "" {
 		return users
 	}
 	filtered := make([]dto.AdminOpsConcurrencyUser, 0, len(users))
 	for _, user := range users {
-		if user.Active+user.Queued >= minActiveOrQueued {
-			filtered = append(filtered, user)
+		if query.MinActiveOrQueued > 0 && user.Active+user.Queued < query.MinActiveOrQueued {
+			continue
 		}
+		if query.PlanID > 0 && user.PlanID != query.PlanID {
+			continue
+		}
+		if status != "" && user.Status != status {
+			continue
+		}
+		if search != "" && !adminOpsConcurrencyUserMatchesSearch(user, search) {
+			continue
+		}
+		filtered = append(filtered, user)
 	}
 	return filtered
+}
+
+func adminOpsConcurrencyUserMatchesSearch(user dto.AdminOpsConcurrencyUser, search string) bool {
+	if search == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(user.Username), search) || strings.Contains(strings.ToLower(user.PlanTitle), search) || strings.Contains(strings.ToLower(user.PlanCode), search) {
+		return true
+	}
+	return strings.Contains(strconv.Itoa(user.UserID), search)
 }
 
 func buildAdminOpsRuntime(generatedAt int64) dto.AdminOpsRuntime {
@@ -448,7 +464,7 @@ func buildAdminOpsRecentErrors(logs []*model.Log) []dto.AdminOpsRecentError {
 	return result
 }
 
-func buildAdminOpsSnapshotHealthReasons(dependencies dto.AdminOpsDependencies, system dto.AdminOpsSystem, summary dto.AdminOpsConcurrencySummary, counters dto.AdminOpsConcurrencyCounters, channels dto.AdminOpsChannels, traffic dto.AdminOpsTraffic) []adminOpsHealthReason {
+func buildAdminOpsSnapshotHealthReasons(dependencies dto.AdminOpsDependencies, system dto.AdminOpsSystem, counters dto.AdminOpsConcurrencyCounters, channels dto.AdminOpsChannels, traffic dto.AdminOpsTraffic) []adminOpsHealthReason {
 	reasons := make([]adminOpsHealthReason, 0, 12)
 	if dependencies.Database.Status == dto.AdminOpsDependencyStatusCritical {
 		reasons = append(reasons, adminOpsHealthReason{Code: "database_unhealthy", Severity: adminOpsHealthSeverityCritical})
@@ -457,7 +473,7 @@ func buildAdminOpsSnapshotHealthReasons(dependencies dto.AdminOpsDependencies, s
 		reasons = append(reasons, adminOpsHealthReason{Code: "redis_unhealthy", Severity: adminOpsHealthSeverityCritical})
 	}
 	reasons = append(reasons, adminOpsSystemHealthReasons(system)...)
-	reasons = append(reasons, adminOpsConcurrencyHealthReasons(summary, counters)...)
+	reasons = append(reasons, adminOpsConcurrencyHealthReasons(counters)...)
 	if channels.AutoDisabled > 0 {
 		reasons = append(reasons, adminOpsHealthReason{Code: "channel_auto_disabled", Severity: adminOpsHealthSeverityDegraded})
 	}
@@ -563,6 +579,13 @@ func buildAdminOpsConcurrencyUsers(rows []SubscriptionConcurrencyUserRuntime, in
 			Limit:               limit.Limit,
 			Queued:              row.Queued,
 			QueueCapacity:       limit.QueueCapacity,
+			PlanID:              limit.PlanID,
+			PlanTitle:           limit.PlanTitle,
+			PlanCode:            limit.PlanCode,
+			AmountTotal:         limit.AmountTotal,
+			AmountUsed:          limit.AmountUsed,
+			TokenLimit:          limit.TokenLimit,
+			TokenUsed:           limit.TokenUsed,
 			OldestQueuedSeconds: row.OldestQueuedSeconds,
 		}
 		if includeUsername {
@@ -581,6 +604,16 @@ func fillAdminOpsConcurrencyUserDerivedFields(user *dto.AdminOpsConcurrencyUser)
 	}
 	if user.Limit > 0 {
 		user.Utilization = float64(user.Active) / float64(user.Limit)
+	}
+	if user.TokenLimit > 0 {
+		user.UsageUsed = user.TokenUsed
+		user.UsageTotal = user.TokenLimit
+	} else if user.AmountTotal > 0 {
+		user.UsageUsed = user.AmountUsed
+		user.UsageTotal = user.AmountTotal
+	}
+	if user.UsageTotal > 0 {
+		user.Usage = float64(user.UsageUsed) / float64(user.UsageTotal)
 	}
 	if user.QueueCapacity > 0 {
 		user.QueueUtilization = float64(user.Queued) / float64(user.QueueCapacity)

@@ -110,6 +110,13 @@ type AdminOpsUserConcurrencyLimit struct {
 	Username      string
 	Limit         int
 	QueueCapacity int
+	PlanID        int
+	PlanTitle     string
+	PlanCode      string
+	AmountTotal   int64
+	AmountUsed    int64
+	TokenLimit    int64
+	TokenUsed     int64
 }
 
 func GetAdminOpsUserConcurrencyLimits(userIDs []int) (map[int]AdminOpsUserConcurrencyLimit, error) {
@@ -150,93 +157,120 @@ func GetAdminOpsUserConcurrencyLimits(userIDs []int) (map[int]AdminOpsUserConcur
 		result[user.Id] = entry
 	}
 
-	activeSubs, err := loadAdminOpsPrimaryActiveSubscriptions(uniqueUserIDs, usersByID)
-	if err != nil {
-		return nil, err
-	}
-	if len(activeSubs) == 0 {
-		return result, nil
-	}
-
-	planIDs := make([]int, 0, len(activeSubs))
-	seenPlanIDs := make(map[int]struct{}, len(activeSubs))
-	for _, sub := range activeSubs {
-		if sub.PlanId <= 0 {
-			continue
-		}
-		if _, ok := seenPlanIDs[sub.PlanId]; ok {
-			continue
-		}
-		seenPlanIDs[sub.PlanId] = struct{}{}
-		planIDs = append(planIDs, sub.PlanId)
-	}
-
-	plans := make(map[int]SubscriptionPlan, len(planIDs))
-	if len(planIDs) > 0 {
-		var planRows []SubscriptionPlan
-		if err := DB.Where("id IN ?", planIDs).Find(&planRows).Error; err != nil {
+	defaultQueueCapacity := runtimeDefaultAdminOpsQueueCapacity()
+	now := GetDBTimestamp()
+	for _, userID := range uniqueUserIDs {
+		selection, err := selectAdminOpsPrimarySubscription(userID, usersByID[userID], now)
+		if err != nil {
 			return nil, err
 		}
-		for _, plan := range planRows {
-			plans[plan.Id] = plan
+		if selection == nil {
+			continue
 		}
-	}
-
-	defaultQueueCapacity := runtimeDefaultAdminOpsQueueCapacity()
-	for _, sub := range activeSubs {
-		entry := result[sub.UserId]
-		entry.UserID = sub.UserId
-		entry.QueueCapacity = defaultQueueCapacity
-		if plan, ok := plans[sub.PlanId]; ok {
-			entry.Limit = plan.ConcurrencyLimit
-			if plan.QueueCapacity > 0 {
-				entry.QueueCapacity = plan.QueueCapacity
-			}
-		} else {
-			entry.Limit = sub.ConcurrencyLimit
-		}
-		if entry.QueueCapacity <= 0 {
-			entry.QueueCapacity = defaultQueueCapacity
-		}
-		result[sub.UserId] = entry
+		entry := result[userID]
+		fillAdminOpsUserConcurrencyLimitFromSelection(&entry, selection, defaultQueueCapacity)
+		result[userID] = entry
 	}
 	return result, nil
 }
 
-func loadAdminOpsPrimaryActiveSubscriptions(userIDs []int, usersByID map[int]User) ([]UserSubscription, error) {
-	now := GetDBTimestamp()
+func selectAdminOpsPrimarySubscription(userID int, user User, now int64) (*primaryBillableSubscription, error) {
 	var subs []UserSubscription
-	if err := DB.Where("user_id IN ? AND status = ? AND end_time > ?", userIDs, "active", now).
+	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userID, "active", now).
 		Order(primaryBillableSubscriptionOrder).
 		Find(&subs).Error; err != nil {
 		return nil, err
 	}
+	if len(subs) == 0 {
+		return nil, nil
+	}
+	activeID := user.GetSetting().ActiveSubscriptionId
+	defaultCandidate, rewardCandidate, err := buildAdminOpsSubscriptionCandidates(subs, activeID)
+	if err != nil {
+		return nil, err
+	}
+	if rewardCandidate != nil {
+		return buildPrimaryBillableSubscription(*rewardCandidate), nil
+	}
+	if defaultCandidate != nil {
+		return buildPrimaryBillableSubscription(*defaultCandidate), nil
+	}
+	return nil, nil
+}
 
-	selected := make([]UserSubscription, 0, len(userIDs))
-	seen := make(map[int]struct{}, len(userIDs))
-	deferred := make([]UserSubscription, 0)
-	for _, sub := range subs {
-		if _, ok := seen[sub.UserId]; ok {
+func buildAdminOpsSubscriptionCandidates(subs []UserSubscription, activeID int) (*billableSubscriptionCandidate, *billableSubscriptionCandidate, error) {
+	candidates := make([]billableSubscriptionCandidate, 0, len(subs))
+	for i, candidate := range subs {
+		sub := candidate
+		plan, err := getAdminOpsSubscriptionPlan(sub.PlanId)
+		if err != nil {
+			return nil, nil, err
+		}
+		entry := billableSubscriptionCandidate{sub: sub, plan: plan, distributor: isDistributorSubscription(&sub, plan), index: i}
+		ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, 1)
+		if !entry.distributor || !ok {
 			continue
 		}
-		if user, ok := usersByID[sub.UserId]; ok {
-			activeID := user.GetSetting().ActiveSubscriptionId
-			if activeID > 0 && sub.Id == activeID {
-				seen[sub.UserId] = struct{}{}
-				selected = append(selected, sub)
-				continue
+		entry.unlimited = unlimited
+		if activeID > 0 && sub.Id == activeID {
+			return &entry, nil, nil
+		}
+		candidates = append(candidates, entry)
+	}
+	if len(candidates) == 0 {
+		return nil, nil, nil
+	}
+	defaultCandidate := candidates[0]
+	if isPaidSubscription(&defaultCandidate.sub) {
+		tier := subscriptionTierKey(defaultCandidate.plan)
+		if tier != "" {
+			for i := 1; i < len(candidates); i++ {
+				candidate := candidates[i]
+				if isInvitationRewardSubscription(&candidate.sub) && subscriptionTierKey(candidate.plan) == tier {
+					return &defaultCandidate, &candidate, nil
+				}
 			}
 		}
-		deferred = append(deferred, sub)
 	}
-	for _, sub := range deferred {
-		if _, ok := seen[sub.UserId]; ok {
-			continue
+	return &defaultCandidate, nil, nil
+}
+
+func getAdminOpsSubscriptionPlan(planID int) (*SubscriptionPlan, error) {
+	if planID <= 0 {
+		return nil, nil
+	}
+	var plan SubscriptionPlan
+	if err := DB.Where("id = ?", planID).First(&plan).Error; err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func fillAdminOpsUserConcurrencyLimitFromSelection(entry *AdminOpsUserConcurrencyLimit, selection *primaryBillableSubscription, defaultQueueCapacity int) {
+	if entry == nil || selection == nil {
+		return
+	}
+	sub := selection.Subscription
+	entry.UserID = sub.UserId
+	entry.PlanID = sub.PlanId
+	entry.AmountTotal = sub.AmountTotal
+	entry.AmountUsed = sub.AmountUsed
+	entry.TokenLimit = sub.TokenLimit
+	entry.TokenUsed = sub.TokenUsed
+	entry.Limit = livePlanConcurrencyLimit(&sub, selection.Plan)
+	entry.QueueCapacity = defaultQueueCapacity
+	if selection.Plan != nil {
+		entry.PlanTitle = selection.Plan.Title
+		if selection.Plan.BusinessCode != nil {
+			entry.PlanCode = *selection.Plan.BusinessCode
 		}
-		seen[sub.UserId] = struct{}{}
-		selected = append(selected, sub)
+		if selection.Plan.QueueCapacity > 0 {
+			entry.QueueCapacity = selection.Plan.QueueCapacity
+		}
 	}
-	return selected, nil
+	if entry.QueueCapacity <= 0 {
+		entry.QueueCapacity = defaultQueueCapacity
+	}
 }
 
 func runtimeDefaultAdminOpsQueueCapacity() int {

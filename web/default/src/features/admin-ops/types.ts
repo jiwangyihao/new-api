@@ -90,6 +90,16 @@ export type AdminOpsConcurrencyUser = {
   limit: number
   queued: number
   queue_capacity: number
+  plan_id: number
+  plan_title: string
+  plan_code: string
+  amount_total: number
+  amount_used: number
+  token_limit: number
+  token_used: number
+  usage: number
+  usage_used: number
+  usage_total: number
   oldest_queued_seconds: number
   utilization: number
   queue_utilization: number

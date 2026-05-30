@@ -4685,7 +4685,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "gpt-3.5-turbo": "gpt-3.5-turbo",
     "gpt-3.5-turbo-0125": "gpt-3.5-turbo-0125",
     "gpt-4": "gpt-4",
@@ -4863,6 +4863,15 @@
     "© 2025 Your Company. All rights reserved.": "© 2025 Ваша Компания. Все права защищены.",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT предлагает стабильный GPT-сервис по сверхнизкой цене. Зарегистрируйтесь по моей реферальной ссылке и получите один бесплатный день с безлимитными токенами:",
     "Amount is required": "Сумма обязательна",
-    "Local top-up product ID is required": "Локальный ID продукта пополнения обязателен"
+    "Local top-up product ID is required": "Локальный ID продукта пополнения обязателен",
+    "adminOps.concurrency.plan": "Тариф",
+    "adminOps.concurrency.usage": "Использование",
+    "adminOps.concurrency.filters.search": "Поиск пользователя или тарифа",
+    "adminOps.concurrency.filters.plan": "Тариф",
+    "adminOps.concurrency.filters.status": "Статус",
+    "adminOps.concurrency.filters.minActiveOrQueued": "Мин. активных или в очереди",
+    "adminOps.concurrency.filters.allPlans": "Все тарифы",
+    "adminOps.concurrency.filters.allStatuses": "Все статусы",
+    "adminOps.concurrency.filters.clear": "Сбросить фильтры"
   }
 }

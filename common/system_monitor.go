@@ -49,7 +49,7 @@ func StartSystemMonitor() {
 	}()
 }
 
-func updateSystemStatus() {
+func updateSystemStatus() SystemStatus {
 	var status SystemStatus
 
 	// CPU
@@ -73,6 +73,12 @@ func updateSystemStatus() {
 	}
 
 	latestSystemStatus.Store(status)
+	return status
+}
+
+// RefreshSystemStatus 立即刷新并返回当前系统状态。
+func RefreshSystemStatus() SystemStatus {
+	return updateSystemStatus()
 }
 
 // GetSystemStatus 获取当前系统状态

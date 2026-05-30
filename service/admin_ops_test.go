@@ -31,25 +31,16 @@ func TestAdminOpsHealthFromReasons(t *testing.T) {
 	assert.Equal(t, []string{"database_unhealthy", "concurrency_queue_not_empty"}, critical.Reasons)
 }
 
-func TestAdminOpsConcurrencySummaryHealthReasons(t *testing.T) {
-	summary := dto.AdminOpsConcurrencySummary{
-		TotalQueued:    2,
-		SaturatedUsers: 1,
-		QueuePressure:  0.75,
-	}
-	reasons := adminOpsConcurrencyHealthReasons(summary, dto.AdminOpsConcurrencyCounters{})
-	assert.Equal(t, []adminOpsHealthReason{
-		{Code: "concurrency_queue_not_empty", Severity: adminOpsHealthSeverityDegraded},
-		{Code: "concurrency_saturated_users", Severity: adminOpsHealthSeverityDegraded},
-		{Code: "concurrency_queue_pressure_high", Severity: adminOpsHealthSeverityDegraded},
-	}, reasons)
+func TestAdminOpsConcurrencyHealthReasonsIgnoreUserQueuePressure(t *testing.T) {
+	reasons := adminOpsConcurrencyHealthReasons(dto.AdminOpsConcurrencyCounters{QueueFullRejectionsTotal: 3})
+	assert.Empty(t, reasons)
 
-	criticalReasons := adminOpsConcurrencyHealthReasons(dto.AdminOpsConcurrencySummary{}, dto.AdminOpsConcurrencyCounters{
-		QueueFullRejectionsTotal:   1,
+	criticalReasons := adminOpsConcurrencyHealthReasons(dto.AdminOpsConcurrencyCounters{
+		RedisErrorsTotal:           1,
 		UnavailableRejectionsTotal: 1,
 	})
 	assert.Equal(t, []adminOpsHealthReason{
-		{Code: "concurrency_queue_full_rejections", Severity: adminOpsHealthSeverityCritical},
+		{Code: "concurrency_redis_errors", Severity: adminOpsHealthSeverityCritical},
 		{Code: "concurrency_unavailable_rejections", Severity: adminOpsHealthSeverityCritical},
 	}, criticalReasons)
 }
@@ -89,8 +80,8 @@ func TestBuildAdminOpsConcurrencySummary(t *testing.T) {
 	assert.EqualValues(t, 1, summary.SaturatedUsers)
 	assert.InDelta(t, 1.0, summary.QueuePressure, 0.0001)
 
-	reasons := adminOpsConcurrencyHealthReasons(summary, dto.AdminOpsConcurrencyCounters{})
-	assert.Contains(t, reasons, adminOpsHealthReason{Code: "concurrency_queue_pressure_high", Severity: adminOpsHealthSeverityDegraded})
+	reasons := adminOpsConcurrencyHealthReasons(dto.AdminOpsConcurrencyCounters{})
+	assert.Empty(t, reasons)
 }
 
 func TestBuildAdminOpsConcurrencySummaryUsesAllUsersBeforeDetailLimit(t *testing.T) {
@@ -110,4 +101,31 @@ func TestBuildAdminOpsConcurrencySummaryUsesAllUsersBeforeDetailLimit(t *testing
 	assert.EqualValues(t, 1, summary.QueuedUsers)
 	assert.EqualValues(t, 1, summary.SaturatedUsers)
 	assert.InDelta(t, 1.0, summary.QueuePressure, 0.0001)
+}
+
+func TestFilterAdminOpsConcurrencyUsersByPlanAndStatus(t *testing.T) {
+	users := []dto.AdminOpsConcurrencyUser{
+		{UserID: 1, PlanID: 10, PlanTitle: "Pro", Active: 2, Queued: 0, Limit: 2, QueueCapacity: 4, Status: "saturated"},
+		{UserID: 2, PlanID: 11, PlanTitle: "Basic", Active: 1, Queued: 3, Limit: 5, QueueCapacity: 4, Status: "queued"},
+		{UserID: 3, PlanID: 10, PlanTitle: "Pro", Active: 1, Queued: 0, Limit: 5, QueueCapacity: 4, Status: "normal"},
+	}
+
+	filtered := filterAdminOpsConcurrencyUsers(users, AdminOpsConcurrencyQuery{PlanID: 10, Status: "saturated", MinActiveOrQueued: 0})
+
+	assert.Equal(t, []dto.AdminOpsConcurrencyUser{users[0]}, filtered)
+}
+
+func TestFillAdminOpsConcurrencyUserUsagePrefersTokenQuota(t *testing.T) {
+	user := dto.AdminOpsConcurrencyUser{
+		AmountTotal: 1000,
+		AmountUsed:  250,
+		TokenLimit:  500,
+		TokenUsed:   125,
+	}
+
+	fillAdminOpsConcurrencyUserDerivedFields(&user)
+
+	assert.InDelta(t, 0.25, user.Usage, 0.0001)
+	assert.EqualValues(t, 500, user.UsageTotal)
+	assert.EqualValues(t, 125, user.UsageUsed)
 }

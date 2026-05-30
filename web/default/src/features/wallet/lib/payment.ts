@@ -22,7 +22,12 @@ import {
   DEFAULT_PAYMENT_TYPE,
   DEFAULT_MIN_TOPUP,
 } from '../constants'
-import type { PresetAmount, TopupInfo } from '../types'
+import type {
+  KyrenPaymentRequest,
+  KyrenPaymentResponse,
+  PresetAmount,
+  TopupInfo,
+} from '../types'
 
 // ============================================================================
 // Payment Processing Functions
@@ -84,6 +89,61 @@ export function isStripePayment(paymentType: string): boolean {
  */
 export function isWaffoPancakePayment(paymentType: string): boolean {
   return paymentType === PAYMENT_TYPES.WAFFO_PANCAKE
+}
+
+interface ProcessKyrenTopUpProductPaymentInput {
+  productId: string
+  requestKyrenPayment: (
+    request: KyrenPaymentRequest
+  ) => Promise<KyrenPaymentResponse>
+  openCheckout: (url: string) => void
+}
+
+function getKyrenCheckoutUrl(response: KyrenPaymentResponse): string | null {
+  const data = response.data
+  if (!data || typeof data !== 'object') {
+    return null
+  }
+
+  if (typeof data.checkout_url === 'string' && data.checkout_url.trim()) {
+    return data.checkout_url
+  }
+  if (typeof data.pay_link === 'string' && data.pay_link.trim()) {
+    return data.pay_link
+  }
+  if (typeof data.url === 'string' && data.url.trim()) {
+    return data.url
+  }
+  return null
+}
+
+function isSafeHttpCheckoutUrl(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return false
+  }
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Request a Kyren checkout session for a local top-up product and open it.
+ */
+export async function processKyrenTopUpProductPayment(
+  input: ProcessKyrenTopUpProductPaymentInput
+): Promise<KyrenPaymentResponse> {
+  const response = await input.requestKyrenPayment({
+    product_id: input.productId,
+  })
+  const checkoutUrl = getKyrenCheckoutUrl(response)
+  if (response.success && checkoutUrl && isSafeHttpCheckoutUrl(checkoutUrl)) {
+    input.openCheckout(checkoutUrl)
+  }
+  return response
 }
 
 /**

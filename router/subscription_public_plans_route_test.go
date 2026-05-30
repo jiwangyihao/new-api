@@ -56,7 +56,9 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 		"custom_seconds":      {},
 		"monthly_token_limit": {},
 		"concurrency_limit":   {},
+		"queue_capacity":      {},
 		"public_visible":      {},
+		"kyren_product_id":    {},
 	}
 
 	assert.Equal(t, "Public High", payload.Data[0].Plan["title"])
@@ -71,6 +73,16 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 			_, ok := record.Plan[key]
 			assert.Truef(t, ok, "missing public plan key %q", key)
 		}
+	}
+
+	kyrenProductByTitle := map[string]string{
+		"Public High": "prod_public_high",
+		"Public Low":  "prod_public_low",
+	}
+	for _, record := range payload.Data {
+		title, ok := record.Plan["title"].(string)
+		require.True(t, ok)
+		assert.Equal(t, kyrenProductByTitle[title], record.Plan["kyren_product_id"])
 	}
 
 	body := publicRecorder.Body.String()
@@ -179,11 +191,13 @@ func seedSubscriptionPublicPlanRouteTestPlans(t *testing.T) {
 		DurationValue:      1,
 		MonthlyTokenLimit:  100000,
 		ConcurrencyLimit:   2,
+		QueueCapacity:      8,
 		Enabled:            true,
 		PublicVisible:      true,
 		SortOrder:          10,
 		StripePriceId:      "price_public_low",
 		CreemProductId:     "creem_public_low",
+		KyrenProductId:     "prod_public_low",
 		MaxPurchasePerUser: 3,
 		UpgradeGroup:       "vip-low",
 		TotalAmount:        1000,
@@ -200,11 +214,13 @@ func seedSubscriptionPublicPlanRouteTestPlans(t *testing.T) {
 		DurationValue:      1,
 		MonthlyTokenLimit:  200000,
 		ConcurrencyLimit:   4,
+		QueueCapacity:      16,
 		Enabled:            true,
 		PublicVisible:      true,
 		SortOrder:          20,
 		StripePriceId:      "price_public_high",
 		CreemProductId:     "creem_public_high",
+		KyrenProductId:     "prod_public_high",
 		MaxPurchasePerUser: 5,
 		UpgradeGroup:       "vip-high",
 		TotalAmount:        2000,

@@ -29,6 +29,7 @@ type PublicSubscriptionPlan struct {
 	ConcurrencyLimit  int     `json:"concurrency_limit"`
 	PublicVisible     bool    `json:"public_visible"`
 	QueueCapacity     int     `json:"queue_capacity"`
+	KyrenProductId    string  `json:"kyren_product_id"`
 }
 
 type PublicSubscriptionPlanDTO struct {
@@ -50,6 +51,7 @@ func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDT
 			ConcurrencyLimit:  p.ConcurrencyLimit,
 			QueueCapacity:     p.QueueCapacity,
 			PublicVisible:     p.PublicVisible,
+			KyrenProductId:    p.KyrenProductId,
 		},
 	}
 }
@@ -323,6 +325,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"sort_order":                 req.Plan.SortOrder,
 			"stripe_price_id":            req.Plan.StripePriceId,
 			"creem_product_id":           req.Plan.CreemProductId,
+			"kyren_product_id":           req.Plan.KyrenProductId,
 			"max_purchase_per_user":      req.Plan.MaxPurchasePerUser,
 			"total_amount":               req.Plan.TotalAmount,
 			"upgrade_group":              "",

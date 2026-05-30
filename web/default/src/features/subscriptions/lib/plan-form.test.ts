@@ -76,6 +76,17 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(payload.plan.currency, 'CNY')
   })
 
+  test('preserves kyren product id in plan form payload', () => {
+    const payload = formValuesToPlanPayload({
+      ...PLAN_FORM_DEFAULTS,
+      title: 'Pro',
+      price_amount: 40,
+      kyren_product_id: 'prod_kyren',
+    })
+
+    assert.equal(payload.plan.kyren_product_id, 'prod_kyren')
+  })
+
   test('omits blank business code instead of sending an empty unique value', () => {
     const payload = formValuesToPlanPayload({
       ...PLAN_FORM_DEFAULTS,

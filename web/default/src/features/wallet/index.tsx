@@ -49,6 +49,7 @@ import type {
   PaymentMethod,
   PresetAmount,
   CreemProduct,
+  KyrenTopUpProduct,
 } from './types'
 
 interface WalletProps {
@@ -70,6 +71,8 @@ export function Wallet(props: WalletProps) {
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
+  const [selectedKyrenTopUpProduct, setSelectedKyrenTopUpProduct] =
+    useState<KyrenTopUpProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
 
   const { status } = useStatus()
@@ -88,6 +91,7 @@ export function Wallet(props: WalletProps) {
     processing,
     calculatePaymentAmount,
     processPayment,
+    processKyrenPayment,
   } = usePayment()
   const {
     affiliateLink,
@@ -223,6 +227,22 @@ export function Wallet(props: WalletProps) {
     }
   }
 
+  const handleKyrenTopUpProductSelect = async (product: KyrenTopUpProduct) => {
+    setSelectedKyrenTopUpProduct(product)
+    setPaymentLoading(`kyren-${product.id}`)
+
+    try {
+      const success = await processKyrenPayment(product)
+      if (success) {
+        await fetchUser()
+      }
+    } finally {
+      setPaymentLoading(null)
+      setSelectedKyrenTopUpProduct(null)
+    }
+  }
+
+
   const handleWaffoMethodSelect = async (_method: unknown, index: number) => {
     const loadingKey = `waffo-${index}`
     setPaymentLoading(loadingKey)
@@ -295,6 +315,10 @@ export function Wallet(props: WalletProps) {
                   creemProducts={topupInfo?.creem_products}
                   enableCreemTopup={topupInfo?.enable_creem_topup}
                   onCreemProductSelect={handleCreemProductSelect}
+                  enableKyrenTopup={topupInfo?.enable_kyren_topup}
+                  kyrenTopUpProducts={topupInfo?.kyren_topup_products}
+                  selectedKyrenTopUpProduct={selectedKyrenTopUpProduct}
+                  onKyrenTopUpProductSelect={handleKyrenTopUpProductSelect}
                   enableWaffoTopup={topupInfo?.enable_waffo_topup}
                   waffoPayMethods={topupInfo?.waffo_pay_methods}
                   waffoMinTopup={topupInfo?.waffo_min_topup}

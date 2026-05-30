@@ -40,6 +40,7 @@ import { Separator } from '@/components/ui/separator'
 import {
   paySubscriptionStripe,
   paySubscriptionCreem,
+  paySubscriptionKyren,
   paySubscriptionEpay,
   paySubscriptionBalance,
 } from '../../api'
@@ -51,11 +52,38 @@ import {
   formatAccountBalanceForPlanPurchase,
   getAccountBalancePaymentState,
 } from '../../lib'
-import type { PlanRecord } from '../../types'
+import type { PlanRecord, SubscriptionPayResponse } from '../../types'
+import type { TopupInfo } from '@/features/wallet/types'
 
 interface PaymentMethod {
   type: string
   name?: string
+}
+
+type KyrenReasonKey =
+  | 'Kyren payment is unavailable'
+  | 'Kyren product is not bound'
+  | 'Kyren supports CNY subscription plans only'
+  | 'Kyren does not support free subscription plans'
+  | 'Kyren does not support trial subscription plans'
+  | 'Kyren requires enabled and visible subscription plans'
+  | 'Purchase limit reached'
+
+interface KyrenPurchaseContext {
+  purchaseCount?: number
+}
+
+interface KyrenAvailability {
+  available: boolean
+  reasonKey?: KyrenReasonKey
+}
+
+interface KyrenPaymentDependencies {
+  planId: number
+  paySubscriptionKyren: (data: {
+    plan_id: number
+  }) => Promise<SubscriptionPayResponse>
+  openCheckout: (url: string) => void
 }
 
 interface Props {
@@ -66,10 +94,117 @@ interface Props {
   enableCreem?: boolean
   enableOnlineTopUp?: boolean
   epayMethods?: PaymentMethod[]
+  enableKyrenSubscription?: boolean
   purchaseLimit?: number
   purchaseCount?: number
   accountBalance?: number
   onPurchaseSuccess?: () => Promise<void> | void
+}
+
+function isKyrenSuccessMessage(message: string | undefined): boolean {
+  return !message || message === 'success'
+}
+
+function getKyrenCheckoutUrl(res: SubscriptionPayResponse): string {
+  return res.data?.checkout_url || res.data?.pay_link || res.url || ''
+}
+
+function isSafeHttpCheckoutUrl(value: string): boolean {
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return false
+  }
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
+export async function processKyrenSubscriptionPayment(
+  deps: KyrenPaymentDependencies
+): Promise<string> {
+  const res = await deps.paySubscriptionKyren({ plan_id: deps.planId })
+  const checkoutUrl = getKyrenCheckoutUrl(res)
+  if (
+    (res.success || isKyrenSuccessMessage(res.message)) &&
+    checkoutUrl &&
+    isSafeHttpCheckoutUrl(checkoutUrl)
+  ) {
+    deps.openCheckout(checkoutUrl)
+    return checkoutUrl
+  }
+  throw new Error(
+    res.message && !isKyrenSuccessMessage(res.message)
+      ? res.message
+      : 'Kyren checkout creation failed'
+  )
+}
+
+export function getKyrenSubscriptionAvailability(
+  plan: PlanRecord['plan'] | null | undefined,
+  topupInfo: Pick<TopupInfo, 'enable_kyren_subscription'> | null | undefined,
+  purchaseContext: KyrenPurchaseContext = {}
+): KyrenAvailability {
+  if (!topupInfo?.enable_kyren_subscription) {
+    return { available: false, reasonKey: 'Kyren payment is unavailable' }
+  }
+  if (!plan?.kyren_product_id?.trim()) {
+    return { available: false, reasonKey: 'Kyren product is not bound' }
+  }
+  if (String(plan.currency || '').toUpperCase() !== 'CNY') {
+    return {
+      available: false,
+      reasonKey: 'Kyren supports CNY subscription plans only',
+    }
+  }
+  if (Number(plan.price_amount || 0) < 0.01) {
+    return {
+      available: false,
+      reasonKey: 'Kyren does not support free subscription plans',
+    }
+  }
+  if (plan.is_trial === true) {
+    return {
+      available: false,
+      reasonKey: 'Kyren does not support trial subscription plans',
+    }
+  }
+  if (plan.enabled === false || plan.public_visible === false) {
+    return {
+      available: false,
+      reasonKey: 'Kyren requires enabled and visible subscription plans',
+    }
+  }
+  const limit = Number(plan.max_purchase_per_user || 0)
+  if (limit > 0 && Number(purchaseContext.purchaseCount || 0) >= limit) {
+    return { available: false, reasonKey: 'Purchase limit reached' }
+  }
+  return { available: true }
+}
+
+function translateKyrenUnavailableReason(
+  reasonKey: KyrenReasonKey | undefined,
+  t: ReturnType<typeof useTranslation>['t']
+): string {
+  switch (reasonKey) {
+    case 'Kyren product is not bound':
+      return t('Kyren product is not bound')
+    case 'Kyren supports CNY subscription plans only':
+      return t('Kyren supports CNY subscription plans only')
+    case 'Kyren does not support free subscription plans':
+      return t('Kyren does not support free subscription plans')
+    case 'Kyren does not support trial subscription plans':
+      return t('Kyren does not support trial subscription plans')
+    case 'Kyren requires enabled and visible subscription plans':
+      return t('Kyren requires enabled and visible subscription plans')
+    case 'Purchase limit reached':
+      return t('Purchase limit reached')
+    case 'Kyren payment is unavailable':
+    default:
+      return t('Kyren payment is unavailable')
+  }
 }
 
 export function SubscriptionPurchaseDialog(props: Props) {
@@ -99,10 +234,12 @@ export function SubscriptionPurchaseDialog(props: Props) {
 
   const hasStripe = props.enableStripe && !!plan.stripe_price_id
   const hasCreem = props.enableCreem && !!plan.creem_product_id
+  const hasKyren = !!props.enableKyrenSubscription
   const hasEpay =
     props.enableOnlineTopUp && (props.epayMethods || []).length > 0
   const hasBalancePayment = true
-  const hasAnyPayment = hasBalancePayment || hasStripe || hasCreem || hasEpay
+  const hasAnyPayment =
+    hasBalancePayment || hasStripe || hasCreem || hasEpay || hasKyren
   const selectedEpayMethodLabel =
     (props.epayMethods || []).find((m) => m.type === selectedEpayMethod)
       ?.name ||
@@ -120,6 +257,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
   })
   const accountBalanceDisplay = formatAccountBalanceForPlanPurchase(
     props.accountBalance ?? 0
+  )
+  const kyrenAvailability = getKyrenSubscriptionAvailability(
+    plan,
+    { enable_kyren_subscription: hasKyren },
+    { purchaseCount: props.purchaseCount }
   )
 
   const handlePayStripe = async () => {
@@ -161,6 +303,27 @@ export function SubscriptionPurchaseDialog(props: Props) {
       }
     } catch {
       toast.error(t('Payment request failed'))
+    } finally {
+      setPaying(false)
+    }
+  }
+
+  const handlePayKyren = async () => {
+    if (!kyrenAvailability.available) {
+      toast.error(translateKyrenUnavailableReason(kyrenAvailability.reasonKey, t))
+      return
+    }
+    setPaying(true)
+    try {
+      await processKyrenSubscriptionPayment({
+        planId: plan.id,
+        paySubscriptionKyren,
+        openCheckout: (url) => window.open(url, '_blank'),
+      })
+      toast.success(t('Payment page opened'))
+      props.onOpenChange(false)
+    } catch {
+      toast.error(t('Kyren checkout creation failed'))
     } finally {
       setPaying(false)
     }
@@ -328,6 +491,13 @@ export function SubscriptionPurchaseDialog(props: Props) {
             </Alert>
           )}
 
+          {hasKyren && !kyrenAvailability.available && (
+            <Alert>
+              <AlertDescription>
+                {translateKyrenUnavailableReason(kyrenAvailability.reasonKey, t)}
+              </AlertDescription>
+            </Alert>
+          )}
 
           {hasBalancePayment && accountBalanceLoaded && balancePaymentState.disabled && (
             <Alert>
@@ -361,7 +531,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                   </span>
                 </Button>
               )}
-              {(hasStripe || hasCreem) && (
+              {(hasStripe || hasCreem || hasKyren) && (
                 <div className='grid grid-cols-2 gap-2 sm:flex'>
                   {hasStripe && (
                     <Button
@@ -381,6 +551,16 @@ export function SubscriptionPurchaseDialog(props: Props) {
                       disabled={paying || limitReached}
                     >
                       Creem
+                    </Button>
+                  )}
+                  {hasKyren && (
+                    <Button
+                      variant='outline'
+                      className='flex-1'
+                      onClick={handlePayKyren}
+                      disabled={paying || !kyrenAvailability.available}
+                    >
+                      {t('Pay with Kyren')}
                     </Button>
                   )}
                 </div>

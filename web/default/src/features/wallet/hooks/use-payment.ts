@@ -23,6 +23,7 @@ import {
   calculateAmount,
   calculateStripeAmount,
   calculateWaffoPancakeAmount,
+  requestKyrenPayment,
   requestPayment,
   requestStripePayment,
   isApiSuccess,
@@ -30,8 +31,10 @@ import {
 import {
   isStripePayment,
   isWaffoPancakePayment,
+  processKyrenTopUpProductPayment,
   submitPaymentForm,
 } from '../lib'
+import type { KyrenTopUpProduct } from '../types'
 
 // ============================================================================
 // Payment Hook
@@ -75,6 +78,34 @@ export function usePayment() {
     []
   )
 
+  // Process Kyren fixed product payment
+  const processKyrenPayment = useCallback(async (product: KyrenTopUpProduct) => {
+    try {
+      setProcessing(true)
+      let opened = false
+      const response = await processKyrenTopUpProductPayment({
+        productId: product.id,
+        requestKyrenPayment,
+        openCheckout: (url) => {
+          window.open(url, '_blank', 'noopener,noreferrer')
+          opened = true
+        },
+      })
+
+      if (isApiSuccess(response) && opened) {
+        toast.success(i18next.t('Redirecting to payment page...'))
+        return true
+      }
+
+      toast.error(response.message || i18next.t('Payment request failed'))
+      return false
+    } catch (_error) {
+      toast.error(i18next.t('Payment request failed'))
+      return false
+    } finally {
+      setProcessing(false)
+    }
+  }, [])
   // Process payment
   const processPayment = useCallback(
     async (topupAmount: number, paymentType: string) => {
@@ -133,6 +164,7 @@ export function usePayment() {
     processing,
     calculatePaymentAmount,
     processPayment,
+    processKyrenPayment,
     setAmount,
   }
 }

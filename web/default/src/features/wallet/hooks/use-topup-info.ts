@@ -27,6 +27,7 @@ import type {
   TopupInfo,
   PresetAmount,
   CreemProduct,
+  KyrenTopUpProduct,
   PaymentMethod,
   WaffoPayMethod,
 } from '../types'
@@ -117,6 +118,50 @@ function parseCreemProducts(data: unknown): CreemProduct[] {
     .filter((item) => item.name && item.productId)
 }
 
+function parseKyrenTopUpProducts(data: unknown): KyrenTopUpProduct[] {
+  const products: KyrenTopUpProduct[] = []
+  for (const item of parseJsonArray(data)) {
+    if (!item || typeof item !== 'object') {
+      continue
+    }
+
+    const record = item as Record<string, unknown>
+    const id = typeof record.id === 'string' ? record.id : ''
+    const name = typeof record.name === 'string' ? record.name : ''
+    const description =
+      typeof record.description === 'string' ? record.description : undefined
+    const amount = typeof record.amount === 'string' ? record.amount.trim() : ''
+    const currency =
+      typeof record.currency === 'string'
+        ? record.currency.trim().toUpperCase()
+        : ''
+    const quota = Number(record.quota) || 0
+
+    if (
+      !id ||
+      !name ||
+      currency !== 'CNY' ||
+      Number.parseFloat(amount) <= 0 ||
+      quota <= 0 ||
+      record.enabled === false
+    ) {
+      continue
+    }
+
+    products.push({
+      id,
+      name,
+      description,
+      amount,
+      currency: 'CNY',
+      quota,
+      enabled: record.enabled !== false,
+    })
+  }
+  return products
+}
+
+
 function parseAmountOptions(data: unknown): number[] {
   return parseJsonArray(data)
     .map((item) => Number(item))
@@ -187,6 +232,9 @@ export function useTopupInfo() {
         amount_options: parseAmountOptions(response.data.amount_options),
         discount: parseDiscountMap(response.data.discount),
         creem_products: parseCreemProducts(response.data.creem_products),
+        kyren_topup_products: parseKyrenTopUpProducts(
+          response.data.kyren_topup_products
+        ),
         waffo_pay_methods: parseWaffoPayMethods(
           response.data.waffo_pay_methods
         ),

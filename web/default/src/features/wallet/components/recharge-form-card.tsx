@@ -47,6 +47,7 @@ import type {
   TopupInfo,
   CreemProduct,
   WaffoPayMethod,
+  KyrenTopUpProduct,
 } from '../types'
 import { CreemProductsSection } from './creem-products-section'
 
@@ -73,6 +74,10 @@ interface RechargeFormCardProps {
   creemProducts?: CreemProduct[]
   enableCreemTopup?: boolean
   onCreemProductSelect?: (product: CreemProduct) => void
+  enableKyrenTopup?: boolean
+  kyrenTopUpProducts?: KyrenTopUpProduct[]
+  selectedKyrenTopUpProduct?: KyrenTopUpProduct | null
+  onKyrenTopUpProductSelect?: (product: KyrenTopUpProduct) => void
   enableWaffoTopup?: boolean
   waffoPayMethods?: WaffoPayMethod[]
   waffoMinTopup?: number
@@ -103,6 +108,10 @@ export function RechargeFormCard({
   creemProducts,
   enableCreemTopup,
   onCreemProductSelect,
+  enableKyrenTopup,
+  kyrenTopUpProducts,
+  selectedKyrenTopUpProduct,
+  onKyrenTopUpProductSelect,
   enableWaffoTopup,
   waffoPayMethods,
   waffoMinTopup,
@@ -124,12 +133,18 @@ export function RechargeFormCard({
     }
   }
 
+  const hasKyrenTopUpProducts =
+    enableKyrenTopup &&
+    Array.isArray(kyrenTopUpProducts) &&
+    kyrenTopUpProducts.length > 0 &&
+    !!onKyrenTopUpProductSelect
   const hasConfigurableTopup =
     topupInfo?.enable_online_topup ||
     topupInfo?.enable_stripe_topup ||
     enableWaffoTopup ||
     enableWaffoPancakeTopup
-  const hasAnyTopup = hasConfigurableTopup || enableCreemTopup
+  const hasAnyTopup =
+    hasConfigurableTopup || enableCreemTopup || hasKyrenTopUpProducts
   const hasStandardPaymentMethods =
     Array.isArray(topupInfo?.pay_methods) && topupInfo.pay_methods.length > 0
   const hasWaffoPaymentMethods =
@@ -443,6 +458,62 @@ export function RechargeFormCard({
             />
           </div>
         )}
+
+      {/* Kyren Top-up Products Section */}
+      {hasKyrenTopUpProducts && (
+        <div className='space-y-2.5 border-t pt-4 sm:space-y-3 sm:pt-6'>
+          <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
+            {t('Kyren Top-up')}
+          </Label>
+          <div className='grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-3'>
+            {kyrenTopUpProducts?.map((product) => {
+              const loadingKey = `kyren-${product.id}`
+              const loadingProduct =
+                paymentLoading === loadingKey ||
+                selectedKyrenTopUpProduct?.id === product.id
+
+              return (
+                <Button
+                  key={product.id}
+                  variant='outline'
+                  onClick={() => onKyrenTopUpProductSelect?.(product)}
+                  disabled={!!paymentLoading && !loadingProduct}
+                  className={cn(
+                    'hover:border-foreground flex min-h-16 flex-col items-start rounded-lg px-3 py-2.5 text-left whitespace-normal sm:min-h-[72px] sm:p-4',
+                    loadingProduct
+                      ? 'border-foreground bg-foreground/5'
+                      : 'border-muted'
+                  )}
+                >
+                  <div className='flex w-full items-center justify-between gap-2'>
+                    <span className='truncate text-sm font-semibold'>
+                      {product.name}
+                    </span>
+                    {loadingProduct && (
+                      <Loader2 className='h-4 w-4 shrink-0 animate-spin' />
+                    )}
+                  </div>
+                  <div className='text-muted-foreground mt-1.5 flex w-full items-center justify-between gap-2 text-xs sm:mt-2'>
+                    <span>
+                      {product.currency} {product.amount}
+                    </span>
+                    <span>
+                      {t('{{quota}} quota', {
+                        quota: formatNumber(product.quota),
+                      })}
+                    </span>
+                  </div>
+                  {product.description && (
+                    <div className='text-muted-foreground mt-1 line-clamp-2 text-xs'>
+                      {product.description}
+                    </div>
+                  )}
+                </Button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Redemption Code Section */}
       <div className='space-y-2.5 border-t pt-4 sm:space-y-3 sm:pt-6'>

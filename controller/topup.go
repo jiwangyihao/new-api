@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +21,70 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/samber/lo"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
+
+type kyrenUserTopUpProduct struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Amount      string `json:"amount"`
+	Currency    string `json:"currency"`
+	Quota       int64  `json:"quota"`
+	Enabled     bool   `json:"enabled"`
+}
+
+func loadKyrenUserTopUpProducts() []kyrenTopUpProduct {
+	raw := strings.TrimSpace(setting.KyrenTopUpProducts)
+	var option model.Option
+	if err := model.DB.Where("key = ?", "KyrenTopUpProducts").First(&option).Error; err == nil {
+		raw = option.Value
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var products []kyrenTopUpProduct
+	if err := common.UnmarshalJsonStr(raw, &products); err != nil {
+		return nil
+	}
+	return products
+}
+
+func getKyrenUserTopUpProducts() []kyrenUserTopUpProduct {
+	if !isKyrenUserPaymentEnabled() {
+		return nil
+	}
+	products := loadKyrenUserTopUpProducts()
+	result := make([]kyrenUserTopUpProduct, 0, len(products))
+	for i := range products {
+		product := products[i]
+		product.ID = strings.TrimSpace(product.ID)
+		product.Name = strings.TrimSpace(product.Name)
+		product.Description = strings.TrimSpace(product.Description)
+		product.ProductID = strings.TrimSpace(product.ProductID)
+		product.Amount = strings.TrimSpace(product.Amount)
+		product.Currency = strings.ToUpper(strings.TrimSpace(product.Currency))
+		if !product.Enabled || product.ID == "" || product.Name == "" || product.ProductID == "" || product.Currency != kyrenCurrencyCNY || product.Quota <= 0 {
+			continue
+		}
+		amount, err := normalizeKyrenAmountString(product.Amount)
+		if err != nil {
+			continue
+		}
+		result = append(result, kyrenUserTopUpProduct{
+			ID:          product.ID,
+			Name:        product.Name,
+			Description: product.Description,
+			Amount:      amount,
+			Currency:    product.Currency,
+			Quota:       product.Quota,
+			Enabled:     true,
+		})
+	}
+	return result
+}
 
 func GetTopUpInfo(c *gin.Context) {
 	// 获取支付方式
@@ -89,10 +154,14 @@ func GetTopUpInfo(c *gin.Context) {
 		}
 	}
 
+	enableKyren := isKyrenUserPaymentEnabled()
 	data := gin.H{
 		"enable_online_topup":        isEpayTopUpEnabled(),
 		"enable_stripe_topup":        isStripeTopUpEnabled(),
 		"enable_creem_topup":         isCreemTopUpEnabled(),
+		"enable_kyren_topup":         enableKyren,
+		"enable_kyren_subscription":  enableKyren,
+		"kyren_topup_products":       getKyrenUserTopUpProducts(),
 		"enable_waffo_topup":         enableWaffo,
 		"enable_waffo_pancake_topup": enableWaffoPancake,
 		"waffo_pay_methods": func() interface{} {

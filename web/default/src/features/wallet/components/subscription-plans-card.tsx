@@ -651,6 +651,7 @@ export function SubscriptionPlansCard({
         enableStripe={enableStripe}
         enableCreem={enableCreem}
         enableOnlineTopUp={enableOnlineTopUp}
+        enableKyrenSubscription={!!topupInfo?.enable_kyren_subscription}
         epayMethods={epayMethods}
         purchaseLimit={
           selectedPlan?.plan?.max_purchase_per_user

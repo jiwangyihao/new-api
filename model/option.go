@@ -102,6 +102,10 @@ func InitOptionMap() {
 	common.OptionMap["CreemProducts"] = setting.CreemProducts
 	common.OptionMap["CreemTestMode"] = strconv.FormatBool(setting.CreemTestMode)
 	common.OptionMap["CreemWebhookSecret"] = setting.CreemWebhookSecret
+	common.OptionMap["KyrenApiKey"] = setting.KyrenApiKey
+	common.OptionMap["KyrenWebhookSecret"] = setting.KyrenWebhookSecret
+	common.OptionMap["KyrenBaseURL"] = setting.KyrenBaseURL
+	common.OptionMap["KyrenTopUpProducts"] = setting.KyrenTopUpProducts
 	common.OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.WaffoEnabled)
 	common.OptionMap["WaffoApiKey"] = setting.WaffoApiKey
 	common.OptionMap["WaffoPrivateKey"] = setting.WaffoPrivateKey
@@ -232,6 +236,20 @@ func UpdateOption(key string, value string) error {
 func updateOptionMap(key string, value string) (err error) {
 	if IsDeprecatedBusinessGroupOption(key) {
 		return nil
+	}
+
+	if strings.HasPrefix(key, "Kyren") {
+		normalized, apply, err := setting.PrepareKyrenRuntimeOption(key, value)
+		if err != nil {
+			return err
+		}
+		if !apply {
+			return nil
+		}
+		common.OptionMapRWMutex.Lock()
+		common.OptionMap[key] = normalized
+		common.OptionMapRWMutex.Unlock()
+		return setting.ApplyKyrenRuntimeOption(key, normalized)
 	}
 
 	common.OptionMapRWMutex.Lock()

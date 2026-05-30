@@ -175,6 +175,7 @@ type SubscriptionPlan struct {
 
 	StripePriceId  string `json:"stripe_price_id" gorm:"type:varchar(128);default:''"`
 	CreemProductId string `json:"creem_product_id" gorm:"type:varchar(128);default:''"`
+	KyrenProductId string `json:"kyren_product_id" gorm:"type:varchar(128);default:''"`
 
 	// Max purchases per user (0 = unlimited)
 	MaxPurchasePerUser int `json:"max_purchase_per_user" gorm:"type:int;default:0"`
@@ -229,7 +230,9 @@ type SubscriptionOrder struct {
 	CreateTime      int64  `json:"create_time"`
 	CompleteTime    int64  `json:"complete_time"`
 
-	ProviderPayload string `json:"provider_payload" gorm:"type:text"`
+	ProviderPayload     string `json:"provider_payload" gorm:"type:text"`
+	KyrenSnapshot       string `json:"kyren_snapshot" gorm:"type:text"`
+	EntitlementSnapshot string `json:"entitlement_snapshot" gorm:"type:text"`
 }
 
 func (o *SubscriptionOrder) Insert() error {
@@ -252,6 +255,55 @@ func GetSubscriptionOrderByTradeNo(tradeNo string) *SubscriptionOrder {
 		return nil
 	}
 	return &order
+}
+
+func ClaimPendingKyrenSubscriptionOrder(tradeNo string) (bool, error) {
+	if tradeNo == "" {
+		return false, ErrSubscriptionOrderNotFound
+	}
+	result := DB.Model(&SubscriptionOrder{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusPending).
+		Update("status", common.TopUpStatusFailed)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func MarkClaimedKyrenSubscriptionOrderSuccessTx(tx *gorm.DB, order *SubscriptionOrder) error {
+	if tx == nil || order == nil || order.TradeNo == "" {
+		return errors.New("invalid subscription order")
+	}
+	updates := map[string]any{
+		"status":        common.TopUpStatusSuccess,
+		"complete_time": order.CompleteTime,
+	}
+	if order.ProviderPayload != "" {
+		updates["provider_payload"] = order.ProviderPayload
+	}
+	if order.PaymentMethod != "" {
+		updates["payment_method"] = order.PaymentMethod
+	}
+	result := tx.Model(&SubscriptionOrder{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", order.TradeNo, PaymentProviderKyren, common.TopUpStatusFailed).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrSubscriptionOrderStatusInvalid
+	}
+	order.Status = common.TopUpStatusSuccess
+	return nil
+}
+
+func RestoreClaimedKyrenSubscriptionOrder(tradeNo string) error {
+	if tradeNo == "" {
+		return nil
+	}
+	return DB.Model(&SubscriptionOrder{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed).
+		Update("status", common.TopUpStatusPending).Error
 }
 
 // User subscription instance

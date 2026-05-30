@@ -28,6 +28,28 @@ describe('subscription balance payment API payload', () => {
   })
 })
 
+describe('subscription Kyren payment API helpers', () => {
+  test('posts Kyren subscription payment requests to the subscription route', () => {
+    const source = exportedFunctionSource('paySubscriptionKyren')
+
+    assert.match(source, /\/api\/subscription\/kyren\/pay/)
+    assert.match(source, /data/)
+  })
+
+  test('uses the admin subscription Kyren product status route', () => {
+    const source = exportedFunctionSource('getSubscriptionKyrenProduct')
+
+    assert.match(source, /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/)
+  })
+
+  test('posts sync mode to the admin subscription Kyren product route', () => {
+    const source = exportedFunctionSource('syncSubscriptionKyrenProduct')
+
+    assert.match(source, /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/)
+    assert.match(source, /\{\s*mode\s*\}/)
+  })
+})
+
 describe('home public plans API helper', () => {
   test('uses an isolated quiet public endpoint for the home page', () => {
     const source = exportedFunctionSource('getHomePublicPlansQuiet')

@@ -132,6 +132,24 @@ func UpdateOption(c *gin.Context) {
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
 	}
+	if strings.HasPrefix(option.Key, "Kyren") {
+		normalized, persist, err := validateKyrenOptionBeforePersist(option.Key, option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		if !persist {
+			c.JSON(http.StatusOK, gin.H{
+				"success": true,
+				"message": "",
+			})
+			return
+		}
+		option.Value = normalized
+	}
 	if model.IsDeprecatedBusinessGroupOption(option.Key) {
 		err = model.UpdateOption(option.Key, option.Value.(string))
 		if err != nil {

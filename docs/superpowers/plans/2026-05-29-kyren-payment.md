@@ -62,15 +62,15 @@
 - 不修改生产代码。
 - 如需记录证据，可在实现记录或 PR 描述中记录脱敏摘要。
 
-- [ ] **步骤 1：确认 metadata 透传**
+- [x] **步骤 1：确认 metadata 透传**
 
 通过以下任一方式确认 Kyren `metadata.trade_no` 和 `metadata.kind` 会完整出现在 `order.paid` Webhook：Kyren staging 凭据端到端测试、低金额 `CNY` live 订单、Kyren 官方文档或官方支持确认。可接受的文档证据：Kyren 官方文档的 `order.paid.data.metadata` 字段说明，配合 `POST /v1/checkouts` 的 `metadata` 参数说明。
 
-- [ ] **步骤 2：记录证据**
+- [x] **步骤 2：记录证据**
 
 记录确认方式、日期和脱敏后的关键字段摘要。不得保存 raw webhook payload。
 
-- [ ] **步骤 3：门禁判断**
+- [x] **步骤 3：门禁判断**
 
 未确认 metadata 透传时，不进入任务 3/4 的原生 Checkout 实现；需要先回到规格，改为保存 Kyren checkout/session/order 可关联 ID 的设计。
 
@@ -87,7 +87,7 @@
 - 修改：`model/option.go`
 - 修改：`controller/option.go`
 
-- [ ] **步骤 1：编写失败的配置和工具测试**
+- [x] **步骤 1：编写失败的配置和工具测试**
 
 在 `controller/kyren_client_test.go` 新增：
 
@@ -140,7 +140,7 @@ func TestApplyKyrenRuntimeOptionDoesNotOverwriteSecretWithEmptyValue(t *testing.
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TestNormalizeKyrenBaseURL|TestFormatKyrenAmountCNY|TestNormalizeKyrenAmountString|TestNormalizeKyrenTopUpProductsJSON|TestValidateKyrenOptionBeforePersistRejectsTopUpProducts|TestApplyKyrenRuntimeOption' -count=1
@@ -148,7 +148,7 @@ go test ./controller -run 'TestNormalizeKyrenBaseURL|TestFormatKyrenAmountCNY|Te
 
 预期：FAIL，错误包含 `undefined: normalizeKyrenBaseURL`、`undefined: normalizeKyrenTopUpProductsJSON`、`undefined: validateKyrenOptionBeforePersist` 或 `undefined: applyKyrenRuntimeOption`。
 
-- [ ] **步骤 3：实现 Kyren 配置变量**
+- [x] **步骤 3：实现 Kyren 配置变量**
 
 创建 `setting/payment_kyren.go`：
 
@@ -161,7 +161,7 @@ var KyrenBaseURL = "https://api.kyren.top"
 var KyrenTopUpProducts = "[]"
 ```
 
-- [ ] **步骤 4：实现 Kyren 类型和工具**
+- [x] **步骤 4：实现 Kyren 类型和工具**
 
 在 `controller/kyren_types.go` 定义 DTO：
 
@@ -207,7 +207,7 @@ func kyrenDecimalEqual(a string, b string) bool { /* decimal Round(2).Equal */ }
 func normalizeKyrenTopUpProductsJSON(raw string) (string, error) { /* parse []kyrenTopUpProduct, validate, normalize amount, marshal */ }
 ```
 
-- [ ] **步骤 5：接入 option 默认值、运行时加载和保存前校验**
+- [x] **步骤 5：接入 option 默认值、运行时加载和保存前校验**
 
 修改 `model/option.go` 的 `InitOptionMap`：
 
@@ -242,7 +242,7 @@ func validateKyrenOptionBeforePersist(key string, value string) (normalized stri
 
 实现 `applyKyrenRuntimeOption(key, value string) error`，并由 `model.updateOptionMap` 的 Kyren 分支调用。`applyKyrenRuntimeOption` 只接收已校验值：密钥类空字符串保持运行时旧值不变；`KyrenBaseURL` 写入前调用 `normalizeKyrenBaseURL`；`KyrenTopUpProducts` 只在启动加载、定时同步或专用 topup-products 接口成功保存后进入运行时，写入前调用 `normalizeKyrenTopUpProductsJSON`。如果为避免循环依赖不能把 helper 放在 controller，则把 Kyren 校验、规范化和 runtime apply helper 放到不依赖 controller/model 的新包或 `setting` 包，并同步调整测试包名；不得让无效 BaseURL 或畸形 topup products 写入运行时。
 
-- [ ] **步骤 6：运行测试验证通过**
+- [x] **步骤 6：运行测试验证通过**
 
 ```bash
 go test ./controller -run 'TestNormalizeKyrenBaseURL|TestFormatKyrenAmountCNY|TestNormalizeKyrenAmountString|TestNormalizeKyrenTopUpProductsJSON|TestValidateKyrenOptionBeforePersistRejectsTopUpProducts|TestApplyKyrenRuntimeOption' -count=1
@@ -250,7 +250,7 @@ go test ./controller -run 'TestNormalizeKyrenBaseURL|TestFormatKyrenAmountCNY|Te
 
 预期：PASS。
 
-- [ ] **步骤 7：Commit**
+- [x] **步骤 7：Commit**
 
 ```bash
 git add setting/payment_kyren.go controller/kyren_types.go controller/kyren_client.go controller/kyren_client_test.go controller/option.go model/option.go
@@ -272,11 +272,11 @@ git commit -m "feat(payment): 添加 Kyren 基础配置和工具"
 - 修改：`controller/subscription_admin_plan_fields_test.go`
 - 创建或修改：`model/kyren_payment_test.go`
 
-- [ ] **步骤 1：编写失败的套餐字段和公开 DTO 测试**
+- [x] **步骤 1：编写失败的套餐字段和公开 DTO 测试**
 
 修改 `controller/subscription_admin_plan_fields_test.go`，在 admin create/update 字段覆盖测试中加入 `KyrenProductId: "prod_kyren_plan"`，断言数据库读取值保持一致。扩展公开套餐路由测试 `router/subscription_public_plans_route_test.go`，断言 `/api/subscription/public/plans` 返回 `kyren_product_id`，并更新严格字段白名单。
 
-- [ ] **步骤 2：编写失败的快照和常量测试**
+- [x] **步骤 2：编写失败的快照和常量测试**
 
 创建 `model/kyren_payment_test.go`：
 
@@ -305,7 +305,7 @@ func TestKyrenPaymentConstants(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 3：运行测试验证失败**
+- [x] **步骤 3：运行测试验证失败**
 
 ```bash
 go test ./model ./controller ./router -run 'TestKyrenPaymentSnapshotRoundTrip|TestKyrenSubscriptionEntitlementSnapshotRoundTrip|TestKyrenPaymentConstants|KyrenProduct|TestEnsureSubscriptionPlanTableSQLite|TestSubscriptionPlansPublicRoute' -count=1
@@ -313,7 +313,7 @@ go test ./model ./controller ./router -run 'TestKyrenPaymentSnapshotRoundTrip|Te
 
 预期：FAIL，错误包含 `undefined: KyrenPaymentSnapshot`、`undefined: SubscriptionEntitlementSnapshot`、`undefined: PaymentProviderKyren`、`unknown field KyrenProductId`，或 SQLite 迁移缺列断言失败。
 
-- [ ] **步骤 4：新增模型字段、常量和快照 helper**
+- [x] **步骤 4：新增模型字段、常量和快照 helper**
 
 - `SubscriptionPlan` 新增 `KyrenProductId string`。
 - `SubscriptionOrder` 新增 `KyrenSnapshot string` 和 `EntitlementSnapshot string`。`KyrenSnapshot` 保存 Kyren `product_id`、`amount`、`currency`；`EntitlementSnapshot` 保存本次订阅发放所需的套餐权益字段。
@@ -322,20 +322,20 @@ go test ./model ./controller ./router -run 'TestKyrenPaymentSnapshotRoundTrip|Te
 - 新增 `model/kyren_payment.go`，使用 `common.Marshal` / `common.Unmarshal` 实现 `KyrenPaymentSnapshot` round-trip。
 - 新增 `SubscriptionEntitlementSnapshot` 及 `NewSubscriptionEntitlementSnapshotFromPlan`、`MarshalSubscriptionEntitlementSnapshot`、`UnmarshalSubscriptionEntitlementSnapshot`。快照字段至少包括 `plan_id`、`total_amount`、`monthly_token_limit`、`concurrency_limit`、`queue_capacity`、`duration_unit`、`duration_value`、`custom_seconds`、`quota_reset_period`、`quota_reset_custom_seconds`、`max_purchase_per_user`、`business_code`。Kyren 订阅 Webhook 完成路径必须使用该快照发放权益，不得用当前 `SubscriptionPlan` 的可变权益字段决定历史订单。
 
-- [ ] **步骤 5：更新 admin create/update 和公开套餐 DTO**
+- [x] **步骤 5：更新 admin create/update 和公开套餐 DTO**
 
 - `AdminUpdateSubscriptionPlan` 的 `updateMap` 增加 `kyren_product_id`。
 - 公开套餐 DTO / 转换函数增加 `kyren_product_id`。
 - 管理端 DTO 如有手写白名单，也增加 `kyren_product_id`。
 
-- [ ] **步骤 6：更新 SQLite 迁移并补迁移测试**
+- [x] **步骤 6：更新 SQLite 迁移并补迁移测试**
 
 - SQLite 订阅套餐手写建表 SQL 增加 `kyren_product_id varchar(128) DEFAULT ''`。
 - required columns / add column 逻辑增加 `kyren_product_id`。
 - 如新增 `kyren_snapshot` / `entitlement_snapshot` 物理列且对应表有手写补列逻辑，则同步增加 `TEXT DEFAULT ''`。
 - 扩展 `model/subscription_distributor_test.go` 的 SQLite 迁移测试，覆盖 fresh table 和 legacy table：调用 `ensureSubscriptionPlanTableSQLite()` 后，断言 `subscription_plans.kyren_product_id` 存在且默认值为空字符串；legacy table 场景先手写创建只包含旧列的 `subscription_plans`，再调用迁移并断言补列成功。新增快照列迁移断言：`subscription_orders.kyren_snapshot`、`subscription_orders.entitlement_snapshot`、`top_ups.kyren_snapshot` 在 SQLite AutoMigrate 后存在且可写入。
 
-- [ ] **步骤 7：运行测试验证通过**
+- [x] **步骤 7：运行测试验证通过**
 
 ```bash
 go test ./model ./controller ./router -run 'TestKyrenPaymentSnapshotRoundTrip|TestKyrenSubscriptionEntitlementSnapshotRoundTrip|TestKyrenPaymentConstants|KyrenProduct|TestEnsureSubscriptionPlanTableSQLite|TestSubscriptionPlansPublicRoute' -count=1
@@ -344,7 +344,7 @@ go test ./model ./controller ./router -run 'TestKyrenPaymentSnapshotRoundTrip|Te
 预期：PASS。
 
 
-- [ ] **步骤 8：Commit**
+- [x] **步骤 8：Commit**
 
 ```bash
 git add model/subscription.go model/topup.go model/main.go model/kyren_payment.go model/kyren_payment_test.go model/subscription_distributor_test.go controller/subscription.go controller/subscription_admin_plan_fields_test.go router/subscription_public_plans_route_test.go
@@ -364,11 +364,11 @@ git commit -m "feat(payment): 增加 Kyren 订单快照和套餐绑定字段"
 - 创建或修改：`controller/subscription_payment_kyren.go`
 - 修改：`router/api-router.go`
 
-- [ ] **步骤 1：编写失败的 Kyren client HTTP 测试**
+- [x] **步骤 1：编写失败的 Kyren client HTTP 测试**
 
 在 `controller/kyren_client_test.go` 增加 `TestKyrenClientCreateProductUsesAPIKey`，用 `httptest.NewServer` 验证 `x-api-key` 请求头、`/v1/products` path 和响应解析。直接构造 `kyrenClient{baseURL: server.URL, apiKey: "kyren_live_test", httpClient: server.Client()}`，不要通过生产 BaseURL allowlist。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run TestKyrenClientCreateProductUsesAPIKey -count=1
@@ -376,11 +376,11 @@ go test ./controller -run TestKyrenClientCreateProductUsesAPIKey -count=1
 
 预期：FAIL，错误包含 `undefined: kyrenClient` 或 `createProduct undefined`。
 
-- [ ] **步骤 3：实现 Kyren HTTP client 和测试注入点**
+- [x] **步骤 3：实现 Kyren HTTP client 和测试注入点**
 
 实现 `kyrenAPI` interface、`kyrenClient`、`newKyrenClient()`、`newKyrenClientForController` 注入点，以及 `createProduct`、`updateProduct`、`retrieveProduct`、`listProducts`、`createCheckout`。生产 `newKyrenClient()` 必须调用 `normalizeKyrenBaseURL(setting.KyrenBaseURL)`；handler 测试替换 `newKyrenClientForController` 为 fake client。
 
-- [ ] **步骤 4：编写失败的产品同步和 option 并发测试**
+- [x] **步骤 4：编写失败的产品同步和 option 并发测试**
 
 创建 `controller/kyren_products_test.go`，至少包含：
 
@@ -399,7 +399,7 @@ func TestAdminSyncKyrenTopUpProductWritesManageLog(t *testing.T) { /* 充值档�
 func TestAdminSyncKyrenTopUpProductReturnsLatestProductsAndVersion(t *testing.T) { /* sync 成功响应包含最新 products/version/product_id，前端可直接更新 CAS 状态 */ }
 ```
 
-- [ ] **步骤 5：运行测试验证失败**
+- [x] **步骤 5：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TestKyrenClientCreateProductUsesAPIKey|TestAdminSyncSubscriptionKyrenProductCreatesAndBindsProduct|TestAdminSyncSubscriptionKyrenProductReturnsProductIDWhenLocalBindFails|TestAdminSyncSubscriptionKyrenProductReusesMetadataMatchedProduct|TestAdminUpdateKyrenTopUpProductsRejectsStaleVersion|TestAdminSyncSubscriptionKyrenProductWritesManageLog|TestAdminUpdateKyrenTopUpProductsWritesManageLog|TestAdminSyncKyrenTopUpProductMergesLatestOptionValue|TestAdminSyncKyrenTopUpProductUpdatesExistingProduct|TestAdminSyncKyrenTopUpProductReturnsProductIDWhenOptionSaveFails|TestAdminSyncKyrenTopUpProductReusesMetadataMatchedProduct|TestAdminSyncKyrenTopUpProductWritesManageLog|TestAdminSyncKyrenTopUpProductReturnsLatestProductsAndVersion' -count=1
@@ -408,14 +408,14 @@ go test ./controller -run 'TestKyrenClientCreateProductUsesAPIKey|TestAdminSyncS
 预期：client 测试 PASS，同步接口测试 FAIL，错误包含 handler undefined、冲突检测缺失、补偿响应缺失或 metadata 复用缺失。
 
 
-- [ ] **步骤 6：实现产品查询和 sync handler**
+- [x] **步骤 6：实现产品查询和 sync handler**
 
 - `AdminGetSubscriptionKyrenProduct` / `AdminSyncSubscriptionKyrenProduct`：校验 plan、CNY、价格；`create_or_update` 非空时 retrieve+update，404 返回错误；`create_new` 前先按 metadata（`source=new-api`、`kind=subscription_plan`、`plan_id`）查询并复用匹配产品，未找到才创建；创建成功但本地回填失败时，响应必须包含新 `product_id` 和错误原因，供管理员手动绑定或安全重试；metadata 包含 `source=new-api`、`kind=subscription_plan`、`plan_id`、`business_code`；订阅产品 create/update 成功必须写入 `model.LogTypeManage`，`Other.admin_info` 包含管理员 ID/用户名等受控信息。
 - `AdminListKyrenProducts` / `AdminGetKyrenProduct`：只读查询。
 - `AdminListKyrenTopUpProducts` 返回 `{ products, version }`；`AdminGetKyrenTopUpProductStatus` 返回单档远端状态和最新 version，响应包含 `product_id`、`status`、`price`、`currency`、`price_matches`、`currency_matches`、`version`；`AdminUpdateKyrenTopUpProducts` 请求必须包含 `products` 和 `version`，后端基于数据库中最新 `options.KyrenTopUpProducts` 计算 version（推荐 canonical JSON hash 或 `updated_at`），version 不匹配返回 HTTP 409 和可重试错误，不覆盖原值；保存前仍调用 `normalizeKyrenTopUpProductsJSON`；保存成功必须写入 `model.LogTypeManage`。
 - `AdminSyncKyrenTopUpProduct`：使用 `common.Unmarshal`；在事务行锁下读取最新 option JSON，只合并目标档位 `product_id` / 同步状态；请求支持 `mode=create_or_update|create_new`，已有 `product_id` 且 `mode=create_or_update` 时必须 retrieve ACTIVE 产品并 update 远端 `name`、`description`、`price`、`currency`、`metadata`，404/ARCHIVED 返回错误不创建新产品；`mode=create_new` 或未绑定时，先按 metadata（`source=new-api`、`kind=wallet_topup`、`topup_product_id`）查询并复用匹配产品，未找到才创建；Kyren 创建成功但 option 回写失败时，响应必须包含新 `product_id` 和错误原因；sync 成功响应必须包含最新 `{ products, version, product_id }`，供前端直接更新 CAS 状态；不得覆盖同一时间由其他管理员修改的其他档位内容；sync 成功必须写入 `model.LogTypeManage`。
 
-- [ ] **步骤 7：增加路由**
+- [x] **步骤 7：增加路由**
 
 ```go
 apiRouter.GET("/payment/kyren/products", middleware.AdminAuth(), controller.AdminListKyrenProducts)
@@ -428,7 +428,7 @@ subscriptionAdminRoute.GET("/plans/:id/kyren/product", controller.AdminGetSubscr
 subscriptionAdminRoute.POST("/plans/:id/kyren/product", middleware.CriticalRateLimit(), controller.AdminSyncSubscriptionKyrenProduct)
 ```
 
-- [ ] **步骤 8：运行测试验证通过**
+- [x] **步骤 8：运行测试验证通过**
 
 ```bash
 go test ./controller -run 'TestKyrenClientCreateProductUsesAPIKey|TestAdminSyncSubscriptionKyrenProductCreatesAndBindsProduct|TestAdminSyncSubscriptionKyrenProductReturnsProductIDWhenLocalBindFails|TestAdminSyncSubscriptionKyrenProductReusesMetadataMatchedProduct|TestAdminUpdateKyrenTopUpProductsRejectsStaleVersion|TestAdminSyncSubscriptionKyrenProductWritesManageLog|TestAdminUpdateKyrenTopUpProductsWritesManageLog|TestAdminSyncKyrenTopUpProductMergesLatestOptionValue|TestAdminSyncKyrenTopUpProductUpdatesExistingProduct|TestAdminSyncKyrenTopUpProductReturnsProductIDWhenOptionSaveFails|TestAdminSyncKyrenTopUpProductReusesMetadataMatchedProduct|TestAdminSyncKyrenTopUpProductWritesManageLog|TestAdminSyncKyrenTopUpProductReturnsLatestProductsAndVersion' -count=1
@@ -437,7 +437,7 @@ go test ./controller -run 'TestKyrenClientCreateProductUsesAPIKey|TestAdminSyncS
 预期：PASS。
 
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add controller/kyren_client.go controller/kyren_client_test.go controller/kyren_products_test.go controller/topup_kyren.go controller/subscription_payment_kyren.go router/api-router.go
@@ -457,7 +457,7 @@ git commit -m "feat(payment): 添加 Kyren 产品同步接口"
 - 创建：`controller/topup_kyren_test.go`
 - 创建：`controller/subscription_payment_kyren_test.go`
 
-- [ ] **步骤 1：编写失败的 Webhook 和 Checkout 测试**
+- [x] **步骤 1：编写失败的 Webhook 和 Checkout 测试**
 
 新增以下测试：
 
@@ -479,7 +479,7 @@ func TestKyrenCheckoutRejectsArchivedOrMismatchedProductBeforeOrderCreation(t *t
 func TestKyrenPayRejectsMissingWebhookSecret(t *testing.T) { /* API Key 存在但 Webhook Secret 缺失时拒绝创建订阅/充值 pending 订单 */ }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TestVerifyKyrenWebhookSignature|TestKyrenWebhookCompletesSubscriptionOrder|TestKyrenWebhookCompletesSubscriptionOrderUsingEntitlementSnapshot|TestKyrenWebhookCompletesTopUpUsingSnapshot|TestKyrenWebhookMissingMetadata|TestKyrenWebhookRejectsProviderMismatch|TestKyrenWebhookRejectsAmountCurrencyOrProductMismatch|TestKyrenWebhookClosedOnlyExpiresPendingOrder|TestKyrenWebhookRefundedRecordsManualActionAndReturnsSuccess|TestKyrenCheckoutFailureFinalizesPendingOrder|TestKyrenCheckoutRejectsArchivedOrMismatchedProductBeforeOrderCreation|TestKyrenPayRejectsMissingWebhookSecret' -count=1
@@ -487,14 +487,14 @@ go test ./controller -run 'TestVerifyKyrenWebhookSignature|TestKyrenWebhookCompl
 
 预期：FAIL，错误包含 `undefined: verifyKyrenWebhookSignature` 或 handler 未实现。
 
-- [ ] **步骤 3：实现签名、订阅支付、充值支付和 Webhook**
+- [x] **步骤 3：实现签名、订阅支付、充值支付和 Webhook**
 
 - `verifyKyrenWebhookSignature`：`KyrenWebhookSecret` 为空时直接拒绝；timestamp 是 Unix milliseconds；校验 5 分钟容忍；HMAC-SHA256(`timestamp + "." + raw_body`)；签名格式 `sha256=<hex>`；使用 `hmac.Equal`。
 - `SubscriptionRequestKyrenPay`：校验 user、plan、CNY、`KyrenProductId`、`KyrenApiKey` 和 `KyrenWebhookSecret` 均已配置；缺少 API Key 或 Webhook Secret 时不得创建 pending 订单；retrieve product ACTIVE 且 price/currency 匹配；创建 pending 订单并保存 Kyren payment snapshot 和 entitlement snapshot；createCheckout 失败则终态化 pending；返回 checkout_url。
 - `RequestKyrenPay`：请求 `product_id` 是本地档位 ID；校验档位 enabled/CNY/product/amount/quota，且 `KyrenApiKey` 与 `KyrenWebhookSecret` 均已配置；缺少任一密钥时不得创建 pending 订单；retrieve product ACTIVE 且 price/currency 匹配；创建 TopUp pending 和 snapshot；createCheckout 失败则终态化 pending；返回 checkout_url。
 - `KyrenWebhook`：raw body 验签；metadata 缺失返回 2xx 不发放；subscription/topup provider guard；读取 snapshot 校验 product/amount/currency；订阅完成时调用 Kyren 专用完成函数（如 `completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation`），该函数在事务中锁定订单、解析 `SubscriptionOrder.EntitlementSnapshot`、用快照构造发放用 `SubscriptionPlan` 调用 `CreateUserSubscriptionFromPlanTx`，更新订单状态和受控 provider payload，并继续触发 `service.TryEnsureInvitationEntitlementForPaidUser`；不得直接调用会重新读取当前套餐的 `completeSubscriptionOrderAndEvaluateInvitation` / `model.CompleteSubscriptionOrder` 完成 Kyren 订阅；`order.closed` 只影响 pending；`order.refunded` 记录人工处理并返回 2xx；保存受控摘要，不保存 raw payload。
 
-- [ ] **步骤 4：增加路由**
+- [x] **步骤 4：增加路由**
 
 ```go
 apiRouter.POST("/kyren/webhook", controller.KyrenWebhook)
@@ -502,7 +502,7 @@ selfRoute.POST("/kyren/pay", middleware.CriticalRateLimit(), controller.RequestK
 subscriptionRoute.POST("/kyren/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestKyrenPay)
 ```
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./controller -run 'TestVerifyKyrenWebhookSignature|TestKyrenWebhookCompletesSubscriptionOrder|TestKyrenWebhookCompletesSubscriptionOrderUsingEntitlementSnapshot|TestKyrenWebhookCompletesTopUpUsingSnapshot|TestKyrenWebhookMissingMetadata|TestKyrenWebhookRejectsProviderMismatch|TestKyrenWebhookRejectsAmountCurrencyOrProductMismatch|TestKyrenWebhookClosedOnlyExpiresPendingOrder|TestKyrenWebhookRefundedRecordsManualActionAndReturnsSuccess|TestKyrenCheckoutFailureFinalizesPendingOrder|TestKyrenCheckoutRejectsArchivedOrMismatchedProductBeforeOrderCreation|TestKyrenPayRejectsMissingWebhookSecret' -count=1
@@ -511,7 +511,7 @@ go test ./controller -run 'TestVerifyKyrenWebhookSignature|TestKyrenWebhookCompl
 预期：PASS。
 
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add controller/topup_kyren.go controller/subscription_payment_kyren.go controller/subscription_payment_completion.go controller/topup_kyren_test.go controller/subscription_payment_kyren_test.go router/api-router.go
@@ -535,11 +535,11 @@ git commit -m "feat(payment): 接入 Kyren Checkout 和 Webhook"
 - 修改或创建：`web/default/src/features/wallet/lib/payment.ts`
 - 修改：`web/default/src/features/wallet/wallet-layout.test.ts`
 
-- [ ] **步骤 1：编写失败的后端 topup info 测试**
+- [x] **步骤 1：编写失败的后端 topup info 测试**
 
 新增 `TestGetTopUpInfoIncludesKyrenProducts`：设置 Kyren 配置和 enabled CNY 档位，调用 `GetTopUpInfo`，断言 `enable_kyren_topup=true`，`kyren_topup_products` 只包含本地 id/name/amount/currency/quota，不包含 Kyren `prod_xxx`。
 
-- [ ] **步骤 2：运行后端测试验证失败**
+- [x] **步骤 2：运行后端测试验证失败**
 
 ```bash
 go test ./controller -run TestGetTopUpInfoIncludesKyrenProducts -count=1
@@ -547,14 +547,14 @@ go test ./controller -run TestGetTopUpInfoIncludesKyrenProducts -count=1
 
 预期：FAIL，响应缺 Kyren 字段。
 
-- [ ] **步骤 3：实现 topup info Kyren 字段**
+- [x] **步骤 3：实现 topup info Kyren 字段**
 
 - 增加 `enable_kyren_topup`、`enable_kyren_subscription`、`kyren_topup_products`。
 - `enable_kyren_topup` / `enable_kyren_subscription` 只有在 `KyrenApiKey` 和 `KyrenWebhookSecret` 都已配置时才为 true；缺少 Webhook Secret 时不展示用户侧入口，避免创建无法验签入账的 Checkout。
 - 只返回 enabled、CNY、product_id 非空、amount 有效的本地档位。
 - 不返回 Kyren `prod_xxx`。
 
-- [ ] **步骤 4：运行后端测试验证通过**
+- [x] **步骤 4：运行后端测试验证通过**
 
 ```bash
 go test ./controller -run TestGetTopUpInfoIncludesKyrenProducts -count=1
@@ -562,7 +562,7 @@ go test ./controller -run TestGetTopUpInfoIncludesKyrenProducts -count=1
 
 预期：PASS。
 
-- [ ] **步骤 5：编写失败的前端钱包测试**
+- [x] **步骤 5：编写失败的前端钱包测试**
 
 在 `wallet-layout.test.ts` 或新测试文件中测试真实导出 helper：
 
@@ -578,7 +578,7 @@ test('submits Kyren payment with local top-up product id', async () => {
 })
 ```
 
-- [ ] **步骤 6：运行前端测试验证失败**
+- [x] **步骤 6：运行前端测试验证失败**
 
 ```bash
 bun test src/features/wallet/wallet-layout.test.ts
@@ -586,7 +586,7 @@ bun test src/features/wallet/wallet-layout.test.ts
 
 工作目录：`web/default`。预期：FAIL，缺少 `processKyrenTopUpProductPayment` 或类型。
 
-- [ ] **步骤 7：实现前端钱包 Kyren 类型、API 和页面链路**
+- [x] **步骤 7：实现前端钱包 Kyren 类型、API 和页面链路**
 
 - `types.ts` 增加 `KyrenTopUpProduct`、`enable_kyren_topup`、`enable_kyren_subscription`、`kyren_topup_products`。
 - `api.ts` 增加 `requestKyrenPayment({ product_id })`。
@@ -594,7 +594,7 @@ bun test src/features/wallet/wallet-layout.test.ts
 - `wallet/index.tsx` 增加 `selectedKyrenTopUpProduct` 状态，将档位和回调传给 `RechargeFormCard`。
 - `recharge-form-card.tsx` 展示 Kyren 固定档位列表，文案使用 `t()`。
 
-- [ ] **步骤 8：运行前端测试验证通过**
+- [x] **步骤 8：运行前端测试验证通过**
 
 ```bash
 bun test src/features/wallet/wallet-layout.test.ts
@@ -602,7 +602,7 @@ bun test src/features/wallet/wallet-layout.test.ts
 
 工作目录：`web/default`。预期：PASS。
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add controller/topup.go controller/payment_webhook_availability.go web/default/src/features/wallet/index.tsx web/default/src/features/wallet/types.ts web/default/src/features/wallet/api.ts web/default/src/features/wallet/hooks/use-topup-info.ts web/default/src/features/wallet/hooks/use-payment.ts web/default/src/features/wallet/components/recharge-form-card.tsx web/default/src/features/wallet/lib/payment.ts web/default/src/features/wallet/wallet-layout.test.ts
@@ -625,7 +625,7 @@ git commit -m "feat(payment): 暴露 Kyren 用户侧充值入口"
 - 修改：`web/default/src/features/subscriptions/api.test.ts`
 - 创建或修改：`web/default/src/features/subscriptions/components/subscription-kyren-payment.test.tsx`
 
-- [ ] **步骤 1：编写失败的 plan form 测试**
+- [x] **步骤 1：编写失败的 plan form 测试**
 
 ```ts
 test('preserves kyren product id in plan form payload', () => {
@@ -634,7 +634,7 @@ test('preserves kyren product id in plan form payload', () => {
 })
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 bun test src/features/subscriptions/lib/plan-form.test.ts
@@ -642,18 +642,18 @@ bun test src/features/subscriptions/lib/plan-form.test.ts
 
 工作目录：`web/default`。预期：FAIL，`kyren_product_id` 不存在。
 
-- [ ] **步骤 3：实现订阅类型和表单字段**
+- [x] **步骤 3：实现订阅类型和表单字段**
 
 - `SubscriptionPlan` 和 `PublicSubscriptionPlan` 增加 `kyren_product_id?: string`，并确保前端可读取可购买性所需字段：`currency`、`price_amount`、`enabled`、`public_visible`、`is_trial`、`max_purchase_per_user` 或后端等价可购买状态。
 - `plan-form.ts` 的 schema、defaults、`planToFormValues`、`formValuesToPlanPayload` 增加 `kyren_product_id`。
 
-- [ ] **步骤 4：实现订阅 API 和可购买性 helper**
+- [x] **步骤 4：实现订阅 API 和可购买性 helper**
 
 增加 `paySubscriptionKyren`、`getSubscriptionKyrenProduct`、`syncSubscriptionKyrenProduct`，均使用统一 `api` 实例。`getSubscriptionKyrenProduct` 的响应类型必须包含 `status`、`price`、`currency`、`price_matches`、`currency_matches`、`product_id` 和缺失/归档状态，供抽屉状态卡片渲染。
 
 新增 `getKyrenSubscriptionAvailability(plan, topupInfo, purchaseContext)` 纯 helper，返回 `{ available, reasonKey }`，统一判断全局 Kyren 可用性、`kyren_product_id`、CNY、`price_amount >= 0.01`、非试用、enabled/public-visible、购买上限等条件。
 
-- [ ] **步骤 5：实现套餐抽屉 Kyren 区域**
+- [x] **步骤 5：实现套餐抽屉 Kyren 区域**
 
 - `Kyren Product ID` 输入框。
 - 编辑模式显示 `Create Kyren product`、`Sync to Kyren`、`Refresh Kyren status`。
@@ -662,7 +662,7 @@ bun test src/features/subscriptions/lib/plan-form.test.ts
 - 渲染状态卡片，展示 `product_id`、`status`、`price`、`currency`；当产品 missing、archived、`price_matches=false` 或 `currency_matches=false` 时，用醒目告警展示 `Kyren product is missing`、`Kyren product is archived`、`Kyren product price mismatch`、`Kyren product currency mismatch` 等 i18n 文案。
 - 文案全部使用 `t()`。
 
-- [ ] **步骤 6：编写失败的订阅 Kyren 点击链路和可购买性测试**
+- [x] **步骤 6：编写失败的订阅 Kyren 点击链路和可购买性测试**
 
 创建或扩展 `subscription-kyren-payment.test.tsx`，测试用户点击 Kyren 按钮会调用真实支付 helper/API 并打开 checkout，并测试不可购买条件：
 
@@ -688,14 +688,14 @@ test('marks Kyren subscription unavailable for trial, non-CNY, free, hidden, dis
 })
 ```
 
-- [ ] **步骤 7：实现订阅购买弹窗和父组件传参**
+- [x] **步骤 7：实现订阅购买弹窗和父组件传参**
 
 - `subscription-purchase-dialog.tsx` 增加 Kyren 按钮，按钮可用性必须由 `getKyrenSubscriptionAvailability` 决定：只有全局 Kyren 可用、plan `kyren_product_id` 非空、CNY、价格大于等于 `0.01`、非试用、enabled/public-visible、购买上限未达成时启用。
 - 按钮点击调用 `paySubscriptionKyren({ plan_id })`，成功读取 `data.checkout_url` 并打开 Checkout；失败展示 `Kyren checkout creation failed` 或 `Kyren payment is unavailable` 等 i18n 错误；不可用时展示 `reasonKey` 对应 i18n 原因，而不是让用户点击后才看到通用失败。
 - 新增 `processKyrenSubscriptionPayment` 和 `getKyrenSubscriptionAvailability` helper 供组件和测试复用。
 - `subscription-plans-card.tsx` 从 `topupInfo?.enable_kyren_subscription` 派生全局可用性并传给弹窗。
 
-- [ ] **步骤 8：运行测试验证通过**
+- [x] **步骤 8：运行测试验证通过**
 
 ```bash
 bun test src/features/subscriptions/lib/plan-form.test.ts src/features/subscriptions/api.test.ts src/features/subscriptions/components/subscription-kyren-payment.test.tsx
@@ -703,7 +703,7 @@ bun test src/features/subscriptions/lib/plan-form.test.ts src/features/subscript
 
 工作目录：`web/default`。预期：PASS。
 
-- [ ] **步骤 9：Commit**
+- [x] **步骤 9：Commit**
 
 ```bash
 git add web/default/src/features/subscriptions/types.ts web/default/src/features/subscriptions/lib/plan-form.ts web/default/src/features/subscriptions/api.ts web/default/src/features/subscriptions/components/subscriptions-mutate-drawer.tsx web/default/src/features/subscriptions/components/dialogs/subscription-purchase-dialog.tsx web/default/src/features/wallet/components/subscription-plans-card.tsx web/default/src/features/subscriptions/lib/plan-form.test.ts web/default/src/features/subscriptions/api.test.ts web/default/src/features/subscriptions/components/subscription-kyren-payment.test.tsx
@@ -725,7 +725,7 @@ git commit -m "feat(payment): 添加订阅 Kyren 支付入口"
 - 创建或修改：`web/default/src/features/system-settings/integrations/payment-settings-section.test.tsx`
 - 创建或修改：`web/default/src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx`
 
-- [ ] **步骤 1：编写失败的充值档位校验测试**
+- [x] **步骤 1：编写失败的充值档位校验测试**
 
 ```ts
 import { validateKyrenTopUpProducts } from './kyren-topup-products-visual-editor'
@@ -738,7 +738,7 @@ test('rejects duplicate kyren topup product ids', () => {
 })
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 bun test src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx
@@ -746,7 +746,7 @@ bun test src/features/system-settings/integrations/kyren-topup-products-visual-e
 
 工作目录：`web/default`。预期：FAIL，module/function undefined。
 
-- [ ] **步骤 3：实现 Kyren 充值档位编辑器**
+- [x] **步骤 3：实现 Kyren 充值档位编辑器**
 
 创建 `kyren-topup-products-visual-editor.tsx` 和 `kyren-topup-product-dialog.tsx`：
 
@@ -755,7 +755,7 @@ bun test src/features/system-settings/integrations/kyren-topup-products-visual-e
 - UI 风格参考 `creem-products-visual-editor.tsx`。
 - 每档提供创建/同步/刷新状态入口；刷新调用任务 3 的 `GET /api/payment/kyren/topup-products/:id/status`，用返回的 `status`、`price_matches`、`currency_matches` 渲染只读状态；sync 调用任务 3 的 `POST /api/payment/kyren/topup-products/:id/sync`，成功后用服务端最新 `{ products, version }` 覆盖本地编辑器状态。
 
-- [ ] **步骤 4：接入支付设置数据流**
+- [x] **步骤 4：接入支付设置数据流**
 
 - `system-settings/types.ts` 的 `BillingSettings` 增加 `KyrenApiKey`、`KyrenWebhookSecret`、`KyrenBaseURL`、`KyrenTopUpProducts`、`ServerAddress`；其中 `ServerAddress` 用于渲染 Webhook URL，不作为 Kyren 保存项提交。
 - `billing/index.tsx` 的 `defaultBillingSettings` 增加 `ServerAddress: ''`，确保 `SettingsPage` 的 option 归并逻辑会读取 `/api/option/` 返回的真实 `ServerAddress`。
@@ -766,7 +766,7 @@ bun test src/features/system-settings/integrations/kyren-topup-products-visual-e
 - 显示 Webhook URL：使用去尾斜杠后的 `{ServerAddress}/api/kyren/webhook`；`ServerAddress` 为空时显示只读提示 `Server address is not configured`，并说明部署后需配置服务器地址。测试需断言已配置 `ServerAddress` 时渲染完整 Webhook URL。
 - Kyren 充值档位不得通过通用 `UpdateOption` 保存整段 `KyrenTopUpProducts`。加载时调用 `GET /api/payment/kyren/topup-products` 读取 `{ products, version }`；保存时调用 `PUT /api/payment/kyren/topup-products` 并携带当前 `version`；收到 409 时提示配置已更新并 refetch；refresh 调用 `GET /api/payment/kyren/topup-products/:id/status`；sync 调用 `POST /api/payment/kyren/topup-products/:id/sync`；所有操作成功后合并服务端最新数据。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 bun test src/features/system-settings/integrations/payment-settings-section.test.tsx src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx
@@ -774,7 +774,7 @@ bun test src/features/system-settings/integrations/payment-settings-section.test
 
 工作目录：`web/default`。预期：PASS。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add web/default/src/features/system-settings/types.ts web/default/src/features/system-settings/billing/index.tsx web/default/src/features/system-settings/billing/section-registry.tsx web/default/src/features/system-settings/integrations/payment-settings-section.tsx web/default/src/features/system-settings/integrations/kyren-topup-products-visual-editor.tsx web/default/src/features/system-settings/integrations/kyren-topup-product-dialog.tsx web/default/src/features/system-settings/integrations/payment-settings-section.test.tsx web/default/src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx
@@ -795,7 +795,7 @@ git commit -m "feat(payment): 添加 Kyren 支付设置界面"
 - 修改：`web/default/src/i18n/locales/vi.json`
 - 创建：`web/default/src/features/subscriptions/kyren-i18n.test.ts`
 
-- [ ] **步骤 1：编写失败的 i18n 覆盖测试**
+- [x] **步骤 1：编写失败的 i18n 覆盖测试**
 
 ```ts
 import en from '@/i18n/locales/en.json'
@@ -836,7 +836,7 @@ test.each(Object.entries(locales))('%s has Kyren translations', (_name, locale) 
 })
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 bun test src/features/subscriptions/kyren-i18n.test.ts
@@ -844,11 +844,11 @@ bun test src/features/subscriptions/kyren-i18n.test.ts
 
 工作目录：`web/default`。预期：FAIL，缺少 Kyren 翻译 key。
 
-- [ ] **步骤 3：补充 6 个 locale 文件**
+- [x] **步骤 3：补充 6 个 locale 文件**
 
 向 6 个 JSON 文件的 `translation` 节点添加 `requiredKeys` 中的全部 key，且同步任务 5-7 实际新增的其他 `t('...')` 文案。不得只补测试中的基础 key；实现过程中新增的 Kyren 用户可见文案都必须加入 en、zh、fr、ja、ru、vi。
 
-- [ ] **步骤 4：运行 i18n 测试验证通过**
+- [x] **步骤 4：运行 i18n 测试验证通过**
 
 ```bash
 bun test src/features/subscriptions/kyren-i18n.test.ts
@@ -856,7 +856,7 @@ bun test src/features/subscriptions/kyren-i18n.test.ts
 
 工作目录：`web/default`。预期：PASS。
 
-- [ ] **步骤 5：运行前端目标测试**
+- [x] **步骤 5：运行前端目标测试**
 
 ```bash
 bun test src/features/subscriptions/lib/plan-form.test.ts src/features/subscriptions/api.test.ts src/features/wallet/wallet-layout.test.ts src/features/system-settings/integrations/payment-settings-section.test.tsx src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx src/features/subscriptions/components/subscription-kyren-payment.test.tsx src/features/subscriptions/kyren-i18n.test.ts
@@ -864,7 +864,7 @@ bun test src/features/subscriptions/lib/plan-form.test.ts src/features/subscript
 
 工作目录：`web/default`。预期：PASS。
 
-- [ ] **步骤 6：Commit**
+- [x] **步骤 6：Commit**
 
 ```bash
 git add web/default/src/i18n/locales/en.json web/default/src/i18n/locales/zh.json web/default/src/i18n/locales/fr.json web/default/src/i18n/locales/ja.json web/default/src/i18n/locales/ru.json web/default/src/i18n/locales/vi.json web/default/src/features/subscriptions/kyren-i18n.test.ts

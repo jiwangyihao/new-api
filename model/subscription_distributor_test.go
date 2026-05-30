@@ -206,11 +206,123 @@ func TestEnsureSubscriptionPlanTableSQLite_CreatesBusinessCodeUniqueIndexOnFresh
 
 	require.NoError(t, ensureSubscriptionPlanTableSQLite())
 	require.True(t, DB.Migrator().HasIndex("subscription_plans", "idx_subscription_plans_business_code"))
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "kyren_product_id"))
 
 	code := "basic_monthly"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7210, Title: "Basic A", Enabled: true, BusinessCode: &code}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7212, Title: "Kyren Fresh", Enabled: true, KyrenProductId: "prod_fresh"}).Error)
+	var freshPlan SubscriptionPlan
+	require.NoError(t, DB.First(&freshPlan, 7212).Error)
+	assert.Equal(t, "prod_fresh", freshPlan.KyrenProductId)
 	dup := "basic_monthly"
 	require.Error(t, DB.Create(&SubscriptionPlan{Id: 7211, Title: "Basic B", Enabled: true, BusinessCode: &dup}).Error)
+}
+
+func TestEnsureSubscriptionPlanTableSQLite_AddsKyrenProductIdToLegacyTable(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+
+	require.NoError(t, DB.Exec(`CREATE TABLE subscription_plans (
+		id integer PRIMARY KEY,
+		title varchar(128) NOT NULL,
+		subtitle varchar(255) DEFAULT '',
+		price_amount decimal(10,6) NOT NULL,
+		currency varchar(8) NOT NULL DEFAULT 'USD',
+		duration_unit varchar(16) NOT NULL DEFAULT 'month',
+		duration_value integer NOT NULL DEFAULT 1,
+		custom_seconds bigint NOT NULL DEFAULT 0,
+		enabled numeric DEFAULT 1,
+		sort_order integer DEFAULT 0,
+		stripe_price_id varchar(128) DEFAULT '',
+		creem_product_id varchar(128) DEFAULT '',
+		max_purchase_per_user integer DEFAULT 0,
+		upgrade_group varchar(64) DEFAULT '',
+		total_amount bigint NOT NULL DEFAULT 0,
+		monthly_token_limit bigint NOT NULL DEFAULT 0,
+		concurrency_limit integer NOT NULL DEFAULT 0,
+		queue_capacity integer NOT NULL DEFAULT 0,
+		is_trial numeric DEFAULT 0,
+		invite_trial numeric DEFAULT 0,
+		public_visible numeric DEFAULT 1,
+		trial_duration_hours integer NOT NULL DEFAULT 0,
+		reward_eligible numeric DEFAULT 1,
+		business_code varchar(64) DEFAULT NULL,
+		quota_reset_period varchar(16) DEFAULT 'never',
+		quota_reset_custom_seconds bigint DEFAULT 0,
+		created_at bigint,
+		updated_at bigint
+	)`).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO subscription_plans (id, title, price_amount, business_code, enabled) VALUES (7213, 'Legacy', 40, 'legacy_kyren', 1)`).Error)
+
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "kyren_product_id"))
+
+	var legacyPlan SubscriptionPlan
+	require.NoError(t, DB.First(&legacyPlan, 7213).Error)
+	assert.Equal(t, "", legacyPlan.KyrenProductId)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", 7213).Update("kyren_product_id", "prod_legacy").Error)
+	require.NoError(t, DB.First(&legacyPlan, 7213).Error)
+	assert.Equal(t, "prod_legacy", legacyPlan.KyrenProductId)
+}
+
+func TestKyrenSnapshotColumnsAutoMigrateSQLite(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+
+	require.NoError(t, DB.AutoMigrate(&TopUp{}, &SubscriptionOrder{}))
+	require.True(t, DB.Migrator().HasColumn(&TopUp{}, "kyren_snapshot"))
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionOrder{}, "kyren_snapshot"))
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionOrder{}, "entitlement_snapshot"))
+
+	require.NoError(t, DB.Create(&TopUp{
+		Id:              7214,
+		UserId:          7215,
+		Amount:          4000,
+		Money:           40,
+		TradeNo:         "kyren_topup_snapshot",
+		PaymentMethod:   PaymentMethodKyren,
+		PaymentProvider: PaymentProviderKyren,
+		Status:          common.TopUpStatusPending,
+		KyrenSnapshot:   `{"product_id":"prod_topup","amount":"40.00","currency":"CNY"}`,
+	}).Error)
+	require.NoError(t, DB.Create(&SubscriptionOrder{
+		Id:                  7216,
+		UserId:              7217,
+		PlanId:              7218,
+		Money:               40,
+		TradeNo:             "kyren_subscription_snapshot",
+		PaymentMethod:       PaymentMethodKyren,
+		PaymentProvider:     PaymentProviderKyren,
+		Status:              common.TopUpStatusPending,
+		KyrenSnapshot:       `{"product_id":"prod_subscription","amount":"40.00","currency":"CNY"}`,
+		EntitlementSnapshot: `{"plan_id":7218,"queue_capacity":9}`,
+	}).Error)
+
+	var topUp TopUp
+	require.NoError(t, DB.First(&topUp, 7214).Error)
+	assert.Contains(t, topUp.KyrenSnapshot, "prod_topup")
+	var order SubscriptionOrder
+	require.NoError(t, DB.First(&order, 7216).Error)
+	assert.Contains(t, order.KyrenSnapshot, "prod_subscription")
+	assert.Contains(t, order.EntitlementSnapshot, "queue_capacity")
 }
 
 func seedDistributorSubscriptionPlanForTest(t *testing.T, id int, code string, tokenLimit int64) {

@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
+import { processKyrenTopUpProductPayment } from './lib/payment'
 
 function readWalletSource(): string {
   return readFileSync('src/features/wallet/index.tsx', 'utf8')
@@ -38,6 +39,30 @@ function readAffiliateRewardsSource(): string {
   )
 }
 
+
+describe('wallet Kyren payment flow', () => {
+  test('submits Kyren payment with local top-up product id', async () => {
+    const calls: Array<{ product_id: string }> = []
+    const opened: string[] = []
+
+    await processKyrenTopUpProductPayment({
+      productId: 'topup_cny_10',
+      requestKyrenPayment: async (request) => {
+        calls.push(request)
+        return {
+          success: true,
+          data: { checkout_url: 'https://checkout.example/kyren' },
+        }
+      },
+      openCheckout: (url) => {
+        opened.push(url)
+      },
+    })
+
+    assert.deepEqual(calls, [{ product_id: 'topup_cny_10' }])
+    assert.deepEqual(opened, ['https://checkout.example/kyren'])
+  })
+})
 describe('wallet page layout', () => {
   test('places subscription plans before add-funds redemption card', () => {
     const source = readWalletSource()

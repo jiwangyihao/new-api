@@ -36,6 +36,11 @@ func isCreemWebhookEnabled() bool {
 	return strings.TrimSpace(setting.CreemApiKey) != "" && isCreemWebhookConfigured()
 }
 
+func isKyrenUserPaymentEnabled() bool {
+	return strings.TrimSpace(setting.KyrenApiKey) != "" &&
+		strings.TrimSpace(setting.KyrenWebhookSecret) != ""
+}
+
 func isWaffoTopUpEnabled() bool {
 	if !setting.WaffoEnabled {
 		return false

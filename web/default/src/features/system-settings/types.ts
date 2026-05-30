@@ -16,6 +16,17 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+export type KyrenTopUpProduct = {
+  id: string
+  name: string
+  description?: string
+  product_id?: string
+  amount: string
+  currency: string
+  quota: number
+  enabled: boolean
+}
+
 export type SystemOption = {
   key: string
   value: string
@@ -220,6 +231,11 @@ export type BillingSettings = {
   CreemWebhookSecret: string
   CreemTestMode: boolean
   CreemProducts: string
+  KyrenApiKey: string
+  KyrenWebhookSecret: string
+  KyrenBaseURL: string
+  KyrenTopUpProducts: KyrenTopUpProduct[]
+  ServerAddress: string
   WaffoEnabled: boolean
   WaffoApiKey: string
   WaffoPrivateKey: string

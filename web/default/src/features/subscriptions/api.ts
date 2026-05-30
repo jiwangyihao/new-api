@@ -29,6 +29,10 @@ import type {
   SelfSubscriptionData,
   SubscriptionBalancePayRequest,
   SubscriptionBalancePayResponse,
+  SubscriptionKyrenPayResponse,
+  SubscriptionKyrenProductResponse,
+  SubscriptionKyrenProductSyncResponse,
+  SubscriptionKyrenProductSyncMode,
 } from './types'
 
 export interface SetActiveSubscriptionRequest {
@@ -127,6 +131,33 @@ export async function paySubscriptionCreem(
   data: SubscriptionPayRequest
 ): Promise<SubscriptionPayResponse> {
   const res = await api.post('/api/subscription/creem/pay', data)
+  return res.data
+}
+
+export async function paySubscriptionKyren(
+  data: SubscriptionPayRequest
+): Promise<SubscriptionKyrenPayResponse> {
+  const res = await api.post('/api/subscription/kyren/pay', data)
+  return res.data
+}
+
+export async function getSubscriptionKyrenProduct(
+  planId: number
+): Promise<SubscriptionKyrenProductResponse> {
+  const res = await api.get(
+    `/api/subscription/admin/plans/${planId}/kyren/product`
+  )
+  return res.data
+}
+
+export async function syncSubscriptionKyrenProduct(
+  planId: number,
+  mode: SubscriptionKyrenProductSyncMode
+): Promise<SubscriptionKyrenProductSyncResponse> {
+  const res = await api.post(
+    `/api/subscription/admin/plans/${planId}/kyren/product`,
+    { mode }
+  )
   return res.data
 }
 

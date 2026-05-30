@@ -45,7 +45,7 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 		RewardEligible: true,
 	}).Error)
 
-	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated"}}`)
+	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated","kyren_product_id":"prod_kyren_plan"}}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var plan model.SubscriptionPlan
@@ -60,6 +60,7 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 	assert.False(t, plan.RewardEligible)
 	require.NotNil(t, plan.BusinessCode)
 	assert.Equal(t, "basic_monthly_updated", *plan.BusinessCode)
+	assert.Equal(t, "prod_kyren_plan", plan.KyrenProductId)
 }
 
 func TestAdminUpdateSubscriptionPlanPersistsCNYCurrency(t *testing.T) {
@@ -89,7 +90,7 @@ func TestAdminCreateSubscriptionPlanDefaultsCurrencyToCNY(t *testing.T) {
 	setupSubscriptionAdminPlanFieldsTest(t)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Basic","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":1,"queue_capacity":6,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"basic_monthly"}}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Basic","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":1,"queue_capacity":6,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"basic_monthly","kyren_product_id":"prod_kyren_create"}}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	AdminCreateSubscriptionPlan(ctx)
@@ -99,6 +100,7 @@ func TestAdminCreateSubscriptionPlanDefaultsCurrencyToCNY(t *testing.T) {
 	require.NoError(t, model.DB.Where("business_code = ?", "basic_monthly").First(&plan).Error)
 	assert.Equal(t, "CNY", plan.Currency)
 	assert.Equal(t, 6, plan.QueueCapacity)
+	assert.Equal(t, "prod_kyren_create", plan.KyrenProductId)
 }
 
 func TestAdminCreateSubscriptionPlanRejectsNegativeQueueCapacity(t *testing.T) {

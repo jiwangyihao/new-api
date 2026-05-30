@@ -22,6 +22,7 @@ type TopUp struct {
 	CreateTime      int64   `json:"create_time"`
 	CompleteTime    int64   `json:"complete_time"`
 	Status          string  `json:"status"`
+	KyrenSnapshot   string  `json:"kyren_snapshot" gorm:"type:text"`
 }
 
 const (
@@ -29,6 +30,7 @@ const (
 	PaymentMethodCreem        = "creem"
 	PaymentMethodWaffo        = "waffo"
 	PaymentMethodWaffoPancake = "waffo_pancake"
+	PaymentMethodKyren        = "kyren"
 )
 
 const (
@@ -37,6 +39,7 @@ const (
 	PaymentProviderCreem        = "creem"
 	PaymentProviderWaffo        = "waffo"
 	PaymentProviderWaffoPancake = "waffo_pancake"
+	PaymentProviderKyren        = "kyren"
 )
 
 var (
@@ -75,6 +78,28 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 		return nil
 	}
 	return topUp
+}
+
+func ClaimPendingKyrenTopUp(tradeNo string) (bool, error) {
+	if tradeNo == "" {
+		return false, ErrTopUpNotFound
+	}
+	result := DB.Model(&TopUp{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusPending).
+		Update("status", common.TopUpStatusFailed)
+	if result.Error != nil {
+		return false, result.Error
+	}
+	return result.RowsAffected > 0, nil
+}
+
+func RestoreClaimedKyrenTopUp(tradeNo string) error {
+	if tradeNo == "" {
+		return nil
+	}
+	return DB.Model(&TopUp{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed).
+		Update("status", common.TopUpStatusPending).Error
 }
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {

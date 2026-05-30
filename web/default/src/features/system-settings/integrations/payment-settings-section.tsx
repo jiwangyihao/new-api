@@ -18,9 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import * as React from 'react'
 import * as z from 'zod'
-import { useForm } from 'react-hook-form'
+import { type Resolver, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { Code2, Eye } from 'lucide-react'
+import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,9 +43,19 @@ import {
 } from '../components/settings-form-actions'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+import type { KyrenTopUpProduct } from '../types'
 import { AmountDiscountVisualEditor } from './amount-discount-visual-editor'
 import { AmountOptionsVisualEditor } from './amount-options-visual-editor'
 import { CreemProductsVisualEditor } from './creem-products-visual-editor'
+import {
+  fetchKyrenTopUpProducts,
+  KyrenTopUpProductsVisualEditor,
+  parseKyrenTopUpProducts,
+  saveKyrenTopUpProductsState,
+  validateKyrenTopUpProducts,
+  type KyrenTopUpProductStatus,
+  type KyrenTopUpProductsListResponse,
+} from './kyren-topup-products-visual-editor'
 import { PaymentMethodsVisualEditor } from './payment-methods-visual-editor'
 import {
   formatJsonForEditor,
@@ -79,19 +90,13 @@ const paymentSchema = z.object({
   PayMethods: z.string().superRefine((value, ctx) => {
     const error = getJsonError(value)
     if (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error,
-      })
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
     }
   }),
   AmountOptions: z.string().superRefine((value, ctx) => {
     const error = getJsonError(value, (parsed) => Array.isArray(parsed))
     if (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error,
-      })
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
     }
   }),
   AmountDiscount: z.string().superRefine((value, ctx) => {
@@ -101,10 +106,7 @@ const paymentSchema = z.object({
         !!parsed && typeof parsed === 'object' && !Array.isArray(parsed)
     )
     if (error) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: error,
-      })
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
     }
   }),
   StripeApiSecret: z.string(),
@@ -119,18 +121,119 @@ const paymentSchema = z.object({
   CreemProducts: z.string().superRefine((value, ctx) => {
     const error = getJsonError(value, (parsed) => Array.isArray(parsed))
     if (error) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
+    }
+  }),
+  KyrenApiKey: z.string(),
+  KyrenWebhookSecret: z.string(),
+  KyrenBaseURL: z.string().refine((value) => {
+    const trimmed = value.trim()
+    if (!trimmed) return true
+    return /^https?:\/\//.test(trimmed)
+  }, 'Provide a valid URL starting with http:// or https://'),
+  KyrenTopUpProducts: z.string().superRefine((value, ctx) => {
+    const error = getJsonError(value, (parsed) => Array.isArray(parsed))
+    if (error) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: error })
+      return
+    }
+    try {
+      validateKyrenTopUpProducts(parseKyrenTopUpProducts(value))
+    } catch (validationError) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: error,
+        message:
+          validationError instanceof Error
+            ? validationError.message
+            : 'Invalid Kyren top-up products',
       })
     }
   }),
+  ServerAddress: z.string(),
 })
 
-type PaymentFormValues = z.infer<typeof paymentSchema>
+export type PaymentFormValues = z.infer<typeof paymentSchema>
+
+type PaymentSettingsDefaultValues = Omit<
+  PaymentFormValues,
+  'KyrenTopUpProducts'
+> & {
+  KyrenTopUpProducts: KyrenTopUpProduct[]
+}
+
+type KyrenOptionValues = Pick<
+  PaymentFormValues,
+  'KyrenApiKey' | 'KyrenWebhookSecret' | 'KyrenBaseURL'
+>
+type OptionUpdate = { key: string; value: string | number | boolean }
+
+export function getKyrenWebhookUrl(serverAddress: string): string | null {
+  const base = removeTrailingSlash(serverAddress)
+  if (!base) return null
+  return `${base}/api/kyren/webhook`
+}
+
+export function buildKyrenOptionUpdates(
+  values: KyrenOptionValues,
+  initial: KyrenOptionValues
+): OptionUpdate[] {
+  const sanitized = {
+    KyrenApiKey: values.KyrenApiKey.trim(),
+    KyrenWebhookSecret: values.KyrenWebhookSecret.trim(),
+    KyrenBaseURL: removeTrailingSlash(values.KyrenBaseURL),
+  }
+  const initialValues = {
+    KyrenApiKey: initial.KyrenApiKey.trim(),
+    KyrenWebhookSecret: initial.KyrenWebhookSecret.trim(),
+    KyrenBaseURL: removeTrailingSlash(initial.KyrenBaseURL),
+  }
+  const updates: OptionUpdate[] = []
+
+  if (
+    sanitized.KyrenApiKey &&
+    sanitized.KyrenApiKey !== initialValues.KyrenApiKey
+  ) {
+    updates.push({ key: 'KyrenApiKey', value: sanitized.KyrenApiKey })
+  }
+
+  if (
+    sanitized.KyrenWebhookSecret &&
+    sanitized.KyrenWebhookSecret !== initialValues.KyrenWebhookSecret
+  ) {
+    updates.push({
+      key: 'KyrenWebhookSecret',
+      value: sanitized.KyrenWebhookSecret,
+    })
+  }
+
+  if (sanitized.KyrenBaseURL !== initialValues.KyrenBaseURL) {
+    updates.push({ key: 'KyrenBaseURL', value: sanitized.KyrenBaseURL })
+  }
+
+  return updates
+}
+
+function serializeKyrenTopUpProducts(
+  products: KyrenTopUpProduct[] | string
+): string {
+  return JSON.stringify(
+    validateKyrenTopUpProducts(parseKyrenProductsValue(products)),
+    null,
+    2
+  )
+}
+
+function parseKyrenProductsValue(
+  value: KyrenTopUpProduct[] | string
+): KyrenTopUpProduct[] {
+  if (typeof value === 'string') {
+    return parseKyrenTopUpProducts(value)
+  }
+  return value
+}
 
 type PaymentSettingsSectionProps = {
-  defaultValues: PaymentFormValues
+  defaultValues: PaymentSettingsDefaultValues
   waffoDefaultValues: WaffoSettingsValues
   waffoPancakeDefaultValues: WaffoPancakeSettingsValues
 }
@@ -155,9 +258,13 @@ export function PaymentSettingsSection({
     React.useState(true)
   const [creemProductsVisualMode, setCreemProductsVisualMode] =
     React.useState(true)
+  const [kyrenStatuses, setKyrenStatuses] = React.useState<
+    Record<string, KyrenTopUpProductStatus>
+  >({})
+  const [kyrenVersion, setKyrenVersion] = React.useState('')
 
-  const form = useForm({
-    resolver: zodResolver(paymentSchema),
+  const form = useForm<PaymentFormValues>({
+    resolver: zodResolver(paymentSchema) as unknown as Resolver<PaymentFormValues>,
     mode: 'onChange', // Enable real-time validation
     defaultValues: {
       ...defaultValues,
@@ -165,20 +272,40 @@ export function PaymentSettingsSection({
       AmountOptions: formatJsonForEditor(defaultValues.AmountOptions),
       AmountDiscount: formatJsonForEditor(defaultValues.AmountDiscount),
       CreemProducts: formatJsonForEditor(defaultValues.CreemProducts),
+      KyrenTopUpProducts: serializeKyrenTopUpProducts(
+        defaultValues.KyrenTopUpProducts
+      ),
     },
   })
+  const serverAddress = form.watch('ServerAddress')
 
   React.useEffect(() => {
     const parsedDefaults = JSON.parse(defaultsSignature) as PaymentFormValues
-    initialRef.current = parsedDefaults
-    form.reset({
+    const normalizedDefaults = {
       ...parsedDefaults,
-      PayMethods: formatJsonForEditor(parsedDefaults.PayMethods),
-      AmountOptions: formatJsonForEditor(parsedDefaults.AmountOptions),
-      AmountDiscount: formatJsonForEditor(parsedDefaults.AmountDiscount),
-      CreemProducts: formatJsonForEditor(parsedDefaults.CreemProducts),
+      KyrenTopUpProducts: parseKyrenProductsValue(
+        parsedDefaults.KyrenTopUpProducts
+      ),
+    }
+    initialRef.current = normalizedDefaults
+    form.reset({
+      ...normalizedDefaults,
+      PayMethods: formatJsonForEditor(normalizedDefaults.PayMethods),
+      AmountOptions: formatJsonForEditor(normalizedDefaults.AmountOptions),
+      AmountDiscount: formatJsonForEditor(normalizedDefaults.AmountDiscount),
+      CreemProducts: formatJsonForEditor(normalizedDefaults.CreemProducts),
+      KyrenTopUpProducts: serializeKyrenTopUpProducts(
+        normalizedDefaults.KyrenTopUpProducts
+      ),
     })
   }, [defaultsSignature, form])
+
+  React.useEffect(() => {
+    refetchKyrenTopUpProducts().catch(() => {
+      toast.error(t('Failed to load Kyren top-up products'))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const saveGeneralSettings = async () => {
     const values = form.getValues()
@@ -419,6 +546,70 @@ export function PaymentSettingsSection({
     }
   }
 
+  const refetchKyrenTopUpProducts =
+    async (): Promise<KyrenTopUpProductsListResponse> => {
+      const state = await fetchKyrenTopUpProducts()
+      setKyrenVersion(state.version)
+      form.setValue(
+        'KyrenTopUpProducts',
+        serializeKyrenTopUpProducts(state.products),
+        {
+          shouldDirty: false,
+          shouldValidate: true,
+        }
+      )
+      initialRef.current = {
+        ...initialRef.current,
+        KyrenTopUpProducts: state.products,
+      }
+      return state
+    }
+
+  const saveKyrenSettings = async () => {
+    const values = form.getValues()
+    const updates = buildKyrenOptionUpdates(values, initialRef.current)
+    for (const update of updates) {
+      await updateOption.mutateAsync(update)
+    }
+    if (updates.length > 0) {
+      initialRef.current = {
+        ...initialRef.current,
+        KyrenApiKey: values.KyrenApiKey.trim() || initialRef.current.KyrenApiKey,
+        KyrenWebhookSecret:
+          values.KyrenWebhookSecret.trim() ||
+          initialRef.current.KyrenWebhookSecret,
+        KyrenBaseURL: removeTrailingSlash(values.KyrenBaseURL),
+      }
+    }
+
+    const products = validateKyrenTopUpProducts(
+      parseKyrenTopUpProducts(values.KyrenTopUpProducts)
+    )
+    const initialProducts = initialRef.current.KyrenTopUpProducts
+    const topUpProductsChanged =
+      JSON.stringify(products) !== JSON.stringify(initialProducts)
+    if (!topUpProductsChanged) {
+      return
+    }
+
+    const result = await saveKyrenTopUpProductsState({
+      products,
+      version: kyrenVersion,
+      refetch: refetchKyrenTopUpProducts,
+      notifyConflict: (message) => toast.error(t(message)),
+    })
+    setKyrenVersion(result.state.version)
+    form.setValue(
+      'KyrenTopUpProducts',
+      serializeKyrenTopUpProducts(result.state.products),
+      { shouldDirty: false, shouldValidate: true }
+    )
+    initialRef.current = {
+      ...initialRef.current,
+      KyrenTopUpProducts: result.state.products,
+    }
+  }
+
   const onSubmit = async (values: PaymentFormValues) => {
     const sanitized = {
       PayAddress: removeTrailingSlash(values.PayAddress),
@@ -436,6 +627,9 @@ export function PaymentSettingsSection({
       StripeUnitPrice: values.StripeUnitPrice,
       StripeMinTopUp: values.StripeMinTopUp,
       StripePromotionCodesEnabled: values.StripePromotionCodesEnabled,
+      KyrenApiKey: values.KyrenApiKey.trim(),
+      KyrenWebhookSecret: values.KyrenWebhookSecret.trim(),
+      KyrenBaseURL: removeTrailingSlash(values.KyrenBaseURL),
     }
 
     const initial = {
@@ -457,6 +651,9 @@ export function PaymentSettingsSection({
       StripeMinTopUp: initialRef.current.StripeMinTopUp,
       StripePromotionCodesEnabled:
         initialRef.current.StripePromotionCodesEnabled,
+      KyrenApiKey: initialRef.current.KyrenApiKey.trim(),
+      KyrenWebhookSecret: initialRef.current.KyrenWebhookSecret.trim(),
+      KyrenBaseURL: removeTrailingSlash(initialRef.current.KyrenBaseURL),
     }
 
     const updates: Array<{ key: string; value: string | number | boolean }> = []
@@ -554,8 +751,64 @@ export function PaymentSettingsSection({
       })
     }
 
+    if (sanitized.KyrenApiKey && sanitized.KyrenApiKey !== initial.KyrenApiKey) {
+      updates.push({ key: 'KyrenApiKey', value: sanitized.KyrenApiKey })
+    }
+
+    if (
+      sanitized.KyrenWebhookSecret &&
+      sanitized.KyrenWebhookSecret !== initial.KyrenWebhookSecret
+    ) {
+      updates.push({
+        key: 'KyrenWebhookSecret',
+        value: sanitized.KyrenWebhookSecret,
+      })
+    }
+
+    if (sanitized.KyrenBaseURL !== initial.KyrenBaseURL) {
+      updates.push({ key: 'KyrenBaseURL', value: sanitized.KyrenBaseURL })
+    }
+
     for (const update of updates) {
       await updateOption.mutateAsync(update)
+    }
+    if (
+      sanitized.KyrenApiKey ||
+      sanitized.KyrenWebhookSecret ||
+      sanitized.KyrenBaseURL !== initial.KyrenBaseURL
+    ) {
+      initialRef.current = {
+        ...initialRef.current,
+        KyrenApiKey: sanitized.KyrenApiKey || initialRef.current.KyrenApiKey,
+        KyrenWebhookSecret:
+          sanitized.KyrenWebhookSecret || initialRef.current.KyrenWebhookSecret,
+        KyrenBaseURL: sanitized.KyrenBaseURL,
+      }
+    }
+
+    const products = validateKyrenTopUpProducts(
+      parseKyrenTopUpProducts(values.KyrenTopUpProducts)
+    )
+    const initialProducts = initialRef.current.KyrenTopUpProducts
+    if (JSON.stringify(products) === JSON.stringify(initialProducts)) {
+      return
+    }
+
+    const result = await saveKyrenTopUpProductsState({
+      products,
+      version: kyrenVersion,
+      refetch: refetchKyrenTopUpProducts,
+      notifyConflict: (message) => toast.error(t(message)),
+    })
+    setKyrenVersion(result.state.version)
+    form.setValue(
+      'KyrenTopUpProducts',
+      serializeKyrenTopUpProducts(result.state.products),
+      { shouldDirty: false, shouldValidate: true }
+    )
+    initialRef.current = {
+      ...initialRef.current,
+      KyrenTopUpProducts: result.state.products,
     }
   }
 
@@ -1309,6 +1562,153 @@ export function PaymentSettingsSection({
             </Button>
           </div>
 
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div>
+              <h3 className='text-lg font-medium'>{t('Kyren Gateway')}</h3>
+              <p className='text-muted-foreground text-sm'>
+                {t('Configuration for Kyren Pay integration')}
+              </p>
+            </div>
+
+            <div className='rounded-md bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100'>
+              <p className='mb-2 font-medium'>{t('Webhook Configuration:')}</p>
+              <ul className='list-inside list-disc space-y-1'>
+                <li>
+                  {t('Webhook URL:')}{' '}
+                  <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
+                    {getKyrenWebhookUrl(serverAddress) ??
+                      t('Server address is not configured')}
+                  </code>
+                </li>
+                <li>
+                  {t(
+                    'Configure ServerAddress after deployment to expose the Kyren webhook URL.'
+                  )}
+                </li>
+              </ul>
+            </div>
+
+            <div className='grid gap-6 md:grid-cols-3'>
+              <FormField
+                control={form.control}
+                name='KyrenApiKey'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('API Key')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='password'
+                        placeholder={t('Enter Kyren API key')}
+                        autoComplete='new-password'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Kyren API key (leave blank unless updating)')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='KyrenWebhookSecret'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Webhook Secret')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='password'
+                        placeholder={t('Enter webhook secret')}
+                        autoComplete='new-password'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Webhook signing secret (leave blank unless updating)'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='KyrenBaseURL'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Base URL')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='https://api.kyren.top'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Kyren API base URL. Trailing slashes are removed on save.')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name='KyrenTopUpProducts'
+              render={({ field }) => (
+                <FormItem>
+                  <div className='mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                    <FormLabel>{t('Kyren top-up products')}</FormLabel>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        saveKyrenSettings()
+                      }}
+                      disabled={updateOption.isPending}
+                      className='w-full sm:w-auto'
+                    >
+                      {updateOption.isPending
+                        ? t('Saving...')
+                        : t('Save Kyren settings')}
+                    </Button>
+                  </div>
+                  <FormControl>
+                    <KyrenTopUpProductsVisualEditor
+                      products={parseKyrenTopUpProducts(field.value)}
+                      version={kyrenVersion}
+                      statuses={kyrenStatuses}
+                      onChange={(products) =>
+                        field.onChange(serializeKyrenTopUpProducts(products))
+                      }
+                      onVersionChange={setKyrenVersion}
+                      onStatusesChange={setKyrenStatuses}
+                      onRefetch={refetchKyrenTopUpProducts}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Configure fixed CNY Kyren top-up products. They are saved through the dedicated Kyren API.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
           <Button type='submit' disabled={updateOption.isPending}>
             {updateOption.isPending ? t('Saving...') : t('Save all settings')}
           </Button>

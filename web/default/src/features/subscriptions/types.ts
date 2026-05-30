@@ -39,6 +39,7 @@ export const subscriptionPlanSchema = z.object({
   total_amount: z.number(),
   stripe_price_id: z.string().optional(),
   creem_product_id: z.string().optional(),
+  kyren_product_id: z.string().optional(),
   monthly_token_limit: z.number().optional(),
   concurrency_limit: z.number().optional(),
   queue_capacity: z.number().optional(),
@@ -62,6 +63,7 @@ export interface PublicSubscriptionPlan {
   subtitle: string
   price_amount: number
   currency: string
+  kyren_product_id?: string
   duration_unit: SubscriptionPlan['duration_unit']
   duration_value: number
   custom_seconds: number
@@ -69,6 +71,9 @@ export interface PublicSubscriptionPlan {
   concurrency_limit: number
   queue_capacity: number
   public_visible: boolean
+  enabled?: boolean
+  is_trial?: boolean
+  max_purchase_per_user?: number
 }
 
 export interface PublicPlanRecord {
@@ -128,6 +133,37 @@ export interface SubscriptionPayRequest {
   plan_id: number
   payment_method?: string
 }
+
+export type SubscriptionKyrenProductSyncMode =
+  | 'create_or_update'
+  | 'create_new'
+  | 'update_existing'
+
+export interface SubscriptionKyrenProductStatus {
+  bound?: boolean
+  missing?: boolean
+  archived?: boolean
+  product_id?: string
+  status?: string
+  price?: string
+  currency?: string
+  price_matches?: boolean
+  currency_matches?: boolean
+}
+
+export interface SubscriptionKyrenProductSyncStatus
+  extends SubscriptionKyrenProductStatus {
+  synced?: boolean
+  local_error?: string
+}
+
+export type SubscriptionKyrenProductResponse =
+  ApiResponse<SubscriptionKyrenProductStatus>
+
+export type SubscriptionKyrenProductSyncResponse =
+  ApiResponse<SubscriptionKyrenProductSyncStatus>
+
+export type SubscriptionKyrenPayResponse = SubscriptionPayResponse
 
 export interface SubscriptionBalancePayRequest {
   plan_id: number

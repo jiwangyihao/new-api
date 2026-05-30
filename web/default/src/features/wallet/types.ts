@@ -45,6 +45,11 @@ export type AffiliateCodeResponse = ApiResponse<string>
 export type AffiliateTransferResponse = ApiResponse
 export type InvitationEntitlementResponse = ApiResponse<InvitationEntitlement>
 export type CreemPaymentResponse = ApiResponse<{ checkout_url: string }>
+export type KyrenPaymentResponse = ApiResponse<{
+  checkout_url?: string
+  pay_link?: string
+  url?: string
+}>
 export type WaffoPaymentResponse = ApiResponse<
   { payment_url?: string } | string
 >
@@ -82,6 +87,34 @@ export interface CreemPaymentRequest {
   product_id: string
   /** Payment method identifier */
   payment_method: 'creem'
+}
+
+/**
+ * Kyren top-up product shown to users. Uses local product IDs only.
+ */
+export interface KyrenTopUpProduct {
+  /** Local top-up product ID */
+  id: string
+  /** Product display name */
+  name: string
+  /** Optional product description */
+  description?: string
+  /** CNY amount as a fixed decimal string */
+  amount: string
+  /** Product currency */
+  currency: 'CNY'
+  /** Quota amount to credit */
+  quota: number
+  /** Whether product is available */
+  enabled?: boolean
+}
+
+/**
+ * Kyren payment request
+ */
+export interface KyrenPaymentRequest {
+  /** Local Kyren top-up product ID */
+  product_id: string
 }
 
 /**
@@ -138,6 +171,12 @@ export interface TopupInfo {
   enable_creem_topup?: boolean
   /** Available Creem products */
   creem_products?: CreemProduct[]
+  /** Whether Kyren wallet topup is enabled */
+  enable_kyren_topup?: boolean
+  /** Whether Kyren subscription payment is enabled */
+  enable_kyren_subscription?: boolean
+  /** Available Kyren local top-up products */
+  kyren_topup_products?: KyrenTopUpProduct[]
   /** Whether Waffo topup is enabled */
   enable_waffo_topup?: boolean
   /** Available Waffo payment methods */

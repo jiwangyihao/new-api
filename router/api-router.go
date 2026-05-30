@@ -58,7 +58,15 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/stripe/webhook", controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", controller.CreemWebhook)
 		apiRouter.POST("/waffo/webhook", controller.WaffoWebhook)
+		apiRouter.POST("/kyren/webhook", controller.KyrenWebhook)
 		//apiRouter.POST("/waffo-pancake/webhook", controller.WaffoPancakeWebhook)
+
+		apiRouter.GET("/payment/kyren/products", middleware.AdminAuth(), controller.AdminListKyrenProducts)
+		apiRouter.GET("/payment/kyren/products/:id", middleware.AdminAuth(), controller.AdminGetKyrenProduct)
+		apiRouter.GET("/payment/kyren/topup-products", middleware.AdminAuth(), controller.AdminListKyrenTopUpProducts)
+		apiRouter.GET("/payment/kyren/topup-products/:id/status", middleware.AdminAuth(), controller.AdminGetKyrenTopUpProductStatus)
+		apiRouter.PUT("/payment/kyren/topup-products", middleware.AdminAuth(), middleware.CriticalRateLimit(), controller.AdminUpdateKyrenTopUpProducts)
+		apiRouter.POST("/payment/kyren/topup-products/:id/sync", middleware.AdminAuth(), middleware.CriticalRateLimit(), controller.AdminSyncKyrenTopUpProduct)
 
 		// Universal secure verification routes
 		apiRouter.POST("/verify", middleware.UserAuth(), middleware.CriticalRateLimit(), controller.UniversalVerify)
@@ -102,6 +110,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.RequestStripePay)
 				selfRoute.POST("/stripe/amount", controller.RequestStripeAmount)
 				selfRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.RequestCreemPay)
+				selfRoute.POST("/kyren/pay", middleware.CriticalRateLimit(), controller.RequestKyrenPay)
 				selfRoute.POST("/waffo/amount", controller.RequestWaffoAmount)
 				selfRoute.POST("/waffo/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPay)
 				//selfRoute.POST("/waffo-pancake/amount", controller.RequestWaffoPancakeAmount)
@@ -167,6 +176,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalance)
 			subscriptionRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestStripePay)
 			subscriptionRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestCreemPay)
+			subscriptionRoute.POST("/kyren/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestKyrenPay)
 		}
 		subscriptionAdminRoute := apiRouter.Group("/subscription/admin")
 		subscriptionAdminRoute.Use(middleware.AdminAuth())
@@ -175,6 +185,8 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.POST("/plans", controller.AdminCreateSubscriptionPlan)
 			subscriptionAdminRoute.PUT("/plans/:id", controller.AdminUpdateSubscriptionPlan)
 			subscriptionAdminRoute.PATCH("/plans/:id", controller.AdminUpdateSubscriptionPlanStatus)
+			subscriptionAdminRoute.GET("/plans/:id/kyren/product", controller.AdminGetSubscriptionKyrenProduct)
+			subscriptionAdminRoute.POST("/plans/:id/kyren/product", middleware.CriticalRateLimit(), controller.AdminSyncSubscriptionKyrenProduct)
 			subscriptionAdminRoute.POST("/bind", controller.AdminBindSubscription)
 
 			// User subscription management (admin)

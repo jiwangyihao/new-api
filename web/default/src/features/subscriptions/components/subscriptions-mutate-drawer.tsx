@@ -16,12 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CalendarClock, CreditCard, RefreshCw, Settings2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  CalendarClock,
+  CreditCard,
+  RefreshCw,
+  Settings2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -51,7 +58,12 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
-import { createPlan, updatePlan } from '../api'
+import {
+  createPlan,
+  getSubscriptionKyrenProduct,
+  syncSubscriptionKyrenProduct,
+  updatePlan,
+} from '../api'
 import { getDurationUnitOptions, getResetPeriodOptions } from '../constants'
 import {
   getPlanFormSchema,
@@ -60,7 +72,7 @@ import {
   formValuesToPlanPayload,
   type PlanFormValues,
 } from '../lib'
-import type { PlanRecord } from '../types'
+import type { PlanRecord, SubscriptionKyrenProductStatus } from '../types'
 import { useSubscriptions } from './subscriptions-provider'
 
 interface Props {
@@ -78,6 +90,10 @@ export function SubscriptionsMutateDrawer({
   const isEdit = !!currentRow?.plan?.id
   const { triggerRefresh } = useSubscriptions()
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [kyrenStatus, setKyrenStatus] =
+    useState<SubscriptionKyrenProductStatus | null>(null)
+  const [isKyrenLoading, setIsKyrenLoading] = useState(false)
+  const [isKyrenSyncing, setIsKyrenSyncing] = useState(false)
 
   const schema = getPlanFormSchema(t)
   const form = useForm<PlanFormValues>({
@@ -85,14 +101,37 @@ export function SubscriptionsMutateDrawer({
     defaultValues: PLAN_FORM_DEFAULTS,
   })
 
+  const loadKyrenStatus = async () => {
+    if (!currentRow?.plan?.id) {
+      setKyrenStatus(null)
+      return
+    }
+    setIsKyrenLoading(true)
+    try {
+      const res = await getSubscriptionKyrenProduct(currentRow.plan.id)
+      if (res.success) {
+        setKyrenStatus(res.data || null)
+        return
+      }
+      toast.error(res.message || t('Request failed'))
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setIsKyrenLoading(false)
+    }
+  }
+
   useEffect(() => {
     if (open) {
       if (currentRow?.plan) {
         form.reset(planToFormValues(currentRow.plan))
+        void loadKyrenStatus()
       } else {
         form.reset(PLAN_FORM_DEFAULTS)
+        setKyrenStatus(null)
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentRow, form])
 
   const durationUnit = form.watch('duration_unit')
@@ -122,6 +161,45 @@ export function SubscriptionsMutateDrawer({
     } finally {
       setIsSubmitting(false)
     }
+  }
+
+  const handleSyncKyrenProduct = async (
+    mode: 'create_or_update' | 'create_new' | 'update_existing'
+  ) => {
+    if (!currentRow?.plan?.id) {
+      return
+    }
+    setIsKyrenSyncing(true)
+    try {
+      const res = await syncSubscriptionKyrenProduct(currentRow.plan.id, mode)
+      if (res.success) {
+        toast.success(t('Kyren product synced'))
+        form.setValue('kyren_product_id', res.data?.product_id || '', {
+          shouldDirty: true,
+        })
+        await loadKyrenStatus()
+        triggerRefresh()
+        return
+      }
+      toast.error(res.message || t('Request failed'))
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setIsKyrenSyncing(false)
+    }
+  }
+  const kyrenAlerts: ReactNode[] = []
+  if (kyrenStatus?.missing || kyrenStatus?.bound === false) {
+    kyrenAlerts.push(t('Kyren product is missing'))
+  }
+  if (kyrenStatus?.archived || kyrenStatus?.status === 'ARCHIVED') {
+    kyrenAlerts.push(t('Kyren product is archived'))
+  }
+  if (kyrenStatus?.price_matches === false) {
+    kyrenAlerts.push(t('Kyren product price mismatch'))
+  }
+  if (kyrenStatus?.currency_matches === false) {
+    kyrenAlerts.push(t('Kyren product currency mismatch'))
   }
 
   const durationUnitOpts = getDurationUnitOptions(t)
@@ -671,6 +749,92 @@ export function SubscriptionsMutateDrawer({
                   </FormItem>
                 )}
               />
+
+              <FormField
+                control={form.control}
+                name='kyren_product_id'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Kyren Product ID')}</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder='prod_...' />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {isEdit ? (
+                <div className='space-y-3 rounded-md border p-3'>
+                  <div className='flex flex-wrap gap-2'>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={() => handleSyncKyrenProduct('create_new')}
+                      disabled={isKyrenSyncing}
+                    >
+                      {t('Create Kyren product')}
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={() => handleSyncKyrenProduct('create_or_update')}
+                      disabled={isKyrenSyncing}
+                    >
+                      {t('Sync to Kyren')}
+                    </Button>
+                    <Button
+                      type='button'
+                      variant='outline'
+                      size='sm'
+                      onClick={loadKyrenStatus}
+                      disabled={isKyrenLoading}
+                    >
+                      {t('Refresh Kyren status')}
+                    </Button>
+                  </div>
+
+                  {kyrenStatus ? (
+                    <div className='bg-muted/40 grid grid-cols-2 gap-2 rounded-md p-3 text-xs'>
+                      <span className='text-muted-foreground'>
+                        {t('Product ID')}
+                      </span>
+                      <span>{kyrenStatus.product_id || '-'}</span>
+                      <span className='text-muted-foreground'>
+                        {t('Status')}
+                      </span>
+                      <span>{kyrenStatus.status || '-'}</span>
+                      <span className='text-muted-foreground'>
+                        {t('Price')}
+                      </span>
+                      <span>{kyrenStatus.price || '-'}</span>
+                      <span className='text-muted-foreground'>
+                        {t('Currency')}
+                      </span>
+                      <span>{kyrenStatus.currency || '-'}</span>
+                    </div>
+                  ) : (
+                    <p className='text-muted-foreground text-xs'>
+                      {t('No Kyren product status loaded')}
+                    </p>
+                  )}
+
+                  {kyrenAlerts.map((message) => (
+                    <Alert key={String(message)} variant='destructive'>
+                      <AlertTriangle className='h-4 w-4' />
+                      <AlertDescription>{message}</AlertDescription>
+                    </Alert>
+                  ))}
+                </div>
+              ) : (
+                <Alert>
+                  <AlertDescription>
+                    {t('Save the plan before syncing Kyren product status.')}
+                  </AlertDescription>
+                </Alert>
+              )}
             </div>
           </form>
         </Form>

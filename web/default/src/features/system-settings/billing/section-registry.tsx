@@ -128,6 +128,11 @@ const BILLING_SECTIONS = [
           CreemWebhookSecret: settings.CreemWebhookSecret,
           CreemTestMode: settings.CreemTestMode,
           CreemProducts: settings.CreemProducts,
+          KyrenApiKey: settings.KyrenApiKey ?? '',
+          KyrenWebhookSecret: settings.KyrenWebhookSecret ?? '',
+          KyrenBaseURL: settings.KyrenBaseURL ?? 'https://api.kyren.top',
+          KyrenTopUpProducts: settings.KyrenTopUpProducts ?? [],
+          ServerAddress: settings.ServerAddress ?? '',
         }}
         waffoDefaultValues={{
           WaffoEnabled: settings.WaffoEnabled ?? false,

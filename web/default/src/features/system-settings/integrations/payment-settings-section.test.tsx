@@ -98,8 +98,8 @@ describe('PaymentSettingsSection Kyren UI and API contract', () => {
       'utf8'
     )
 
-    assert.doesNotMatch(sectionSource, /key:\s*['"]KyrenTopUpProducts['"]/) 
-    assert.match(editorSource, /\/api\/payment\/kyren\/topup-products/) 
-    assert.match(editorSource, /api\.put<.*KyrenTopUpProductsListResponse/) 
+    assert.doesNotMatch(sectionSource, /key:\s*['"]KyrenTopUpProducts['"]/)
+    assert.match(editorSource, /\/api\/payment\/kyren\/topup-products/)
+    assert.match(editorSource, /api\.put<.*KyrenTopUpProductsListResponse/)
   })
 })

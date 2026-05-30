@@ -182,7 +182,7 @@ describe('subscription Kyren payment helper', () => {
       'src/features/subscriptions/components/subscriptions-mutate-drawer.tsx'
     )
 
-    assert.match(source, /form\.setValue\(\s*['"]kyren_product_id['"]/) 
-    assert.match(source, /res\.data\?\.product_id/) 
+    assert.match(source, /form\.setValue\(\s*['"]kyren_product_id['"]/)
+    assert.match(source, /res\.data\?\.product_id/)
   })
 })

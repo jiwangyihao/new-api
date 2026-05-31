@@ -143,6 +143,27 @@ Option.Value = true
 
 迁移前必须先停止入口流量和异步任务触发源，但保留每个旧实例进程运行。每个旧实例进入 drain 状态后，除本机 loopback drain 请求外，不得再接收会写 `BatchUpdateTypeUserQuota` 的新请求；队列消费者、定时任务和异步触发源必须停止。所有旧实例必须在本机完成 `BatchUpdateTypeUserQuota` flush / drain，并确认每个旧实例自己的 `BatchUpdatePendingSnapshot().ByType[BatchUpdateTypeUserQuota] == 0` 后，才能停止旧服务和所有写库进程、备份数据库并启动新版本迁移。不得用迁移进程或新进程自己的空 batch snapshot 代替旧实例逐节点检查。
 
+可执行顺序如下：
+
+1. 停止入口流量和异步任务触发源，不再接收新充值、兑换码、签到、注册、邀请、模型调用请求。
+2. 将每个旧实例切到本地 drain 状态：公网入口已断开，队列消费者、定时任务和异步触发源已停止，除本机 loopback drain 请求外不再有新请求进入会调用 `addNewRecord(BatchUpdateTypeUserQuota, delta)` 的路径。
+3. 保持每个旧实例进程运行，逐个在对应机器本地执行：
+
+   ```bash
+   curl -fsS -X POST http://127.0.0.1:<port>/debug/loadtest/runtime/batch-update/user-quota/drain
+   ```
+
+4. 对每个旧实例继续执行：
+
+   ```bash
+   curl -fsS http://127.0.0.1:<port>/debug/loadtest/runtime
+   ```
+
+   确认响应中的 `batch_update` reason 里 `BatchUpdateTypeUserQuota` 对应 pending 为 0。
+5. 任一旧实例 drain 返回非 2xx，或 pending 不为 0 时，停止迁移，修复该实例写库问题后重试 drain；不得启动新版本迁移。
+6. 所有旧实例确认 pending = 0 后，停止所有旧服务和写库进程，备份数据库。
+7. 启动包含任务 3 迁移接入的新版本。新版本在 HTTP 服务和后台任务启动前执行 `EnsureAccountBalanceCentsMigration()`。
+
 如果线上旧版本没有 drain 入口，应先发布一个不接入启动迁移的预迁移版本，仅提供本地 loopback drain 入口；完成逐实例 drain 和数据库备份后，才发布包含启动迁移接入的迁移版本。任一旧实例 drain 失败或 pending 不为 0 时，迁移必须停止并修复该实例写库问题后重试，不得带着未落库的余额批量更新执行除法迁移。drain 实现还必须对极少量 in-flight 余额 delta 安全：flush 时在锁内原子 swap 当前 batch map，flush 期间新增 delta 写入新的 map；失败时只把尚未落库的 snapshot 项合并回当前 map，不能删除或抵消 flush 期间新增的 delta。
 
 ### 换算公式

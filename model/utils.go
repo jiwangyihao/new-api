@@ -60,6 +60,10 @@ func addNewRecord(type_ int, id int, value int) {
 	}
 }
 
+func AddUserQuotaBatchForMigrationDrain(id int, value int) {
+	addNewRecord(BatchUpdateTypeUserQuota, id, value)
+}
+
 func BatchUpdatePendingSnapshot() BatchUpdatePending {
 	snapshot := BatchUpdatePending{ByType: make(map[int]int, BatchUpdateTypeCount)}
 	for i := 0; i < BatchUpdateTypeCount; i++ {

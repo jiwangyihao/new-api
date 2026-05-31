@@ -180,6 +180,35 @@ func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string, stats *Loadt
 		}
 		c.JSON(http.StatusOK, resp)
 	})
+	r.POST("/debug/loadtest/runtime/batch-update/user-quota/drain", func(c *gin.Context) {
+		if !remoteAddrIsLoopback(c.Request.RemoteAddr) || !forwardedClientIsLoopback(c.Request) {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		before := model.BatchUpdatePendingSnapshot()
+		err := model.FlushBatchUpdateTypeForMigration(model.BatchUpdateTypeUserQuota)
+		after := model.BatchUpdatePendingSnapshot()
+		pending := after.ByType[model.BatchUpdateTypeUserQuota]
+		status := http.StatusOK
+		if err != nil || pending != 0 {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{
+			"flushed_type": "user_quota",
+			"before":       before,
+			"after":        after,
+			"pending":      pending,
+			"error":        errorString(err),
+			"note":         "Stop ingress before calling drain; this endpoint only flushes this local instance.",
+		})
+	})
+}
+
+func errorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func applyLoadtestProfileRates() {
@@ -210,9 +239,10 @@ func forwardedClientIsLoopback(r *http.Request) bool {
 		if value == "" {
 			continue
 		}
-		first, _, _ := strings.Cut(value, ",")
-		if !hostIsLoopback(strings.TrimSpace(first)) {
-			return false
+		for _, part := range strings.Split(value, ",") {
+			if !hostIsLoopback(strings.TrimSpace(part)) {
+				return false
+			}
 		}
 	}
 	return true

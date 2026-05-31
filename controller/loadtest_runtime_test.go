@@ -9,8 +9,50 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
+
+func setupLoadtestRuntimeModelDB(t *testing.T) {
+	t.Helper()
+	originalDB := model.DB
+	originalLogDB := model.LOG_DB
+	originalUsingSQLite := common.UsingSQLite
+	originalBatchUpdateEnabled := common.BatchUpdateEnabled
+	common.UsingSQLite = true
+	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
+	requireNoErrorLoadtest(t, err)
+	model.DB = db
+	model.LOG_DB = db
+	requireNoErrorLoadtest(t, db.AutoMigrate(&model.User{}))
+	t.Cleanup(func() {
+		_ = model.FlushBatchUpdateTypeForMigration(model.BatchUpdateTypeUserQuota)
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = originalDB
+		model.LOG_DB = originalLogDB
+		common.UsingSQLite = originalUsingSQLite
+		common.BatchUpdateEnabled = originalBatchUpdateEnabled
+	})
+}
+
+func getLoadtestRuntimeUserQuota(t *testing.T, userID int) int {
+	t.Helper()
+	var user model.User
+	requireNoErrorLoadtest(t, model.DB.Select("quota").First(&user, userID).Error)
+	return user.Quota
+}
+
+func requireNoErrorLoadtest(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLoadtestRuntimeRouteDisabledByDefault(t *testing.T) {
 	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "")
@@ -131,6 +173,149 @@ func TestLoadtestRuntimeRouteIncludesGCAndHTTPStats(t *testing.T) {
 		if got := connState[key]; got != want {
 			t.Fatalf("http_conn_state[%s] = %v want %v", key, got, want)
 		}
+	}
+}
+
+func TestLoadtestRuntimeDrainUserQuotaBatchFlushesLocalPending(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	setupLoadtestRuntimeModelDB(t)
+	requireNoErrorLoadtest(t, model.DB.Create(&model.User{Id: 9320, Username: "runtime-drain", Status: common.UserStatusEnabled}).Error)
+	model.AddUserQuotaBatchForMigrationDrain(9320, 700)
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, "127.0.0.1:13080", nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/debug/loadtest/runtime/batch-update/user-quota/drain", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	assertLoadtestRuntimeDrainResponse(t, w.Body.Bytes(), 1, 0, "")
+	if got := model.BatchUpdatePendingSnapshot().ByType[model.BatchUpdateTypeUserQuota]; got != 0 {
+		t.Fatalf("pending = %d", got)
+	}
+	if got := getLoadtestRuntimeUserQuota(t, 9320); got != 700 {
+		t.Fatalf("quota = %d", got)
+	}
+}
+
+func TestLoadtestRuntimeDrainUserQuotaBatchReportsPendingWhenFlushFails(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	setupLoadtestRuntimeModelDB(t)
+	model.AddUserQuotaBatchForMigrationDrain(9399, 700)
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, "127.0.0.1:13080", nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/debug/loadtest/runtime/batch-update/user-quota/drain", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	assertLoadtestRuntimeDrainResponse(t, w.Body.Bytes(), 1, 1, "record not found")
+	if got := model.BatchUpdatePendingSnapshot().ByType[model.BatchUpdateTypeUserQuota]; got != 1 {
+		t.Fatalf("pending = %d", got)
+	}
+	requireNoErrorLoadtest(t, model.DB.Create(&model.User{Id: 9399, Username: "runtime-drain-retry", Status: common.UserStatusEnabled}).Error)
+}
+
+func TestLoadtestRuntimeDrainUserQuotaBatchRejectsForwardedNonLoopbackClient(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	setupLoadtestRuntimeModelDB(t)
+	requireNoErrorLoadtest(t, model.DB.Create(&model.User{Id: 9340, Username: "runtime-drain-forbidden", Status: common.UserStatusEnabled}).Error)
+	model.AddUserQuotaBatchForMigrationDrain(9340, 700)
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, "127.0.0.1:13080", nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/debug/loadtest/runtime/batch-update/user-quota/drain", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "203.0.113.8")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if got := model.BatchUpdatePendingSnapshot().ByType[model.BatchUpdateTypeUserQuota]; got != 1 {
+		t.Fatalf("pending = %d", got)
+	}
+	if got := getLoadtestRuntimeUserQuota(t, 9340); got != 0 {
+		t.Fatalf("quota = %d", got)
+	}
+}
+
+func TestLoadtestRuntimeDrainUserQuotaBatchRejectsForwardedChainWithNonLoopbackHop(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	setupLoadtestRuntimeModelDB(t)
+	requireNoErrorLoadtest(t, model.DB.Create(&model.User{Id: 9341, Username: "runtime-drain-forwarded-chain", Status: common.UserStatusEnabled}).Error)
+	model.AddUserQuotaBatchForMigrationDrain(9341, 700)
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, "127.0.0.1:13080", nil)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/debug/loadtest/runtime/batch-update/user-quota/drain", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("X-Forwarded-For", "127.0.0.1, 203.0.113.8")
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	if got := model.BatchUpdatePendingSnapshot().ByType[model.BatchUpdateTypeUserQuota]; got != 1 {
+		t.Fatalf("pending = %d", got)
+	}
+	if got := getLoadtestRuntimeUserQuota(t, 9341); got != 0 {
+		t.Fatalf("quota = %d", got)
+	}
+}
+
+func assertLoadtestRuntimeDrainResponse(t *testing.T, bodyBytes []byte, beforePending float64, afterPending float64, errorContains string) {
+	t.Helper()
+	var body map[string]any
+	if err := common.Unmarshal(bodyBytes, &body); err != nil {
+		t.Fatal(err)
+	}
+	if got := body["flushed_type"]; got != "user_quota" {
+		t.Fatalf("flushed_type = %v", got)
+	}
+	if _, ok := body["note"].(string); !ok {
+		t.Fatalf("missing note in %#v", body)
+	}
+	if got := body["pending"]; got != afterPending {
+		t.Fatalf("pending response = %v", got)
+	}
+	errorValue, ok := body["error"].(string)
+	if !ok {
+		t.Fatalf("error has type %T", body["error"])
+	}
+	if errorContains == "" {
+		if errorValue != "" {
+			t.Fatalf("error = %q", errorValue)
+		}
+	} else if !strings.Contains(errorValue, errorContains) {
+		t.Fatalf("error = %q", errorValue)
+	}
+	assertLoadtestRuntimeDrainSnapshotPending(t, body, "before", beforePending)
+	assertLoadtestRuntimeDrainSnapshotPending(t, body, "after", afterPending)
+}
+
+func assertLoadtestRuntimeDrainSnapshotPending(t *testing.T, body map[string]any, key string, want float64) {
+	t.Helper()
+	snapshot, ok := body[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has type %T", key, body[key])
+	}
+	byType, ok := snapshot["by_type"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s.by_type has type %T", key, snapshot["by_type"])
+	}
+	got := byType["0"]
+	if got != want {
+		t.Fatalf("%s.by_type[0] = %v want %v", key, got, want)
 	}
 }
 

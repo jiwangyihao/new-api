@@ -15,6 +15,7 @@ type TopUp struct {
 	Id              int     `json:"id"`
 	UserId          int     `json:"user_id" gorm:"index"`
 	Amount          int64   `json:"amount"`
+	AmountUnit      string  `json:"amount_unit" gorm:"size:32;default:''"`
 	Money           float64 `json:"money"`
 	TradeNo         string  `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string  `json:"payment_method" gorm:"type:varchar(50)"`
@@ -41,6 +42,8 @@ const (
 	PaymentProviderWaffoPancake = "waffo_pancake"
 	PaymentProviderKyren        = "kyren"
 )
+
+const TopUpAmountUnitAccountBalanceCents = "account_balance_cents"
 
 var (
 	ErrPaymentMethodMismatch = errors.New("payment method mismatch")

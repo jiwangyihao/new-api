@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Option struct {
@@ -231,6 +234,119 @@ func UpdateOption(key string, value string) error {
 	DB.Save(&option)
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+
+func UpdateOptionChecked(key string, value string) error {
+	option := Option{Key: key}
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
+	option.Value = value
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
+	return updateOptionMap(key, value)
+}
+
+func upsertOptionTx(tx *gorm.DB, key string, value string) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	return tx.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&Option{Key: key, Value: value}).Error
+}
+
+type migratedOptionRuntimeUpdate struct {
+	Key   string
+	Value string
+}
+
+type migratedOptionsRuntimePlan struct {
+	Updates        []migratedOptionRuntimeUpdate
+	CheckinSetting *operation_setting.CheckinSetting
+}
+
+func syncMigratedOptionsRuntime(values map[string]string) error {
+	plan, err := prepareMigratedOptionsRuntimePlan(values)
+	if err != nil {
+		return err
+	}
+	if len(plan.Updates) == 0 && plan.CheckinSetting == nil {
+		return nil
+	}
+	rollback := captureMigratedOptionsRuntimeRollback(plan)
+	for _, update := range plan.Updates {
+		if err := updateOptionMap(update.Key, update.Value); err != nil {
+			rollback()
+			return err
+		}
+		if update.Key == "checkin_setting" && plan.CheckinSetting != nil {
+			current := operation_setting.GetCheckinSetting()
+			*current = *plan.CheckinSetting
+		}
+	}
+	return nil
+}
+
+func captureMigratedOptionsRuntimeRollback(plan migratedOptionsRuntimePlan) func() {
+	oldOptionMap := make(map[string]string, len(plan.Updates))
+	oldOptionExists := make(map[string]bool, len(plan.Updates))
+	common.OptionMapRWMutex.RLock()
+	for _, update := range plan.Updates {
+		old, ok := common.OptionMap[update.Key]
+		oldOptionMap[update.Key] = old
+		oldOptionExists[update.Key] = ok
+	}
+	common.OptionMapRWMutex.RUnlock()
+	oldQuotaForNewUser := common.QuotaForNewUser
+	oldQuotaForInviter := common.QuotaForInviter
+	oldQuotaForInvitee := common.QuotaForInvitee
+	oldKyrenTopUpProducts := setting.KyrenTopUpProducts
+	oldCreemProducts := setting.CreemProducts
+	oldCheckinSetting := *operation_setting.GetCheckinSetting()
+
+	return func() {
+		common.OptionMapRWMutex.Lock()
+		for _, update := range plan.Updates {
+			if oldOptionExists[update.Key] {
+				common.OptionMap[update.Key] = oldOptionMap[update.Key]
+			} else {
+				delete(common.OptionMap, update.Key)
+			}
+		}
+		common.OptionMapRWMutex.Unlock()
+		common.QuotaForNewUser = oldQuotaForNewUser
+		common.QuotaForInviter = oldQuotaForInviter
+		common.QuotaForInvitee = oldQuotaForInvitee
+		setting.KyrenTopUpProducts = oldKyrenTopUpProducts
+		setting.CreemProducts = oldCreemProducts
+		*operation_setting.GetCheckinSetting() = oldCheckinSetting
+	}
+}
+
+func prepareMigratedOptionsRuntimePlan(values map[string]string) (migratedOptionsRuntimePlan, error) {
+	plan := migratedOptionsRuntimePlan{Updates: make([]migratedOptionRuntimeUpdate, 0, len(values))}
+	for _, key := range sortedAccountBalanceMigrationKeys(values) {
+		value := values[key]
+		if key == "KyrenTopUpProducts" {
+			normalized, err := normalizeMigratedKyrenTopUpProductsRuntime(value)
+			if err != nil {
+				return migratedOptionsRuntimePlan{}, err
+			}
+			value = normalized
+		}
+		if key == "checkin_setting" {
+			checkinSetting, err := parseCheckinSettingJSON(value)
+			if err != nil {
+				return migratedOptionsRuntimePlan{}, err
+			}
+			plan.CheckinSetting = &checkinSetting
+		}
+		plan.Updates = append(plan.Updates, migratedOptionRuntimeUpdate{Key: key, Value: value})
+	}
+	return plan, nil
 }
 
 func updateOptionMap(key string, value string) (err error) {

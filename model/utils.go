@@ -31,11 +31,13 @@ func (p BatchUpdatePending) String() string {
 
 var batchUpdateStores []map[int]int
 var batchUpdateLocks []sync.Mutex
+var batchUpdateFlushLocks []sync.Mutex
 
 func init() {
 	for i := 0; i < BatchUpdateTypeCount; i++ {
 		batchUpdateStores = append(batchUpdateStores, make(map[int]int))
 		batchUpdateLocks = append(batchUpdateLocks, sync.Mutex{})
+		batchUpdateFlushLocks = append(batchUpdateFlushLocks, sync.Mutex{})
 	}
 }
 
@@ -61,13 +63,90 @@ func addNewRecord(type_ int, id int, value int) {
 func BatchUpdatePendingSnapshot() BatchUpdatePending {
 	snapshot := BatchUpdatePending{ByType: make(map[int]int, BatchUpdateTypeCount)}
 	for i := 0; i < BatchUpdateTypeCount; i++ {
+		batchUpdateFlushLocks[i].Lock()
 		batchUpdateLocks[i].Lock()
 		count := len(batchUpdateStores[i])
 		batchUpdateLocks[i].Unlock()
+		batchUpdateFlushLocks[i].Unlock()
 		snapshot.ByType[i] = count
 		snapshot.Total += count
 	}
 	return snapshot
+}
+
+func BatchUpdatePendingCount(type_ int) int {
+	if type_ < 0 || type_ >= BatchUpdateTypeCount {
+		return 0
+	}
+	batchUpdateFlushLocks[type_].Lock()
+	defer batchUpdateFlushLocks[type_].Unlock()
+	batchUpdateLocks[type_].Lock()
+	defer batchUpdateLocks[type_].Unlock()
+	return len(batchUpdateStores[type_])
+}
+
+var migrationFlushAfterSwapHookForTest func()
+
+func FlushBatchUpdateTypeForMigration(type_ int) error {
+	if type_ != BatchUpdateTypeUserQuota {
+		return errors.New("unsupported migration batch update type")
+	}
+	batchUpdateFlushLocks[type_].Lock()
+	defer batchUpdateFlushLocks[type_].Unlock()
+
+	batchUpdateLocks[type_].Lock()
+	snapshot := batchUpdateStores[type_]
+	batchUpdateStores[type_] = make(map[int]int)
+	batchUpdateLocks[type_].Unlock()
+
+	if migrationFlushAfterSwapHookForTest != nil {
+		migrationFlushAfterSwapHookForTest()
+	}
+
+	flushed := make(map[int]struct{}, len(snapshot))
+	for key, value := range snapshot {
+		if value == 0 {
+			flushed[key] = struct{}{}
+			continue
+		}
+		if err := flushUserQuotaForMigration(key, value); err != nil {
+			batchUpdateLocks[type_].Lock()
+			for pendingKey, pendingValue := range snapshot {
+				if pendingValue == 0 {
+					continue
+				}
+				if _, ok := flushed[pendingKey]; ok {
+					continue
+				}
+				batchUpdateStores[type_][pendingKey] += pendingValue
+			}
+			batchUpdateLocks[type_].Unlock()
+			return err
+		}
+		flushed[key] = struct{}{}
+	}
+	return nil
+}
+
+func flushUserQuotaForMigration(id int, quota int) error {
+	if quota == 0 {
+		return nil
+	}
+	result := DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota + ?", quota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	var count int64
+	if err := DB.Model(&User{}).Where("id = ?", id).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func batchUpdate() {
@@ -89,11 +168,11 @@ func batchUpdate() {
 
 	common.SysLog("batch update started")
 	for i := 0; i < BatchUpdateTypeCount; i++ {
+		batchUpdateFlushLocks[i].Lock()
 		batchUpdateLocks[i].Lock()
 		store := batchUpdateStores[i]
 		batchUpdateStores[i] = make(map[int]int)
 		batchUpdateLocks[i].Unlock()
-		// TODO: maybe we can combine updates with same key?
 		for key, value := range store {
 			switch i {
 			case BatchUpdateTypeUserQuota:
@@ -114,6 +193,7 @@ func batchUpdate() {
 				updateChannelUsedQuota(key, value)
 			}
 		}
+		batchUpdateFlushLocks[i].Unlock()
 	}
 	common.SysLog("batch update finished")
 }

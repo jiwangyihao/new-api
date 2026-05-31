@@ -289,6 +289,9 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
+	if err := ensureTopUpAmountUnitColumnSQLite(); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -365,6 +368,9 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if err := ensureTopUpAmountUnitColumnSQLite(); err != nil {
+		return err
+	}
 	if common.UsingSQLite {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -392,6 +398,19 @@ func migrateLOGDB() error {
 type sqliteColumnDef struct {
 	Name string
 	DDL  string
+}
+
+func ensureTopUpAmountUnitColumnSQLite() error {
+	if !common.UsingSQLite {
+		return nil
+	}
+	if !DB.Migrator().HasTable(&TopUp{}) {
+		return DB.AutoMigrate(&TopUp{})
+	}
+	if DB.Migrator().HasColumn(&TopUp{}, "amount_unit") {
+		return nil
+	}
+	return DB.Exec("ALTER TABLE `top_ups` ADD COLUMN `amount_unit` varchar(32) DEFAULT ''").Error
 }
 
 func ensureSubscriptionPlanTableSQLite() error {

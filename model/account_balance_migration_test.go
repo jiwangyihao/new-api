@@ -10,8 +10,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -72,6 +74,41 @@ func TestEnsureAccountBalanceCentsMigrationConvertsAccountBalanceFields(t *testi
 	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsDataMigrated))
 	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigrated))
 	assert.NotEmpty(t, getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigratedAt))
+}
+
+func TestEnsureAccountBalanceCentsMigrationInvalidatesOldUserCache(t *testing.T) {
+	setupAccountBalanceMigrationTestDB(t)
+	setOptionForMigrationTest(t, "QuotaPerUnit", "500000")
+	require.NoError(t, DB.Create(&User{Id: 9230, Username: "cached", Quota: 20000000, Status: common.UserStatusEnabled}).Error)
+	seedUserCacheForMigrationTest(t, &UserBase{Id: 9230, Quota: 20000000, Status: common.UserStatusEnabled, Username: "cached"})
+
+	logs := captureAccountBalanceMigrationLogs(t, func() {
+		require.NoError(t, EnsureAccountBalanceCentsMigration())
+	})
+
+	cache, err := GetUserCache(9230)
+	require.NoError(t, err)
+	assert.Equal(t, 4000, cache.Quota)
+	assert.Contains(t, logs, `"user_cache_clear_mode":"redis_user_ids"`)
+}
+
+func TestEnsureAccountBalanceCentsMigrationDoesNotFinalizeWhenCacheClearFails(t *testing.T) {
+	setupAccountBalanceMigrationTestDB(t)
+	setOptionForMigrationTest(t, "QuotaPerUnit", "250000")
+	require.NoError(t, DB.Create(&User{Id: 9231, Username: "cached-fail", Quota: 1000000, Status: common.UserStatusEnabled}).Error)
+	seedUserCacheForMigrationTest(t, &UserBase{Id: 9231, Quota: 1000000, Status: common.UserStatusEnabled, Username: "cached-fail"})
+	forceInvalidateAllUserCacheErrorForMigrationTest(errors.New("redis delete failed"))
+
+	err := EnsureAccountBalanceCentsMigration()
+
+	require.Error(t, err)
+	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsDataMigrated))
+	assert.Empty(t, getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigrated))
+	assert.Empty(t, getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigratedAt))
+	forceInvalidateAllUserCacheErrorForMigrationTest(nil)
+	require.NoError(t, EnsureAccountBalanceCentsMigration())
+	assert.Equal(t, 400, getUserQuotaForAccountBalanceTest(t, 9231))
+	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigrated))
 }
 
 func TestEnsureAccountBalanceCentsMigrationUsesLoadedQuotaPerUnit(t *testing.T) {
@@ -527,6 +564,34 @@ func setupAccountBalanceMigrationTestDB(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
+}
+
+func seedUserCacheForMigrationTest(t *testing.T, userCache *UserBase) {
+	t.Helper()
+	require.NotNil(t, userCache)
+
+	oldRedisEnabled := common.RedisEnabled
+	oldRDB := common.RDB
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	common.RedisEnabled = true
+	common.RDB = client
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		common.RDB = oldRDB
+		_ = client.Close()
+		server.Close()
+	})
+
+	require.NoError(t, updateUserCache(User{
+		Id:       userCache.Id,
+		Username: userCache.Username,
+		Email:    userCache.Email,
+		Quota:    userCache.Quota,
+		Status:   userCache.Status,
+		Setting:  userCache.Setting,
+	}))
 }
 
 func setOptionForMigrationTest(t *testing.T, key string, value string) {

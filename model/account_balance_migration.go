@@ -1,7 +1,6 @@
 package model
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -85,6 +84,7 @@ func EnsureAccountBalanceCentsMigration() error {
 	dataMigrated := dataMarkerExists && accountBalanceMigrationOptionValueIsTrue(dataMarkerValue)
 
 	var runtimeValues map[string]string
+	var migratedUserIds []int
 	if dataMigrated {
 		stats.DataStageAlreadyMigrated = true
 		runtimeValues, err = loadAccountBalanceMigratedOptionValuesFromDB()
@@ -105,7 +105,7 @@ func EnsureAccountBalanceCentsMigration() error {
 				return err
 			}
 		}
-		runtimeValues, stats, err = migrateAccountBalanceData(quotaPerUnit, quotaPerUnitSource, stats)
+		runtimeValues, migratedUserIds, stats, err = migrateAccountBalanceData(quotaPerUnit, quotaPerUnitSource, stats)
 		if errors.Is(err, errAccountBalanceDataMigrationAlreadyDone) {
 			stats.DataStageAlreadyMigrated = true
 			runtimeValues, err = loadAccountBalanceMigratedOptionValuesFromDB()
@@ -120,7 +120,7 @@ func EnsureAccountBalanceCentsMigration() error {
 		logAccountBalanceMigrationStats(stats)
 		return err
 	}
-	cleared, skipReason, err := invalidateAllUserCachesForAccountBalanceMigration()
+	cleared, skipReason, err := invalidateAllUserCachesForAccountBalanceMigration(migratedUserIds)
 	stats.UserCacheCleared = cleared
 	stats.UserCacheClearSkipReason = skipReason
 	if err != nil {
@@ -167,8 +167,9 @@ func lockAccountBalanceDataMigrationMarkerTx(tx *gorm.DB) (bool, error) {
 	return false, nil
 }
 
-func migrateAccountBalanceData(quotaPerUnit decimal.Decimal, quotaPerUnitSource string, stats accountBalanceMigrationStats) (map[string]string, accountBalanceMigrationStats, error) {
+func migrateAccountBalanceData(quotaPerUnit decimal.Decimal, quotaPerUnitSource string, stats accountBalanceMigrationStats) (map[string]string, []int, accountBalanceMigrationStats, error) {
 	runtimeValues := make(map[string]string)
+	var migratedUserIds []int
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		alreadyMigrated, err := lockAccountBalanceDataMigrationMarkerTx(tx)
 		if err != nil {
@@ -177,9 +178,11 @@ func migrateAccountBalanceData(quotaPerUnit decimal.Decimal, quotaPerUnitSource 
 		if alreadyMigrated {
 			return errAccountBalanceDataMigrationAlreadyDone
 		}
-		if err := migrateAccountBalanceUsersTx(tx, quotaPerUnit, &stats); err != nil {
+		userIds, err := migrateAccountBalanceUsersTx(tx, quotaPerUnit, &stats)
+		if err != nil {
 			return err
 		}
+		migratedUserIds = userIds
 		if err := migrateAccountBalanceRedemptionsTx(tx, quotaPerUnit, &stats); err != nil {
 			return err
 		}
@@ -212,42 +215,44 @@ func migrateAccountBalanceData(quotaPerUnit decimal.Decimal, quotaPerUnitSource 
 		stats.QuotaPerUnitSource = quotaPerUnitSource
 		stats.Error = err.Error()
 		logAccountBalanceMigrationStats(stats)
-		return nil, stats, err
+		return nil, nil, stats, err
 	}
 	stats.DataMarkerWritten = true
-	return runtimeValues, stats, nil
+	return runtimeValues, migratedUserIds, stats, nil
 }
 
-func migrateAccountBalanceUsersTx(tx *gorm.DB, quotaPerUnit decimal.Decimal, stats *accountBalanceMigrationStats) error {
+func migrateAccountBalanceUsersTx(tx *gorm.DB, quotaPerUnit decimal.Decimal, stats *accountBalanceMigrationStats) ([]int, error) {
 	var users []User
 	if err := tx.Unscoped().Select("id", "quota", "aff_quota", "aff_history").Find(&users).Error; err != nil {
-		return err
+		return nil, err
 	}
+	userIds := make([]int, 0, len(users))
 	for i := range users {
 		quota, err := legacyQuotaToCentsInt(users[i].Quota, quotaPerUnit)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		affQuota, err := legacyQuotaToCentsInt(users[i].AffQuota, quotaPerUnit)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		affHistory, err := legacyQuotaToCentsInt(users[i].AffHistoryQuota, quotaPerUnit)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		if err := tx.Unscoped().Model(&User{}).Where("id = ?", users[i].Id).Updates(map[string]any{
 			"quota":       quota,
 			"aff_quota":   affQuota,
 			"aff_history": affHistory,
 		}).Error; err != nil {
-			return err
+			return nil, err
 		}
+		userIds = append(userIds, users[i].Id)
 		stats.Users++
 		stats.UserAffQuota++
 		stats.UserAffHistory++
 	}
-	return nil
+	return userIds, nil
 }
 
 func migrateAccountBalanceRedemptionsTx(tx *gorm.DB, quotaPerUnit decimal.Decimal, stats *accountBalanceMigrationStats) error {
@@ -639,7 +644,7 @@ func legacyQuotaToCentsInt64(value int64, quotaPerUnit decimal.Decimal) (int64, 
 	return converted.IntPart(), nil
 }
 
-func invalidateAllUserCachesForAccountBalanceMigration() (int64, string, error) {
+func invalidateAllUserCachesForAccountBalanceMigration(userIds []int) (int64, string, error) {
 	if accountBalanceMigrationInvalidateAllUserCachesHook != nil {
 		return 0, "test_hook", accountBalanceMigrationInvalidateAllUserCachesHook()
 	}
@@ -649,26 +654,21 @@ func invalidateAllUserCachesForAccountBalanceMigration() (int64, string, error) 
 	if common.RDB == nil {
 		return 0, "redis_client_nil", errors.New("redis is enabled but client is nil")
 	}
-	ctx := context.Background()
-	var cursor uint64
-	var deleted int64
-	for {
-		keys, next, err := common.RDB.Scan(ctx, cursor, "user:*", 1000).Result()
-		if err != nil {
-			return deleted, "", err
-		}
-		if len(keys) > 0 {
-			removed, err := common.RDB.Del(ctx, keys...).Result()
-			if err != nil {
-				return deleted, "", err
-			}
-			deleted += removed
-		}
-		cursor = next
-		if cursor == 0 {
-			return deleted, "", nil
+	if userIds == nil {
+		if err := DB.Unscoped().Model(&User{}).Pluck("id", &userIds).Error; err != nil {
+			return 0, "", err
 		}
 	}
+	cleared := 0
+	for _, userId := range userIds {
+		if userId > 0 {
+			cleared++
+		}
+	}
+	if err := InvalidateAllUserCacheByIDs(userIds); err != nil {
+		return int64(cleared), "", err
+	}
+	return int64(cleared), "", nil
 }
 
 func accountBalanceMigrationUserCacheClearMode() string {
@@ -678,7 +678,7 @@ func accountBalanceMigrationUserCacheClearMode() string {
 	if !common.RedisEnabled {
 		return "redis_disabled"
 	}
-	return "redis_scan_user_prefix"
+	return "redis_user_ids"
 }
 
 func writeAccountBalanceMigrationFinalMarkers(migratedAt string) error {

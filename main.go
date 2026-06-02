@@ -350,6 +350,16 @@ func InitResources() error {
 	// Initialize options, should after model.InitDB()
 	model.InitOptionMap()
 
+	// Initialize Redis
+	err = common.InitRedisClient()
+	if err != nil {
+		return err
+	}
+	if err = model.EnsureAccountBalanceCentsMigration(); err != nil {
+		common.FatalLog("failed to migrate account balance cents: " + err.Error())
+		return err
+	}
+
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
 
@@ -358,12 +368,6 @@ func InitResources() error {
 
 	// Initialize SQL Database
 	err = model.InitLogDB()
-	if err != nil {
-		return err
-	}
-
-	// Initialize Redis
-	err = common.InitRedisClient()
 	if err != nil {
 		return err
 	}

@@ -76,6 +76,19 @@ func InvalidateUserCache(userId int) error {
 	return invalidateUserCache(userId)
 }
 
+// InvalidateAllUserCacheByIDs clears cached user hashes for the provided user IDs.
+func InvalidateAllUserCacheByIDs(userIds []int) error {
+	for _, userId := range userIds {
+		if userId <= 0 {
+			continue
+		}
+		if err := invalidateUserCache(userId); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // updateUserCache updates all user cache fields using hash
 func updateUserCache(user User) error {
 	if !common.RedisEnabled {

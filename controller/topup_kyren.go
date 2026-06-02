@@ -123,6 +123,7 @@ func RequestKyrenPay(c *gin.Context) {
 	topUp := &model.TopUp{
 		UserId:          userID,
 		Amount:          product.Quota,
+		AmountUnit:      model.TopUpAmountUnitAccountBalanceCents,
 		Money:           money,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodKyren,
@@ -231,13 +232,16 @@ func completeKyrenTopUpWithSnapshot(tradeNo string, event kyrenWebhookEvent, cal
 		if snapshot.Quota <= 0 {
 			return fmt.Errorf("%w: 无效的充值额度", errKyrenPermanentFulfillmentFailure)
 		}
+		amountToCredit := int(snapshot.Quota)
 		topUp.Amount = snapshot.Quota
+		topUp.AmountUnit = model.TopUpAmountUnitAccountBalanceCents
 		topUp.CompleteTime = common.GetTimestamp()
 		topUp.Status = common.TopUpStatusSuccess
 		result := tx.Model(&model.TopUp{}).
 			Where("trade_no = ? AND payment_provider = ? AND status = ?", topUp.TradeNo, model.PaymentProviderKyren, common.TopUpStatusFailed).
 			Updates(map[string]any{
 				"amount":        topUp.Amount,
+				"amount_unit":   model.TopUpAmountUnitAccountBalanceCents,
 				"complete_time": topUp.CompleteTime,
 				"status":        common.TopUpStatusSuccess,
 			})
@@ -247,7 +251,7 @@ func completeKyrenTopUpWithSnapshot(tradeNo string, event kyrenWebhookEvent, cal
 		if result.RowsAffected == 0 {
 			return model.ErrTopUpStatusInvalid
 		}
-		if err := tx.Model(&model.User{}).Where("id = ?", topUp.UserId).Update("quota", gorm.Expr("quota + ?", snapshot.Quota)).Error; err != nil {
+		if err := model.IncreaseUserAccountBalanceTx(tx, topUp.UserId, amountToCredit); err != nil {
 			return err
 		}
 		creditedQuota = snapshot.Quota
@@ -258,8 +262,15 @@ func completeKyrenTopUpWithSnapshot(tradeNo string, event kyrenWebhookEvent, cal
 	if err != nil {
 		return err
 	}
+	if topUpUserID <= 0 || creditedQuota <= 0 {
+		return nil
+	}
+	if err := model.InvalidateUserCache(topUpUserID); err != nil {
+		return err
+	}
 	if creditedQuota > 0 {
-		model.RecordTopupLog(topUpUserID, fmt.Sprintf("Kyren充值成功，充值额度: %d，支付金额: %.2f", creditedQuota, topUpMoney), callerIP, model.PaymentMethodKyren, model.PaymentMethodKyren)
+		balanceCNY := model.AccountBalanceCNYFromCents(int(creditedQuota)).StringFixed(2)
+		model.RecordTopupLog(topUpUserID, fmt.Sprintf("Kyren充值成功，充值额度: %s，支付金额: %.2f", balanceCNY, topUpMoney), callerIP, model.PaymentMethodKyren, model.PaymentMethodKyren)
 	}
 	return nil
 }

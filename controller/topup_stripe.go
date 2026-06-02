@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/checkout/session"
 	"github.com/stripe/stripe-go/v81/webhook"
@@ -81,7 +82,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 
 	id := c.GetInt("id")
 	user, _ := model.GetUserById(id, false)
-	chargedMoney := GetChargedAmount(float64(req.Amount), *user)
+	chargedMoney := getStripePayMoney(float64(req.Amount), "")
 
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
@@ -93,9 +94,16 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		return
 	}
 
+	amountCents, err := model.AccountBalanceCentsFromCNY(decimal.NewFromInt(req.Amount))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          req.Amount,
+		Amount:          int64(amountCents),
+		AmountUnit:      model.TopUpAmountUnitAccountBalanceCents,
 		Money:           chargedMoney,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
@@ -385,9 +393,6 @@ func GetChargedAmount(count float64, _ model.User) float64 {
 
 func getStripePayMoney(amount float64, _ string) float64 {
 	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
-	}
 	// Using float64 for monetary calculations is acceptable here due to the small amounts involved
 	topupGroupRatio := 1.0
 	// apply optional preset discount by the original request amount (if configured), default 1.0
@@ -402,9 +407,5 @@ func getStripePayMoney(amount float64, _ string) float64 {
 }
 
 func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
-	}
-	return int64(minTopup)
+	return int64(setting.StripeMinTopUp)
 }

@@ -45,10 +45,6 @@ func RequestWaffoPancakeAmount(c *gin.Context) {
 
 func getWaffoPancakePayMoney(amount int64, _ string) float64 {
 	dAmount := decimal.NewFromInt(amount)
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dAmount = dAmount.Div(decimal.NewFromFloat(common.QuotaPerUnit))
-	}
-
 	topupGroupRatio := decimal.NewFromInt(1)
 
 	discount := 1.0
@@ -65,17 +61,7 @@ func getWaffoPancakePayMoney(amount int64, _ string) float64 {
 }
 
 func normalizeWaffoPancakeTopUpAmount(amount int64) int64 {
-	if operation_setting.GetQuotaDisplayType() != operation_setting.QuotaDisplayTypeTokens {
-		return amount
-	}
-
-	normalized := decimal.NewFromInt(amount).
-		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
-		IntPart()
-	if normalized < 1 {
-		return 1
-	}
-	return normalized
+	return amount
 }
 
 func formatWaffoPancakeAmount(payMoney float64) string {
@@ -140,10 +126,17 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
+	amountCents, err := model.AccountBalanceCentsFromCNY(decimal.NewFromInt(req.Amount))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
 	tradeNo := fmt.Sprintf("WAFFO_PANCAKE-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          normalizeWaffoPancakeTopUpAmount(req.Amount),
+		Amount:          int64(amountCents),
+		AmountUnit:      model.TopUpAmountUnitAccountBalanceCents,
 		Money:           payMoney,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodWaffoPancake,

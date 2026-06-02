@@ -33,6 +33,7 @@ func seedPendingKyrenTopUp(t *testing.T, tradeNo string, userID int, localID str
 	require.NoError(t, model.DB.Create(&model.TopUp{
 		UserId:          userID,
 		Amount:          quota,
+		AmountUnit:      model.TopUpAmountUnitAccountBalanceCents,
 		Money:           10,
 		TradeNo:         tradeNo,
 		PaymentMethod:   model.PaymentMethodKyren,

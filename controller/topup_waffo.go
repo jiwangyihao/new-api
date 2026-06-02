@@ -15,12 +15,16 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"github.com/thanhpk/randstr"
 	waffo "github.com/waffo-com/waffo-go"
 	"github.com/waffo-com/waffo-go/config"
 	"github.com/waffo-com/waffo-go/core"
+	waffonet "github.com/waffo-com/waffo-go/net"
 	"github.com/waffo-com/waffo-go/types/order"
 )
+
+var waffoCustomTransportForTest waffonet.HttpTransport
 
 func getWaffoSDK() (*waffo.Waffo, error) {
 	env := config.Sandbox
@@ -38,6 +42,9 @@ func getWaffoSDK() (*waffo.Waffo, error) {
 		PrivateKey(privateKey).
 		WaffoPublicKey(publicKey).
 		Environment(env)
+	if waffoCustomTransportForTest != nil {
+		builder = builder.CustomTransport(waffoCustomTransportForTest)
+	}
 	if setting.WaffoMerchantId != "" {
 		builder = builder.MerchantID(setting.WaffoMerchantId)
 	}
@@ -73,12 +80,8 @@ func formatWaffoAmount(amount float64, currency string) string {
 
 // getWaffoPayMoney converts the user-facing amount to USD for Waffo payment.
 // Waffo only accepts USD, so this function handles the conversion from different
-// display types (USD/CNY/TOKENS) to the actual USD amount to charge.
 func getWaffoPayMoney(amount float64, _ string) float64 {
 	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
-	}
 	topupGroupRatio := 1.0
 	discount := 1.0
 	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
@@ -185,19 +188,17 @@ func RequestWaffoPay(c *gin.Context) {
 	merchantOrderId := fmt.Sprintf("WAFFO-%d-%d-%s", id, time.Now().UnixMilli(), randstr.String(6))
 	paymentRequestId := merchantOrderId
 
-	// Token 模式下归一化 Amount（存等价美元/CNY 数量，避免 RechargeWaffo 双重放大）
-	amount := req.Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = int64(float64(req.Amount) / common.QuotaPerUnit)
-		if amount < 1 {
-			amount = 1
-		}
+	amountCents, err := model.AccountBalanceCentsFromCNY(decimal.NewFromInt(req.Amount))
+	if err != nil {
+		common.ApiError(c, err)
+		return
 	}
 
 	// 创建本地订单
 	topUp := &model.TopUp{
 		UserId:          id,
-		Amount:          amount,
+		Amount:          int64(amountCents),
+		AmountUnit:      model.TopUpAmountUnitAccountBalanceCents,
 		Money:           payMoney,
 		TradeNo:         merchantOrderId,
 		PaymentMethod:   model.PaymentMethodWaffo,

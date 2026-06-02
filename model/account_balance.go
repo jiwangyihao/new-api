@@ -55,7 +55,14 @@ func IncreaseUserAccountBalanceTx(tx *gorm.DB, userId int, cents int) error {
 	if cents <= 0 {
 		return errors.New("invalid amount")
 	}
-	return tx.Model(&User{}).
+	result := tx.Model(&User{}).
 		Where("id = ?", userId).
-		Update("quota", gorm.Expr("quota + ?", cents)).Error
+		Update("quota", gorm.Expr("quota + ?", cents))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("用户不存在")
+	}
+	return nil
 }

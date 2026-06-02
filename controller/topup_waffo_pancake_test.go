@@ -27,7 +27,7 @@ func TestFormatWaffoPancakeAmount_UsesDisplayPriceString(t *testing.T) {
 	}
 }
 
-func TestGetWaffoPancakePayMoney(t *testing.T) {
+func TestWaffoPancakeTopUpCentsPayMoney(t *testing.T) {
 	originalUnitPrice := setting.WaffoPancakeUnitPrice
 	originalQuotaDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
 	originalDiscounts := make(map[int]float64, len(operation_setting.GetPaymentSetting().AmountDiscount))
@@ -66,11 +66,11 @@ func TestGetWaffoPancakePayMoney(t *testing.T) {
 			expected:         20,
 		},
 		{
-			name:             "tokens display converts quota to display units before pricing without group ratio",
+			name:             "tokens display prices CNY amount independent from quota per unit",
 			amount:           int64(common.QuotaPerUnit * 3),
 			group:            "vip",
 			quotaDisplayType: operation_setting.QuotaDisplayTypeTokens,
-			expected:         3.75,
+			expected:         1875000,
 		},
 		{
 			name:             "non-positive discount falls back to no discount",

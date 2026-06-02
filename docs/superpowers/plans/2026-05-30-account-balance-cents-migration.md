@@ -1024,7 +1024,7 @@ git commit -m "fix(subscription): 余额购买按分扣款"
 - 修改：`setting/payment_kyren.go`
 - 测试：`controller/topup_account_balance_cents_test.go`、既有 `topup_*_test.go`
 
-- [ ] **步骤 1：编写新订单分制红测**
+- [x] **步骤 1：编写新订单分制红测**
 
 在 `controller/topup_account_balance_cents_test.go` 新增测试覆盖：
 
@@ -1179,7 +1179,7 @@ func TestExpiredProviderTopUpsCannotBeCreditedByLateWebhook(t *testing.T) {
 
 Epay / Stripe / Waffo / Waffo Pancake / Creem / Kyren 的成功路径必须逐渠道硬断言：`TopUp.Amount = 3990`、`TopUp.AmountUnit = account_balance_cents`、成功回调按 `TopUp.Amount` 增加用户余额、状态变 success、日志使用账户余额格式；测试中修改 `common.QuotaPerUnit` 后结果不变。过期订单红测覆盖 `ManualCompleteTopUp`、Epay、Stripe、Waffo、Waffo Pancake、Creem、Kyren，断言迁移前 `expired` 旧订单不会被补单或迟到 webhook 入账。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TopUp.*Cents|Expired.*TopUp|Test.*WebhookCreditsTopUpAmountCents|TestKyrenWebhookCompletesTopUpUsingSnapshot' -count=1
@@ -1187,7 +1187,7 @@ go test ./controller -run 'TopUp.*Cents|Expired.*TopUp|Test.*WebhookCreditsTopUp
 
 预期：FAIL，旧路径仍乘 `QuotaPerUnit` 或保存旧 amount。
 
-- [ ] **步骤 3：修改创建订单金额**
+- [x] **步骤 3：修改创建订单金额**
 
 普通充值请求中：
 
@@ -1205,7 +1205,7 @@ Stripe / Waffo / Waffo Pancake 同样在创建订单时把用户获得的账户�
 
 Creem / Kyren 产品配置中的 `quota` 已是分，创建订单继续复制分值，不再做旧倍率换算，并同样写 `TopUp.AmountUnit = model.TopUpAmountUnitAccountBalanceCents`。`setting.NormalizeKyrenTopUpProductsJSON` / 管理端保存路径必须拒绝 `quota <= 0`、`currency != CNY`、不可解析金额、超过两位小数金额，并把合法 `amount` 规范为 CNY 金额字符串。`controller/topup_creem.go` 中 `setting.CreemProducts`、Creem checkout request / response 的业务 JSON 使用 `common.UnmarshalJsonStr`、`common.Marshal`、`common.Unmarshal`，不得继续调用 `encoding/json`。
 
-- [ ] **步骤 4：修改 webhook / 补单入账**
+- [x] **步骤 4：修改 webhook / 补单入账**
 
 所有成功回调、`model.ManualCompleteTopUp` 和 Kyren / Creem completion 使用账户余额 helper，并在事务成功提交后清理缓存：
 
@@ -1227,7 +1227,7 @@ return model.InvalidateUserCache(topUp.UserId)
 
 日志使用账户余额格式：`AccountBalanceCNYFromCents(int(topUp.Amount)).StringFixed(2)`，不得使用 `logger.LogQuota` 展示账户余额。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./controller ./model -run 'TopUp.*Cents|Expired.*TopUp|Test.*WebhookCreditsTopUpAmountCents|TestKyrenWebhookCompletesTopUpUsingSnapshot|TestManualCompleteTopUp|TestGetTopUpInfoIncludesKyrenProducts' -count=1
@@ -1235,7 +1235,7 @@ go test ./controller ./model -run 'TopUp.*Cents|Expired.*TopUp|Test.*WebhookCred
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add controller/topup.go controller/topup_stripe.go controller/topup_waffo.go controller/topup_waffo_pancake.go controller/topup_creem.go controller/topup_kyren.go model/topup.go setting/payment_kyren.go controller/topup_account_balance_cents_test.go

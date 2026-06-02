@@ -32,6 +32,7 @@ import {
   Radio,
   FlaskConical,
   MessageSquare,
+  ShieldAlert,
   CreditCard,
   ListTodo,
   Settings,
@@ -151,6 +152,11 @@ export function useSidebarData(): SidebarData {
             title: t('adminOps.title'),
             url: '/admin-ops',
             icon: Activity,
+          },
+          {
+            title: t('trialAbuse.title'),
+            url: '/trial-abuse',
+            icon: ShieldAlert,
           },
           {
             title: t('Redemption Codes'),

@@ -140,6 +140,10 @@ export function SidebarModulesSection({
         title: t('Trial Codes'),
         description: t('Manage manual trial codes for new account trials.'),
       },
+      trial_abuse: {
+        title: t('trialAbuse.title'),
+        description: t('trialAbuse.description'),
+      },
       user: {
         title: t('Users'),
         description: t('Administer user accounts and roles.'),

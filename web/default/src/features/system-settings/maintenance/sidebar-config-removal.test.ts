@@ -40,4 +40,19 @@ describe('sidebar module defaults after removing application guides', () => {
 
     assert.equal(parsed.personal?.app_guides, undefined)
   })
+
+  test('keeps trial abuse enabled in default and parsed admin config', () => {
+    assert.equal(SIDEBAR_MODULES_DEFAULT.admin?.trial_abuse, true)
+
+    const parsed = parseSidebarModulesAdmin(
+      JSON.stringify({
+        admin: {
+          enabled: true,
+          channel: true,
+        },
+      })
+    )
+
+    assert.equal(parsed.admin?.trial_abuse, true)
+  })
 })

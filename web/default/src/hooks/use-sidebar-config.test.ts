@@ -172,6 +172,67 @@ describe('sidebar config defaults', () => {
     assert.equal(filtered[0]?.items[0]?.url, '/admin-ops')
   })
 
+  test('applies sidebar permissions as a hard limit over saved user config', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          { title: 'System Settings', url: '/system-settings' },
+          { title: 'Trial Abuse', url: '/trial-abuse' },
+        ],
+      },
+    ]
+    const userConfig = {
+      admin: {
+        enabled: true,
+        setting: true,
+        trial_abuse: true,
+      },
+    }
+    const permissions = {
+      admin: {
+        setting: false,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig,
+      permissions
+    )
+
+    assert.deepEqual(
+      filtered[0]?.items.map((item) => ('url' in item ? item.url : '')),
+      ['/trial-abuse']
+    )
+  })
+
+  test('treats section-level sidebar permission false as a hard limit', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [{ title: 'System Settings', url: '/system-settings' }],
+      },
+    ]
+    const userConfig = {
+      admin: {
+        enabled: true,
+        setting: true,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, userConfig, {
+      admin: false,
+    })
+
+    assert.equal(filtered.length, 0)
+  })
+
   test('lets user config explicitly hide admin ops', () => {
     const defaults = getDefaultSidebarModulesForTest()
     const groups: NavGroup[] = [
@@ -190,6 +251,84 @@ describe('sidebar config defaults', () => {
       admin: {
         enabled: true,
         ops: false,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig
+    )
+
+    assert.equal(filtered.length, 0)
+  })
+
+  test('keeps trial abuse visible in the default admin sidebar', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Trial Abuse',
+            url: '/trial-abuse',
+          },
+        ],
+      },
+    ]
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, null)
+
+    assert.equal(defaults.admin?.trial_abuse, true)
+    assert.equal(filtered[0]?.items[0]?.url, '/trial-abuse')
+  })
+
+  test('hides trial abuse when admin sidebar config disables the module', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Trial Abuse',
+            url: '/trial-abuse',
+          },
+        ],
+      },
+    ]
+    const adminConfig = {
+      ...defaults,
+      admin: {
+        ...(defaults.admin ?? { enabled: true }),
+        trial_abuse: false,
+      },
+    }
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, adminConfig, null)
+
+    assert.equal(filtered.length, 0)
+  })
+
+  test('lets user config explicitly hide trial abuse', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Trial Abuse',
+            url: '/trial-abuse',
+          },
+        ],
+      },
+    ]
+    const userConfig = {
+      admin: {
+        enabled: true,
+        trial_abuse: false,
       },
     }
 

@@ -47,6 +47,76 @@ type SectionDef = {
   modules: { key: string; title: string; description: string }[]
 }
 
+export function buildDefaultSidebarModulesForSectionsForTest(
+  sections: SectionDef[],
+  unavailableModules: Record<string, unknown> = {},
+  savedConfig?: SidebarModulesConfig
+): SidebarModulesConfig {
+  const defaults = savedConfig ?? buildDefaultSidebarModulesForSections(sections, unavailableModules)
+  return clampSidebarModulesForPermissionsForTest(defaults, unavailableModules)
+}
+
+export function clampSidebarModulesForPermissionsForTest(
+  config: SidebarModulesConfig,
+  unavailableModules: Record<string, unknown> = {}
+): SidebarModulesConfig {
+  return applySidebarModulePermissions(config, unavailableModules)
+}
+
+function buildDefaultSidebarModulesForSections(
+  sections: SectionDef[],
+  unavailableModules: Record<string, unknown> = {}
+): SidebarModulesConfig {
+  const defaults: SidebarModulesConfig = {}
+  for (const sec of sections) {
+    defaults[sec.key] = { enabled: true }
+    for (const mod of sec.modules) {
+      defaults[sec.key][mod.key] = !isSidebarModuleUnavailable(unavailableModules, sec.key, mod.key)
+    }
+  }
+  return applySidebarModulePermissions(defaults, unavailableModules)
+}
+
+function isSidebarModuleUnavailable(
+  unavailableModules: Record<string, unknown>,
+  sectionKey: string,
+  moduleKey: string
+): boolean {
+  const section = unavailableModules[sectionKey]
+  if (section === false) return true
+  if (section == null || typeof section !== 'object') return false
+  const sectionRecord = section as Record<string, unknown>
+  return sectionRecord.enabled === false || sectionRecord[moduleKey] === false
+}
+
+function applySidebarModulePermissions(
+  config: SidebarModulesConfig,
+  unavailableModules: Record<string, unknown> = {}
+): SidebarModulesConfig {
+  const next: SidebarModulesConfig = {}
+  for (const [sectionKey, section] of Object.entries(config)) {
+    const nextSection: SidebarModuleConfig = { ...section }
+    for (const moduleKey of Object.keys(nextSection)) {
+      if (moduleKey === 'enabled') continue
+      if (isSidebarModuleUnavailable(unavailableModules, sectionKey, moduleKey)) {
+        nextSection[moduleKey] = false
+      }
+    }
+    const unavailableSection = unavailableModules[sectionKey]
+    if (
+      unavailableSection === false ||
+      (typeof unavailableSection === 'object' &&
+        unavailableSection !== null &&
+        (unavailableSection as Record<string, unknown>).enabled === false)
+    ) {
+      nextSection.enabled = false
+    }
+    next[sectionKey] = nextSection
+  }
+  return next
+}
+
+
 export function SidebarModulesCard() {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
@@ -169,6 +239,11 @@ export function SidebarModulesCard() {
           description: t('adminOps.description'),
         },
         {
+          key: 'trial_abuse',
+          title: t('trialAbuse.title'),
+          description: t('trialAbuse.description'),
+        },
+        {
           key: 'user',
           title: t('Users'),
           description: t('Manage users and their permissions'),
@@ -188,14 +263,9 @@ export function SidebarModulesCard() {
       if (res.data.success && res.data.data?.sidebar_modules) {
         const raw = res.data.data.sidebar_modules
         const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
-        setConfig(parsed)
+        setConfig(applySidebarModulePermissions(parsed, currentUser?.permissions?.sidebar_modules))
       } else {
-        const defaults: SidebarModulesConfig = {}
-        for (const sec of sectionDefs) {
-          defaults[sec.key] = { enabled: true }
-          for (const mod of sec.modules) defaults[sec.key][mod.key] = true
-        }
-        setConfig(defaults)
+        setConfig(buildDefaultSidebarModulesForSections(sectionDefs, currentUser?.permissions?.sidebar_modules))
       }
     } catch {
       /* ignore */
@@ -228,7 +298,11 @@ export function SidebarModulesCard() {
   const handleSave = async () => {
     setLoading(true)
     try {
-      const serialized = JSON.stringify(config)
+      const sanitizedConfig = applySidebarModulePermissions(
+        config,
+        currentUser?.permissions?.sidebar_modules
+      )
+      const serialized = JSON.stringify(sanitizedConfig)
       const res = await api.put('/api/user/self', {
         sidebar_modules: serialized,
       })
@@ -250,12 +324,12 @@ export function SidebarModulesCard() {
   }
 
   const handleReset = () => {
-    const defaults: SidebarModulesConfig = {}
-    for (const sec of sectionDefs) {
-      defaults[sec.key] = { enabled: true }
-      for (const mod of sec.modules) defaults[sec.key][mod.key] = true
-    }
-    setConfig(defaults)
+    setConfig(
+      buildDefaultSidebarModulesForSections(
+        sectionDefs,
+        currentUser?.permissions?.sidebar_modules
+      )
+    )
     toast.success(t('Reset to default configuration'))
   }
 

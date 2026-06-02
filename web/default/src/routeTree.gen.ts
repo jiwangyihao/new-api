@@ -42,6 +42,7 @@ import { Route as AuthenticatedUsersIndexRouteImport } from './routes/_authentic
 import { Route as AuthenticatedUsageLogsIndexRouteImport } from './routes/_authenticated/usage-logs/index'
 import { Route as AuthenticatedUsageAnalyticsIndexRouteImport } from './routes/_authenticated/usage-analytics/index'
 import { Route as AuthenticatedTrialCodesIndexRouteImport } from './routes/_authenticated/trial-codes/index'
+import { Route as AuthenticatedTrialAbuseIndexRouteImport } from './routes/_authenticated/trial-abuse/index'
 import { Route as AuthenticatedSystemSettingsIndexRouteImport } from './routes/_authenticated/system-settings/index'
 import { Route as AuthenticatedSubscriptionsIndexRouteImport } from './routes/_authenticated/subscriptions/index'
 import { Route as AuthenticatedRedemptionCodesIndexRouteImport } from './routes/_authenticated/redemption-codes/index'
@@ -240,6 +241,12 @@ const AuthenticatedTrialCodesIndexRoute =
   AuthenticatedTrialCodesIndexRouteImport.update({
     id: '/trial-codes/',
     path: '/trial-codes/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
+const AuthenticatedTrialAbuseIndexRoute =
+  AuthenticatedTrialAbuseIndexRouteImport.update({
+    id: '/trial-abuse/',
+    path: '/trial-abuse/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 const AuthenticatedSystemSettingsIndexRoute =
@@ -469,6 +476,7 @@ export interface FileRoutesByFullPath {
   '/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
+  '/trial-abuse/': typeof AuthenticatedTrialAbuseIndexRoute
   '/trial-codes/': typeof AuthenticatedTrialCodesIndexRoute
   '/usage-analytics/': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
@@ -532,6 +540,7 @@ export interface FileRoutesByTo {
   '/redemption-codes': typeof AuthenticatedRedemptionCodesIndexRoute
   '/subscriptions': typeof AuthenticatedSubscriptionsIndexRoute
   '/system-settings': typeof AuthenticatedSystemSettingsIndexRoute
+  '/trial-abuse': typeof AuthenticatedTrialAbuseIndexRoute
   '/trial-codes': typeof AuthenticatedTrialCodesIndexRoute
   '/usage-analytics': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/usage-logs': typeof AuthenticatedUsageLogsIndexRoute
@@ -599,6 +608,7 @@ export interface FileRoutesById {
   '/_authenticated/redemption-codes/': typeof AuthenticatedRedemptionCodesIndexRoute
   '/_authenticated/subscriptions/': typeof AuthenticatedSubscriptionsIndexRoute
   '/_authenticated/system-settings/': typeof AuthenticatedSystemSettingsIndexRoute
+  '/_authenticated/trial-abuse/': typeof AuthenticatedTrialAbuseIndexRoute
   '/_authenticated/trial-codes/': typeof AuthenticatedTrialCodesIndexRoute
   '/_authenticated/usage-analytics/': typeof AuthenticatedUsageAnalyticsIndexRoute
   '/_authenticated/usage-logs/': typeof AuthenticatedUsageLogsIndexRoute
@@ -665,6 +675,7 @@ export interface FileRouteTypes {
     | '/redemption-codes/'
     | '/subscriptions/'
     | '/system-settings/'
+    | '/trial-abuse/'
     | '/trial-codes/'
     | '/usage-analytics/'
     | '/usage-logs/'
@@ -728,6 +739,7 @@ export interface FileRouteTypes {
     | '/redemption-codes'
     | '/subscriptions'
     | '/system-settings'
+    | '/trial-abuse'
     | '/trial-codes'
     | '/usage-analytics'
     | '/usage-logs'
@@ -794,6 +806,7 @@ export interface FileRouteTypes {
     | '/_authenticated/redemption-codes/'
     | '/_authenticated/subscriptions/'
     | '/_authenticated/system-settings/'
+    | '/_authenticated/trial-abuse/'
     | '/_authenticated/trial-codes/'
     | '/_authenticated/usage-analytics/'
     | '/_authenticated/usage-logs/'
@@ -1069,6 +1082,13 @@ declare module '@tanstack/react-router' {
       path: '/trial-codes'
       fullPath: '/trial-codes/'
       preLoaderRoute: typeof AuthenticatedTrialCodesIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/trial-abuse/': {
+      id: '/_authenticated/trial-abuse/'
+      path: '/trial-abuse'
+      fullPath: '/trial-abuse/'
+      preLoaderRoute: typeof AuthenticatedTrialAbuseIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/system-settings/': {
@@ -1392,6 +1412,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedProfileIndexRoute: typeof AuthenticatedProfileIndexRoute
   AuthenticatedRedemptionCodesIndexRoute: typeof AuthenticatedRedemptionCodesIndexRoute
   AuthenticatedSubscriptionsIndexRoute: typeof AuthenticatedSubscriptionsIndexRoute
+  AuthenticatedTrialAbuseIndexRoute: typeof AuthenticatedTrialAbuseIndexRoute
   AuthenticatedTrialCodesIndexRoute: typeof AuthenticatedTrialCodesIndexRoute
   AuthenticatedUsageAnalyticsIndexRoute: typeof AuthenticatedUsageAnalyticsIndexRoute
   AuthenticatedUsageLogsIndexRoute: typeof AuthenticatedUsageLogsIndexRoute
@@ -1419,6 +1440,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedRedemptionCodesIndexRoute:
     AuthenticatedRedemptionCodesIndexRoute,
   AuthenticatedSubscriptionsIndexRoute: AuthenticatedSubscriptionsIndexRoute,
+  AuthenticatedTrialAbuseIndexRoute: AuthenticatedTrialAbuseIndexRoute,
   AuthenticatedTrialCodesIndexRoute: AuthenticatedTrialCodesIndexRoute,
   AuthenticatedUsageAnalyticsIndexRoute: AuthenticatedUsageAnalyticsIndexRoute,
   AuthenticatedUsageLogsIndexRoute: AuthenticatedUsageLogsIndexRoute,

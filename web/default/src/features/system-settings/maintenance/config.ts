@@ -78,6 +78,7 @@ export const SIDEBAR_MODULES_DEFAULT: SidebarModulesAdminConfig = {
     models: true,
     redemption: true,
     trial_code: true,
+    trial_abuse: true,
     user: true,
     setting: true,
     subscription: true,

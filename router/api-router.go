@@ -221,6 +221,12 @@ func SetApiRouter(router *gin.Engine) {
 			adminOpsRoute.GET("/concurrency", controller.GetAdminOpsConcurrency)
 		}
 
+		trialAbuseRoute := apiRouter.Group("/trial-abuse")
+		trialAbuseRoute.Use(middleware.AdminAuth())
+		{
+			trialAbuseRoute.GET("/summary", controller.GetTrialAbuseSummary)
+		}
+
 		trialCodeAdminRoute := apiRouter.Group("/trial-codes/admin")
 		trialCodeAdminRoute.Use(middleware.AdminAuth())
 		{

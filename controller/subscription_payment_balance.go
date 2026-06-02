@@ -3,7 +3,6 @@ package controller
 import (
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"strings"
 
@@ -84,11 +83,11 @@ func subscriptionBalancePayAmount(price float64) (int, error) {
 	if price <= 0 {
 		return 0, errors.New("套餐不可购买")
 	}
-	quotaAmount := decimal.NewFromFloat(price).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).Round(0).IntPart()
-	if quotaAmount <= 0 || quotaAmount > int64(math.MaxInt) {
+	amount, err := model.AccountBalanceCentsFromCNY(decimal.NewFromFloat(price))
+	if err != nil {
 		return 0, errors.New("套餐价格无效")
 	}
-	return int(quotaAmount), nil
+	return amount, nil
 }
 
 func subscriptionBalancePlanLockKey(userId int, planId int) string {

@@ -177,22 +177,9 @@ func UpdateMidjourneyTaskBulk() {
 				if err != nil {
 					logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 				} else if won && shouldReturnQuota {
-					err = model.IncreaseUserQuota(task.UserId, task.Quota, false)
-					if err != nil {
-						logger.LogError(ctx, "fail to increase user quota: "+err.Error())
-					}
-					model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
-						UserId:    task.UserId,
-						LogType:   model.LogTypeRefund,
-						Content:   "",
-						ChannelId: task.ChannelId,
-						ModelName: service.CovertMjpActionToModelName(task.Action),
-						Quota:     task.Quota,
-						Other: map[string]interface{}{
-							"task_id": task.MjId,
-							"reason":  "构图失败",
-						},
-					})
+					err = service.ErrLegacyWalletFundingDisabled
+					logger.LogWarn(ctx, fmt.Sprintf("skip legacy wallet refund for midjourney task %s: %s", task.MjId, err.Error()))
+					model.RecordLog(task.UserId, model.LogTypeSystem, fmt.Sprintf("Midjourney async task failed %s, legacy wallet refund requires manual handling", task.MjId))
 				}
 			}
 		}

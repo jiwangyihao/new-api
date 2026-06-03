@@ -379,25 +379,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			relayInfo.SubscriptionPostDelta += delta
 		}
 	} else {
-		// Wallet quota is retained for non-relay compatibility paths only.
-		if quota > 0 {
-			err = model.DecreaseUserQuota(relayInfo.UserId, quota, false)
-		} else {
-			err = model.IncreaseUserQuota(relayInfo.UserId, -quota, false)
-		}
-		if err != nil {
-			return err
-		}
-		if !relayInfo.IsPlayground {
-			if quota > 0 {
-				err = model.DecreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, quota)
-			} else {
-				err = model.IncreaseTokenQuota(relayInfo.TokenId, relayInfo.TokenKey, -quota)
-			}
-			if err != nil {
-				return err
-			}
-		}
+		return ErrLegacyWalletFundingDisabled
 	}
 
 	if sendEmail {

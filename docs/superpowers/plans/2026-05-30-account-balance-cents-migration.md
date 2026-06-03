@@ -1563,9 +1563,10 @@ git commit -m "fix(balance): 奖励兑换码和管理调额按分处理"
 - 修改：`controller/task_video.go`
 - 修改：`service/subscription_only_billing_test.go`
 - 修改：`service/task_billing_test.go`
+- 修改：`service/task_group_removal_test.go`
 - 修改：`controller/subscription_non_text_billing_test.go`
 
-- [ ] **步骤 1：编写阻断 legacy wallet 红测**
+- [x] **步骤 1：编写阻断 legacy wallet 红测**
 
 ```go
 func TestWalletFundingDoesNotWriteAccountBalanceForRelay(t *testing.T) {
@@ -1605,7 +1606,7 @@ func TestAsyncTaskRefundDoesNotWriteAccountBalance(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./service ./controller -run 'WalletFundingDoesNotWrite|PostConsumeQuotaRejects|AsyncTaskRefundDoesNotWrite|RefundTaskQuota|RecalculateTaskQuota|TaskBilling|subscription.*billing|task.*billing' -count=1
@@ -1613,7 +1614,7 @@ go test ./service ./controller -run 'WalletFundingDoesNotWrite|PostConsumeQuotaR
 
 预期：FAIL，旧代码仍写 `users.quota`。
 
-- [ ] **步骤 3：修改 funding 入口**
+- [x] **步骤 3：修改 funding 入口**
 
 `WalletFunding` 保留类型但 relay / task 不得使用其写 `users.quota`。实现为明确错误：
 
@@ -1627,11 +1628,11 @@ func (w *WalletFunding) Refund() error { return ErrLegacyWalletFundingDisabled }
 
 非 relay 兼容路径如果仍需要账户余额写入，必须调用 `IncreaseUserAccountBalanceTx` / `DeductUserAccountBalanceTx`，不得复用 `WalletFunding`。
 
-- [ ] **步骤 4：修改 `PostConsumeQuota` 和 `taskAdjustFunding`**
+- [x] **步骤 4：修改 `PostConsumeQuota` 和 `taskAdjustFunding`**
 
 `service/billing_session.go`、`service/pre_consume_quota.go`、`service/quota.go` 的非订阅 fallback 返回错误，不再 `DecreaseUserQuota` / `IncreaseUserQuota`。既有 `RefundTaskQuota` / `RecalculateTaskQuota` / task billing 钱包退款或差额结算测试必须改写为断言用户余额不变，并返回 `ErrLegacyWalletFundingDisabled` 或记录人工处理；不得保留旧测试继续期待 `users.quota` 增减。`controller/midjourney.go` 和 `controller/task_video.go` 中任务失败退款不得写账户余额；迁移前旧任务如无法安全换算，返回明确错误并记录人工处理日志，不能把模型 quota delta 加到账户余额分。
 
-- [ ] **步骤 5：运行静态扫描与测试**
+- [x] **步骤 5：运行静态扫描与测试**
 
 ```bash
 go test ./service ./controller -run 'WalletFundingDoesNotWrite|PostConsumeQuotaRejects|AsyncTaskRefundDoesNotWrite|RefundTaskQuota|RecalculateTaskQuota|TaskBilling|subscription.*billing|task.*billing|TestPreConsumeUserSubscription' -count=1
@@ -1648,10 +1649,10 @@ go test ./service ./controller -run 'WalletFundingDoesNotWrite|PostConsumeQuotaR
 任何不在清单内的命中必须在本任务修复并重跑测试。
 ```
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
-git add service/funding_source.go service/billing_session.go service/pre_consume_quota.go service/task_billing.go service/quota.go controller/midjourney.go controller/task_video.go service/subscription_only_billing_test.go service/task_billing_test.go controller/subscription_non_text_billing_test.go
+git add service/funding_source.go service/billing_session.go service/pre_consume_quota.go service/task_billing.go service/quota.go controller/midjourney.go controller/task_video.go service/subscription_only_billing_test.go service/task_billing_test.go service/task_group_removal_test.go controller/subscription_non_text_billing_test.go
 git commit -m "fix(billing): 禁止模型调用写账户余额"
 ```
 

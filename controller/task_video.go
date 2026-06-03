@@ -188,12 +188,12 @@ func updateVideoSingleTask(ctx context.Context, adaptor channel.TaskAdaptor, cha
 	}
 
 	if shouldRefund {
-		// 任务失败且之前状态不是失败才退还额度，防止重复退还
-		if err := model.IncreaseUserQuota(task.UserId, quota, false); err != nil {
-			logger.LogWarn(ctx, "Failed to increase user quota: "+err.Error())
+		if task.PrivateData.BillingSource == service.BillingSourceSubscription {
+			service.RefundTaskQuota(ctx, task, task.FailReason)
+		} else {
+			logger.LogWarn(ctx, fmt.Sprintf("skip legacy wallet refund for video task %s: %s", task.TaskID, service.ErrLegacyWalletFundingDisabled.Error()))
+			model.RecordLog(task.UserId, model.LogTypeSystem, fmt.Sprintf("Video async task failed %s, legacy wallet refund requires manual handling", task.TaskID))
 		}
-		logContent := fmt.Sprintf("Video async task failed %s, refund %s", task.TaskID, logger.LogQuota(quota))
-		model.RecordLog(task.UserId, model.LogTypeSystem, logContent)
 	}
 
 	return nil

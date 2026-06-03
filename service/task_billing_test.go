@@ -226,19 +226,10 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 
 	RefundTaskQuota(ctx, task, "task failed: upstream error")
 
-	// User quota should increase by preConsumed
-	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
-
-	// Token remain_quota should increase, used_quota should decrease
-	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
-	assert.Equal(t, -preConsumed, getTokenUsedQuota(t, tokenID))
-
-	// A refund log should be created
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
-	assert.Equal(t, preConsumed, log.Quota)
-	assert.Equal(t, "test-model", log.ModelName)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestRefundTaskQuota_Subscription(t *testing.T) {
@@ -370,13 +361,8 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 
 	RefundTaskQuota(ctx, task, "no token task failed")
 
-	// User quota refunded
-	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
-
-	// Log created
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 // ===========================================================================
@@ -389,7 +375,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	const userID, tokenID, channelID = 10, 10, 10
 	const initQuota, preConsumed = 10000, 2000
-	const actualQuota = 3000 // under-charged by 1000
+	const actualQuota = 3000
 	const tokenRemain = 5000
 
 	seedUser(t, userID, initQuota)
@@ -400,20 +386,10 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
-	// User quota should decrease by the delta (1000 additional charge)
-	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
-
-	// Token should also be charged the delta
-	assert.Equal(t, tokenRemain-(actualQuota-preConsumed), getTokenRemainQuota(t, tokenID))
-
-	// task.Quota should be updated to actualQuota
-	assert.Equal(t, actualQuota, task.Quota)
-
-	// Log type should be Consume (additional charge)
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeConsume, log.Type)
-	assert.Equal(t, actualQuota-preConsumed, log.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestRecalculate_NegativeDelta(t *testing.T) {
@@ -422,7 +398,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	const userID, tokenID, channelID = 11, 11, 11
 	const initQuota, preConsumed = 10000, 5000
-	const actualQuota = 3000 // over-charged by 2000
+	const actualQuota = 3000
 	const tokenRemain = 5000
 
 	seedUser(t, userID, initQuota)
@@ -433,20 +409,10 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
 
-	// User quota should increase by abs(delta) = 2000 (refund overpayment)
-	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
-
-	// Token should be refunded the difference
-	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))
-
-	// task.Quota updated
-	assert.Equal(t, actualQuota, task.Quota)
-
-	// Log type should be Refund
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
-	assert.Equal(t, preConsumed-actualQuota, log.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestRecalculate_ZeroDelta(t *testing.T) {
@@ -591,18 +557,12 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 
 	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusFailure), 0)
 
-	// CAS wins: task in DB should now be FAILURE
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusFailure, reloaded.Status)
-
-	// Refund should have happened
-	assert.Equal(t, initQuota+preConsumed, getUserQuota(t, userID))
-	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
-
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestCASGuardedRefund_Lose(t *testing.T) {
@@ -643,7 +603,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 
 	const userID, tokenID, channelID = 22, 22, 22
 	const initQuota, preConsumed = 10000, 5000
-	const actualQuota = 3000 // over-charged, should get partial refund
+	const actualQuota = 3000
 	const tokenRemain = 8000
 
 	seedUser(t, userID, initQuota)
@@ -656,17 +616,13 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 
 	simulatePollBilling(ctx, task, model.TaskStatus(model.TaskStatusSuccess), actualQuota)
 
-	// CAS wins: task should be SUCCESS
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
 	assert.EqualValues(t, model.TaskStatusSuccess, reloaded.Status)
-
-	// Settlement should refund the over-charge (5000 - 3000 = 2000 back to user)
-	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
-	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))
-
-	// task.Quota should be updated to actualQuota
-	assert.Equal(t, actualQuota, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestNonTerminalUpdate_NoBilling(t *testing.T) {
@@ -788,19 +744,40 @@ func TestSettle_NonPerCall_AdaptorAdjustWorks(t *testing.T) {
 	seedChannel(t, channelID)
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
-	// PerCallBilling defaults to false
 
 	adaptor := &mockAdaptor{adjustReturn: adaptorQuota}
 	taskResult := &relaycommon.TaskInfo{Status: model.TaskStatusSuccess}
 
 	settleTaskBillingOnComplete(ctx, adaptor, task, taskResult)
 
-	// Non-per-call: adaptor adjustment applies (refund 2000)
-	assert.Equal(t, initQuota+(preConsumed-adaptorQuota), getUserQuota(t, userID))
-	assert.Equal(t, tokenRemain+(preConsumed-adaptorQuota), getTokenRemainQuota(t, tokenID))
-	assert.Equal(t, adaptorQuota, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
+}
 
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Equal(t, model.LogTypeRefund, log.Type)
+func TestLegacyTaskRefundAndRecalculateDoNotWriteAccountBalance(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 40, 40, 40
+	const initQuota, preConsumed = 4000, 500000
+	const tokenRemain = 900000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-legacy-task", tokenRemain)
+	seedChannel(t, channelID)
+
+	refundTask := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	RefundTaskQuota(ctx, refundTask, "legacy wallet refund")
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
+
+	recalculateTask := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	RecalculateTaskQuota(ctx, recalculateTask, preConsumed+1000, "legacy wallet recalculate")
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, preConsumed, recalculateTask.Quota)
+	assert.Equal(t, int64(0), countLogs(t))
 }

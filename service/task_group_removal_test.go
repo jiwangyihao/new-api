@@ -41,16 +41,10 @@ func TestTaskBillingIgnoresLegacyTaskAndUserGroupsForTokenRecalculation(t *testi
 
 	RecalculateTaskQuotaByTokens(context.Background(), task, 10)
 
-	assert.Equal(t, 20, task.Quota)
-	assert.Equal(t, initQuota+80, getUserQuota(t, userID))
-	assert.Equal(t, tokenRemain+80, getTokenRemainQuota(t, tokenID))
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Empty(t, log.Group)
-	assert.NotContains(t, log.Content, "groupRatio")
-	assert.NotContains(t, log.Content, "分组倍率")
-	assert.NotContains(t, log.Other, "group_ratio")
-	assert.NotContains(t, log.Other, "user_group_ratio")
+	assert.Equal(t, 100, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestTaskBillingLogsDoNotPersistBusinessGroup(t *testing.T) {
@@ -66,11 +60,7 @@ func TestTaskBillingLogsDoNotPersistBusinessGroup(t *testing.T) {
 
 	RefundTaskQuota(context.Background(), task, "legacy grouped task failed")
 
-	log := getLastLog(t)
-	require.NotNil(t, log)
-	assert.Empty(t, log.Group)
-	assert.NotContains(t, log.Other, "group_ratio")
-	assert.NotContains(t, log.Other, "user_group_ratio")
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestTaskBillingSourceNoLongerContainsMJBusinessGroupTerms(t *testing.T) {

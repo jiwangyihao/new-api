@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"time"
 
 	"github.com/QuantumNous/new-api/model"
@@ -22,6 +23,8 @@ type FundingSource interface {
 	Refund() error
 }
 
+var ErrLegacyWalletFundingDisabled = errors.New("legacy wallet funding is disabled; use subscription billing")
+
 // ---------------------------------------------------------------------------
 // WalletFunding — 钱包资金来源实现。
 // 保留给余额/旧兼容路径；relay 请求计费由 NewBillingSession 强制使用 SubscriptionFunding。
@@ -38,30 +41,21 @@ func (w *WalletFunding) PreConsume(amount int) error {
 	if amount <= 0 {
 		return nil
 	}
-	if err := model.DecreaseUserQuota(w.userId, amount, false); err != nil {
-		return err
-	}
-	w.consumed = amount
-	return nil
+	return ErrLegacyWalletFundingDisabled
 }
 
 func (w *WalletFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	if delta > 0 {
-		return model.DecreaseUserQuota(w.userId, delta, false)
-	}
-	return model.IncreaseUserQuota(w.userId, -delta, false)
+	return ErrLegacyWalletFundingDisabled
 }
 
 func (w *WalletFunding) Refund() error {
 	if w.consumed <= 0 {
 		return nil
 	}
-	// IncreaseUserQuota 是 quota += N 的非幂等操作，不能重试，否则会多退额度。
-	// 订阅的 RefundSubscriptionPreConsume 有 requestId 幂等保护所以可以重试。
-	return model.IncreaseUserQuota(w.userId, w.consumed, false)
+	return ErrLegacyWalletFundingDisabled
 }
 
 // ---------------------------------------------------------------------------

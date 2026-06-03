@@ -206,3 +206,33 @@ func TestPostConsumeQuotaLegacySubscriptionUsesAmountUsed(t *testing.T) {
 	assert.Equal(t, int64(0), sub.TokenUsed)
 	assert.Equal(t, int64(7), relayInfo.SubscriptionPostDelta)
 }
+
+func TestPostConsumeQuotaRejectsLegacyWalletFallback(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9341
+	const tokenID = 9342
+	const tokenKey = "sk-legacy-wallet-post"
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "legacy_wallet_post", Quota: 4000, Status: common.UserStatusEnabled, AffCode: "aff9341"}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: tokenKey, Status: common.TokenStatusEnabled, RemainQuota: 9000}).Error)
+	relayInfo := subscriptionOnlyRelayInfo(userID, tokenID, tokenKey, "wallet_only")
+	relayInfo.BillingSource = BillingSourceWallet
+
+	err := PostConsumeQuota(relayInfo, 700, 0, false)
+
+	require.ErrorIs(t, err, ErrLegacyWalletFundingDisabled)
+	assert.Equal(t, 4000, getUserQuota(t, userID))
+	assert.Equal(t, 9000, getTokenRemainQuota(t, tokenID))
+}
+
+func TestWalletFundingDoesNotWriteAccountBalanceForRelay(t *testing.T) {
+	setupSubscriptionOnlyBillingTestDB(t)
+	const userID = 9351
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "legacy_wallet_funding", Quota: 4000, Status: common.UserStatusEnabled, AffCode: "aff9351"}).Error)
+	funding := &WalletFunding{userId: userID}
+
+	require.ErrorIs(t, funding.PreConsume(100), ErrLegacyWalletFundingDisabled)
+	require.ErrorIs(t, funding.Settle(100), ErrLegacyWalletFundingDisabled)
+	funding.consumed = 100
+	require.ErrorIs(t, funding.Refund(), ErrLegacyWalletFundingDisabled)
+	assert.Equal(t, 4000, getUserQuota(t, userID))
+}

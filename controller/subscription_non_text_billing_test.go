@@ -1,7 +1,11 @@
 package controller
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,6 +127,80 @@ func TestRelayTaskDistributorDoesNotChargeWalletOrTokenKey(t *testing.T) {
 	assert.Equal(t, seedQuota, token.RemainQuota)
 	assert.Zero(t, token.UsedQuota)
 	assert.Equal(t, int64(0), getControllerTestSubscriptionTokenUsed(t, subID))
+}
+
+func TestAsyncTaskRefundDoesNotWriteAccountBalance(t *testing.T) {
+	originalDB := model.DB
+	db := setupModelListControllerTestDB(t)
+	model.DB = db
+	t.Cleanup(func() { model.DB = originalDB })
+	require.NoError(t, db.AutoMigrate(&model.Token{}, &model.Channel{}, &model.Task{}, &model.Midjourney{}, &model.Log{}))
+
+	const userID = 9301
+	const tokenID = 9302
+	const channelID = 9303
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "async_refund", Quota: 4000, Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, model.DB.Create(&model.Token{Id: tokenID, UserId: userID, Key: "sk-async-refund", Status: common.TokenStatusEnabled, RemainQuota: 9000}).Error)
+	require.NoError(t, model.DB.Create(&model.Channel{Id: channelID, Name: "async-channel", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled}).Error)
+
+	task := &model.Task{TaskID: "video-refund", UserId: userID, ChannelId: channelID, Quota: 500000, Status: model.TaskStatusInProgress, PrivateData: model.TaskPrivateData{BillingSource: service.BillingSourceWallet, TokenId: tokenID}}
+	require.NoError(t, model.DB.Create(task).Error)
+
+	err := updateVideoSingleTask(context.Background(), fakeVideoTaskAdaptor{}, &model.Channel{Id: channelID, Type: constant.ChannelTypeOpenAI, Key: "sk-channel"}, task.TaskID, map[string]*model.Task{task.TaskID: task})
+
+	require.NoError(t, err)
+	assert.Equal(t, 4000, getControllerTestUserQuota(t, userID))
+	assert.Equal(t, 9000, getControllerTestTokenRemainQuota(t, tokenID))
+	assertControllerSystemLogContains(t, userID, "legacy wallet refund requires manual handling")
+
+	serviceTask := &model.Task{TaskID: "service-refund", UserId: userID, ChannelId: channelID, Quota: 500000, Status: model.TaskStatusFailure, PrivateData: model.TaskPrivateData{BillingSource: service.BillingSourceWallet, TokenId: tokenID}}
+	service.RefundTaskQuota(context.Background(), serviceTask, "video failed")
+	assert.Equal(t, 4000, getControllerTestUserQuota(t, userID))
+	assert.Equal(t, 9000, getControllerTestTokenRemainQuota(t, tokenID))
+}
+
+type fakeVideoTaskAdaptor struct{}
+
+func (fakeVideoTaskAdaptor) Init(_ *relaycommon.RelayInfo) {}
+func (fakeVideoTaskAdaptor) ValidateRequestAndSetAction(_ *gin.Context, _ *relaycommon.RelayInfo) *dto.TaskError {
+	return nil
+}
+func (fakeVideoTaskAdaptor) EstimateBilling(_ *gin.Context, _ *relaycommon.RelayInfo) map[string]float64 {
+	return nil
+}
+func (fakeVideoTaskAdaptor) AdjustBillingOnSubmit(_ *relaycommon.RelayInfo, _ []byte) map[string]float64 {
+	return nil
+}
+func (fakeVideoTaskAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.TaskInfo) int {
+	return 0
+}
+func (fakeVideoTaskAdaptor) BuildRequestURL(_ *relaycommon.RelayInfo) (string, error) { return "", nil }
+func (fakeVideoTaskAdaptor) BuildRequestHeader(_ *gin.Context, _ *http.Request, _ *relaycommon.RelayInfo) error {
+	return nil
+}
+func (fakeVideoTaskAdaptor) BuildRequestBody(_ *gin.Context, _ *relaycommon.RelayInfo) (io.Reader, error) {
+	return nil, nil
+}
+func (fakeVideoTaskAdaptor) DoRequest(_ *gin.Context, _ *relaycommon.RelayInfo, _ io.Reader) (*http.Response, error) {
+	return nil, nil
+}
+func (fakeVideoTaskAdaptor) DoResponse(_ *gin.Context, _ *http.Response, _ *relaycommon.RelayInfo) (string, []byte, *dto.TaskError) {
+	return "", nil, nil
+}
+func (fakeVideoTaskAdaptor) GetModelList() []string { return nil }
+func (fakeVideoTaskAdaptor) GetChannelName() string { return "fake" }
+func (fakeVideoTaskAdaptor) FetchTask(_, _ string, _ map[string]any, _ string) (*http.Response, error) {
+	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"FAILURE","reason":"failed"}`))}, nil
+}
+func (fakeVideoTaskAdaptor) ParseTaskResult(_ []byte) (*relaycommon.TaskInfo, error) {
+	return &relaycommon.TaskInfo{TaskID: "video-refund", Status: model.TaskStatusFailure, Reason: "failed"}, nil
+}
+
+func assertControllerSystemLogContains(t *testing.T, userID int, expected string) {
+	t.Helper()
+	var log model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeSystem).Order("id DESC").First(&log).Error)
+	assert.Contains(t, log.Content, expected)
 }
 
 func getControllerTestUserQuota(t *testing.T, id int) int {

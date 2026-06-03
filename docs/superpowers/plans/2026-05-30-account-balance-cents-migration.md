@@ -1397,6 +1397,7 @@ git commit -m "fix(wallet): 账单历史返回分制展示字段"
 **文件：**
 - 修改：`controller/redemption.go`
 - 修改：`controller/user.go`
+- 修改：`controller/oauth_onboarding.go`
 - 修改：`model/redemption.go`
 - 修改：`model/user.go`
 - 修改：`model/checkin.go`
@@ -1404,7 +1405,7 @@ git commit -m "fix(wallet): 账单历史返回分制展示字段"
 - 修改：`setting/operation_setting/checkin_setting.go`
 - 测试：`controller/redemption_cny_test.go`、`controller/user_manage_account_balance_test.go`、`model/user_account_balance_rewards_test.go`、`model/checkin_account_balance_test.go`
 
-- [ ] **步骤 1：编写红测**
+- [x] **步骤 1：编写红测**
 
 ```go
 func TestBuildWalletRedemptionUsesSubmittedCents(t *testing.T) {
@@ -1500,7 +1501,7 @@ func TestManageUserQuotaUsesAccountBalanceCents(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller ./model -run 'TestBuildWalletRedemptionUsesSubmittedCents|TestInviteAndCheckinRewardsUseAccountBalanceCents|TestRegistrationRewardEntryPointsUseAccountBalanceCents|TestManageUserQuotaUsesAccountBalanceCents' -count=1
@@ -1508,7 +1509,7 @@ go test ./controller ./model -run 'TestBuildWalletRedemptionUsesSubmittedCents|T
 
 预期：FAIL，兑换码仍按 `QuotaPerUnit` 放大，或奖励 / 管理员调额日志不符合分制。
 
-- [ ] **步骤 3：修改兑换码请求边界**
+- [x] **步骤 3：修改兑换码请求边界**
 
 `redemptionCNYAmountToQuota` 改为校验正整数分，或重命名为 `validateRedemptionWalletCents`：
 
@@ -1523,7 +1524,7 @@ func validateRedemptionWalletCents(cents int) (int, error) {
 
 `buildRedemptionsForCreate` / `applyRedemptionUpdate` 对钱包类型直接保存分。
 
-- [ ] **步骤 4：修改奖励、签到和管理员调额路径**
+- [x] **步骤 4：修改奖励、签到和管理员调额路径**
 
 `User.Insert`、`User.InsertWithTx`、`FinalizeCreationTx`、`FinalizeOAuthUserCreation`、`inviteUser`、`inviteUserTx`、邀请划转、签到奖励保持 `common.QuotaForNewUser` / `QuotaForInviter` / `QuotaForInvitee` / `checkin_setting.*` 为分，移除这些函数中账户余额链路对 `QuotaPerUnit` 的依赖。日志展示使用账户余额格式，不用 `logger.LogQuota`。
 
@@ -1533,7 +1534,7 @@ func validateRedemptionWalletCents(cents int) (int, error) {
 
 `controller/user.go` 的 `ManageUser` / `add_quota` 分支按分处理 `req.Value`：`add` / `subtract` 调用账户余额 helper，`override` 设置分值后在事务成功提交后清理用户缓存；管理日志使用 `AccountBalanceCNYFromCents(req.Value).StringFixed(2)` 账户余额格式，不得使用 `logger.LogQuota`。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./controller ./model -run 'Redemption|Invite.*Reward|RegistrationRewardEntryPointsUseAccountBalanceCents|Checkin.*AccountBalance|ManageUserQuotaUsesAccountBalanceCents|TestBuildWalletRedemptionUsesSubmittedCents' -count=1
@@ -1541,10 +1542,10 @@ go test ./controller ./model -run 'Redemption|Invite.*Reward|RegistrationRewardE
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
-git add controller/redemption.go controller/user.go model/redemption.go model/user.go model/checkin.go controller/checkin.go setting/operation_setting/checkin_setting.go controller/redemption_cny_test.go controller/user_manage_account_balance_test.go model/user_account_balance_rewards_test.go model/checkin_account_balance_test.go
+git add controller/redemption.go controller/user.go controller/oauth_onboarding.go model/redemption.go model/user.go model/checkin.go controller/checkin.go setting/operation_setting/checkin_setting.go controller/redemption_cny_test.go controller/user_manage_account_balance_test.go model/user_account_balance_rewards_test.go model/checkin_account_balance_test.go
 git commit -m "fix(balance): 奖励兑换码和管理调额按分处理"
 ```
 

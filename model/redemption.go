@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/logger"
 
 	"gorm.io/gorm"
 )
@@ -228,8 +227,7 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 			}
 			result.Plan = plan
 		} else {
-			err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
-			if err != nil {
+			if err := IncreaseUserAccountBalanceTx(tx, userId, redemption.Quota); err != nil {
 				return err
 			}
 			result.Quota = redemption.Quota
@@ -251,7 +249,9 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 		}
 		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码兑换订阅套餐 %s，兑换码ID %d", planTitle, redemption.Id))
 	} else {
-		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
+		invalidateUserCacheBestEffort(userId)
+		amountCNY := AccountBalanceCNYFromCents(redemption.Quota).StringFixed(2)
+		RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", amountCNY, redemption.Id))
 	}
 	return result, nil
 }

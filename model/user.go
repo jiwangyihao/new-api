@@ -10,7 +10,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
-	"github.com/QuantumNous/new-api/logger"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -441,6 +440,41 @@ func HardDeleteUserById(id int) error {
 	return err
 }
 
+func accountBalanceCNYAmount(cents int) string {
+	return AccountBalanceCNYFromCents(cents).StringFixed(2)
+}
+
+func invalidateUserCacheBestEffort(userId int) {
+	if err := InvalidateUserCache(userId); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", userId, err.Error()))
+	}
+}
+
+func recordLogTx(tx *gorm.DB, userId int, logType int, content string) {
+	if tx == nil {
+		RecordLog(userId, logType, content)
+		return
+	}
+	if LOG_DB != DB {
+		return
+	}
+	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+		return
+	}
+	var username string
+	_ = tx.Model(&User{}).Select("username").Where("id = ?", userId).Scan(&username).Error
+	log := &Log{
+		UserId:    userId,
+		Username:  username,
+		CreatedAt: common.GetTimestamp(),
+		Type:      logType,
+		Content:   content,
+	}
+	if err := tx.Create(log).Error; err != nil {
+		common.SysLog("failed to record log: " + err.Error())
+	}
+}
+
 func inviteUser(inviterId int) (err error) {
 	user, err := GetUserById(inviterId, true)
 	if err != nil {
@@ -464,40 +498,36 @@ func inviteUserTx(tx *gorm.DB, inviterId int) error {
 }
 
 func (user *User) TransferAffQuotaToQuota(quota int) error {
-	// 检查quota是否小于最小额度
-	if float64(quota) < common.QuotaPerUnit {
-		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(int(common.QuotaPerUnit)))
+	if quota < 1 {
+		return errors.New("转移额度最小为0.01！")
 	}
 
-	// 开始数据库事务
 	tx := DB.Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
-	defer tx.Rollback() // 确保在函数退出时事务能回滚
+	defer tx.Rollback()
 
-	// 加锁查询用户以确保数据一致性
-	err := tx.Set("gorm:query_option", "FOR UPDATE").First(&user, user.Id).Error
+	err := tx.Set("gorm:query_option", "FOR UPDATE").First(user, user.Id).Error
 	if err != nil {
 		return err
 	}
 
-	// 再次检查用户的AffQuota是否足够
 	if user.AffQuota < quota {
 		return errors.New("邀请额度不足！")
 	}
 
-	// 更新用户额度
 	user.AffQuota -= quota
 	user.Quota += quota
 
-	// 保存用户状态
 	if err := tx.Save(user).Error; err != nil {
 		return err
 	}
-
-	// 提交事务
-	return tx.Commit().Error
+	if err := tx.Commit().Error; err != nil {
+		return err
+	}
+	invalidateUserCacheBestEffort(user.Id)
+	return nil
 }
 
 func (user *User) Insert(inviterId int) error {
@@ -541,16 +571,20 @@ func (user *User) Insert(inviterId int) error {
 	}
 
 	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", accountBalanceCNYAmount(common.QuotaForNewUser)))
 	}
 	if inviterId != 0 {
 		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+			if err := DB.Transaction(func(tx *gorm.DB) error {
+				return IncreaseUserAccountBalanceTx(tx, user.Id, common.QuotaForInvitee)
+			}); err != nil {
+				return err
+			}
+			invalidateUserCacheBestEffort(user.Id)
+			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", accountBalanceCNYAmount(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
-			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", accountBalanceCNYAmount(common.QuotaForInviter)))
 			_ = inviteUser(inviterId)
 		}
 	}
@@ -591,65 +625,67 @@ func (user *User) FinalizeCreationTx(tx *gorm.DB, inviterId int) error {
 		return errors.New("tx is nil")
 	}
 	var createdUser User
-	if err := tx.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
-		defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
-		if defaultSidebarConfig != "" {
-			currentSetting := createdUser.GetSetting()
-			currentSetting.SidebarModules = defaultSidebarConfig
-			createdUser.SetSetting(currentSetting)
-			if err := tx.Save(&createdUser).Error; err != nil {
-				return err
-			}
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+	if err := tx.Where("id = ?", user.Id).First(&createdUser).Error; err != nil {
+		return err
+	}
+	defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
+	if defaultSidebarConfig != "" {
+		currentSetting := createdUser.GetSetting()
+		currentSetting.SidebarModules = defaultSidebarConfig
+		createdUser.SetSetting(currentSetting)
+		if err := tx.Save(&createdUser).Error; err != nil {
+			return err
 		}
+		common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
+	}
+	if common.QuotaForNewUser > 0 {
+		recordLogTx(tx, user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", accountBalanceCNYAmount(common.QuotaForNewUser)))
 	}
 	if inviterId != 0 {
 		if common.QuotaForInvitee > 0 {
-			if err := increaseUserQuotaTx(tx, user.Id, common.QuotaForInvitee); err != nil {
+			if err := IncreaseUserAccountBalanceTx(tx, user.Id, common.QuotaForInvitee); err != nil {
 				return err
 			}
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+			recordLogTx(tx, user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", accountBalanceCNYAmount(common.QuotaForInvitee)))
 		}
 		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
+			recordLogTx(tx, inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", accountBalanceCNYAmount(common.QuotaForInviter)))
 			if err := inviteUserTx(tx, inviterId); err != nil {
 				return err
 			}
 		}
 	}
 	return nil
+}
 
+func (user *User) RecordAccountBalanceRewardLogsAfterTx(inviterId int) {
+	if LOG_DB == DB {
+		return
+	}
+	if common.QuotaForNewUser > 0 {
+		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", accountBalanceCNYAmount(common.QuotaForNewUser)))
+	}
+	if inviterId != 0 {
+		if common.QuotaForInvitee > 0 {
+			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", accountBalanceCNYAmount(common.QuotaForInvitee)))
+		}
+		if common.QuotaForInviter > 0 {
+			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", accountBalanceCNYAmount(common.QuotaForInviter)))
+		}
+	}
 }
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
 // This should be called after the transaction commits successfully.
 func (user *User) FinalizeOAuthUserCreation(inviterId int) {
-	// 用户创建成功后，根据角色初始化边栏配置
-	var createdUser User
-	if err := DB.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
-		defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
-		if defaultSidebarConfig != "" {
-			currentSetting := createdUser.GetSetting()
-			currentSetting.SidebarModules = defaultSidebarConfig
-			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
-			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
-		}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return user.FinalizeCreationTx(tx, inviterId)
+	})
+	if err != nil {
+		common.SysLog("failed to finalize OAuth user creation: " + err.Error())
+		return
 	}
-
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
-	}
-	if inviterId != 0 {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
-		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
-		}
-	}
+	user.RecordAccountBalanceRewardLogsAfterTx(inviterId)
 }
 
 func (user *User) Update(updatePassword bool) error {

@@ -5,15 +5,15 @@ import "github.com/QuantumNous/new-api/setting/config"
 // CheckinSetting 签到功能配置
 type CheckinSetting struct {
 	Enabled  bool `json:"enabled"`   // 是否启用签到功能
-	MinQuota int  `json:"min_quota"` // 签到最小额度奖励
-	MaxQuota int  `json:"max_quota"` // 签到最大额度奖励
+	MinQuota int  `json:"min_quota"` // 签到最小账户余额奖励（CNY 分）
+	MaxQuota int  `json:"max_quota"` // 签到最大账户余额奖励（CNY 分）
 }
 
 // 默认配置
 var checkinSetting = CheckinSetting{
 	Enabled:  false, // 默认关闭
-	MinQuota: 1000,  // 默认最小额度 1000 (约 0.002 USD)
-	MaxQuota: 10000, // 默认最大额度 10000 (约 0.02 USD)
+	MinQuota: 20,    // 默认最小账户余额奖励 ¥0.20
+	MaxQuota: 20,    // 默认最大账户余额奖励 ¥0.20
 }
 
 func init() {

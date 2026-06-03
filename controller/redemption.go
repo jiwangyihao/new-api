@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -245,15 +244,11 @@ func validateExpiredTime(c *gin.Context, expired int64) (bool, string) {
 	return true, ""
 }
 
-func redemptionCNYAmountToQuota(amount int) (int, error) {
-	if amount <= 0 {
+func validateRedemptionWalletCents(cents int) (int, error) {
+	if cents <= 0 {
 		return 0, errors.New("兑换码金额必须大于0")
 	}
-	quota := int64(amount) * int64(common.QuotaPerUnit)
-	if quota <= 0 || quota > int64(math.MaxInt) {
-		return 0, errors.New("兑换码金额无效")
-	}
-	return int(quota), nil
+	return cents, nil
 }
 
 func normalizeRedemptionCreateType(redemptionType string) string {
@@ -288,7 +283,7 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 		planId = redemption.PlanId
 	} else {
 		var err error
-		quota, err = redemptionCNYAmountToQuota(redemption.Quota)
+		quota, err = validateRedemptionWalletCents(redemption.Quota)
 		if err != nil {
 			return nil, err
 		}
@@ -322,7 +317,7 @@ func applyRedemptionUpdate(cleanRedemption *model.Redemption, redemption model.R
 		planId = redemption.PlanId
 	} else {
 		var err error
-		quota, err = redemptionCNYAmountToQuota(redemption.Quota)
+		quota, err = validateRedemptionWalletCents(redemption.Quota)
 		if err != nil {
 			return err
 		}

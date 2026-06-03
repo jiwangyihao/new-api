@@ -12,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
-	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 
@@ -219,6 +218,7 @@ func Register(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	cleanUser.RecordAccountBalanceRewardLogsAfterTx(inviterId)
 	insertedUser := cleanUser
 	// 生成默认令牌
 	if constant.GenerateDefaultToken {
@@ -976,31 +976,46 @@ func ManageUser(c *gin.Context) {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.IncreaseUserQuota(user.Id, req.Value, true); err != nil {
+			if err := model.DB.Transaction(func(tx *gorm.DB) error {
+				return model.IncreaseUserAccountBalanceTx(tx, user.Id, req.Value)
+			}); err != nil {
 				common.ApiError(c, err)
 				return
 			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
+			}
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员增加用户额度 %s", logger.LogQuota(req.Value)), adminInfo)
+				fmt.Sprintf("管理员增加用户额度 %s", model.AccountBalanceCNYFromCents(req.Value).StringFixed(2)), adminInfo)
 		case "subtract":
 			if req.Value <= 0 {
 				common.ApiErrorI18n(c, i18n.MsgUserQuotaChangeZero)
 				return
 			}
-			if err := model.DecreaseUserQuota(user.Id, req.Value, true); err != nil {
+			if err := model.DB.Transaction(func(tx *gorm.DB) error {
+				return model.DeductUserAccountBalanceTx(tx, user.Id, req.Value)
+			}); err != nil {
 				common.ApiError(c, err)
 				return
 			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
+			}
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员减少用户额度 %s", logger.LogQuota(req.Value)), adminInfo)
+				fmt.Sprintf("管理员减少用户额度 %s", model.AccountBalanceCNYFromCents(req.Value).StringFixed(2)), adminInfo)
 		case "override":
 			oldQuota := user.Quota
 			if err := model.DB.Model(&model.User{}).Where("id = ?", user.Id).Update("quota", req.Value).Error; err != nil {
 				common.ApiError(c, err)
 				return
 			}
+			if err := model.InvalidateUserCache(user.Id); err != nil {
+				common.SysLog(fmt.Sprintf("failed to invalidate user cache for user %d: %s", user.Id, err.Error()))
+			}
+			oldQuotaCNY := model.AccountBalanceCNYFromCents(oldQuota).StringFixed(2)
+			newQuotaCNY := model.AccountBalanceCNYFromCents(req.Value).StringFixed(2)
 			model.RecordLogWithAdminInfo(user.Id, model.LogTypeManage,
-				fmt.Sprintf("管理员覆盖用户额度从 %s 为 %s", logger.LogQuota(oldQuota), logger.LogQuota(req.Value)), adminInfo)
+				fmt.Sprintf("管理员覆盖用户额度从 %s 为 %s", oldQuotaCNY, newQuotaCNY), adminInfo)
 		default:
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return

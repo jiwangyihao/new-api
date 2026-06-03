@@ -262,6 +262,7 @@ func completeOAuthOnboarding(ctx context.Context, pending OAuthOnboardingPending
 	if err != nil {
 		return nil, err
 	}
+	user.RecordAccountBalanceRewardLogsAfterTx(pending.InviterId)
 	_ = ctx
 	return user, nil
 }

@@ -570,7 +570,7 @@
     "Are you sure you want to delete this key? This action cannot be undone.": "您确定要删除此密钥吗？此操作无法撤销。",
     "Are you sure you want to disable all enabled keys?": "您确定要禁用所有已启用的密钥吗？",
     "Are you sure you want to enable all keys?": "您确定要启用所有密钥吗？",
-    "Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.": "您确定要手动完成此订单吗？用户将获得相应的配额。",
+    "Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.": "您确定要手动完成此订单吗？用户将获得相应的账户余额。",
     "Are you sure you want to sign out? You will need to sign in again to access your account.": "您确定要退出登录吗？您需要再次登录才能访问您的账户。",
     "Are you sure you want to unbind {{provider}} for this user? The user will no longer be able to log in via this method.": "确定要解绑该用户的 {{provider}} 绑定吗？解绑后该用户将无法通过此方式登录。",
     "Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.": "确定要解绑 {{provider}} 吗？解绑后将无法通过此方式登录。",
@@ -5050,6 +5050,18 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
-    "Zoom": "缩放"
+    "Zoom": "缩放",
+    "GPT abuse limits": "GPT 滥用限制",
+    "Configure GPT service interruption for safety warnings": "配置安全警告触发后的 GPT 服务中断",
+    "GPT safety warnings": "GPT 安全警告",
+    "Warnings triggered today against your daily limit": "今日已触发的警告次数 / 每日上限",
+    "GPT abuse warning limit": "GPT 滥用警告上限",
+    "0 means automatic: max(concurrency limit, system minimum)": "0 表示自动：max(并发上限，系统最小值)",
+    "Enable GPT abuse service interruption": "启用 GPT 滥用服务中断",
+    "When enabled, users who trigger the daily GPT safety warning limit are suspended from GPT service until the next day.": "启用后，用户当天触发 GPT 安全警告达到上限时，将暂停 GPT 服务至次日。",
+    "Default minimum GPT abuse warnings": "默认最小 GPT 滥用警告次数",
+    "Plan limits and automatic concurrency-based limits are never allowed below this value.": "套餐配置上限和基于并发自动计算的上限都不会低于该值。",
+    "Save GPT abuse limits": "保存 GPT 滥用限制",
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "配置当上游安全警告达到每日上限时临时中断 GPT 服务。"
   }
 }

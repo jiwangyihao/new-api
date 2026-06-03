@@ -161,9 +161,10 @@ func RequestWaffoPancakePay(c *gin.Context) {
 			TaxIncluded: false,
 			TaxCategory: "saas",
 		},
-		BuyerEmail:       getWaffoPancakeBuyerEmail(user),
-		SuccessURL:       getWaffoPancakeReturnURL(),
-		ExpiresInSeconds: &expiresInSeconds,
+		BuyerEmail:              getWaffoPancakeBuyerEmail(user),
+		SuccessURL:              getWaffoPancakeReturnURL(),
+		ExpiresInSeconds:        &expiresInSeconds,
+		OrderMerchantExternalID: tradeNo,
 	})
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 创建结账会话失败 user_id=%d trade_no=%s error=%q", id, tradeNo, err.Error()))
@@ -171,6 +172,24 @@ func RequestWaffoPancakePay(c *gin.Context) {
 		_ = topUp.Update()
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
+	}
+	remoteOrderID := strings.TrimSpace(session.OrderID)
+	if remoteOrderID != "" && remoteOrderID != tradeNo {
+		result := model.DB.Model(&model.TopUp{}).
+			Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, model.PaymentProviderWaffoPancake, common.TopUpStatusPending).
+			Update("trade_no", remoteOrderID)
+		if result.Error != nil {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 保存远端订单号失败 user_id=%d trade_no=%s remote_order_id=%s error=%q", id, tradeNo, remoteOrderID, result.Error.Error()))
+			_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderWaffoPancake, common.TopUpStatusFailed)
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+			return
+		}
+		if result.RowsAffected == 0 {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 保存远端订单号失败 user_id=%d trade_no=%s remote_order_id=%s reason=no_pending_order", id, tradeNo, remoteOrderID))
+			c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
+			return
+		}
+		tradeNo = remoteOrderID
 	}
 	logger.LogInfo(c.Request.Context(), fmt.Sprintf("Waffo Pancake 充值订单创建成功 user_id=%d trade_no=%s session_id=%s amount=%d money=%.2f", id, tradeNo, session.SessionID, req.Amount, payMoney))
 

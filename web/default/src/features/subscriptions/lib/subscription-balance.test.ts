@@ -16,6 +16,11 @@ describe('subscription balance purchase helpers', () => {
     assert.equal(accountBalanceCentsToCnyAmount(Number.NaN), 0)
   })
 
+  test('preserves negative stored CNY cents for account balance display', () => {
+    assert.equal(accountBalanceCentsToCnyAmount(-250), -2.5)
+    assert.match(formatAccountBalanceForPlanPurchase(-250), /-2\.50/)
+  })
+
   test('keeps quota compatibility helper on CNY cents semantics', () => {
     assert.equal(accountBalanceQuotaToCnyAmount(3990), 39.9)
     assert.equal(accountBalanceQuotaToCnyAmount(Number.NaN), 0)

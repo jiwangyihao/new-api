@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -203,7 +204,7 @@ func setKyrenTopUpProductsOptionForTest(t *testing.T, products []kyrenTopUpProdu
 func loadKyrenTopUpProductsOptionForTest(t *testing.T) []kyrenTopUpProduct {
 	t.Helper()
 	var option model.Option
-	require.NoError(t, model.DB.Where("key = ?", "KyrenTopUpProducts").First(&option).Error)
+	require.NoError(t, kyrenTopUpProductsOptionQuery(model.DB).First(&option).Error)
 	var products []kyrenTopUpProduct
 	require.NoError(t, common.UnmarshalJsonStr(option.Value, &products))
 	return products
@@ -235,6 +236,15 @@ func assertLatestManageLogHasAdminInfo(t *testing.T) {
 	assert.Equal(t, "kyren-admin", adminInfo["admin_username"])
 }
 
+func TestKyrenTopUpProductsOptionQueriesQuoteOptionKeyColumn(t *testing.T) {
+	setupKyrenProductsControllerTestDB(t)
+
+	stmt := kyrenTopUpProductsOptionQuery(model.DB.Session(&gorm.Session{DryRun: true})).Find(&model.Option{}).Statement
+	sql := stmt.SQL.String()
+
+	assert.NotContains(t, sql, "WHERE key =")
+	assert.True(t, strings.Contains(sql, "`key`") || strings.Contains(sql, `"key"`), sql)
+}
 func TestAdminSyncSubscriptionKyrenProductCreatesAndBindsProduct(t *testing.T) {
 	setupKyrenProductsControllerTestDB(t)
 	plan := seedKyrenSubscriptionPlan(t, 3001, "")
@@ -418,7 +428,7 @@ func TestSaveKyrenTopUpProductsOptionCASRejectsChangedVersion(t *testing.T) {
 
 func TestSaveKyrenTopUpProductsOptionCASCreatesMissingOptionRowOnConflict(t *testing.T) {
 	setupKyrenProductsControllerTestDB(t)
-	require.NoError(t, model.DB.Where("key = ?", "KyrenTopUpProducts").Delete(&model.Option{}).Error)
+	require.NoError(t, kyrenTopUpProductsOptionQuery(model.DB).Delete(&model.Option{}).Error)
 	setting.KyrenTopUpProducts = "[]"
 	common.OptionMapRWMutex.Lock()
 	delete(common.OptionMap, "KyrenTopUpProducts")
@@ -437,7 +447,7 @@ func TestSaveKyrenTopUpProductsOptionCASCreatesMissingOptionRowOnConflict(t *tes
 	assert.Equal(t, "[]", currentNormalized)
 	assert.Empty(t, currentProducts)
 	var option model.Option
-	require.NoError(t, model.DB.Where("key = ?", "KyrenTopUpProducts").First(&option).Error)
+	require.NoError(t, kyrenTopUpProductsOptionQuery(model.DB).First(&option).Error)
 	assert.Equal(t, "[]", option.Value)
 }
 

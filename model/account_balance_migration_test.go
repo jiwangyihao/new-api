@@ -139,19 +139,29 @@ func TestEnsureAccountBalanceCentsMigrationRejectsInvalidQuotaPerUnit(t *testing
 	}
 }
 
-func TestEnsureAccountBalanceCentsMigrationRequiresDBQuotaPerUnit(t *testing.T) {
+func TestEnsureAccountBalanceCentsMigrationFallsBackToLoadedQuotaPerUnitWhenDBOptionMissing(t *testing.T) {
 	setupAccountBalanceMigrationTestDB(t)
 	common.OptionMap["QuotaPerUnit"] = "250000"
 	common.QuotaPerUnit = 250000
 	require.NoError(t, DB.Create(&User{Id: 9217, Username: "missing-qpu", Quota: 1000000}).Error)
 
-	err := EnsureAccountBalanceCentsMigration()
+	require.NoError(t, EnsureAccountBalanceCentsMigration())
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing database QuotaPerUnit")
-	assert.Equal(t, 1000000, getUserQuotaForAccountBalanceTest(t, 9217))
-	assert.Empty(t, getOptionValueForMigrationTest(t, OptionAccountBalanceCentsDataMigrated))
-	assert.Empty(t, getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigrated))
+	assert.Equal(t, 400, getUserQuotaForAccountBalanceTest(t, 9217))
+	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsDataMigrated))
+	assert.Equal(t, "true", getOptionValueForMigrationTest(t, OptionAccountBalanceCentsMigrated))
+}
+
+func TestAccountBalanceMigrationOptionQueriesQuoteOptionKeyColumn(t *testing.T) {
+	setupAccountBalanceMigrationTestDB(t)
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	common.UsingPostgreSQL = false
+	initCol()
+
+	stmt := DB.Session(&gorm.Session{DryRun: true}).Model(&Option{}).Select("value").Where(commonKeyCol+" = ?", "QuotaPerUnit").Find(&Option{}).Statement
+
+	assert.Contains(t, stmt.SQL.String(), commonKeyCol)
 }
 
 func TestEnsureAccountBalanceCentsMigrationLeavesNonAccountQuotaFieldsUnchanged(t *testing.T) {

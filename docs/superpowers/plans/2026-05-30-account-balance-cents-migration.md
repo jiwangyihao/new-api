@@ -2177,7 +2177,7 @@ git commit -m "docs(balance): 补充分制迁移回滚验收"
 **文件：**
 - 汇总验证本计划任务 1–12A 修改的后端、`web/default`、`web/classic`、i18n 和回滚 runbook 文件。
 
-- [ ] **步骤 1：后端定向测试**
+- [x] **步骤 1：后端定向测试**
 
 运行：
 
@@ -2193,7 +2193,7 @@ go test ./model ./controller ./service -run 'AccountBalance|TopUp.*Cents|TopUpHi
 go test ./model -run 'TestEnsureAccountBalanceCentsMigration.*MySQL|TestEnsureAccountBalanceCentsMigration.*PostgreSQL' -count=1
 ```
 
-- [ ] **步骤 2：前端 default 测试与类型检查**
+- [x] **步骤 2：前端 default 测试与类型检查**
 
 运行：
 
@@ -2205,19 +2205,19 @@ bun run typecheck
 
 预期：PASS，`tsc -b` 退出码 0。
 
-- [ ] **步骤 3：前端 classic 测试与目标 lint**
+- [x] **步骤 3：前端 classic 测试与目标 lint**
 
 运行：
 
 ```bash
 cd web/classic
 bun test src/helpers/account-balance.test.js src/helpers/account-balance-i18n.test.js
-bun run eslint -- --quiet src/helpers/account-balance.js src/components/topup/index.jsx src/components/topup/RechargeCard.jsx src/components/topup/SubscriptionPlansCard.jsx src/components/topup/InvitationCard.jsx src/components/topup/modals/SubscriptionPurchaseModal.jsx src/components/topup/modals/TransferModal.jsx src/components/topup/modals/PaymentConfirmModal.jsx src/components/topup/modals/TopupHistoryModal.jsx src/components/table/redemptions/RedemptionsColumnDefs.jsx src/components/table/redemptions/RedemptionsTable.jsx src/components/table/redemptions/modals/EditRedemptionModal.jsx src/hooks/redemptions/useRedemptionsData.jsx src/components/settings/personal/cards/CheckinCalendar.jsx src/components/settings/personal/components/UserInfoHeader.jsx src/pages/Setting/Operation/SettingsCheckin.jsx src/pages/Setting/Operation/SettingsCreditLimit.jsx src/pages/Setting/Payment/SettingsGeneralPayment.jsx src/pages/Setting/Payment/SettingsPaymentGateway.jsx src/pages/Setting/Payment/SettingsPaymentGatewayStripe.jsx src/pages/Setting/Payment/SettingsPaymentGatewayWaffo.jsx src/pages/Setting/Payment/SettingsPaymentGatewayWaffoPancake.jsx src/pages/Setting/Payment/SettingsPaymentGatewayCreem.jsx src/components/table/users/UsersColumnDefs.jsx src/components/table/users/UsersTable.jsx src/components/table/users/modals/EditUserModal.jsx src/components/table/usage-logs/modals/UserInfoModal.jsx
+bunx eslint --quiet src/helpers/account-balance.js src/components/topup/index.jsx src/components/topup/RechargeCard.jsx src/components/topup/SubscriptionPlansCard.jsx src/components/topup/InvitationCard.jsx src/components/topup/modals/SubscriptionPurchaseModal.jsx src/components/topup/modals/TransferModal.jsx src/components/topup/modals/PaymentConfirmModal.jsx src/components/topup/modals/TopupHistoryModal.jsx src/components/table/redemptions/RedemptionsColumnDefs.jsx src/components/table/redemptions/RedemptionsTable.jsx src/components/table/redemptions/modals/EditRedemptionModal.jsx src/hooks/redemptions/useRedemptionsData.jsx src/components/settings/personal/cards/CheckinCalendar.jsx src/components/settings/personal/components/UserInfoHeader.jsx src/pages/Setting/Operation/SettingsCheckin.jsx src/pages/Setting/Operation/SettingsCreditLimit.jsx src/pages/Setting/Payment/SettingsGeneralPayment.jsx src/pages/Setting/Payment/SettingsPaymentGateway.jsx src/pages/Setting/Payment/SettingsPaymentGatewayStripe.jsx src/pages/Setting/Payment/SettingsPaymentGatewayWaffo.jsx src/pages/Setting/Payment/SettingsPaymentGatewayWaffoPancake.jsx src/pages/Setting/Payment/SettingsPaymentGatewayCreem.jsx src/components/table/users/UsersColumnDefs.jsx src/components/table/users/UsersTable.jsx src/components/table/users/modals/EditUserModal.jsx src/components/table/usage-logs/modals/UserInfoModal.jsx
 ```
 
 预期：PASS。
 
-- [ ] **步骤 4：静态扫描账户余额链路**
+- [x] **步骤 4：静态扫描账户余额链路**
 
 使用 `search` 工具，不要用 shell grep：
 
@@ -2228,7 +2228,7 @@ bun run eslint -- --quiet src/helpers/account-balance.js src/components/topup/in
 - 检查回滚 runbook：计划和规格中必须包含「恢复迁移前数据库备份」「部署旧版本服务」「验证用户余额和充值入口」「不实现自动反向迁移」。
 - 硬门禁：任何账户余额链路残留命中、业务 JSON 标准库调用命中、数据库方言风险命中、回滚 runbook 缺项或无法明确分类的命中，必须回到对应任务修复，重跑该任务测试和本静态扫描。只有扫描结果全部为「非账户余额允许保留」或「无命中」后，才能进入 whitespace 检查。
 
-- [ ] **步骤 5：whitespace 检查**
+- [x] **步骤 5：whitespace 检查**
 
 运行：
 
@@ -2238,17 +2238,23 @@ git diff --check
 
 预期：无 whitespace error。CRLF/LF warning 需要记录；实际 whitespace error 必须修复。
 
-- [ ] **步骤 6：最终提交**
+- [x] **步骤 6：最终提交**
 
-所有前置任务必须已经提交；如果最终扫描触发回修，则提交回修：
+所有前置任务必须已经提交；如果最终扫描触发回修，只能逐文件暂存本任务实际触达的文件，禁止目录级 `git add`，避免纳入并行或无关改动：
 
 ```bash
 git status --short
-git add docs/superpowers/specs/2026-05-30-account-balance-cents-migration-design.md docs/superpowers/plans/2026-05-30-account-balance-cents-migration.md model controller service setting web/default web/classic main.go
+git add docs/superpowers/plans/2026-05-30-account-balance-cents-migration.md \
+  controller/topup.go controller/topup_kyren.go controller/topup_waffo_pancake.go controller/topup_stripe.go controller/topup_account_balance_cents_test.go controller/kyren_products_test.go \
+  model/account_balance_migration.go model/account_balance_migration_test.go model/topup.go model/topup_history_cents_test.go \
+  service/waffo_pancake.go service/waffo_pancake_test.go \
+  web/classic/src/components/topup/modals/TopupHistoryModal.jsx web/classic/src/helpers/account-balance.test.js \
+  web/default/src/features/subscriptions/lib/subscription-balance.ts web/default/src/features/subscriptions/lib/subscription-balance.test.ts web/default/src/features/wallet/components/dialogs/billing-history-dialog.tsx web/default/src/features/wallet/wallet-layout.test.ts \
+  web/default/src/i18n/locales/en.json web/default/src/i18n/locales/fr.json web/default/src/i18n/locales/ja.json web/default/src/i18n/locales/ru.json web/default/src/i18n/locales/vi.json web/default/src/i18n/locales/zh.json
 git commit -m "fix(balance): 完成账户余额分制迁移"
 ```
 
-- [ ] **步骤 7：请求代码审查**
+- [x] **步骤 7：请求代码审查**
 
 派发至少 3 个只读审查子代理，方向：
 

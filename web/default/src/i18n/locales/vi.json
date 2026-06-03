@@ -570,7 +570,7 @@
     "Are you sure you want to delete this key? This action cannot be undone.": "Bạn có chắc chắn muốn xóa khóa này? Hành động này không thể hoàn tác.",
     "Are you sure you want to disable all enabled keys?": "Bạn có chắc chắn muốn vô hiệu hóa tất cả các khóa đang bật không?",
     "Are you sure you want to enable all keys?": "Bạn có chắc chắn muốn bật tất cả các khóa không?",
-    "Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.": "Bạn có chắc muốn hoàn thành thủ công đơn hàng này không? Người dùng sẽ được cộng hạn mức tương ứng.",
+    "Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.": "Bạn có chắc muốn hoàn thành thủ công đơn hàng này không? Người dùng sẽ được cộng số dư tài khoản tương ứng.",
     "Are you sure you want to sign out? You will need to sign in again to access your account.": "Bạn có chắc chắn muốn đăng xuất? Bạn sẽ cần đăng nhập lại để truy cập tài khoản của mình.",
     "Are you sure you want to unbind {{provider}} for this user? The user will no longer be able to log in via this method.": "Bạn có chắc chắn muốn hủy liên kết {{provider}} cho người dùng này? Người dùng sẽ không thể đăng nhập bằng phương thức này nữa.",
     "Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.": "Bạn có chắc chắn muốn hủy liên kết {{provider}}? Bạn sẽ không thể đăng nhập bằng phương thức này nữa.",
@@ -5050,6 +5050,18 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "GPT abuse limits": "Giới hạn lạm dụng GPT",
+    "Configure GPT service interruption for safety warnings": "Cấu hình tạm ngừng dịch vụ GPT theo cảnh báo an toàn",
+    "GPT safety warnings": "Cảnh báo an toàn GPT",
+    "Warnings triggered today against your daily limit": "Cảnh báo đã kích hoạt hôm nay so với giới hạn hằng ngày",
+    "GPT abuse warning limit": "Giới hạn cảnh báo lạm dụng GPT",
+    "0 means automatic: max(concurrency limit, system minimum)": "0 nghĩa là tự động: max(giới hạn đồng thời, mức tối thiểu hệ thống)",
+    "Enable GPT abuse service interruption": "Bật tạm ngừng dịch vụ khi lạm dụng GPT",
+    "When enabled, users who trigger the daily GPT safety warning limit are suspended from GPT service until the next day.": "Khi bật, người dùng kích hoạt cảnh báo an toàn GPT đến giới hạn hằng ngày sẽ bị tạm ngừng dịch vụ GPT đến ngày tiếp theo.",
+    "Default minimum GPT abuse warnings": "Số cảnh báo lạm dụng GPT tối thiểu mặc định",
+    "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Giới hạn của gói và giới hạn tự động dựa trên mức đồng thời không bao giờ thấp hơn giá trị này.",
+    "Save GPT abuse limits": "Lưu giới hạn lạm dụng GPT",
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Cấu hình tạm ngừng dịch vụ GPT khi cảnh báo an toàn từ upstream đạt giới hạn hằng ngày."
   }
 }

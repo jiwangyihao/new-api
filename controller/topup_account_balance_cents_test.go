@@ -235,6 +235,12 @@ func requestStripeForTopUpCentsTest(t *testing.T, amount int64) *httptest.Respon
 	return performTopUpCentsJSONRequest(t, RequestStripePay, topUpCentsUserID, fmt.Sprintf(`{"amount":%d,"payment_method":"stripe"}`, amount))
 }
 
+func requestStripeAmountForTopUpCentsTest(t *testing.T, amount int64) *httptest.ResponseRecorder {
+	t.Helper()
+	withStripeSessionServerForTopUpCentsTest(t)
+	return performTopUpCentsJSONRequest(t, RequestStripeAmount, topUpCentsUserID, fmt.Sprintf(`{"amount":%d}`, amount))
+}
+
 func requestWaffoForTopUpCentsTest(t *testing.T, amount int64) *httptest.ResponseRecorder {
 	t.Helper()
 	responsePrivateKey := configureWaffoKeysForTopUpCentsTest(t)
@@ -248,12 +254,25 @@ func requestWaffoForTopUpCentsTest(t *testing.T, amount int64) *httptest.Respons
 
 func requestWaffoPancakeForTopUpCentsTest(t *testing.T, amount int64) *httptest.ResponseRecorder {
 	t.Helper()
+	return requestWaffoPancakeForTopUpCentsTestWithPayload(t, amount, `{"data":{"sessionId":"sess_topup_cents","checkoutUrl":"https://pay.waffo-pancake.test/checkout","expiresAt":"2099-01-01T00:00:00Z","orderId":"remote_order"}}`)
+}
+
+var waffoPancakeCreateSessionBodyForTopUpCentsTest string
+
+func requestWaffoPancakeForTopUpCentsTestWithPayload(t *testing.T, amount int64, payload string) *httptest.ResponseRecorder {
+	t.Helper()
 	configureWaffoPancakeKeysForTopUpCentsTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		waffoPancakeCreateSessionBodyForTopUpCentsTest = string(body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"data":{"sessionId":"sess_topup_cents","checkoutUrl":"https://pay.waffo-pancake.test/checkout","expiresAt":"2099-01-01T00:00:00Z","orderId":"remote_order"}}`))
+		_, _ = w.Write([]byte(payload))
 	}))
-	t.Cleanup(server.Close)
+	t.Cleanup(func() {
+		waffoPancakeCreateSessionBodyForTopUpCentsTest = ""
+		server.Close()
+	})
 	transport := &rewriteHostRoundTripper{target: server.URL, base: http.DefaultTransport}
 	http.DefaultClient = &http.Client{Transport: transport}
 	return performTopUpCentsJSONRequest(t, RequestWaffoPancakePay, topUpCentsUserID, fmt.Sprintf(`{"amount":%d}`, amount))
@@ -289,22 +308,69 @@ func performTopUpCentsJSONRequest(t *testing.T, handler func(*gin.Context), user
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(body))
+
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("id", userID)
 	handler(ctx)
 	return recorder
 }
 
+var stripeSessionFormForTopUpCentsTest url.Values
+var stripePriceFormForTopUpCentsTest url.Values
+var stripeBasePriceCurrencyForTopUpCentsTest = "usd"
+var stripePriceGetAuthorizationForTopUpCentsTest string
+
+func getStripePriceFormValueForTopUpCentsTest(t *testing.T, key string) string {
+	t.Helper()
+	require.NotNil(t, stripePriceFormForTopUpCentsTest)
+	return stripePriceFormForTopUpCentsTest.Get(key)
+}
+
+func getStripeSessionFormValueForTopUpCentsTest(t *testing.T, key string) string {
+	t.Helper()
+	require.NotNil(t, stripeSessionFormForTopUpCentsTest)
+	return stripeSessionFormForTopUpCentsTest.Get(key)
+}
+
 func withStripeSessionServerForTopUpCentsTest(t *testing.T) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"cs_topup_cents","object":"checkout.session","url":"https://checkout.stripe.test/session"}`))
+		switch r.URL.Path {
+		case "/v1/prices/price_topup_cents":
+			stripePriceGetAuthorizationForTopUpCentsTest = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"price_topup_cents","object":"price","currency":%q,"unit_amount":100,"product":"prod_topup_cents"}`, stripeBasePriceCurrencyForTopUpCentsTest)))
+		case "/v1/prices":
+			require.NoError(t, r.ParseForm())
+			stripePriceFormForTopUpCentsTest = r.Form
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"id":"price_topup_dynamic","object":"price","currency":%q,"unit_amount":16000,"product":"prod_topup_cents"}`, stripeBasePriceCurrencyForTopUpCentsTest)))
+		case "/v1/checkout/sessions":
+			require.NoError(t, r.ParseForm())
+			stripeSessionFormForTopUpCentsTest = r.Form
+			if value := r.Form.Get("line_items[0][price]"); value != "price_topup_dynamic" {
+				t.Errorf("unexpected Stripe checkout price: %q", value)
+			}
+			if value := r.Form.Get("line_items[0][quantity]"); value != "1" {
+				t.Errorf("unexpected Stripe quantity: %q", value)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"cs_topup_cents","object":"checkout.session","url":"https://checkout.stripe.test/session"}`))
+		default:
+			t.Errorf("unexpected Stripe path: %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	t.Cleanup(server.Close)
 	oldBackend := stripe.GetBackend(stripe.APIBackend)
 	stripe.SetBackend(stripe.APIBackend, stripe.GetBackendWithConfig(stripe.APIBackend, &stripe.BackendConfig{URL: stripe.String(server.URL), MaxNetworkRetries: stripe.Int64(0)}))
-	t.Cleanup(func() { stripe.SetBackend(stripe.APIBackend, oldBackend) })
+	t.Cleanup(func() {
+		stripeBasePriceCurrencyForTopUpCentsTest = "usd"
+		stripePriceFormForTopUpCentsTest = nil
+		stripePriceGetAuthorizationForTopUpCentsTest = ""
+		stripeSessionFormForTopUpCentsTest = nil
+		stripe.SetBackend(stripe.APIBackend, oldBackend)
+	})
 }
 
 func configureWaffoKeysForTopUpCentsTest(t *testing.T) string {
@@ -750,12 +816,143 @@ func TestStripeTopUpCentsPersistsPaymentMoney(t *testing.T) {
 		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
 	})
 
+	assertStripeTopUpCentsPayment(t, 160.0, "16000")
+}
+
+func TestStripeTopUpCentsRoundsStoredPaymentMoneyToCheckoutAmount(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 0.333
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	assertStripeTopUpCentsPayment(t, 13.32, "1332")
+}
+
+func TestStripeTopUpCentsUsesZeroDecimalCurrencyMinorUnits(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	stripeBasePriceCurrencyForTopUpCentsTest = "jpy"
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 8
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{40: 0.5}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	assertStripeTopUpCentsPayment(t, 160.0, "160")
+}
+
+func TestStripeTopUpCentsRoundsStoredPaymentMoneyToZeroDecimalCheckoutAmount(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	stripeBasePriceCurrencyForTopUpCentsTest = "jpy"
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 0.333
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	assertStripeTopUpCentsPayment(t, 13.0, "13")
+}
+
+func TestStripeTopUpCentsRoundsSpecialIntegerCurrencyToCheckoutAmount(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	stripeBasePriceCurrencyForTopUpCentsTest = "isk"
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 0.333
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	assertStripeTopUpCentsPayment(t, 13.0, "1300")
+}
+
+func TestStripeTopUpAmountPreviewUsesCheckoutQuantizedMoney(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	stripeBasePriceCurrencyForTopUpCentsTest = "jpy"
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 0.333
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	recorder := requestStripeAmountForTopUpCentsTest(t, 40)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"data":"13.00"`)
+}
+
+func TestStripeTopUpAmountPreviewSetsStripeKeyBeforePriceLookup(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	stripe.Key = ""
+	oldUnitPrice := setting.StripeUnitPrice
+	setting.StripeUnitPrice = 1
+	operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	t.Cleanup(func() {
+		setting.StripeUnitPrice = oldUnitPrice
+		operation_setting.GetPaymentSetting().AmountDiscount = map[int]float64{}
+	})
+
+	recorder := requestStripeAmountForTopUpCentsTest(t, 40)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"data":"40.00"`)
+	assert.Equal(t, "Bearer sk_test_topup_cents", stripePriceGetAuthorizationForTopUpCentsTest)
+}
+
+func assertStripeTopUpCentsPayment(t *testing.T, expectedMoney float64, expectedUnitAmount string) {
+	t.Helper()
+
 	recorder := requestStripeForTopUpCentsTest(t, 40)
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	topUp := getLatestTopUpForUserTest(t, topUpCentsUserID)
 	assert.EqualValues(t, 4000, topUp.Amount)
 	assert.Equal(t, model.TopUpAmountUnitAccountBalanceCents, topUp.AmountUnit)
-	assert.Equal(t, 160.0, topUp.Money)
+	assert.Equal(t, expectedMoney, topUp.Money)
+	assert.Equal(t, expectedUnitAmount, getStripePriceFormValueForTopUpCentsTest(t, "unit_amount"))
+	assert.Equal(t, "price_topup_dynamic", getStripeSessionFormValueForTopUpCentsTest(t, "line_items[0][price]"))
+	assert.Equal(t, "1", getStripeSessionFormValueForTopUpCentsTest(t, "line_items[0][quantity]"))
+}
+
+func TestWaffoPancakeTopUpPersistsRemoteOrderID(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+
+	recorder := requestWaffoPancakeForTopUpCentsTest(t, 40)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	topUp := getLatestTopUpForUserTest(t, topUpCentsUserID)
+	assert.Equal(t, "remote_order", topUp.TradeNo)
+	var response struct {
+		Data struct {
+			OrderID string `json:"order_id"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
+	assert.Equal(t, "remote_order", response.Data.OrderID)
+}
+
+func TestWaffoPancakeTopUpKeepsLocalTradeNoWhenRemoteOrderIDMissing(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+
+	recorder := requestWaffoPancakeForTopUpCentsTestWithPayload(t, 40, `{"data":{"sessionId":"sess_without_order_id","checkoutUrl":"https://pay.waffo-pancake.test/checkout","expiresAt":"2099-01-01T00:00:00Z"}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	topUp := getLatestTopUpForUserTest(t, topUpCentsUserID)
+	assert.True(t, strings.HasPrefix(topUp.TradeNo, "WAFFO_PANCAKE-"), topUp.TradeNo)
+	assert.NotEqual(t, "sess_without_order_id", topUp.TradeNo)
+
+	var request struct {
+		OrderMerchantExternalID string `json:"orderMerchantExternalId"`
+	}
+	require.NoError(t, common.UnmarshalJsonStr(waffoPancakeCreateSessionBodyForTopUpCentsTest, &request))
+	assert.Equal(t, topUp.TradeNo, request.OrderMerchantExternalID)
 }
 
 func TestStripeWebhookCreditsTopUpAmountCents(t *testing.T) {
@@ -772,6 +969,39 @@ func TestStripeTopUpCentsWebhookPreservesCustomerID(t *testing.T) {
 	seedStripeTopUpForWebhookTest(t, "stripe-customer", 4000, 40)
 	require.NoError(t, completeStripeTopUpForTestWithCustomer("stripe-customer", "cus_balance_cents"))
 	assert.Equal(t, "cus_balance_cents", getUserStripeCustomerForTopUpCentsTest(t, topUpCentsUserID))
+	assert.Equal(t, 4000, getUserQuotaForTopUpCentsTest(t, topUpCentsUserID))
+}
+
+func TestStripeWebhookIgnoresCacheInvalidationFailureAfterCommit(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	setupControllerBrokenRedis(t)
+	seedStripeTopUpForWebhookTest(t, "stripe-broken-cache", 4000, 40)
+
+	require.NoError(t, completeStripeTopUpForTest("stripe-broken-cache"))
+
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForTopUpCentsTest(t, "stripe-broken-cache"))
+	assert.Equal(t, 4000, getUserQuotaForTopUpCentsTest(t, topUpCentsUserID))
+}
+
+func TestCreemWebhookIgnoresCacheInvalidationFailureAfterCommit(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	setupControllerBrokenRedis(t)
+	tradeNo := seedCreemTopUpForWebhookTest(t, 4000, 40)
+
+	require.NoError(t, completeCreemTopUpForTest(tradeNo))
+
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForTopUpCentsTest(t, tradeNo))
+	assert.Equal(t, 4000, getUserQuotaForTopUpCentsTest(t, topUpCentsUserID))
+}
+
+func TestKyrenWebhookIgnoresCacheInvalidationFailureAfterCommit(t *testing.T) {
+	setupTopUpCentsTestDB(t)
+	setupControllerBrokenRedis(t)
+	seedTopUpForProviderTest(t, "kyren-broken-cache", model.PaymentProviderKyren, model.PaymentMethodKyren, 4000, 40, common.TopUpStatusPending)
+
+	require.NoError(t, completeKyrenTopUpForTest("kyren-broken-cache"))
+
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForTopUpCentsTest(t, "kyren-broken-cache"))
 	assert.Equal(t, 4000, getUserQuotaForTopUpCentsTest(t, topUpCentsUserID))
 }
 

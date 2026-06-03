@@ -570,7 +570,7 @@
     "Are you sure you want to delete this key? This action cannot be undone.": "Are you sure you want to delete this key? This action cannot be undone.",
     "Are you sure you want to disable all enabled keys?": "Are you sure you want to disable all enabled keys?",
     "Are you sure you want to enable all keys?": "Are you sure you want to enable all keys?",
-    "Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.": "Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.",
+    "Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.": "Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.",
     "Are you sure you want to sign out? You will need to sign in again to access your account.": "Are you sure you want to sign out? You will need to sign in again to access your account.",
     "Are you sure you want to unbind {{provider}} for this user? The user will no longer be able to log in via this method.": "Are you sure you want to unbind {{provider}} for this user? The user will no longer be able to log in via this method.",
     "Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.": "Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.",
@@ -5050,6 +5050,18 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "GPT abuse limits": "GPT abuse limits",
+    "Configure GPT service interruption for safety warnings": "Configure GPT service interruption for safety warnings",
+    "GPT safety warnings": "GPT safety warnings",
+    "Warnings triggered today against your daily limit": "Warnings triggered today against your daily limit",
+    "GPT abuse warning limit": "GPT abuse warning limit",
+    "0 means automatic: max(concurrency limit, system minimum)": "0 means automatic: max(concurrency limit, system minimum)",
+    "Enable GPT abuse service interruption": "Enable GPT abuse service interruption",
+    "When enabled, users who trigger the daily GPT safety warning limit are suspended from GPT service until the next day.": "When enabled, users who trigger the daily GPT safety warning limit are suspended from GPT service until the next day.",
+    "Default minimum GPT abuse warnings": "Default minimum GPT abuse warnings",
+    "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Plan limits and automatic concurrency-based limits are never allowed below this value.",
+    "Save GPT abuse limits": "Save GPT abuse limits",
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit."
   }
 }

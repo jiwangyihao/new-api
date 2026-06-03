@@ -119,6 +119,8 @@ describe('classic account balance helper', () => {
 
     assert.match(history, /credited_balance_display/);
     assert.match(history, /credited_balance_cents/);
+    assert.match(history, /Number\.isFinite\(cents\)/);
+    assert.doesNotMatch(history, /cents > 0/);
     assert.doesNotMatch(history, /<Text>\{amount\}<\/Text>/);
   });
 });

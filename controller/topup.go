@@ -37,7 +37,7 @@ type kyrenUserTopUpProduct struct {
 func loadKyrenUserTopUpProducts() []kyrenTopUpProduct {
 	raw := strings.TrimSpace(setting.KyrenTopUpProducts)
 	var option model.Option
-	if err := model.DB.Where("key = ?", "KyrenTopUpProducts").First(&option).Error; err == nil {
+	if err := kyrenTopUpProductsOptionQuery(model.DB).First(&option).Error; err == nil {
 		raw = option.Value
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil

@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting"
 	"github.com/shopspring/decimal"
 
 	"gorm.io/gorm"
@@ -238,9 +237,7 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 		return nil
 	}
 
-	if err := InvalidateUserCache(completed.UserId); err != nil {
-		return err
-	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, referenceId)
 	amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 	RecordTopupLog(completed.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %s，支付金额：%.2f", amountCNY, completed.Money), callerIp, completed.PaymentMethod, PaymentMethodStripe)
 
@@ -264,26 +261,10 @@ type topUpHistoryKyrenSnapshot struct {
 	Quota    any    `json:"quota"`
 }
 
-type topUpHistoryCreemProduct struct {
-	Price    float64 `json:"price"`
-	Currency string  `json:"currency"`
-	Quota    int64   `json:"quota"`
-}
-
 type topUpHistoryContext struct {
-	creemProductsLoaded bool
-	creemProducts       []topUpHistoryCreemProduct
-	quotaPerUnitLoaded  bool
-	quotaPerUnit        decimal.Decimal
-	quotaPerUnitOK      bool
-}
-
-func (ctx *topUpHistoryContext) getCreemProducts() []topUpHistoryCreemProduct {
-	if !ctx.creemProductsLoaded {
-		ctx.creemProducts = topUpHistoryCreemProducts()
-		ctx.creemProductsLoaded = true
-	}
-	return ctx.creemProducts
+	quotaPerUnitLoaded bool
+	quotaPerUnit       decimal.Decimal
+	quotaPerUnitOK     bool
 }
 
 func (ctx *topUpHistoryContext) getQuotaPerUnit() (decimal.Decimal, bool) {
@@ -439,58 +420,8 @@ func topUpHistorySnapshotAmountCents(amount string, currency string, fallbackMon
 	return 0, false
 }
 
-func creemLegacyTopUpCreditedBalanceCents(topUp *TopUp, ctx *topUpHistoryContext) (int64, bool) {
-	products := ctx.getCreemProducts()
-	if len(products) == 0 {
-		return 0, false
-	}
-	topUpMoney := decimal.NewFromFloat(topUp.Money).Round(2)
-	var matchedQuota int64
-	matches := 0
-	for i := range products {
-		if products[i].Quota <= 0 || !topUpHistoryCreemCurrencyCompatible(products[i].Currency) {
-			continue
-		}
-		if !decimal.NewFromFloat(products[i].Price).Round(2).Equal(topUpMoney) {
-			continue
-		}
-		matchedQuota = products[i].Quota
-		matches++
-		if matches > 1 {
-			return 0, false
-		}
-	}
-	if matches != 1 {
-		return 0, false
-	}
-	return matchedQuota, true
-}
-
-func topUpHistoryCreemProducts() []topUpHistoryCreemProduct {
-	raw := strings.TrimSpace(setting.CreemProducts)
-	if DB != nil {
-		value, ok, err := accountBalanceMigrationDBOptionValue("CreemProducts")
-		if err == nil && ok && strings.TrimSpace(value) != "" {
-			raw = value
-		}
-	}
-	if raw == "" {
-		return nil
-	}
-	var products []topUpHistoryCreemProduct
-	if err := common.UnmarshalJsonStr(raw, &products); err != nil {
-		return nil
-	}
-	return products
-}
-
-func topUpHistoryCreemCurrencyCompatible(currency string) bool {
-	switch strings.ToUpper(strings.TrimSpace(currency)) {
-	case "", "CNY", "USD":
-		return true
-	default:
-		return false
-	}
+func creemLegacyTopUpCreditedBalanceCents(_ *TopUp, _ *topUpHistoryContext) (int64, bool) {
+	return 0, false
 }
 
 func topUpHistoryQuotaPerUnit() (decimal.Decimal, bool) {
@@ -694,9 +625,7 @@ func ManualCompleteTopUp(tradeNo string, callerIp string) error {
 	if !claimed {
 		return nil
 	}
-	if err := InvalidateUserCache(completed.UserId); err != nil {
-		return err
-	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, tradeNo)
 	amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 	RecordTopupLog(completed.UserId, fmt.Sprintf("管理员补单成功，充值金额: %s，支付金额：%.2f", amountCNY, completed.Money), callerIp, completed.PaymentMethod, "admin")
 	return nil
@@ -742,9 +671,7 @@ func RechargeCreem(referenceId string, customerEmail string, customerName string
 		return nil
 	}
 
-	if err := InvalidateUserCache(completed.UserId); err != nil {
-		return err
-	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, referenceId)
 	amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 	RecordTopupLog(completed.UserId, fmt.Sprintf("使用Creem充值成功，充值额度: %s，支付金额：%.2f", amountCNY, completed.Money), callerIp, completed.PaymentMethod, PaymentMethodCreem)
 
@@ -772,9 +699,7 @@ func RechargeWaffo(tradeNo string, callerIp string) (err error) {
 	if !claimed {
 		return nil
 	}
-	if err := InvalidateUserCache(completed.UserId); err != nil {
-		return err
-	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, tradeNo)
 	if completed.Amount > 0 {
 		amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 		RecordTopupLog(completed.UserId, fmt.Sprintf("Waffo充值成功，充值额度: %s，支付金额: %.2f", amountCNY, completed.Money), callerIp, completed.PaymentMethod, PaymentMethodWaffo)
@@ -804,13 +729,17 @@ func RechargeWaffoPancake(tradeNo string) (err error) {
 	if !claimed {
 		return nil
 	}
-	if err := InvalidateUserCache(completed.UserId); err != nil {
-		return err
-	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, tradeNo)
 	if completed.Amount > 0 {
 		amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 		RecordLog(completed.UserId, LogTypeTopup, fmt.Sprintf("Waffo Pancake充值成功，充值额度: %s，支付金额: %.2f", amountCNY, completed.Money))
 	}
 
 	return nil
+}
+
+func invalidateUserCacheAfterCommittedTopUp(userId int, tradeNo string) {
+	if err := InvalidateUserCache(userId); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate user cache after topup commit user_id=%d trade_no=%s: %s", userId, tradeNo, err.Error()))
+	}
 }

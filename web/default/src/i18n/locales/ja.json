@@ -570,7 +570,7 @@
     "Are you sure you want to delete this key? This action cannot be undone.": "このキーを削除してもよろしいですか？この操作は元に戻せません。",
     "Are you sure you want to disable all enabled keys?": "すべての有効なキーを無効にすることをよろしいですか？",
     "Are you sure you want to enable all keys?": "すべてのキーを有効にすることをよろしいですか？",
-    "Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.": "この注文を手動で完了してもよろしいですか？ユーザーには対応するクォータがクレジットされます。",
+    "Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.": "この注文を手動で完了してもよろしいですか？ユーザーには対応するアカウント残高が付与されます。",
     "Are you sure you want to sign out? You will need to sign in again to access your account.": "ログアウトしてもよろしいですか？アカウントにアクセスするには再度ログインする必要があります。",
     "Are you sure you want to unbind {{provider}} for this user? The user will no longer be able to log in via this method.": "このユーザーの{{provider}}連携を解除してもよろしいですか？このユーザーはこの方法でログインできなくなります。",
     "Are you sure you want to unbind {{provider}}? You will no longer be able to log in via this method.": "{{provider}}の連携を解除してもよろしいですか？この方法でログインできなくなります。",
@@ -5050,6 +5050,18 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "GPT abuse limits": "GPT 不正利用制限",
+    "Configure GPT service interruption for safety warnings": "安全警告に対する GPT サービス停止を設定",
+    "GPT safety warnings": "GPT 安全警告",
+    "Warnings triggered today against your daily limit": "本日発生した警告数 / 1 日の上限",
+    "GPT abuse warning limit": "GPT 不正利用警告上限",
+    "0 means automatic: max(concurrency limit, system minimum)": "0 は自動を意味します: max(同時実行上限, システム最小値)",
+    "Enable GPT abuse service interruption": "GPT 不正利用によるサービス停止を有効化",
+    "When enabled, users who trigger the daily GPT safety warning limit are suspended from GPT service until the next day.": "有効にすると、1 日の GPT 安全警告上限に達したユーザーは翌日まで GPT サービスが停止されます。",
+    "Default minimum GPT abuse warnings": "GPT 不正利用警告のデフォルト最小値",
+    "Plan limits and automatic concurrency-based limits are never allowed below this value.": "プラン上限と同時実行数に基づく自動上限は、この値を下回りません。",
+    "Save GPT abuse limits": "GPT 不正利用制限を保存",
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "上流の安全警告が 1 日の上限に達した場合の一時的な GPT サービス停止を設定します。"
   }
 }

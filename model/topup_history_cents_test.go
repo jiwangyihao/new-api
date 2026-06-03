@@ -68,11 +68,25 @@ func TestTopUpHistoryKyrenAndCreemSnapshotFallbacks(t *testing.T) {
 	assert.Equal(t, "legacy", kyrenRaw.AmountUnit)
 	assert.Zero(t, kyrenRaw.CreditedBalanceCents)
 	assert.Contains(t, kyrenRaw.CreditedBalanceDisplay, "legacy/raw amount")
-	assert.EqualValues(t, 4000, findHistoryItemForTest(t, items, "legacy-creem-product").CreditedBalanceCents)
+	assert.Contains(t, findHistoryItemForTest(t, items, "legacy-creem-product").CreditedBalanceDisplay, "legacy/raw amount")
 	creemRaw := findHistoryItemForTest(t, items, "legacy-creem-raw")
 	assert.Equal(t, "legacy", creemRaw.AmountUnit)
 	assert.Zero(t, creemRaw.CreditedBalanceCents)
 	assert.Contains(t, creemRaw.CreditedBalanceDisplay, "legacy/raw amount")
+}
+
+func TestTopUpHistoryCreemLegacyDoesNotUseMutableProductConfig(t *testing.T) {
+	setupTopUpHistoryCentsTestDB(t)
+	setTopUpHistoryOptionForTest(t, "CreemProducts", `[{"productId":"prod_creem_40","name":"Creem 40","price":40,"currency":"USD","quota":4000}]`)
+	require.NoError(t, DB.Create(&TopUp{UserId: 9308, Amount: 20000000, Money: 40, TradeNo: "legacy-creem-mutable-config", PaymentProvider: PaymentProviderCreem, PaymentMethod: PaymentMethodCreem, Status: common.TopUpStatusSuccess, CreateTime: common.GetTimestamp()}).Error)
+
+	items, _, err := GetUserTopUpHistoryItems(9308, topUpHistoryPageForTest(20))
+	require.NoError(t, err)
+	item := findHistoryItemForTest(t, items, "legacy-creem-mutable-config")
+
+	assert.Equal(t, "legacy", item.AmountUnit)
+	assert.Zero(t, item.CreditedBalanceCents)
+	assert.Contains(t, item.CreditedBalanceDisplay, "legacy/raw amount")
 }
 
 func TestTopUpHistoryKyrenLegacySnapshotConvertsOldQuotaWithMigrationRate(t *testing.T) {

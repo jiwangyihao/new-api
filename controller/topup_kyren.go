@@ -265,14 +265,18 @@ func completeKyrenTopUpWithSnapshot(tradeNo string, event kyrenWebhookEvent, cal
 	if topUpUserID <= 0 || creditedQuota <= 0 {
 		return nil
 	}
-	if err := model.InvalidateUserCache(topUpUserID); err != nil {
-		return err
-	}
+	invalidateKyrenTopUpUserCacheAfterCommit(topUpUserID, tradeNo)
 	if creditedQuota > 0 {
 		balanceCNY := model.AccountBalanceCNYFromCents(int(creditedQuota)).StringFixed(2)
 		model.RecordTopupLog(topUpUserID, fmt.Sprintf("Kyren充值成功，充值额度: %s，支付金额: %.2f", balanceCNY, topUpMoney), callerIP, model.PaymentMethodKyren, model.PaymentMethodKyren)
 	}
 	return nil
+}
+
+func invalidateKyrenTopUpUserCacheAfterCommit(userID int, tradeNo string) {
+	if err := model.InvalidateUserCache(userID); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate user cache after Kyren topup commit user_id=%d trade_no=%s: %s", userID, tradeNo, err.Error()))
+	}
 }
 
 func kyrenTopUpSnapshotMatches(snapshot kyrenTopUpSnapshot, productID string, amount string, currency string) bool {
@@ -435,10 +439,21 @@ func kyrenTopUpProductsVersion(normalized string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+func kyrenOptionKeyColumn() string {
+	if common.UsingPostgreSQL {
+		return `"key"`
+	}
+	return "`key`"
+}
+
+func kyrenTopUpProductsOptionQuery(db *gorm.DB) *gorm.DB {
+	return db.Where(kyrenOptionKeyColumn()+" = ?", "KyrenTopUpProducts")
+}
+
 func loadLatestKyrenTopUpProducts() (string, []kyrenTopUpProduct, error) {
 	raw := strings.TrimSpace(setting.KyrenTopUpProducts)
 	var option model.Option
-	if err := model.DB.Where("key = ?", "KyrenTopUpProducts").First(&option).Error; err == nil {
+	if err := kyrenTopUpProductsOptionQuery(model.DB).First(&option).Error; err == nil {
 		raw = option.Value
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", nil, err
@@ -465,7 +480,7 @@ func loadLatestKyrenTopUpProductsTx(tx *gorm.DB) (string, []kyrenTopUpProduct, e
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&option).Error; err != nil {
 		return "", nil, err
 	}
-	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("key = ?", "KyrenTopUpProducts").First(&option).Error; err != nil {
+	if err := kyrenTopUpProductsOptionQuery(tx.Set("gorm:query_option", "FOR UPDATE")).First(&option).Error; err != nil {
 		return "", nil, err
 	}
 	raw := option.Value

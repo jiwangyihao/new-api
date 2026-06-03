@@ -154,7 +154,7 @@ func lockAccountBalanceDataMigrationMarkerTx(tx *gorm.DB) (bool, error) {
 		return false, err
 	}
 	var option Option
-	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("key = ?", OptionAccountBalanceCentsDataMigrated).First(&option).Error
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(commonKeyCol+" = ?", OptionAccountBalanceCentsDataMigrated).First(&option).Error
 	if err != nil {
 		return false, err
 	}
@@ -521,7 +521,7 @@ func accountBalanceMigrationOptionNumber(value any) (int64, bool, error) {
 
 func accountBalanceMigrationOptionValueTx(tx *gorm.DB, key string) (string, bool, error) {
 	var value string
-	row := tx.Model(&Option{}).Select("value").Where("key = ?", key).Row()
+	row := tx.Model(&Option{}).Select("value").Where(commonKeyCol+" = ?", key).Row()
 	err := row.Scan(&value)
 	if err == nil {
 		return value, true, nil
@@ -535,7 +535,7 @@ func accountBalanceMigrationOptionValueTx(tx *gorm.DB, key string) (string, bool
 func loadAccountBalanceFinalMarkerOptionValuesFromDB() (map[string]string, error) {
 	keys := []string{OptionAccountBalanceCentsMigrated, OptionAccountBalanceCentsMigratedAt}
 	var options []Option
-	if err := DB.Where("key IN ?", keys).Find(&options).Error; err != nil {
+	if err := DB.Where(commonKeyCol+" IN ?", keys).Find(&options).Error; err != nil {
 		return nil, err
 	}
 	values := make(map[string]string, len(options))
@@ -561,7 +561,7 @@ func loadAccountBalanceMigratedOptionValuesFromDB() (map[string]string, error) {
 		"checkin_setting.max_quota",
 	}
 	var options []Option
-	if err := DB.Where("key IN ?", keys).Find(&options).Error; err != nil {
+	if err := DB.Where(commonKeyCol+" IN ?", keys).Find(&options).Error; err != nil {
 		return nil, err
 	}
 	values := make(map[string]string, len(options))
@@ -577,7 +577,7 @@ func accountBalanceMigrationQuotaPerUnitForDataStage() (decimal.Decimal, string,
 		return decimal.Zero, "", err
 	}
 	if !ok || strings.TrimSpace(value) == "" {
-		return decimal.Zero, "", errors.New("missing database QuotaPerUnit for account balance migration")
+		return accountBalanceMigrationRuntimeQuotaPerUnit()
 	}
 	quotaPerUnit, err := decimal.NewFromString(strings.TrimSpace(value))
 	if err != nil {
@@ -587,6 +587,24 @@ func accountBalanceMigrationQuotaPerUnitForDataStage() (decimal.Decimal, string,
 		return decimal.Zero, "db_option", errors.New("invalid QuotaPerUnit for account balance migration")
 	}
 	return quotaPerUnit, "db_option", nil
+}
+
+func accountBalanceMigrationRuntimeQuotaPerUnit() (decimal.Decimal, string, error) {
+	if value := strings.TrimSpace(common.OptionMap[accountBalanceMigrationQuotaPerUnitOption]); value != "" {
+		quotaPerUnit, err := decimal.NewFromString(value)
+		if err != nil {
+			return decimal.Zero, "runtime_option", fmt.Errorf("invalid runtime QuotaPerUnit for account balance migration: %w", err)
+		}
+		if quotaPerUnit.LessThanOrEqual(decimal.Zero) {
+			return decimal.Zero, "runtime_option", errors.New("invalid runtime QuotaPerUnit for account balance migration")
+		}
+		return quotaPerUnit, "runtime_option", nil
+	}
+	quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	if quotaPerUnit.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, "runtime_value", errors.New("invalid runtime QuotaPerUnit for account balance migration")
+	}
+	return quotaPerUnit, "runtime_value", nil
 }
 
 func accountBalanceMigrationOptionTrue(key string) (bool, error) {
@@ -605,7 +623,7 @@ func accountBalanceMigrationDBOptionValue(key string) (string, bool, error) {
 		return "", false, errors.New("database is not initialized")
 	}
 	var value string
-	row := DB.Model(&Option{}).Select("value").Where("key = ?", key).Row()
+	row := DB.Model(&Option{}).Select("value").Where(commonKeyCol+" = ?", key).Row()
 	err := row.Scan(&value)
 	if err == nil {
 		return value, true, nil

@@ -62,7 +62,7 @@ const getCreditedBalanceDisplay = (record) => {
   if (typeof display === 'string' && display.trim()) return display.trim();
 
   const cents = Number(record?.credited_balance_cents);
-  if (Number.isFinite(cents) && cents > 0) {
+  if (Number.isFinite(cents)) {
     return formatAccountBalance(cents);
   }
 

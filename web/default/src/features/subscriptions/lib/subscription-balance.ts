@@ -37,7 +37,7 @@ export interface AccountBalancePaymentState {
 }
 
 export function accountBalanceCentsToCnyAmount(balanceCents: number): number {
-  if (!Number.isFinite(balanceCents) || balanceCents <= 0) return 0
+  if (!Number.isFinite(balanceCents)) return 0
   return balanceCents / 100
 }
 

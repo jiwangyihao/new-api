@@ -69,10 +69,9 @@ function getCreditedBalanceDisplay(record: TopupRecord): string {
   if (display) return display
 
   const cents = record.credited_balance_cents
-  if (typeof cents === 'number' && Number.isFinite(cents) && cents > 0) {
+  if (typeof cents === 'number' && Number.isFinite(cents)) {
     return formatCreditedBalanceCents(cents)
   }
-
 
   return '-'
 }
@@ -342,7 +341,7 @@ export function BillingHistoryDialog({
             <AlertDialogTitle>{t('Complete Order')}</AlertDialogTitle>
             <AlertDialogDescription>
               {t(
-                'Are you sure you want to manually complete this order? The user will be credited with the corresponding quota.'
+                'Are you sure you want to manually complete this order? The user will be credited with the corresponding account balance.'
               )}
             </AlertDialogDescription>
           </AlertDialogHeader>

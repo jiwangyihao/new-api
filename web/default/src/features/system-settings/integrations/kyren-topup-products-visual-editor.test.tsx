@@ -3,6 +3,8 @@ import { describe, test } from 'node:test'
 import {
   KYREN_TOPUP_PRODUCTS_CONFLICT_MESSAGE,
   getKyrenTopUpProductStatusAlerts,
+  kyrenTopUpProductFromForm,
+  kyrenTopUpProductToForm,
   saveKyrenTopUpProductsState,
   syncKyrenTopUpProductState,
   validateKyrenTopUpProducts,
@@ -79,6 +81,13 @@ describe('validateKyrenTopUpProducts', () => {
       () => validateKyrenTopUpProducts([validProduct({ quota: 0 })]),
       /Quota must be at least 1/
     )
+  })
+})
+
+describe('Kyren top-up product form helpers', () => {
+  test('round trips account balance cents as CNY yuan', () => {
+    assert.equal(kyrenTopUpProductToForm({ quota: 3990 }).balance_cny, '39.90')
+    assert.equal(kyrenTopUpProductFromForm({ balance_cny: '39.90' }).quota, 3990)
   })
 })
 

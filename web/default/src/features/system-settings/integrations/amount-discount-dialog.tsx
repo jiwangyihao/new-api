@@ -122,7 +122,7 @@ export function AmountDiscountDialog({
             {isEditMode ? t('Edit discount tier') : t('Add discount tier')}
           </DialogTitle>
           <DialogDescription>
-            {t('Set a discount rate for a specific recharge amount threshold.')}
+            {t('Set a discount rate for a credited account balance CNY threshold.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -136,7 +136,7 @@ export function AmountDiscountDialog({
               name='amount'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Recharge Amount (USD)')}</FormLabel>
+                  <FormLabel>{t('Credited account balance (CNY)')}</FormLabel>
                   <FormControl>
                     <Input
                       type='number'
@@ -154,7 +154,7 @@ export function AmountDiscountDialog({
                     {isEditMode
                       ? t('Amount cannot be changed when editing.')
                       : t(
-                          'Minimum recharge amount to qualify for this discount.'
+                          'Minimum credited account balance in CNY to qualify for this discount.'
                         )}
                   </FormDescription>
                   <FormMessage />

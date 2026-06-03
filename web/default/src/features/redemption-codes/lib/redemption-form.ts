@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
 import type { TFunction } from 'i18next'
-import { accountBalanceQuotaToCnyAmount } from '@/features/subscriptions/lib'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '@/features/subscriptions/lib'
 import {
   REDEMPTION_VALIDATION,
   getRedemptionFormErrorMessages,
@@ -53,15 +56,7 @@ export function getRedemptionFormSchema(t: TFunction) {
     })
     .superRefine((data, ctx) => {
       if (data.type === 'wallet') {
-        if (!Number.isInteger(data.quota_cny)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: t('Amount must be a whole number'),
-            path: ['quota_cny'],
-          })
-        }
-
-        if (data.quota_cny < 1) {
+        if (data.quota_cny <= 0) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message: t('Amount must be greater than 0'),
@@ -114,7 +109,8 @@ export function transformFormDataToPayload(
 ): RedemptionFormData {
   return {
     name: data.name,
-    quota: data.type === 'wallet' ? data.quota_cny : 0,
+    quota:
+      data.type === 'wallet' ? accountBalanceCnyToCents(data.quota_cny) : 0,
     type: data.type,
     plan_id: data.type === 'subscription' ? data.plan_id : 0,
     expired_time: data.expired_time
@@ -137,7 +133,7 @@ export function transformRedemptionToFormDefaults(
     type,
     quota_cny:
       type === 'wallet'
-        ? accountBalanceQuotaToCnyAmount(redemption.quota)
+        ? accountBalanceCentsToCnyAmount(redemption.quota)
         : 0,
     plan_id: type === 'subscription' ? redemption.plan_id : 0,
     expired_time:

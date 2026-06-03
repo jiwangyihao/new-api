@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
-import { quotaUnitsToDollars } from '@/lib/format'
+import { accountBalanceCentsToCnyAmount } from '@/features/subscriptions/lib'
 import { type UserFormData, type User } from '../types'
 
 // ============================================================================
@@ -29,11 +29,12 @@ export const userFormSchema = z.object({
   display_name: z.string().optional(),
   password: z.string().optional(),
   role: z.number().optional(),
-  quota_dollars: z.number().min(0).optional(),
+  quota_cny: z.string().optional(),
   remark: z.string().optional(),
 })
 
 export type UserFormValues = z.infer<typeof userFormSchema>
+type UserFormDefaultsInput = Pick<User, 'quota'> & Partial<Omit<User, 'quota'>>
 
 // ============================================================================
 // Form Defaults
@@ -44,7 +45,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   display_name: '',
   password: '',
   role: 1, // Default to common user
-  quota_dollars: 0,
+  quota_cny: '0.00',
   remark: '',
 }
 
@@ -62,8 +63,9 @@ export function transformFormDataToPayload(
   const payload: UserFormData & { id?: number } = {
     username: data.username,
     display_name: data.display_name || data.username,
-    password: data.password || undefined,
   }
+
+  if (userId === undefined || data.password) payload.password = data.password || ''
 
   // For create: only send required fields
   if (userId === undefined) {
@@ -80,13 +82,16 @@ export function transformFormDataToPayload(
 /**
  * Transform user data to form defaults
  */
-export function transformUserToFormDefaults(user: User): UserFormValues {
+export function transformUserToFormDefaults(
+  user: UserFormDefaultsInput
+): UserFormValues {
+  const username = user.username ?? ''
   return {
-    username: user.username,
-    display_name: user.display_name,
+    username,
+    display_name: user.display_name ?? username,
     password: '',
-    role: user.role,
-    quota_dollars: quotaUnitsToDollars(user.quota),
+    role: user.role ?? 1,
+    quota_cny: accountBalanceCentsToCnyAmount(user.quota).toFixed(2),
     remark: user.remark || '',
   }
 }

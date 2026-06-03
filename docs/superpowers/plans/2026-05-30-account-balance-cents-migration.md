@@ -1772,7 +1772,7 @@ git commit -m "fix(web-default): 账户余额按分展示"
 - 修改：`web/default/src/features/system-settings/integrations/creem-products-visual-editor.tsx`
 - 测试：`web/default/src/features/redemption-codes/lib/redemption-form.test.ts`、`web/default/src/features/system-settings/general/quota-settings-section.test.ts`、`web/default/src/features/system-settings/general/checkin-settings-section.test.ts`、`web/default/src/features/system-settings/integrations/kyren-topup-products-visual-editor.test.tsx`、`web/default/src/features/system-settings/integrations/creem-products-visual-editor.test.tsx`、`web/default/src/features/system-settings/integrations/payment-settings-section.test.tsx`、`web/default/src/features/users/components/users-columns.test.ts`、`web/default/src/features/wallet/wallet-layout.test.ts`。
 
-- [ ] **步骤 1：编写红测**
+- [x] **步骤 1：编写红测**
 
 补充测试断言：
 
@@ -1875,7 +1875,7 @@ test('waffo settings describe min top-up as credited CNY balance', () => {
 })
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 cd web/default
@@ -1884,7 +1884,7 @@ bun test src/features/redemption-codes/lib/redemption-form.test.ts src/features/
 
 预期：FAIL，仍按旧 quota 或 raw cents。
 
-- [ ] **步骤 3：实现 default 管理端转换**
+- [x] **步骤 3：实现 default 管理端转换**
 
 所有账户余额输入用 CNY 元，提交前 `accountBalanceCnyToCents`；编辑回显用 `accountBalanceCentsToCnyAmount`。`checkin-settings-section.tsx` 的 `min_quota` / `max_quota` 从分回显 CNY 元，保存时转回分。非账户余额字段（`PreConsumedQuota`、`QuotaRemindThreshold`、used quota、subscription token）不改。
 
@@ -1894,7 +1894,7 @@ bun test src/features/redemption-codes/lib/redemption-form.test.ts src/features/
 
 Kyren / Creem 产品 dialog 导出并使用 `kyrenTopUpProductToForm`、`kyrenTopUpProductFromForm`、`creemProductToForm`、`creemProductFromForm`；表单字段使用 `balance_cny`，后端字段 `quota` 保持分。
 
-- [ ] **步骤 4：实现签到、用户、兑换码展示**
+- [x] **步骤 4：实现签到、用户、兑换码展示**
 
 新增 / 导出的前端 helper 签名固定为：
 
@@ -1911,7 +1911,7 @@ export function creemProductFromForm(values: { balance_cny: string }): Pick<Cree
 
 `profile-header`、签到日历、用户列表 / 详情、`users/lib/user-form.ts` 中 `quota` 默认值字段统一为 `quota_cny` 且 `4000 -> "40.00"`，邀请余额 `aff_quota` / `aff_history_quota` 的展示放在 users columns 和 usage-logs dialog 测试中；手动调额显示账户余额分为 CNY；`user-quota-dialog.tsx` 导出并测试调额转换 helper，输入 `40.00` 提交 `value:4000`，当前 `4000` 显示 `¥40.00`；钱包兑换码 `quota=4000` 回显 `40.00`，提交仍 `4000`。`used_quota`、日志用量和 token 用量继续使用原用量格式。
 
-- [ ] **步骤 5：运行测试和类型检查**
+- [x] **步骤 5：运行测试和类型检查**
 
 ```bash
 cd web/default
@@ -1921,7 +1921,7 @@ bun run typecheck
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add web/default/src/features/users web/default/src/features/profile web/default/src/features/usage-logs/components/dialogs/user-info-dialog.tsx web/default/src/features/redemption-codes web/default/src/features/system-settings/general web/default/src/features/system-settings/integrations web/default/src/features/wallet

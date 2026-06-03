@@ -92,13 +92,13 @@ export function AmountOptionsVisualEditor({
     <div className='space-y-4'>
       <div>
         <p className='text-muted-foreground mb-3 text-sm'>
-          {t('Preset recharge amounts displayed to users')}
+          {t('Preset credited account balance amounts in CNY')}
         </p>
 
         {amounts.length === 0 ? (
           <div className='text-muted-foreground rounded-lg border border-dashed p-6 text-center text-sm'>
             {t(
-              'No amount options configured. Add amounts below to get started.'
+              'No credited account balance CNY options configured. Add amounts below to get started.'
             )}
           </div>
         ) : (
@@ -110,7 +110,7 @@ export function AmountOptionsVisualEditor({
                 className='text-base'
                 copyable={false}
               >
-                <span className='font-mono'>${amount}</span>
+                <span className='font-mono'>¥{amount}</span>
                 <Button
                   type='button'
                   variant='ghost'
@@ -121,7 +121,7 @@ export function AmountOptionsVisualEditor({
                     handleRemove(amount)
                   }}
                   className='hover:bg-muted-foreground/20 size-auto p-0.5'
-                  aria-label={t('Remove ${{amount}}', { amount })}
+                  aria-label={t('Remove ¥{{amount}}', { amount })}
                 >
                   <X className='h-3.5 w-3.5' />
                 </Button>
@@ -134,7 +134,7 @@ export function AmountOptionsVisualEditor({
       <div className='flex flex-col gap-2 sm:flex-row sm:items-end'>
         <div className='flex-1'>
           <Label htmlFor='new-amount' className='mb-2 block'>
-            {t('Add new amount')}
+            {t('Add credited account balance CNY amount')}
           </Label>
           <Input
             id='new-amount'

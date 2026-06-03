@@ -46,15 +46,15 @@ function setCurrencyConfig() {
 }
 
 describe('redemption wallet display', () => {
-  test('formats stored wallet quota as one-to-one CNY balance without exchange-rate conversion', () => {
+  test('formats stored wallet quota cents as CNY balance without legacy currency conversion', () => {
     setCurrencyConfig()
 
-    assert.equal(formatRedemptionWalletValue(100 * 500000), '¥100.00')
+    assert.equal(formatRedemptionWalletValue(4000), '¥40.00')
   })
 })
 
 describe('redemption form payloads', () => {
-  test('sends CNY wallet amount directly to backend instead of USD-converted quota', () => {
+  test('converts wallet CNY yuan input to cents payload', () => {
     setCurrencyConfig()
 
     const payload = transformFormDataToPayload({
@@ -66,7 +66,7 @@ describe('redemption form payloads', () => {
     })
 
     assert.equal(payload.type, 'wallet')
-    assert.equal(payload.quota, 40)
+    assert.equal(payload.quota, 4000)
     assert.equal(payload.plan_id, 0)
   })
 
@@ -91,7 +91,7 @@ describe('redemption form payloads', () => {
 })
 
 describe('redemption form defaults', () => {
-  test('converts stored wallet quota back to CNY amount one-to-one', () => {
+  test('converts stored wallet quota cents back to CNY amount', () => {
     setCurrencyConfig()
 
     const defaults = transformRedemptionToFormDefaults({
@@ -101,7 +101,7 @@ describe('redemption form defaults', () => {
       key: 'key',
       status: 1,
       type: 'wallet',
-      quota: 40 * 500000,
+      quota: 4000,
       plan_id: 0,
       created_time: 0,
       redeemed_time: 0,

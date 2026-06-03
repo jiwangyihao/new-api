@@ -22,8 +22,10 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
-import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -105,11 +107,12 @@ export function UsersMutateDrawer({
     }
   }, [open, isUpdate, currentRow, form])
 
-  const { meta: currencyMeta } = getCurrencyDisplay()
-  const currencyLabel = getCurrencyLabel()
-  const tokensOnly = currencyMeta.kind === 'tokens'
-
-  const currentQuotaRaw = form.watch('quota_dollars') || 0
+  const currentBalanceCny = form.watch('quota_cny') || '0.00'
+  const parsedCurrentBalanceAmount = Number.parseFloat(currentBalanceCny)
+  const currentBalanceAmount = Number.isFinite(parsedCurrentBalanceAmount)
+    ? parsedCurrentBalanceAmount
+    : 0
+  const currentBalanceCents = accountBalanceCnyToCents(currentBalanceAmount)
 
   const onSubmit = async (data: UserFormValues) => {
     setIsSubmitting(true)
@@ -289,27 +292,20 @@ export function UsersMutateDrawer({
               {/* Quota Settings (Update only) */}
               {isUpdate && (
                 <div className='space-y-4'>
-                  <h3 className='text-sm font-medium'>{t('Quota')}</h3>
-
+                  <h3 className='text-sm font-medium'>
+                    {t('Account Balance')}
+                  </h3>
 
                   <FormField
                     control={form.control}
-                    name='quota_dollars'
-                    render={({ field }) => (
+                    name='quota_cny'
+                    render={() => (
                       <FormItem>
-                        <FormLabel>
-                          {t('Remaining Quota ({{currency}})', {
-                            currency: currencyLabel,
-                          })}
-                        </FormLabel>
+                        <FormLabel>{t('Account Balance (CNY)')}</FormLabel>
                         <div className='flex gap-2'>
                           <FormControl>
                             <Input
-                              value={
-                                tokensOnly
-                                  ? String(field.value || 0)
-                                  : (field.value || 0).toFixed(6)
-                              }
+                              value={currentBalanceCny}
                               readOnly
                               className='flex-1'
                             />
@@ -320,11 +316,11 @@ export function UsersMutateDrawer({
                             onClick={() => setQuotaDialogOpen(true)}
                           >
                             <Pencil className='mr-1 h-4 w-4' />
-                            {t('Adjust Quota')}
+                            {t('Adjust Account Balance')}
                           </Button>
                         </div>
                         <FormDescription>
-                          {formatQuota(parseQuotaFromDollars(field.value || 0))}
+                          {formatAccountBalanceForPlanPurchase(currentBalanceCents)}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
@@ -402,7 +398,7 @@ export function UsersMutateDrawer({
           open={quotaDialogOpen}
           onOpenChange={setQuotaDialogOpen}
           userId={currentRow.id}
-          currentQuota={parseQuotaFromDollars(currentQuotaRaw || 0)}
+          currentBalanceCents={currentBalanceCents}
           onSuccess={refreshUserData}
         />
       )}

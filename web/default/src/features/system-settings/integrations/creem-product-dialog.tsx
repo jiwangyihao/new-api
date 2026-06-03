@@ -16,11 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import * as z from 'zod'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -50,18 +55,42 @@ import {
 } from '@/components/ui/select'
 import type { CreemProduct } from '@/features/wallet/types'
 
-const creemProductDialogSchema = z.object({
-  name: z.string().min(1, 'Product name is required'),
-  productId: z.string().min(1, 'Product ID is required'),
-  price: z.number().min(0.01, 'Price must be greater than 0'),
-  quota: z.number().min(1, 'Quota must be at least 1'),
-  currency: z.enum(['USD', 'EUR']),
-})
+function getCreemProductDialogSchema(t: TFunction) {
+  return z.object({
+    name: z.string().min(1, t('Product name is required')),
+    productId: z.string().min(1, t('Product ID is required')),
+    price: z.number().min(0.01, t('Price must be greater than 0')),
+    balance_cny: z
+      .string()
+      .min(1, t('Amount is required'))
+      .refine(
+        (value) => accountBalanceCnyToCents(Number.parseFloat(value)) >= 1,
+        { message: t('Amount must be at least 0.01 CNY') }
+      ),
+    currency: z.enum(['USD', 'EUR']),
+  })
+}
 
-type CreemProductDialogFormValues = z.infer<typeof creemProductDialogSchema>
+type CreemProductDialogFormValues = z.infer<ReturnType<typeof getCreemProductDialogSchema>>
 
 // Re-export for backwards compatibility
 export type CreemProductData = CreemProduct
+
+export function creemProductToForm(
+  product: Pick<CreemProductData, 'quota'>
+): { balance_cny: string } {
+  return {
+    balance_cny: accountBalanceCentsToCnyAmount(product.quota).toFixed(2),
+  }
+}
+
+export function creemProductFromForm(values: {
+  balance_cny: string
+}): Pick<CreemProductData, 'quota'> {
+  return {
+    quota: accountBalanceCnyToCents(Number.parseFloat(values.balance_cny)),
+  }
+}
 
 type CreemProductDialogProps = {
   open: boolean
@@ -78,27 +107,29 @@ export function CreemProductDialog({
 }: CreemProductDialogProps) {
   const { t } = useTranslation()
   const isEditMode = !!editData
+  const formSchema = useMemo(() => getCreemProductDialogSchema(t), [t])
+
 
   const form = useForm<CreemProductDialogFormValues>({
-    resolver: zodResolver(creemProductDialogSchema),
+    resolver: zodResolver(formSchema),
     defaultValues: {
       name: '',
       productId: '',
       price: 0,
-      quota: 0,
+      balance_cny: '0.00',
       currency: 'USD',
     },
   })
 
   useEffect(() => {
     if (editData) {
-      form.reset(editData)
+      form.reset({ ...editData, ...creemProductToForm(editData) })
     } else {
       form.reset({
         name: '',
         productId: '',
         price: 0,
-        quota: 0,
+        balance_cny: '0.00',
         currency: 'USD',
       })
     }
@@ -109,7 +140,7 @@ export function CreemProductDialog({
       name: values.name,
       productId: values.productId,
       price: values.price,
-      quota: values.quota,
+      quota: creemProductFromForm(values).quota,
       currency: values.currency,
     }
     onSave(data)
@@ -125,7 +156,7 @@ export function CreemProductDialog({
             {isEditMode ? t('Edit product') : t('Add product')}
           </DialogTitle>
           <DialogDescription>
-            {t('Configure a Creem product for user recharge options.')}
+            {t('Configure a Creem product for credited account balance options.')}
           </DialogDescription>
         </DialogHeader>
 
@@ -228,21 +259,19 @@ export function CreemProductDialog({
 
             <FormField
               control={form.control}
-              name='quota'
+              name='balance_cny'
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{t('Quota')}</FormLabel>
+                  <FormLabel>{t('Credited account balance (CNY)')}</FormLabel>
                   <FormControl>
                     <Input
-                      type='number'
-                      min={1}
-                      placeholder={t('e.g., 500000')}
+                      inputMode='decimal'
+                      placeholder={t('e.g., 39.90')}
                       {...field}
-                      onChange={(e) => field.onChange(e.target.valueAsNumber)}
                     />
                   </FormControl>
                   <FormDescription>
-                    {t('Amount of quota to credit to user account.')}
+                    {t('Saved to the server as CNY cents.')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>

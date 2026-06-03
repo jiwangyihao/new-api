@@ -16,11 +16,15 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ChangeEvent } from 'react'
+import { useMemo, type ChangeEvent } from 'react'
 import * as z from 'zod'
 import type { Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -57,7 +61,47 @@ const quotaSchema = z.object({
   }),
 })
 
-type QuotaFormValues = z.infer<typeof quotaSchema>
+export type QuotaFormValues = z.infer<typeof quotaSchema>
+
+type OptionUpdate = { key: string; value: string | number | boolean }
+
+function quotaSettingsToFormDefaults(values: QuotaFormValues): QuotaFormValues {
+  return {
+    ...values,
+    QuotaForNewUser: accountBalanceCentsToCnyAmount(values.QuotaForNewUser),
+    QuotaForInviter: accountBalanceCentsToCnyAmount(values.QuotaForInviter),
+    QuotaForInvitee: accountBalanceCentsToCnyAmount(values.QuotaForInvitee),
+  }
+}
+
+export function buildQuotaSettingsOptionUpdates(
+  values: QuotaFormValues
+): Array<OptionUpdate> {
+  return [
+    {
+      key: 'QuotaForNewUser',
+      value: String(accountBalanceCnyToCents(values.QuotaForNewUser)),
+    },
+    { key: 'PreConsumedQuota', value: values.PreConsumedQuota },
+    {
+      key: 'QuotaForInviter',
+      value: String(accountBalanceCnyToCents(values.QuotaForInviter)),
+    },
+    {
+      key: 'QuotaForInvitee',
+      value: String(accountBalanceCnyToCents(values.QuotaForInvitee)),
+    },
+    { key: 'TopUpLink', value: values.TopUpLink },
+    {
+      key: 'general_setting.docs_link',
+      value: values.general_setting.docs_link,
+    },
+    {
+      key: 'quota_setting.enable_free_model_pre_consume',
+      value: values.quota_setting.enable_free_model_pre_consume,
+    },
+  ]
+}
 
 type QuotaSettingsSectionProps = {
   defaultValues: QuotaFormValues
@@ -76,6 +120,11 @@ export function QuotaSettingsSection({
       )
     }
 
+  const formDefaultValues = useMemo<QuotaFormValues>(
+    () => quotaSettingsToFormDefaults(defaultValues),
+    [defaultValues]
+  )
+
   const { form, handleSubmit, isDirty, isSubmitting } =
     useSettingsForm<QuotaFormValues>({
       resolver: zodResolver(quotaSchema) as Resolver<
@@ -83,13 +132,16 @@ export function QuotaSettingsSection({
         unknown,
         QuotaFormValues
       >,
-      defaultValues,
-      onSubmit: async (_data, changedFields) => {
-        for (const [key, value] of Object.entries(changedFields)) {
-          await updateOption.mutateAsync({
-            key,
-            value: value as string | number | boolean,
-          })
+      defaultValues: formDefaultValues,
+      onSubmit: async (data, changedFields) => {
+        for (const update of buildQuotaSettingsOptionUpdates(data)) {
+          if (
+            !Object.prototype.hasOwnProperty.call(changedFields, update.key)
+          ) {
+            continue
+          }
+
+          await updateOption.mutateAsync(update)
         }
       },
     })
@@ -97,7 +149,9 @@ export function QuotaSettingsSection({
   return (
     <SettingsSection
       title={t('Quota Settings')}
-      description={t('Configure user quota allocation and rewards')}
+      description={t(
+        'Configure CNY account balance rewards and quota pre-consumption'
+      )}
     >
       <FormNavigationGuard when={isDirty} />
 
@@ -121,10 +175,14 @@ export function QuotaSettingsSection({
             name='QuotaForNewUser'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('New User Quota')}</FormLabel>
+                <FormLabel>
+                  {t('New User Account Balance Reward (CNY)')}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type='number'
+                    min={0}
+                    step='0.01'
                     value={field.value ?? ''}
                     onChange={handleNumberChange(field.onChange)}
                     name={field.name}
@@ -133,7 +191,7 @@ export function QuotaSettingsSection({
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('Initial quota given to new users')}
+                  {t('Initial CNY account balance credited to new users')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -169,10 +227,14 @@ export function QuotaSettingsSection({
             name='QuotaForInviter'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Inviter Reward')}</FormLabel>
+                <FormLabel>
+                  {t('Inviter Account Balance Reward (CNY)')}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type='number'
+                    min={0}
+                    step='0.01'
                     value={field.value ?? ''}
                     onChange={handleNumberChange(field.onChange)}
                     name={field.name}
@@ -181,7 +243,7 @@ export function QuotaSettingsSection({
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('Quota given to users who invite others')}
+                  {t('CNY account balance credited to users who invite others')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -193,10 +255,14 @@ export function QuotaSettingsSection({
             name='QuotaForInvitee'
             render={({ field }) => (
               <FormItem>
-                <FormLabel>{t('Invitee Reward')}</FormLabel>
+                <FormLabel>
+                  {t('Invitee Account Balance Reward (CNY)')}
+                </FormLabel>
                 <FormControl>
                   <Input
                     type='number'
+                    min={0}
+                    step='0.01'
                     value={field.value ?? ''}
                     onChange={handleNumberChange(field.onChange)}
                     name={field.name}
@@ -205,7 +271,7 @@ export function QuotaSettingsSection({
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('Quota given to invited users')}
+                  {t('CNY account balance credited to invited users')}
                 </FormDescription>
                 <FormMessage />
               </FormItem>

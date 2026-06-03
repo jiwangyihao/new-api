@@ -16,11 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
+import { useEffect, useMemo } from 'react'
 import * as z from 'zod'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { type Resolver, useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
+import type { TFunction } from 'i18next'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -45,26 +50,50 @@ import { Textarea } from '@/components/ui/textarea'
 import type { KyrenTopUpProduct } from '../types'
 import { normalizeKyrenAmountString } from './kyren-topup-products-visual-editor'
 
-const kyrenTopUpProductDialogSchema = z.object({
-  id: z.string().min(1, 'Local top-up product ID is required'),
-  name: z.string().min(1, 'Product name is required'),
-  description: z.string(),
-  product_id: z.string(),
-  amount: z
-    .string()
-    .min(1, 'Amount is required')
-    .refine((value) => normalizeKyrenAmountString(value) !== null, {
-      message: 'Amount must be at least 0.01 CNY',
-    }),
-  quota: z.coerce.number().int().min(1, 'Quota must be at least 1'),
-  enabled: z.boolean(),
-})
+function getKyrenTopUpProductDialogSchema(t: TFunction) {
+  return z.object({
+    id: z.string().min(1, t('Local top-up product ID is required')),
+    name: z.string().min(1, t('Product name is required')),
+    description: z.string(),
+    product_id: z.string(),
+    amount: z
+      .string()
+      .min(1, t('Amount is required'))
+      .refine((value) => normalizeKyrenAmountString(value) !== null, {
+        message: t('Amount must be at least 0.01 CNY'),
+      }),
+    balance_cny: z
+      .string()
+      .min(1, t('Amount is required'))
+      .refine(
+        (value) => accountBalanceCnyToCents(Number.parseFloat(value)) >= 1,
+        { message: t('Amount must be at least 0.01 CNY') }
+      ),
+    enabled: z.boolean(),
+  })
+}
 
 type KyrenTopUpProductDialogFormValues = z.infer<
-  typeof kyrenTopUpProductDialogSchema
+  ReturnType<typeof getKyrenTopUpProductDialogSchema>
 >
 
 export type KyrenTopUpProductData = KyrenTopUpProduct
+
+export function kyrenTopUpProductToForm(
+  product: Pick<KyrenTopUpProduct, 'quota'>
+): { balance_cny: string } {
+  return {
+    balance_cny: accountBalanceCentsToCnyAmount(product.quota).toFixed(2),
+  }
+}
+
+export function kyrenTopUpProductFromForm(values: {
+  balance_cny: string
+}): Pick<KyrenTopUpProduct, 'quota'> {
+  return {
+    quota: accountBalanceCnyToCents(Number.parseFloat(values.balance_cny)),
+  }
+}
 
 type KyrenTopUpProductDialogProps = {
   open: boolean
@@ -79,7 +108,7 @@ const emptyDefaults: KyrenTopUpProductDialogFormValues = {
   description: '',
   product_id: '',
   amount: '10.00',
-  quota: 0,
+  balance_cny: '0.00',
   enabled: true,
 }
 
@@ -87,8 +116,10 @@ export function KyrenTopUpProductDialog(props: KyrenTopUpProductDialogProps) {
   const { t } = useTranslation()
   const isEditMode = !!props.editData
 
+  const formSchema = useMemo(() => getKyrenTopUpProductDialogSchema(t), [t])
+
   const form = useForm<KyrenTopUpProductDialogFormValues>({
-    resolver: zodResolver(kyrenTopUpProductDialogSchema) as unknown as Resolver<KyrenTopUpProductDialogFormValues>,
+    resolver: zodResolver(formSchema) as unknown as Resolver<KyrenTopUpProductDialogFormValues>,
     defaultValues: emptyDefaults,
   })
 
@@ -100,7 +131,7 @@ export function KyrenTopUpProductDialog(props: KyrenTopUpProductDialogProps) {
         description: props.editData.description ?? '',
         product_id: props.editData.product_id ?? '',
         amount: props.editData.amount,
-        quota: props.editData.quota,
+        balance_cny: kyrenTopUpProductToForm(props.editData).balance_cny,
         enabled: props.editData.enabled,
       })
       return
@@ -116,7 +147,7 @@ export function KyrenTopUpProductDialog(props: KyrenTopUpProductDialogProps) {
       product_id: values.product_id.trim(),
       amount: normalizeKyrenAmountString(values.amount) ?? values.amount.trim(),
       currency: 'CNY',
-      quota: values.quota,
+      quota: kyrenTopUpProductFromForm(values).quota,
       enabled: values.enabled,
     })
     form.reset(emptyDefaults)
@@ -246,21 +277,20 @@ export function KyrenTopUpProductDialog(props: KyrenTopUpProductDialogProps) {
 
               <FormField
                 control={form.control}
-                name='quota'
+                name='balance_cny'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Quota')}</FormLabel>
+                    <FormLabel>{t('Credited account balance (CNY)')}</FormLabel>
                     <FormControl>
                       <Input
-                        type='number'
-                        min={1}
-                        placeholder={t('e.g., 500000')}
+                        inputMode='decimal'
+                        placeholder={t('e.g., 39.90')}
                         {...field}
-                        onChange={(event) =>
-                          field.onChange(event.target.valueAsNumber)
-                        }
                       />
                     </FormControl>
+                    <FormDescription>
+                      {t('Saved to the server as CNY cents.')}
+                    </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}

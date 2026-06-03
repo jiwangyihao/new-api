@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { formatQuota, formatTimestamp } from '@/lib/format'
+import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -46,8 +47,8 @@ export function getUserQuotaDisplayState(
   const used = user.used_quota
   const remaining = user.quota
   const hasQuota = remaining > 0
-  const total = hasQuota ? used + remaining : 0
-  const percentage = hasQuota && total > 0 ? (remaining / total) * 100 : 0
+  const total = hasQuota ? remaining : 0
+  const percentage = hasQuota ? 100 : 0
 
   return {
     hasQuota,
@@ -229,10 +230,10 @@ export function useUsersColumns(): ColumnDef<User>[] {
             >
               <div className='flex justify-between text-xs'>
                 <span className='font-medium tabular-nums'>
-                  {formatQuota(quotaState.remaining)}
+                  {formatAccountBalanceForPlanPurchase(quotaState.remaining)}
                 </span>
                 <span className='text-muted-foreground tabular-nums'>
-                  {formatQuota(quotaState.total)}
+                  {formatAccountBalanceForPlanPurchase(quotaState.total)}
                 </span>
               </div>
               <Progress
@@ -249,10 +250,12 @@ export function useUsersColumns(): ColumnDef<User>[] {
                   {t('Used:')} {formatQuota(quotaState.used)}
                 </div>
                 <div>
-                  {t('Remaining:')} {formatQuota(quotaState.remaining)}
+                  {t('Remaining:')}{' '}
+                  {formatAccountBalanceForPlanPurchase(quotaState.remaining)}
                 </div>
                 <div>
-                  {t('Total:')} {formatQuota(quotaState.total)}
+                  {t('Total:')}{' '}
+                  {formatAccountBalanceForPlanPurchase(quotaState.total)}
                 </div>
                 <div>
                   {t('Percentage:')} {quotaState.percentage.toFixed(1)}%

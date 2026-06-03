@@ -165,7 +165,7 @@ export function RedemptionsMutateDrawer({
     form.setValue('expired_time', newDate)
   }
 
-  const amountLabel = t('Amount (CNY)')
+  const amountLabel = `${t('Amount')} (CNY)`
   const amountPlaceholder = t('Enter amount in CNY')
 
   return (
@@ -246,9 +246,9 @@ export function RedemptionsMutateDrawer({
                     </FormControl>
                     <SelectContent alignItemWithTrigger={false}>
                       <SelectGroup>
-                        <SelectItem value='wallet'>{t('Wallet Balance')}</SelectItem>
+                        <SelectItem value='wallet'>{t('Wallet')}</SelectItem>
                         <SelectItem value='subscription'>
-                          {t('Subscription Plan')}
+                          {t('Subscription')}
                         </SelectItem>
                       </SelectGroup>
                     </SelectContent>
@@ -269,7 +269,7 @@ export function RedemptionsMutateDrawer({
                       <Input
                         {...field}
                         type='number'
-                        step={1}
+                        step='0.01'
                         placeholder={amountPlaceholder}
                         onChange={(e) =>
                           field.onChange(parseFloat(e.target.value) || 0)
@@ -291,7 +291,7 @@ export function RedemptionsMutateDrawer({
                 name='plan_id'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Subscription Plan')}</FormLabel>
+                    <FormLabel>{t('Subscription')}</FormLabel>
                     <Select
                       value={field.value > 0 ? String(field.value) : ''}
                       onValueChange={(value) => field.onChange(Number(value))}

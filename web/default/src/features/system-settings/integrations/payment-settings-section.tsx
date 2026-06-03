@@ -165,7 +165,17 @@ type KyrenOptionValues = Pick<
   PaymentFormValues,
   'KyrenApiKey' | 'KyrenWebhookSecret' | 'KyrenBaseURL'
 >
-type OptionUpdate = { key: string; value: string | number | boolean }
+export type OptionUpdate = { key: string; value: string | number | boolean }
+
+type PaymentOptionValues = Omit<PaymentFormValues, 'KyrenTopUpProducts'> & {
+  KyrenTopUpProducts?: unknown
+} & Partial<
+    Pick<WaffoSettingsValues, 'WaffoMinTopUp' | 'WaffoUnitPrice'> &
+      Pick<
+        WaffoPancakeSettingsValues,
+        'WaffoPancakeMinTopUp' | 'WaffoPancakeUnitPrice'
+      >
+  >
 
 export function getKyrenWebhookUrl(serverAddress: string): string | null {
   const base = removeTrailingSlash(serverAddress)
@@ -208,6 +218,213 @@ export function buildKyrenOptionUpdates(
 
   if (sanitized.KyrenBaseURL !== initialValues.KyrenBaseURL) {
     updates.push({ key: 'KyrenBaseURL', value: sanitized.KyrenBaseURL })
+  }
+
+  return updates
+}
+
+export function buildPaymentOptionUpdates(
+  values: PaymentOptionValues,
+  initial: PaymentOptionValues
+): OptionUpdate[] {
+  const sanitized = {
+    PayAddress: removeTrailingSlash(values.PayAddress),
+    EpayId: values.EpayId.trim(),
+    EpayKey: values.EpayKey.trim(),
+    Price: values.Price,
+    MinTopUp: values.MinTopUp,
+    CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
+    PayMethods: values.PayMethods.trim(),
+    AmountOptions: values.AmountOptions.trim(),
+    AmountDiscount: values.AmountDiscount.trim(),
+    StripeApiSecret: values.StripeApiSecret.trim(),
+    StripeWebhookSecret: values.StripeWebhookSecret.trim(),
+    StripePriceId: values.StripePriceId.trim(),
+    StripeUnitPrice: values.StripeUnitPrice,
+    StripeMinTopUp: values.StripeMinTopUp,
+    StripePromotionCodesEnabled: values.StripePromotionCodesEnabled,
+    CreemApiKey: values.CreemApiKey.trim(),
+    CreemWebhookSecret: values.CreemWebhookSecret.trim(),
+    CreemTestMode: values.CreemTestMode,
+    CreemProducts: values.CreemProducts.trim(),
+  }
+
+  const initialValues = {
+    PayAddress: removeTrailingSlash(initial.PayAddress),
+    EpayId: initial.EpayId.trim(),
+    EpayKey: initial.EpayKey.trim(),
+    Price: initial.Price,
+    MinTopUp: initial.MinTopUp,
+    CustomCallbackAddress: removeTrailingSlash(initial.CustomCallbackAddress),
+    PayMethods: initial.PayMethods.trim(),
+    AmountOptions: initial.AmountOptions.trim(),
+    AmountDiscount: initial.AmountDiscount.trim(),
+    StripeApiSecret: initial.StripeApiSecret.trim(),
+    StripeWebhookSecret: initial.StripeWebhookSecret.trim(),
+    StripePriceId: initial.StripePriceId.trim(),
+    StripeUnitPrice: initial.StripeUnitPrice,
+    StripeMinTopUp: initial.StripeMinTopUp,
+    StripePromotionCodesEnabled: initial.StripePromotionCodesEnabled,
+    CreemApiKey: initial.CreemApiKey.trim(),
+    CreemWebhookSecret: initial.CreemWebhookSecret.trim(),
+    CreemTestMode: initial.CreemTestMode,
+    CreemProducts: initial.CreemProducts.trim(),
+  }
+
+  const updates: OptionUpdate[] = []
+
+  if (sanitized.PayAddress !== initialValues.PayAddress) {
+    updates.push({ key: 'PayAddress', value: sanitized.PayAddress })
+  }
+
+  if (sanitized.EpayId !== initialValues.EpayId) {
+    updates.push({ key: 'EpayId', value: sanitized.EpayId })
+  }
+
+  if (sanitized.EpayKey && sanitized.EpayKey !== initialValues.EpayKey) {
+    updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
+  }
+
+  if (sanitized.Price !== initialValues.Price) {
+    updates.push({ key: 'Price', value: sanitized.Price })
+  }
+
+  if (sanitized.MinTopUp !== initialValues.MinTopUp) {
+    updates.push({ key: 'MinTopUp', value: sanitized.MinTopUp })
+  }
+
+  if (sanitized.CustomCallbackAddress !== initialValues.CustomCallbackAddress) {
+    updates.push({
+      key: 'CustomCallbackAddress',
+      value: sanitized.CustomCallbackAddress,
+    })
+  }
+
+  if (
+    normalizeJsonForComparison(sanitized.PayMethods) !==
+    normalizeJsonForComparison(initialValues.PayMethods)
+  ) {
+    updates.push({ key: 'PayMethods', value: sanitized.PayMethods })
+  }
+
+  if (
+    normalizeJsonForComparison(sanitized.AmountOptions) !==
+    normalizeJsonForComparison(initialValues.AmountOptions)
+  ) {
+    updates.push({
+      key: 'payment_setting.amount_options',
+      value: sanitized.AmountOptions,
+    })
+  }
+
+  if (
+    normalizeJsonForComparison(sanitized.AmountDiscount) !==
+    normalizeJsonForComparison(initialValues.AmountDiscount)
+  ) {
+    updates.push({
+      key: 'payment_setting.amount_discount',
+      value: sanitized.AmountDiscount,
+    })
+  }
+
+  if (
+    sanitized.StripeApiSecret &&
+    sanitized.StripeApiSecret !== initialValues.StripeApiSecret
+  ) {
+    updates.push({ key: 'StripeApiSecret', value: sanitized.StripeApiSecret })
+  }
+
+  if (
+    sanitized.StripeWebhookSecret &&
+    sanitized.StripeWebhookSecret !== initialValues.StripeWebhookSecret
+  ) {
+    updates.push({
+      key: 'StripeWebhookSecret',
+      value: sanitized.StripeWebhookSecret,
+    })
+  }
+
+  if (sanitized.StripePriceId !== initialValues.StripePriceId) {
+    updates.push({ key: 'StripePriceId', value: sanitized.StripePriceId })
+  }
+
+  if (sanitized.StripeUnitPrice !== initialValues.StripeUnitPrice) {
+    updates.push({ key: 'StripeUnitPrice', value: sanitized.StripeUnitPrice })
+  }
+
+  if (sanitized.StripeMinTopUp !== initialValues.StripeMinTopUp) {
+    updates.push({ key: 'StripeMinTopUp', value: sanitized.StripeMinTopUp })
+  }
+
+  if (
+    sanitized.StripePromotionCodesEnabled !==
+    initialValues.StripePromotionCodesEnabled
+  ) {
+    updates.push({
+      key: 'StripePromotionCodesEnabled',
+      value: sanitized.StripePromotionCodesEnabled,
+    })
+  }
+
+  if (sanitized.CreemApiKey && sanitized.CreemApiKey !== initialValues.CreemApiKey) {
+    updates.push({ key: 'CreemApiKey', value: sanitized.CreemApiKey })
+  }
+
+  if (
+    sanitized.CreemWebhookSecret &&
+    sanitized.CreemWebhookSecret !== initialValues.CreemWebhookSecret
+  ) {
+    updates.push({
+      key: 'CreemWebhookSecret',
+      value: sanitized.CreemWebhookSecret,
+    })
+  }
+
+  if (sanitized.CreemTestMode !== initialValues.CreemTestMode) {
+    updates.push({ key: 'CreemTestMode', value: sanitized.CreemTestMode })
+  }
+
+  if (
+    normalizeJsonForComparison(sanitized.CreemProducts) !==
+    normalizeJsonForComparison(initialValues.CreemProducts)
+  ) {
+    updates.push({ key: 'CreemProducts', value: sanitized.CreemProducts })
+  }
+
+  updates.push(...buildKyrenOptionUpdates(values, initial))
+
+  if (
+    values.WaffoMinTopUp !== undefined &&
+    values.WaffoMinTopUp !== initial.WaffoMinTopUp
+  ) {
+    updates.push({ key: 'WaffoMinTopUp', value: values.WaffoMinTopUp })
+  }
+
+  if (
+    values.WaffoUnitPrice !== undefined &&
+    values.WaffoUnitPrice !== initial.WaffoUnitPrice
+  ) {
+    updates.push({ key: 'WaffoUnitPrice', value: values.WaffoUnitPrice })
+  }
+
+  if (
+    values.WaffoPancakeMinTopUp !== undefined &&
+    values.WaffoPancakeMinTopUp !== initial.WaffoPancakeMinTopUp
+  ) {
+    updates.push({
+      key: 'WaffoPancakeMinTopUp',
+      value: values.WaffoPancakeMinTopUp,
+    })
+  }
+
+  if (
+    values.WaffoPancakeUnitPrice !== undefined &&
+    values.WaffoPancakeUnitPrice !== initial.WaffoPancakeUnitPrice
+  ) {
+    updates.push({
+      key: 'WaffoPancakeUnitPrice',
+      value: values.WaffoPancakeUnitPrice,
+    })
   }
 
   return updates
@@ -308,59 +525,17 @@ export function PaymentSettingsSection({
   }, [])
 
   const saveGeneralSettings = async () => {
-    const values = form.getValues()
-    const sanitized = {
-      Price: values.Price as number,
-      MinTopUp: values.MinTopUp as number,
-      PayMethods: values.PayMethods.trim(),
-      AmountOptions: values.AmountOptions.trim(),
-      AmountDiscount: values.AmountDiscount.trim(),
-    }
-
-    const initial = {
-      Price: initialRef.current.Price,
-      MinTopUp: initialRef.current.MinTopUp,
-      PayMethods: initialRef.current.PayMethods.trim(),
-      AmountOptions: initialRef.current.AmountOptions.trim(),
-      AmountDiscount: initialRef.current.AmountDiscount.trim(),
-    }
-
-    const updates: Array<{ key: string; value: string | number }> = []
-
-    if (sanitized.Price !== initial.Price) {
-      updates.push({ key: 'Price', value: sanitized.Price })
-    }
-
-    if (sanitized.MinTopUp !== initial.MinTopUp) {
-      updates.push({ key: 'MinTopUp', value: sanitized.MinTopUp })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.PayMethods) !==
-      normalizeJsonForComparison(initial.PayMethods)
-    ) {
-      updates.push({ key: 'PayMethods', value: sanitized.PayMethods })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.AmountOptions) !==
-      normalizeJsonForComparison(initial.AmountOptions)
-    ) {
-      updates.push({
-        key: 'payment_setting.amount_options',
-        value: sanitized.AmountOptions,
-      })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.AmountDiscount) !==
-      normalizeJsonForComparison(initial.AmountDiscount)
-    ) {
-      updates.push({
-        key: 'payment_setting.amount_discount',
-        value: sanitized.AmountDiscount,
-      })
-    }
+    const updates = buildPaymentOptionUpdates(
+      form.getValues(),
+      initialRef.current
+    ).filter(
+      (update) =>
+        update.key === 'Price' ||
+        update.key === 'MinTopUp' ||
+        update.key === 'PayMethods' ||
+        update.key === 'payment_setting.amount_options' ||
+        update.key === 'payment_setting.amount_discount'
+    )
 
     if (updates.length === 0) {
       return
@@ -372,43 +547,16 @@ export function PaymentSettingsSection({
   }
 
   const saveEpaySettings = async () => {
-    const values = form.getValues()
-    const sanitized = {
-      PayAddress: removeTrailingSlash(values.PayAddress),
-      EpayId: values.EpayId.trim(),
-      EpayKey: values.EpayKey.trim(),
-      CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
-    }
-
-    const initial = {
-      PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
-      EpayId: initialRef.current.EpayId.trim(),
-      EpayKey: initialRef.current.EpayKey.trim(),
-      CustomCallbackAddress: removeTrailingSlash(
-        initialRef.current.CustomCallbackAddress
-      ),
-    }
-
-    const updates: Array<{ key: string; value: string }> = []
-
-    if (sanitized.PayAddress !== initial.PayAddress) {
-      updates.push({ key: 'PayAddress', value: sanitized.PayAddress })
-    }
-
-    if (sanitized.EpayId !== initial.EpayId) {
-      updates.push({ key: 'EpayId', value: sanitized.EpayId })
-    }
-
-    if (sanitized.EpayKey && sanitized.EpayKey !== initial.EpayKey) {
-      updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
-    }
-
-    if (sanitized.CustomCallbackAddress !== initial.CustomCallbackAddress) {
-      updates.push({
-        key: 'CustomCallbackAddress',
-        value: sanitized.CustomCallbackAddress,
-      })
-    }
+    const updates = buildPaymentOptionUpdates(
+      form.getValues(),
+      initialRef.current
+    ).filter(
+      (update) =>
+        update.key === 'PayAddress' ||
+        update.key === 'EpayId' ||
+        update.key === 'EpayKey' ||
+        update.key === 'CustomCallbackAddress'
+    )
 
     if (updates.length === 0) {
       return
@@ -420,67 +568,18 @@ export function PaymentSettingsSection({
   }
 
   const saveStripeSettings = async () => {
-    const values = form.getValues()
-    const sanitized = {
-      StripeApiSecret: values.StripeApiSecret.trim(),
-      StripeWebhookSecret: values.StripeWebhookSecret.trim(),
-      StripePriceId: values.StripePriceId.trim(),
-      StripeUnitPrice: values.StripeUnitPrice as number,
-      StripeMinTopUp: values.StripeMinTopUp as number,
-      StripePromotionCodesEnabled:
-        values.StripePromotionCodesEnabled as boolean,
-    }
-
-    const initial = {
-      StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
-      StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
-      StripePriceId: initialRef.current.StripePriceId.trim(),
-      StripeUnitPrice: initialRef.current.StripeUnitPrice,
-      StripeMinTopUp: initialRef.current.StripeMinTopUp,
-      StripePromotionCodesEnabled:
-        initialRef.current.StripePromotionCodesEnabled,
-    }
-
-    const updates: Array<{ key: string; value: string | number | boolean }> = []
-
-    if (
-      sanitized.StripeApiSecret &&
-      sanitized.StripeApiSecret !== initial.StripeApiSecret
-    ) {
-      updates.push({ key: 'StripeApiSecret', value: sanitized.StripeApiSecret })
-    }
-
-    if (
-      sanitized.StripeWebhookSecret &&
-      sanitized.StripeWebhookSecret !== initial.StripeWebhookSecret
-    ) {
-      updates.push({
-        key: 'StripeWebhookSecret',
-        value: sanitized.StripeWebhookSecret,
-      })
-    }
-
-    if (sanitized.StripePriceId !== initial.StripePriceId) {
-      updates.push({ key: 'StripePriceId', value: sanitized.StripePriceId })
-    }
-
-    if (sanitized.StripeUnitPrice !== initial.StripeUnitPrice) {
-      updates.push({ key: 'StripeUnitPrice', value: sanitized.StripeUnitPrice })
-    }
-
-    if (sanitized.StripeMinTopUp !== initial.StripeMinTopUp) {
-      updates.push({ key: 'StripeMinTopUp', value: sanitized.StripeMinTopUp })
-    }
-
-    if (
-      sanitized.StripePromotionCodesEnabled !==
-      initial.StripePromotionCodesEnabled
-    ) {
-      updates.push({
-        key: 'StripePromotionCodesEnabled',
-        value: sanitized.StripePromotionCodesEnabled,
-      })
-    }
+    const updates = buildPaymentOptionUpdates(
+      form.getValues(),
+      initialRef.current
+    ).filter(
+      (update) =>
+        update.key === 'StripeApiSecret' ||
+        update.key === 'StripeWebhookSecret' ||
+        update.key === 'StripePriceId' ||
+        update.key === 'StripeUnitPrice' ||
+        update.key === 'StripeMinTopUp' ||
+        update.key === 'StripePromotionCodesEnabled'
+    )
 
     if (updates.length === 0) {
       return
@@ -492,50 +591,16 @@ export function PaymentSettingsSection({
   }
 
   const saveCreemSettings = async () => {
-    const values = form.getValues()
-    const sanitized = {
-      CreemApiKey: values.CreemApiKey.trim(),
-      CreemWebhookSecret: values.CreemWebhookSecret.trim(),
-      CreemTestMode: values.CreemTestMode as boolean,
-      CreemProducts: values.CreemProducts.trim(),
-    }
-
-    const initial = {
-      CreemApiKey: initialRef.current.CreemApiKey.trim(),
-      CreemWebhookSecret: initialRef.current.CreemWebhookSecret.trim(),
-      CreemTestMode: initialRef.current.CreemTestMode,
-      CreemProducts: initialRef.current.CreemProducts.trim(),
-    }
-
-    const updates: Array<{ key: string; value: string | boolean }> = []
-
-    if (
-      sanitized.CreemApiKey &&
-      sanitized.CreemApiKey !== initial.CreemApiKey
-    ) {
-      updates.push({ key: 'CreemApiKey', value: sanitized.CreemApiKey })
-    }
-
-    if (
-      sanitized.CreemWebhookSecret &&
-      sanitized.CreemWebhookSecret !== initial.CreemWebhookSecret
-    ) {
-      updates.push({
-        key: 'CreemWebhookSecret',
-        value: sanitized.CreemWebhookSecret,
-      })
-    }
-
-    if (sanitized.CreemTestMode !== initial.CreemTestMode) {
-      updates.push({ key: 'CreemTestMode', value: sanitized.CreemTestMode })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.CreemProducts) !==
-      normalizeJsonForComparison(initial.CreemProducts)
-    ) {
-      updates.push({ key: 'CreemProducts', value: sanitized.CreemProducts })
-    }
+    const updates = buildPaymentOptionUpdates(
+      form.getValues(),
+      initialRef.current
+    ).filter(
+      (update) =>
+        update.key === 'CreemApiKey' ||
+        update.key === 'CreemWebhookSecret' ||
+        update.key === 'CreemTestMode' ||
+        update.key === 'CreemProducts'
+    )
 
     if (updates.length === 0) {
       return
@@ -611,178 +676,26 @@ export function PaymentSettingsSection({
   }
 
   const onSubmit = async (values: PaymentFormValues) => {
-    const sanitized = {
-      PayAddress: removeTrailingSlash(values.PayAddress),
-      EpayId: values.EpayId.trim(),
-      EpayKey: values.EpayKey.trim(),
-      Price: values.Price,
-      MinTopUp: values.MinTopUp,
-      CustomCallbackAddress: removeTrailingSlash(values.CustomCallbackAddress),
-      PayMethods: values.PayMethods.trim(),
-      AmountOptions: values.AmountOptions.trim(),
-      AmountDiscount: values.AmountDiscount.trim(),
-      StripeApiSecret: values.StripeApiSecret.trim(),
-      StripeWebhookSecret: values.StripeWebhookSecret.trim(),
-      StripePriceId: values.StripePriceId.trim(),
-      StripeUnitPrice: values.StripeUnitPrice,
-      StripeMinTopUp: values.StripeMinTopUp,
-      StripePromotionCodesEnabled: values.StripePromotionCodesEnabled,
-      KyrenApiKey: values.KyrenApiKey.trim(),
-      KyrenWebhookSecret: values.KyrenWebhookSecret.trim(),
-      KyrenBaseURL: removeTrailingSlash(values.KyrenBaseURL),
-    }
-
-    const initial = {
-      PayAddress: removeTrailingSlash(initialRef.current.PayAddress),
-      EpayId: initialRef.current.EpayId.trim(),
-      EpayKey: initialRef.current.EpayKey.trim(),
-      Price: initialRef.current.Price,
-      MinTopUp: initialRef.current.MinTopUp,
-      CustomCallbackAddress: removeTrailingSlash(
-        initialRef.current.CustomCallbackAddress
-      ),
-      PayMethods: initialRef.current.PayMethods.trim(),
-      AmountOptions: initialRef.current.AmountOptions.trim(),
-      AmountDiscount: initialRef.current.AmountDiscount.trim(),
-      StripeApiSecret: initialRef.current.StripeApiSecret.trim(),
-      StripeWebhookSecret: initialRef.current.StripeWebhookSecret.trim(),
-      StripePriceId: initialRef.current.StripePriceId.trim(),
-      StripeUnitPrice: initialRef.current.StripeUnitPrice,
-      StripeMinTopUp: initialRef.current.StripeMinTopUp,
-      StripePromotionCodesEnabled:
-        initialRef.current.StripePromotionCodesEnabled,
-      KyrenApiKey: initialRef.current.KyrenApiKey.trim(),
-      KyrenWebhookSecret: initialRef.current.KyrenWebhookSecret.trim(),
-      KyrenBaseURL: removeTrailingSlash(initialRef.current.KyrenBaseURL),
-    }
-
-    const updates: Array<{ key: string; value: string | number | boolean }> = []
-
-    if (sanitized.PayAddress !== initial.PayAddress) {
-      updates.push({ key: 'PayAddress', value: sanitized.PayAddress })
-    }
-
-    if (sanitized.EpayId !== initial.EpayId) {
-      updates.push({ key: 'EpayId', value: sanitized.EpayId })
-    }
-
-    if (sanitized.EpayKey && sanitized.EpayKey !== initial.EpayKey) {
-      updates.push({ key: 'EpayKey', value: sanitized.EpayKey })
-    }
-
-    if (sanitized.Price !== initial.Price) {
-      updates.push({ key: 'Price', value: sanitized.Price })
-    }
-
-    if (sanitized.MinTopUp !== initial.MinTopUp) {
-      updates.push({ key: 'MinTopUp', value: sanitized.MinTopUp })
-    }
-
-    if (sanitized.CustomCallbackAddress !== initial.CustomCallbackAddress) {
-      updates.push({
-        key: 'CustomCallbackAddress',
-        value: sanitized.CustomCallbackAddress,
-      })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.PayMethods) !==
-      normalizeJsonForComparison(initial.PayMethods)
-    ) {
-      updates.push({ key: 'PayMethods', value: sanitized.PayMethods })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.AmountOptions) !==
-      normalizeJsonForComparison(initial.AmountOptions)
-    ) {
-      updates.push({
-        key: 'payment_setting.amount_options',
-        value: sanitized.AmountOptions,
-      })
-    }
-
-    if (
-      normalizeJsonForComparison(sanitized.AmountDiscount) !==
-      normalizeJsonForComparison(initial.AmountDiscount)
-    ) {
-      updates.push({
-        key: 'payment_setting.amount_discount',
-        value: sanitized.AmountDiscount,
-      })
-    }
-
-    if (
-      sanitized.StripeApiSecret &&
-      sanitized.StripeApiSecret !== initial.StripeApiSecret
-    ) {
-      updates.push({ key: 'StripeApiSecret', value: sanitized.StripeApiSecret })
-    }
-
-    if (
-      sanitized.StripeWebhookSecret &&
-      sanitized.StripeWebhookSecret !== initial.StripeWebhookSecret
-    ) {
-      updates.push({
-        key: 'StripeWebhookSecret',
-        value: sanitized.StripeWebhookSecret,
-      })
-    }
-
-    if (sanitized.StripePriceId !== initial.StripePriceId) {
-      updates.push({ key: 'StripePriceId', value: sanitized.StripePriceId })
-    }
-
-    if (sanitized.StripeUnitPrice !== initial.StripeUnitPrice) {
-      updates.push({ key: 'StripeUnitPrice', value: sanitized.StripeUnitPrice })
-    }
-
-    if (sanitized.StripeMinTopUp !== initial.StripeMinTopUp) {
-      updates.push({ key: 'StripeMinTopUp', value: sanitized.StripeMinTopUp })
-    }
-
-    if (
-      sanitized.StripePromotionCodesEnabled !==
-      initial.StripePromotionCodesEnabled
-    ) {
-      updates.push({
-        key: 'StripePromotionCodesEnabled',
-        value: sanitized.StripePromotionCodesEnabled,
-      })
-    }
-
-    if (sanitized.KyrenApiKey && sanitized.KyrenApiKey !== initial.KyrenApiKey) {
-      updates.push({ key: 'KyrenApiKey', value: sanitized.KyrenApiKey })
-    }
-
-    if (
-      sanitized.KyrenWebhookSecret &&
-      sanitized.KyrenWebhookSecret !== initial.KyrenWebhookSecret
-    ) {
-      updates.push({
-        key: 'KyrenWebhookSecret',
-        value: sanitized.KyrenWebhookSecret,
-      })
-    }
-
-    if (sanitized.KyrenBaseURL !== initial.KyrenBaseURL) {
-      updates.push({ key: 'KyrenBaseURL', value: sanitized.KyrenBaseURL })
-    }
+    const updates = buildPaymentOptionUpdates(values, initialRef.current)
 
     for (const update of updates) {
       await updateOption.mutateAsync(update)
     }
-    if (
-      sanitized.KyrenApiKey ||
-      sanitized.KyrenWebhookSecret ||
-      sanitized.KyrenBaseURL !== initial.KyrenBaseURL
-    ) {
+
+    const kyrenOptionsChanged = updates.some(
+      (update) =>
+        update.key === 'KyrenApiKey' ||
+        update.key === 'KyrenWebhookSecret' ||
+        update.key === 'KyrenBaseURL'
+    )
+    if (kyrenOptionsChanged) {
       initialRef.current = {
         ...initialRef.current,
-        KyrenApiKey: sanitized.KyrenApiKey || initialRef.current.KyrenApiKey,
+        KyrenApiKey: values.KyrenApiKey.trim() || initialRef.current.KyrenApiKey,
         KyrenWebhookSecret:
-          sanitized.KyrenWebhookSecret || initialRef.current.KyrenWebhookSecret,
-        KyrenBaseURL: sanitized.KyrenBaseURL,
+          values.KyrenWebhookSecret.trim() ||
+          initialRef.current.KyrenWebhookSecret,
+        KyrenBaseURL: removeTrailingSlash(values.KyrenBaseURL),
       }
     }
 
@@ -849,7 +762,7 @@ export function PaymentSettingsSection({
                 name='Price'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Price (local currency / USD)')}</FormLabel>
+                    <FormLabel>{t('Unit price for credited balance (CNY)')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
@@ -863,7 +776,7 @@ export function PaymentSettingsSection({
                     </FormControl>
                     <FormDescription>
                       {t(
-                        'How much to charge for each US dollar of balance (Epay)'
+                        'Channel payment amount charged per CNY credited balance (Epay)'
                       )}
                     </FormDescription>
                     <FormMessage />
@@ -876,7 +789,7 @@ export function PaymentSettingsSection({
                 name='MinTopUp'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Minimum top-up (USD)')}</FormLabel>
+                    <FormLabel>{t('Minimum credited balance (CNY)')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
@@ -889,7 +802,7 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Smallest USD amount users can recharge (Epay)')}
+                      {t('Smallest credited account balance in CNY (Epay)')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -960,7 +873,7 @@ export function PaymentSettingsSection({
                 render={({ field }) => (
                   <FormItem>
                     <div className='mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                      <FormLabel>{t('Top-up amount options')}</FormLabel>
+                      <FormLabel>{t('Account balance CNY options')}</FormLabel>
                       <Button
                         type='button'
                         variant='outline'
@@ -1001,7 +914,7 @@ export function PaymentSettingsSection({
                       )}
                     </FormControl>
                     <FormDescription>
-                      {t('Preset recharge amounts (JSON array)')}
+                      {t('Credited account balance CNY options (JSON array)')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1014,7 +927,7 @@ export function PaymentSettingsSection({
                 render={({ field }) => (
                   <FormItem>
                     <div className='mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
-                      <FormLabel>{t('Amount discount')}</FormLabel>
+                      <FormLabel>{t('Account balance CNY discount')}</FormLabel>
                       <Button
                         type='button'
                         variant='outline'
@@ -1055,7 +968,9 @@ export function PaymentSettingsSection({
                       )}
                     </FormControl>
                     <FormDescription>
-                      {t('Discount map by recharge amount (JSON object)')}
+                      {t(
+                        'Discount map by credited account balance CNY (JSON object)'
+                      )}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1314,7 +1229,7 @@ export function PaymentSettingsSection({
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>
-                      {t('Unit price (local currency / USD)')}
+                      {t('Unit price for credited balance (CNY)')}
                     </FormLabel>
                     <FormControl>
                       <Input
@@ -1328,7 +1243,7 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('e.g., 8 means 8 local currency per USD')}
+                      {t('Channel payment amount charged per CNY credited balance')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1340,7 +1255,7 @@ export function PaymentSettingsSection({
                 name='StripeMinTopUp'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Minimum top-up (USD)')}</FormLabel>
+                    <FormLabel>{t('Minimum credited balance (CNY)')}</FormLabel>
                     <FormControl>
                       <Input
                         type='number'
@@ -1353,7 +1268,7 @@ export function PaymentSettingsSection({
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Minimum recharge amount in USD')}
+                      {t('Minimum credited account balance in CNY')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -1533,7 +1448,7 @@ export function PaymentSettingsSection({
                     ) : (
                       <Textarea
                         rows={4}
-                        placeholder='[{"name":"Basic","productId":"prod_xxx","price":10,"quota":500000,"currency":"USD"}]'
+                        placeholder='[{"name":"Basic","productId":"prod_xxx","price":10,"quota":3990,"currency":"USD"}]'
                         {...field}
                         onChange={(event) => field.onChange(event.target.value)}
                       />

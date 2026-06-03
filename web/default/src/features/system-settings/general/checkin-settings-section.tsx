@@ -16,11 +16,16 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useMemo } from 'react'
 import { z } from 'zod'
 import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -38,11 +43,71 @@ import { useUpdateOption } from '../hooks/use-update-option'
 
 const schema = z.object({
   enabled: z.boolean(),
-  minQuota: z.coerce.number().int().min(0),
-  maxQuota: z.coerce.number().int().min(0),
+  minQuotaCny: z.string().refine((value) => {
+    const amount = Number(value)
+    return Number.isFinite(amount) && amount >= 0
+  }),
+  maxQuotaCny: z.string().refine((value) => {
+    const amount = Number(value)
+    return Number.isFinite(amount) && amount >= 0
+  }),
 })
 
-type Values = z.infer<typeof schema>
+type CheckinSettingsValues = {
+  enabled: boolean
+  minQuota: number
+  maxQuota: number
+}
+
+type CheckinSettingsFormValues = z.infer<typeof schema>
+
+type CheckinSettingsFormDefaults = CheckinSettingsFormValues
+
+type OptionUpdate = { key: string; value: string }
+
+function formatCnyAmountFromCents(cents: number): string {
+  return accountBalanceCentsToCnyAmount(cents).toFixed(2)
+}
+
+function cnyInputToCentsString(value: string): string {
+  return String(accountBalanceCnyToCents(Number(value)))
+}
+
+export function checkinSettingsToFormDefaults(
+  values: CheckinSettingsValues
+): CheckinSettingsFormDefaults {
+  return {
+    enabled: values.enabled,
+    minQuotaCny: formatCnyAmountFromCents(values.minQuota),
+    maxQuotaCny: formatCnyAmountFromCents(values.maxQuota),
+  }
+}
+
+export function buildCheckinSettingsOptionUpdates(
+  values: CheckinSettingsFormValues,
+  initial: CheckinSettingsFormDefaults
+): Array<OptionUpdate> {
+  const updates: Array<OptionUpdate> = []
+
+  if (values.enabled !== initial.enabled) {
+    updates.push({
+      key: 'checkin_setting.enabled',
+      value: String(values.enabled),
+    })
+  }
+
+  const minQuotaCents = cnyInputToCentsString(values.minQuotaCny)
+  if (minQuotaCents !== cnyInputToCentsString(initial.minQuotaCny)) {
+    updates.push({ key: 'checkin_setting.min_quota', value: minQuotaCents })
+  }
+
+  const maxQuotaCents = cnyInputToCentsString(values.maxQuotaCny)
+  if (maxQuotaCents !== cnyInputToCentsString(initial.maxQuotaCny)) {
+    updates.push({ key: 'checkin_setting.max_quota', value: maxQuotaCents })
+  }
+
+  return updates
+}
 
 export function CheckinSettingsSection({
   defaultValues,
@@ -56,41 +121,23 @@ export function CheckinSettingsSection({
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
 
-  const form = useForm<Values>({
-    resolver: zodResolver(schema) as unknown as Resolver<Values>,
-    defaultValues: {
-      enabled: defaultValues.enabled,
-      minQuota: defaultValues.minQuota,
-      maxQuota: defaultValues.maxQuota,
-    },
+  const formDefaults = useMemo<CheckinSettingsFormDefaults>(
+    () => checkinSettingsToFormDefaults(defaultValues),
+    [defaultValues]
+  )
+
+  const form = useForm<CheckinSettingsFormValues>({
+    resolver: zodResolver(schema) as unknown as Resolver<
+      CheckinSettingsFormValues
+    >,
+    defaultValues: formDefaults,
   })
 
   const { isDirty, isSubmitting } = form.formState
   const enabled = form.watch('enabled')
 
-  async function onSubmit(values: Values) {
-    const updates: Array<{ key: string; value: string }> = []
-
-    if (values.enabled !== defaultValues.enabled) {
-      updates.push({
-        key: 'checkin_setting.enabled',
-        value: String(values.enabled),
-      })
-    }
-
-    if (values.minQuota !== defaultValues.minQuota) {
-      updates.push({
-        key: 'checkin_setting.min_quota',
-        value: String(values.minQuota),
-      })
-    }
-
-    if (values.maxQuota !== defaultValues.maxQuota) {
-      updates.push({
-        key: 'checkin_setting.max_quota',
-        value: String(values.maxQuota),
-      })
-    }
+  async function onSubmit(values: CheckinSettingsFormValues) {
+    const updates = buildCheckinSettingsOptionUpdates(values, formDefaults)
 
     if (updates.length === 0) {
       toast.info(t('No changes to save'))
@@ -103,11 +150,10 @@ export function CheckinSettingsSection({
 
     form.reset(values)
   }
-
   return (
     <SettingsSection
       title={t('Check-in Settings')}
-      description={t('Configure daily check-in rewards for users')}
+      description={t('Configure daily check-in account balance rewards')}
     >
       <Form {...form}>
         <form
@@ -126,7 +172,7 @@ export function CheckinSettingsSection({
                   </FormLabel>
                   <FormDescription>
                     {t(
-                      'Allow users to check in daily for random quota rewards'
+                      'Allow users to check in daily for random CNY account balance rewards'
                     )}
                   </FormDescription>
                 </div>
@@ -145,20 +191,23 @@ export function CheckinSettingsSection({
             <div className='grid gap-6 sm:grid-cols-2'>
               <FormField
                 control={form.control}
-                name='minQuota'
+                name='minQuotaCny'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Minimum check-in quota')}</FormLabel>
+                    <FormLabel>
+                      {t('Minimum check-in account balance reward (CNY)')}
+                    </FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min={0}
-                        placeholder={t('1000')}
+                        step='0.01'
+                        placeholder={t('0.20')}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Minimum quota amount awarded for check-in')}
+                      {t('Minimum CNY account balance credited for check-in')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -167,20 +216,23 @@ export function CheckinSettingsSection({
 
               <FormField
                 control={form.control}
-                name='maxQuota'
+                name='maxQuotaCny'
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t('Maximum check-in quota')}</FormLabel>
+                    <FormLabel>
+                      {t('Maximum check-in account balance reward (CNY)')}
+                    </FormLabel>
                     <FormControl>
                       <Input
                         type='number'
                         min={0}
-                        placeholder={t('10000')}
+                        step='0.01'
+                        placeholder={t('1.50')}
                         {...field}
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Maximum quota amount awarded for check-in')}
+                      {t('Maximum CNY account balance credited for check-in')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

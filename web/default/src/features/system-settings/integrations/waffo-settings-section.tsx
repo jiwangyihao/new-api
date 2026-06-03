@@ -119,8 +119,8 @@ export function WaffoSettingsSection(props: Props) {
         { key: 'WaffoSandbox', value: String(values.WaffoSandbox) },
         { key: 'WaffoMerchantId', value: values.WaffoMerchantId || '' },
         { key: 'WaffoCurrency', value: values.WaffoCurrency || 'USD' },
-        { key: 'WaffoUnitPrice', value: String(values.WaffoUnitPrice || 1) },
-        { key: 'WaffoMinTopUp', value: String(values.WaffoMinTopUp || 1) },
+        { key: 'WaffoUnitPrice', value: String(values.WaffoUnitPrice ?? 1) },
+        { key: 'WaffoMinTopUp', value: String(values.WaffoMinTopUp ?? 1) },
         { key: 'WaffoNotifyUrl', value: values.WaffoNotifyUrl || '' },
         { key: 'WaffoReturnUrl', value: values.WaffoReturnUrl || '' },
         { key: 'WaffoPublicCert', value: values.WaffoPublicCert || '' },
@@ -303,17 +303,23 @@ export function WaffoSettingsSection(props: Props) {
             <Input {...form.register('WaffoCurrency')} disabled />
           </div>
           <div className='grid gap-1.5'>
-            <Label>{t('Unit price (USD)')}</Label>
+            <Label>{t('Unit price for credited balance (CNY)')}</Label>
             <Input
               type='number'
               step={0.1}
               min={0}
-              {...form.register('WaffoUnitPrice')}
+              {...form.register('WaffoUnitPrice', { valueAsNumber: true })}
             />
+            <p className='text-muted-foreground text-xs'>
+              {t('Channel payment amount charged per CNY credited balance')}
+            </p>
           </div>
           <div className='grid gap-1.5'>
-            <Label>{t('Minimum top-up quantity')}</Label>
-            <Input type='number' min={1} {...form.register('WaffoMinTopUp')} />
+            <Label>{t('Minimum credited balance (CNY)')}</Label>
+            <Input type='number' min={1} {...form.register('WaffoMinTopUp', { valueAsNumber: true })} />
+            <p className='text-muted-foreground text-xs'>
+              {t('Minimum credited account balance in CNY')}
+            </p>
           </div>
         </div>
 

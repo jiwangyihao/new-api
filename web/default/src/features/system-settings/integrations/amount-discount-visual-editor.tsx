@@ -121,7 +121,7 @@ export function AmountDiscountVisualEditor({
     <div className='space-y-4'>
       <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
         <p className='text-muted-foreground text-sm'>
-          {t('Configure discount rates based on recharge amounts')}
+          {t('Configure discount rates based on credited account balance CNY amounts')}
         </p>
         <Button
           type='button'
@@ -151,7 +151,7 @@ export function AmountDiscountVisualEditor({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('Recharge Amount')}</TableHead>
+                  <TableHead>{t('Credited account balance (CNY)')}</TableHead>
                   <TableHead>{t('Discount Rate')}</TableHead>
                   <TableHead>{t('Discount')}</TableHead>
                   <TableHead className='text-right'>{t('Actions')}</TableHead>
@@ -162,7 +162,7 @@ export function AmountDiscountVisualEditor({
                   <TableRow key={discount.amount}>
                     <TableCell>
                       <span className='font-mono text-sm'>
-                        ${discount.amount}
+                        ¥{discount.amount}
                       </span>
                     </TableCell>
                     <TableCell>
@@ -220,7 +220,7 @@ export function AmountDiscountVisualEditor({
                 <div className='mb-3 flex items-start justify-between'>
                   <div className='flex-1'>
                     <div className='mb-2 font-mono text-base font-medium'>
-                      ${discount.amount}
+                      ¥{discount.amount}
                     </div>
                     <StatusBadge
                       variant={discount.discountRate < 1 ? 'info' : 'neutral'}

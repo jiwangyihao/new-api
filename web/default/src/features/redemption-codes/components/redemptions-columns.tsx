@@ -194,8 +194,8 @@ export function useRedemptionsColumns(): ColumnDef<RedemptionBatchRow>[] {
         const redemption = row.original
         const label =
           redemption.type === 'subscription'
-            ? t('Subscription Plan')
-            : t('Wallet Balance')
+            ? t('Subscription')
+            : t('Wallet')
         return <StatusBadge label={label} variant='neutral' copyable={false} />
       },
       filterFn: (row, id, value) => value.includes(row.getValue(id)),

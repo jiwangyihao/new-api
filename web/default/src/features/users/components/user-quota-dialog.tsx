@@ -19,8 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
-import { formatQuota, parseQuotaFromDollars } from '@/lib/format'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -40,8 +42,57 @@ interface UserQuotaDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   userId: number
-  currentQuota: number
+  currentBalanceCents?: number
+  legacyQuota?: number
   onSuccess: () => void
+}
+
+export function accountBalanceAdjustmentInputToCents(
+  input: string | number
+): number {
+  const amount = typeof input === 'number' ? input : Number.parseFloat(input)
+  return accountBalanceCnyToCents(amount)
+}
+
+export function formatUserAccountBalanceForDialog(cents: number): string {
+  return formatAccountBalanceForPlanPurchase(cents)
+}
+
+export function getUserQuotaAdjustmentPreview(input: {
+  currentBalanceCents: number
+  mode: QuotaAdjustMode
+  input: string | number
+}): { valueCents: number; nextBalanceCents: number; text: string } {
+  const valueCents = accountBalanceAdjustmentInputToCents(input.input)
+  const currentText = formatUserAccountBalanceForDialog(
+    input.currentBalanceCents
+  )
+
+  if (input.mode === 'add') {
+    const nextBalanceCents = input.currentBalanceCents + valueCents
+    const valueText = formatUserAccountBalanceForDialog(valueCents)
+    return {
+      valueCents,
+      nextBalanceCents,
+      text: `${currentText}  +${valueText} = ${formatUserAccountBalanceForDialog(nextBalanceCents)}`,
+    }
+  }
+
+  if (input.mode === 'subtract') {
+    const nextBalanceCents = input.currentBalanceCents - valueCents
+    const valueText = formatUserAccountBalanceForDialog(valueCents)
+    return {
+      valueCents,
+      nextBalanceCents,
+      text: `${currentText}  -${valueText} = ${formatUserAccountBalanceForDialog(nextBalanceCents)}`,
+    }
+  }
+
+  return {
+    valueCents,
+    nextBalanceCents: valueCents,
+    text: `${currentText} → ${formatUserAccountBalanceForDialog(valueCents)}`,
+  }
 }
 
 export function UserQuotaDialog(props: UserQuotaDialogProps) {
@@ -50,43 +101,27 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
   const [amount, setAmount] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const { meta: currencyMeta } = getCurrencyDisplay()
-  const currencyLabel = getCurrencyLabel()
-  const tokensOnly = currencyMeta.kind === 'tokens'
-
-  const amountValue = parseFloat(amount) || 0
-  const quotaValue = parseQuotaFromDollars(Math.abs(amountValue))
-
+  const currentBalanceCents = props.currentBalanceCents ?? props.legacyQuota ?? 0
+  const preview = getUserQuotaAdjustmentPreview({
+    currentBalanceCents,
+    mode,
+    input: amount,
+  })
   const getPreviewText = () => {
-    const current = props.currentQuota
-    const val = quotaValue
-    switch (mode) {
-      case 'add':
-        return `${t('Current quota')}: ${formatQuota(current)}  +${formatQuota(val)} = ${formatQuota(current + val)}`
-      case 'subtract':
-        return `${t('Current quota')}: ${formatQuota(current)}  -${formatQuota(val)} = ${formatQuota(current - val)}`
-      case 'override': {
-        const overrideQuota = parseQuotaFromDollars(amountValue)
-        return `${t('Current quota')}: ${formatQuota(current)} → ${formatQuota(overrideQuota)}`
-      }
-      default:
-        return ''
-    }
+    return `${t('Current balance')}: ${preview.text}`
   }
 
   const handleConfirm = async () => {
     if (!amount && mode !== 'override') return
-    if (quotaValue <= 0 && mode !== 'override') return
+    if (preview.valueCents <= 0 && mode !== 'override') return
 
     setLoading(true)
     try {
-      const value =
-        mode === 'override' ? parseQuotaFromDollars(amountValue) : quotaValue
       const result = await adjustUserQuota({
         id: props.userId,
         action: 'add_quota',
         mode,
-        value: mode === 'override' ? value : Math.abs(value),
+        value: preview.valueCents,
       })
       if (result.success) {
         toast.success(t('Quota adjusted successfully'))
@@ -110,17 +145,15 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
     props.onOpenChange(false)
   }
 
-  const placeholder = tokensOnly
-    ? t('Enter amount in tokens')
-    : t('Enter amount in {{currency}}', { currency: currencyLabel })
+  const placeholder = t('Enter amount in CNY')
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('Adjust Quota')}</DialogTitle>
+          <DialogTitle>{t('Adjust Account Balance')}</DialogTitle>
           <DialogDescription>
-            {t('Select an operation mode and enter the amount')}
+            {t('Select an operation mode and enter the CNY amount')}
           </DialogDescription>
         </DialogHeader>
         <div className='space-y-4'>
@@ -157,13 +190,11 @@ export function UserQuotaDialog(props: UserQuotaDialogProps) {
           </div>
 
           <div className='space-y-2'>
-            <Label>
-              {t('Amount')} ({currencyLabel})
-            </Label>
+            <Label>{t('Amount (CNY)')}</Label>
             <Input
               type='number'
-              step={tokensOnly ? 1 : 0.000001}
-              min={mode === 'override' ? undefined : 0}
+              step={0.01}
+              min={0}
               placeholder={placeholder}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}

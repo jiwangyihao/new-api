@@ -29,16 +29,18 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  formatCreemPrice,
-  formatQuotaShort,
-} from '@/features/wallet/lib/format'
+import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
+import { formatCreemPrice } from '@/features/wallet/lib/format'
 import { safeJsonParseWithValidation } from '../utils/json-parser'
 import { isArray } from '../utils/json-validators'
 import {
   CreemProductDialog,
+  creemProductFromForm,
+  creemProductToForm,
   type CreemProductData,
 } from './creem-product-dialog'
+
+export { creemProductFromForm, creemProductToForm }
 
 type CreemProductsVisualEditorProps = {
   value: string
@@ -190,7 +192,7 @@ export function CreemProductsVisualEditor({
                   <TableHead>{t('Name')}</TableHead>
                   <TableHead>{t('Product ID')}</TableHead>
                   <TableHead>{t('Price')}</TableHead>
-                  <TableHead>{t('Quota')}</TableHead>
+                  <TableHead>{t('Credited balance (CNY)')}</TableHead>
                   <TableHead className='text-right'>{t('Actions')}</TableHead>
                 </TableRow>
               </TableHeader>
@@ -212,7 +214,7 @@ export function CreemProductsVisualEditor({
                     </TableCell>
                     <TableCell>
                       <span className='font-mono text-sm'>
-                        {formatQuotaShort(product.quota)}
+                        {formatAccountBalanceForPlanPurchase(product.quota)}
                       </span>
                     </TableCell>
                     <TableCell className='text-right'>
@@ -298,10 +300,10 @@ export function CreemProductsVisualEditor({
                   </div>
                   <div className='flex items-center gap-2'>
                     <span className='text-muted-foreground min-w-16'>
-                      {t('Quota')}:
+                      {t('Credited balance (CNY)')}:
                     </span>
                     <span className='font-mono'>
-                      {formatQuotaShort(product.quota)}
+                      {formatAccountBalanceForPlanPurchase(product.quota)}
                     </span>
                   </div>
                 </div>

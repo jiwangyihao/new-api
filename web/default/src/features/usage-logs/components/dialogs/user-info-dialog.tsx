@@ -21,6 +21,7 @@ import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatQuota, formatCompactNumber } from '@/lib/format'
+import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
 import {
   Dialog,
   DialogContent,
@@ -45,6 +46,9 @@ export function UserInfoDialog({
 }: UserInfoDialogProps) {
   const { t } = useTranslation()
   const [userInfo, setUserInfo] = useState<UserInfo | null>(null)
+  const userAccountInfo = userInfo as (UserInfo & {
+    aff_history_quota?: number
+  }) | null
   const [isLoading, setIsLoading] = useState(false)
 
   const fetchUserInfo = useCallback(
@@ -103,15 +107,15 @@ export function UserInfoDialog({
           <div className='flex items-center justify-center py-8'>
             <Loader2 className='text-muted-foreground size-6 animate-spin' />
           </div>
-        ) : userInfo ? (
+        ) : userAccountInfo ? (
           <div className='space-y-4 py-4'>
             {/* Basic Info */}
             <div className='grid grid-cols-2 gap-4'>
-              <InfoItem label={t('Username')} value={userInfo.username} />
-              {userInfo.display_name && (
+              <InfoItem label={t('Username')} value={userAccountInfo.username} />
+              {userAccountInfo.display_name && (
                 <InfoItem
                   label={t('Display Name')}
-                  value={userInfo.display_name}
+                  value={userAccountInfo.display_name}
                 />
               )}
             </div>
@@ -120,11 +124,11 @@ export function UserInfoDialog({
             <div className='grid grid-cols-2 gap-4'>
               <InfoItem
                 label={t('Balance')}
-                value={formatQuota(userInfo.quota)}
+                value={formatAccountBalanceForPlanPurchase(userAccountInfo.quota)}
               />
               <InfoItem
                 label={t('Used Quota')}
-                value={formatQuota(userInfo.used_quota)}
+                value={formatQuota(userAccountInfo.used_quota)}
               />
             </div>
 
@@ -132,47 +136,62 @@ export function UserInfoDialog({
             <div className='grid grid-cols-2 gap-4'>
               <InfoItem
                 label={t('Request Count')}
-                value={formatCompactNumber(userInfo.request_count)}
+                value={formatCompactNumber(userAccountInfo.request_count)}
               />
             </div>
 
             {/* Invitation Info */}
-            {(userInfo.aff_code ||
-              userInfo.aff_count !== undefined ||
-              (userInfo.aff_quota !== undefined && userInfo.aff_quota > 0)) && (
+            {(userAccountInfo.aff_code ||
+              userAccountInfo.aff_count !== undefined ||
+              (userAccountInfo.aff_quota !== undefined &&
+                userAccountInfo.aff_quota > 0) ||
+              (userAccountInfo.aff_history_quota !== undefined &&
+                userAccountInfo.aff_history_quota > 0)) && (
               <>
                 <div className='grid grid-cols-2 gap-4'>
-                  {userInfo.aff_code && (
+                  {userAccountInfo.aff_code && (
                     <InfoItem
                       label={t('Invitation Code')}
-                      value={userInfo.aff_code}
+                      value={userAccountInfo.aff_code}
                     />
                   )}
-                  {userInfo.aff_count !== undefined && (
+                  {userAccountInfo.aff_count !== undefined && (
                     <InfoItem
                       label={t('Invited Users')}
-                      value={formatCompactNumber(userInfo.aff_count)}
+                      value={formatCompactNumber(userAccountInfo.aff_count)}
                     />
                   )}
                 </div>
 
-                {userInfo.aff_quota !== undefined && userInfo.aff_quota > 0 && (
-                  <InfoItem
-                    label={t('Invitation Quota')}
-                    value={formatQuota(userInfo.aff_quota)}
-                  />
-                )}
+                {userAccountInfo.aff_quota !== undefined &&
+                  userAccountInfo.aff_quota > 0 && (
+                    <InfoItem
+                      label={t('Invitation Quota')}
+                      value={formatAccountBalanceForPlanPurchase(
+                        userAccountInfo.aff_quota
+                      )}
+                    />
+                  )}
+                {userAccountInfo.aff_history_quota !== undefined &&
+                  userAccountInfo.aff_history_quota > 0 && (
+                    <InfoItem
+                      label={t('Invitation History Quota')}
+                      value={formatAccountBalanceForPlanPurchase(
+                        userAccountInfo.aff_history_quota
+                      )}
+                    />
+                  )}
               </>
             )}
 
             {/* Remark */}
-            {userInfo.remark && (
+            {userAccountInfo.remark && (
               <div className='space-y-1.5'>
                 <Label className='text-muted-foreground text-xs'>
                   {t('Remark')}
                 </Label>
                 <div className='text-sm leading-relaxed font-semibold break-words'>
-                  {userInfo.remark}
+                  {userAccountInfo.remark}
                 </div>
               </div>
             )}

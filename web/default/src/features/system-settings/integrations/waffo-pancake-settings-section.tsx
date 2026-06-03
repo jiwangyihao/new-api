@@ -174,7 +174,7 @@ export function WaffoPancakeSettingsSection(props: Props) {
     <SettingsSection
       title={t('Waffo Pancake Payment Gateway')}
       description={t(
-        'Configure Waffo Pancake hosted checkout integration for USD-priced top-ups'
+        'Configure Waffo Pancake hosted checkout integration for credited CNY balance top-ups'
       )}
     >
       <Alert>
@@ -282,21 +282,27 @@ export function WaffoPancakeSettingsSection(props: Props) {
 
       <div className='grid grid-cols-2 gap-4'>
         <div className='grid gap-1.5'>
-          <Label>{t('Unit price (local currency / USD)')}</Label>
+          <Label>{t('Unit price for credited balance (CNY)')}</Label>
           <Input
             type='number'
             step={0.01}
             min={0}
             {...form.register('WaffoPancakeUnitPrice', { valueAsNumber: true })}
           />
+          <p className='text-muted-foreground text-xs'>
+            {t('Channel payment amount charged per CNY credited balance')}
+          </p>
         </div>
         <div className='grid gap-1.5'>
-          <Label>{t('Minimum top-up (USD)')}</Label>
+          <Label>{t('Minimum credited balance (CNY)')}</Label>
           <Input
             type='number'
             min={1}
             {...form.register('WaffoPancakeMinTopUp', { valueAsNumber: true })}
           />
+          <p className='text-muted-foreground text-xs'>
+            {t('Minimum credited account balance in CNY')}
+          </p>
         </div>
       </div>
 

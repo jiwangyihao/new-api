@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { formatQuotaShort } from '@/features/wallet/lib/format'
+import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { KyrenTopUpProduct } from '../types'
@@ -39,8 +39,12 @@ import { isArray } from '../utils/json-validators'
 import { safeJsonParseWithValidation } from '../utils/json-parser'
 import {
   KyrenTopUpProductDialog,
+  kyrenTopUpProductFromForm,
+  kyrenTopUpProductToForm,
   type KyrenTopUpProductData,
 } from './kyren-topup-product-dialog'
+
+export { kyrenTopUpProductFromForm, kyrenTopUpProductToForm }
 
 export const KYREN_TOPUP_PRODUCTS_CONFLICT_MESSAGE =
   'Kyren settings were updated elsewhere. Please reload and try again.'
@@ -626,7 +630,7 @@ export function KyrenTopUpProductsVisualEditor(
                   <TableHead>{t('Local product ID')}</TableHead>
                   <TableHead>{t('Kyren product ID')}</TableHead>
                   <TableHead>{t('Amount')}</TableHead>
-                  <TableHead>{t('Quota')}</TableHead>
+                  <TableHead>{t('Credited balance (CNY)')}</TableHead>
                   <TableHead>{t('Status')}</TableHead>
                   <TableHead className='text-right'>{t('Actions')}</TableHead>
                 </TableRow>
@@ -667,7 +671,7 @@ export function KyrenTopUpProductsVisualEditor(
                     </TableCell>
                     <TableCell>
                       <span className='font-mono text-sm'>
-                        {formatQuotaShort(product.quota)}
+                        {formatAccountBalanceForPlanPurchase(product.quota)}
                       </span>
                     </TableCell>
                     <TableCell>{renderStatusDetails(product)}</TableCell>
@@ -717,10 +721,10 @@ export function KyrenTopUpProductsVisualEditor(
                   </div>
                   <div className='flex items-center gap-2'>
                     <span className='text-muted-foreground min-w-24'>
-                      {t('Quota')}:
+                      {t('Credited balance (CNY)')}:
                     </span>
                     <span className='font-mono'>
-                      {formatQuotaShort(product.quota)}
+                      {formatAccountBalanceForPlanPurchase(product.quota)}
                     </span>
                   </div>
                 </div>

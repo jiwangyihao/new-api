@@ -56,6 +56,22 @@ const PAYMENT_METHOD_MAP = {
   wxpay: '微信',
 };
 
+const formatCreditedBalanceCents = (cents) => {
+  return `¥${(cents / 100).toFixed(2)}`;
+};
+
+const getCreditedBalanceDisplay = (record) => {
+  const display = record?.credited_balance_display?.trim();
+  if (display) return display;
+
+  const cents = record?.credited_balance_cents;
+  if (typeof cents === 'number' && Number.isFinite(cents) && cents > 0) {
+    return formatCreditedBalanceCents(cents);
+  }
+
+  return '-';
+};
+
 const TopupHistoryModal = ({ visible, onCancel, t }) => {
   const [loading, setLoading] = useState(false);
   const [topups, setTopups] = useState([]);
@@ -187,7 +203,7 @@ const TopupHistoryModal = ({ visible, onCancel, t }) => {
         title: t('充值额度'),
         dataIndex: 'amount',
         key: 'amount',
-        render: (amount, record) => {
+        render: (_, record) => {
           if (isSubscriptionTopup(record)) {
             return (
               <Tag color='purple' shape='circle' size='small'>
@@ -198,7 +214,7 @@ const TopupHistoryModal = ({ visible, onCancel, t }) => {
           return (
             <span className='flex items-center gap-1'>
               <Coins size={16} />
-              <Text>{amount}</Text>
+              <Text>{getCreditedBalanceDisplay(record)}</Text>
             </span>
           );
         },

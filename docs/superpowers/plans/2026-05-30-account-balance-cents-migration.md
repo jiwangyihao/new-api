@@ -1254,7 +1254,7 @@ git commit -m "fix(topup): 充值订单按账户余额分入账"
 - 修改：`web/classic/src/components/topup/modals/TopupHistoryModal.jsx`
 - 测试：`model/topup_history_cents_test.go`、`web/default/src/features/wallet/wallet-layout.test.ts`。classic 账单历史行为断言归任务 11 的 `web/classic/src/helpers/account-balance.test.js`，任务 6 只改 `TopupHistoryModal.jsx` 并通过目标 eslint 保证可用。
 
-- [ ] **步骤 1：编写服务端账单历史红测**
+- [x] **步骤 1：编写服务端账单历史红测**
 
 ```go
 func TestTopUpHistoryReturnsStableCreditedBalanceFields(t *testing.T) {
@@ -1337,7 +1337,7 @@ func TestAdminAndSearchTopUpHistoryReturnStableCreditedBalanceFields(t *testing.
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./model -run 'TestTopUpHistoryReturnsStableCreditedBalanceFields|TestTopUpHistoryKyrenAndCreemSnapshotFallbacks|TestTopUpHistoryKyrenLegacySnapshot|TestAdminAndSearchTopUpHistoryReturnStableCreditedBalanceFields' -count=1
@@ -1345,7 +1345,7 @@ go test ./model -run 'TestTopUpHistoryReturnsStableCreditedBalanceFields|TestTop
 
 预期：FAIL，缺少 DTO / 函数。
 
-- [ ] **步骤 3：实现 DTO 和控制器返回**
+- [x] **步骤 3：实现 DTO 和控制器返回**
 
 新增 DTO：
 
@@ -1361,7 +1361,7 @@ type TopUpHistoryItem struct {
 
 `GetUserTopUps` / `GetAllTopUps` / `SearchUserTopUps` / `SearchAllTopUps` 变体返回 `[]TopUpHistoryItem`。新分制订单只信任订单级 `TopUp.AmountUnit == TopUpAmountUnitAccountBalanceCents`，不可依赖 `CreateTime >= AccountBalanceCentsMigratedAt` 推断单位；这样可以覆盖蓝绿发布、时钟偏差、迁移失败重试和人工补单导致的时间边界不可靠场景。迁移前旧订单 `amount_unit` 为空，普通 Epay / Stripe / Waffo / Pancake 历史成功记录可用 `amount * 100` 生成展示分并返回 `AmountUnit = "legacy"`；Kyren 历史记录解析 `TopUp.KyrenSnapshot` 的 `quota` 字段：若快照 quota 已明显为分制小额正数则返回该分值；若是迁移前历史 quota（例如 `20000000`），必须使用可确定的迁移倍率按 `round(snapshot.quota * 100 / QuotaPerUnit)` 换算；倍率不可确定或解析失败时返回 legacy/raw audit，不能填充 `credited_balance_cents`；Creem 历史记录用 `TopUp.Money` + `setting.CreemProducts` 中同价格 / 币种产品的 `quota` 匹配，唯一命中且 `quota > 0` 时返回该分值；Kyren / Creem 无可靠快照或唯一产品匹配时 `AmountUnit = "legacy"`、`IsAccountBalanceCents = false`、`CreditedBalanceCents = 0`，不得用 `amount * 100` 伪造分制金额。控制器不得继续返回裸 `[]TopUp`；用户、管理员、用户搜索和全局搜索四个列表入口必须共用同一 DTO 构造函数。
 
-- [ ] **步骤 4：前端改用展示字段**
+- [x] **步骤 4：前端改用展示字段**
 
 新增 default `billing-history-dialog` 测试：新订单、legacy 可换算订单、legacy 不可换算订单三类记录都不得从 `record.amount` 推断到账余额；必须优先使用后端 `credited_balance_display`，其次使用 `credited_balance_cents`。classic `TopupHistoryModal` 的行为测试归任务 11 的 `account-balance.test.js`，任务 6 只负责让组件消费同一后端字段并通过目标 eslint。
 
@@ -1373,7 +1373,7 @@ record.credited_balance_display || formatAccountBalanceForPlanPurchase(record.cr
 
 如果 `is_account_balance_cents === false` 且 `amount_unit === 'legacy'`，显示后端提供的 legacy 文案 / 原始审计值，不自行用 `record.amount` 推断。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./model ./controller -run 'TopUpHistory|GetUserTopUps|GetAllTopUps|Search.*TopUp|KyrenAndCreemSnapshotFallbacks' -count=1
@@ -1383,7 +1383,7 @@ cd ../classic && bun run eslint -- --quiet src/components/topup/modals/TopupHist
 
 预期：后端 PASS；default 测试 PASS；classic eslint 对目标文件无错误。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add model/topup.go controller/topup.go model/topup_history_cents_test.go web/default/src/features/wallet/types.ts web/default/src/features/wallet/components/dialogs/billing-history-dialog.tsx web/classic/src/components/topup/modals/TopupHistoryModal.jsx

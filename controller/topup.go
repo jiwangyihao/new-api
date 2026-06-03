@@ -489,14 +489,14 @@ func GetUserTopUps(c *gin.Context) {
 	keyword := c.Query("keyword")
 
 	var (
-		topups []*model.TopUp
+		topups []model.TopUpHistoryItem
 		total  int64
 		err    error
 	)
 	if keyword != "" {
-		topups, total, err = model.SearchUserTopUps(userId, keyword, pageInfo)
+		topups, total, err = model.SearchUserTopUpHistoryItems(userId, keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetUserTopUps(userId, pageInfo)
+		topups, total, err = model.GetUserTopUpHistoryItems(userId, pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)
@@ -514,14 +514,14 @@ func GetAllTopUps(c *gin.Context) {
 	keyword := c.Query("keyword")
 
 	var (
-		topups []*model.TopUp
+		topups []model.TopUpHistoryItem
 		total  int64
 		err    error
 	)
 	if keyword != "" {
-		topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
+		topups, total, err = model.SearchAllTopUpHistoryItems(keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetAllTopUps(pageInfo)
+		topups, total, err = model.GetAllTopUpHistoryItems(pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)

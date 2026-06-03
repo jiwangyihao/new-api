@@ -319,6 +319,14 @@ export interface TopupRecord {
   amount: number
   /** Payment amount (actual money paid) */
   money: number
+  /** Account balance credited by this order, in CNY cents */
+  credited_balance_cents?: number
+  /** Server-provided display string for credited account balance */
+  credited_balance_display?: string
+  /** Whether credited balance uses account-balance cents semantics */
+  is_account_balance_cents?: boolean
+  /** Unit used for the credited amount display/audit fields */
+  amount_unit?: string
   /** Trade/order number */
   trade_no: string
   /** Payment method type */

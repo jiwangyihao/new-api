@@ -3,8 +3,12 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting"
+	"github.com/shopspring/decimal"
 
 	"gorm.io/gorm"
 )
@@ -22,6 +26,14 @@ type TopUp struct {
 	CompleteTime    int64   `json:"complete_time"`
 	Status          string  `json:"status"`
 	KyrenSnapshot   string  `json:"kyren_snapshot" gorm:"type:text"`
+}
+
+type TopUpHistoryItem struct {
+	TopUp
+	CreditedBalanceCents   int64  `json:"credited_balance_cents"`
+	CreditedBalanceDisplay string `json:"credited_balance_display"`
+	AmountUnit             string `json:"amount_unit"`
+	IsAccountBalanceCents  bool   `json:"is_account_balance_cents"`
 }
 
 const (
@@ -241,6 +253,274 @@ const topUpQueryWindowSeconds int64 = 30 * 24 * 60 * 60
 // topUpQueryCutoff 返回允许查询的最早 create_time（秒级 Unix 时间戳）。
 func topUpQueryCutoff() int64 {
 	return common.GetTimestamp() - topUpQueryWindowSeconds
+}
+
+const topUpHistoryAmountUnitLegacy = "legacy"
+const topUpHistoryKyrenCentsQuotaMax int64 = 100000
+
+type topUpHistoryKyrenSnapshot struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+	Quota    any    `json:"quota"`
+}
+
+type topUpHistoryCreemProduct struct {
+	Price    float64 `json:"price"`
+	Currency string  `json:"currency"`
+	Quota    int64   `json:"quota"`
+}
+
+type topUpHistoryContext struct {
+	creemProductsLoaded bool
+	creemProducts       []topUpHistoryCreemProduct
+	quotaPerUnitLoaded  bool
+	quotaPerUnit        decimal.Decimal
+	quotaPerUnitOK      bool
+}
+
+func (ctx *topUpHistoryContext) getCreemProducts() []topUpHistoryCreemProduct {
+	if !ctx.creemProductsLoaded {
+		ctx.creemProducts = topUpHistoryCreemProducts()
+		ctx.creemProductsLoaded = true
+	}
+	return ctx.creemProducts
+}
+
+func (ctx *topUpHistoryContext) getQuotaPerUnit() (decimal.Decimal, bool) {
+	if !ctx.quotaPerUnitLoaded {
+		ctx.quotaPerUnit, ctx.quotaPerUnitOK = topUpHistoryQuotaPerUnit()
+		ctx.quotaPerUnitLoaded = true
+	}
+	return ctx.quotaPerUnit, ctx.quotaPerUnitOK
+}
+
+func GetUserTopUpHistoryItems(userId int, pageInfo *common.PageInfo) (items []TopUpHistoryItem, total int64, err error) {
+	topups, total, err := GetUserTopUps(userId, pageInfo)
+	if err != nil {
+		return nil, 0, err
+	}
+	return topUpsToHistoryItems(topups), total, nil
+}
+
+func GetAllTopUpHistoryItems(pageInfo *common.PageInfo) (items []TopUpHistoryItem, total int64, err error) {
+	topups, total, err := GetAllTopUps(pageInfo)
+	if err != nil {
+		return nil, 0, err
+	}
+	return topUpsToHistoryItems(topups), total, nil
+}
+
+func SearchUserTopUpHistoryItems(userId int, keyword string, pageInfo *common.PageInfo) (items []TopUpHistoryItem, total int64, err error) {
+	topups, total, err := SearchUserTopUps(userId, keyword, pageInfo)
+	if err != nil {
+		return nil, 0, err
+	}
+	return topUpsToHistoryItems(topups), total, nil
+}
+
+func SearchAllTopUpHistoryItems(keyword string, pageInfo *common.PageInfo) (items []TopUpHistoryItem, total int64, err error) {
+	topups, total, err := SearchAllTopUps(keyword, pageInfo)
+	if err != nil {
+		return nil, 0, err
+	}
+	return topUpsToHistoryItems(topups), total, nil
+}
+
+func topUpsToHistoryItems(topups []*TopUp) []TopUpHistoryItem {
+	if len(topups) == 0 {
+		return []TopUpHistoryItem{}
+	}
+	items := make([]TopUpHistoryItem, len(topups))
+	ctx := topUpHistoryContext{}
+	for i, topUp := range topups {
+		if topUp == nil {
+			items[i].AmountUnit = topUpHistoryAmountUnitLegacy
+			items[i].CreditedBalanceDisplay = topUpHistoryRawAuditDisplay(nil)
+			continue
+		}
+		items[i] = topUpHistoryItemFromTopUp(topUp, &ctx)
+	}
+	return items
+}
+
+func topUpHistoryItemFromTopUp(topUp *TopUp, ctx *topUpHistoryContext) TopUpHistoryItem {
+	item := TopUpHistoryItem{TopUp: *topUp}
+	if topUp.AmountUnit == TopUpAmountUnitAccountBalanceCents {
+		item.CreditedBalanceCents = topUp.Amount
+		item.CreditedBalanceDisplay = topUpHistoryCNYDisplay(topUp.Amount)
+		item.AmountUnit = TopUpAmountUnitAccountBalanceCents
+		item.IsAccountBalanceCents = true
+		return item
+	}
+	item.AmountUnit = topUpHistoryAmountUnitLegacy
+	if creditedCents, ok := legacyTopUpCreditedBalanceCents(topUp, ctx); ok {
+		item.CreditedBalanceCents = creditedCents
+		item.CreditedBalanceDisplay = topUpHistoryCNYDisplay(creditedCents)
+		return item
+	}
+	item.CreditedBalanceDisplay = topUpHistoryRawAuditDisplay(topUp)
+	return item
+}
+
+func legacyTopUpCreditedBalanceCents(topUp *TopUp, ctx *topUpHistoryContext) (int64, bool) {
+	if topUp == nil {
+		return 0, false
+	}
+	if topUp.PaymentProvider == PaymentProviderKyren || topUp.PaymentMethod == PaymentMethodKyren {
+		return kyrenLegacyTopUpCreditedBalanceCents(topUp, ctx)
+	}
+	if topUp.PaymentProvider == PaymentProviderCreem || topUp.PaymentMethod == PaymentMethodCreem {
+		return creemLegacyTopUpCreditedBalanceCents(topUp, ctx)
+	}
+	if isLegacyCNYTopUp(topUp) && topUp.Amount <= math.MaxInt64/100 && topUp.Amount >= math.MinInt64/100 {
+		return topUp.Amount * 100, true
+	}
+	return 0, false
+}
+
+func isLegacyCNYTopUp(topUp *TopUp) bool {
+	switch strings.ToLower(strings.TrimSpace(topUp.PaymentProvider)) {
+	case PaymentProviderEpay, PaymentProviderStripe, PaymentProviderWaffo, PaymentProviderWaffoPancake:
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(topUp.PaymentMethod)) {
+	case "alipay", "wxpay", "qqpay", "bank", PaymentMethodStripe, PaymentMethodWaffo, PaymentMethodWaffoPancake:
+		return true
+	}
+	return false
+}
+
+func kyrenLegacyTopUpCreditedBalanceCents(topUp *TopUp, ctx *topUpHistoryContext) (int64, bool) {
+	if strings.TrimSpace(topUp.KyrenSnapshot) == "" {
+		return 0, false
+	}
+	var snapshot topUpHistoryKyrenSnapshot
+	if err := common.UnmarshalJsonStr(topUp.KyrenSnapshot, &snapshot); err != nil {
+		return 0, false
+	}
+	quota, ok, err := accountBalanceMigrationOptionNumber(snapshot.Quota)
+	if err != nil || !ok || quota <= 0 {
+		return 0, false
+	}
+	if topUpHistoryKyrenSnapshotQuotaIsCents(snapshot, topUp, quota) {
+		return quota, true
+	}
+	quotaPerUnit, ok := ctx.getQuotaPerUnit()
+	if !ok {
+		return 0, false
+	}
+	converted, err := legacyQuotaToCentsInt64(quota, quotaPerUnit)
+	if err != nil || converted <= 0 {
+		return 0, false
+	}
+	return converted, true
+}
+
+func topUpHistoryKyrenSnapshotQuotaIsCents(snapshot topUpHistoryKyrenSnapshot, topUp *TopUp, quota int64) bool {
+	if expectedCents, ok := topUpHistorySnapshotAmountCents(snapshot.Amount, snapshot.Currency, topUp.Money); ok {
+		return quota == expectedCents
+	}
+	return quota <= topUpHistoryCentsQuotaThreshold()
+}
+
+func topUpHistorySnapshotAmountCents(amount string, currency string, fallbackMoney float64) (int64, bool) {
+	if trimmedCurrency := strings.ToUpper(strings.TrimSpace(currency)); trimmedCurrency != "" && trimmedCurrency != "CNY" {
+		return 0, false
+	}
+	if trimmedAmount := strings.TrimSpace(amount); trimmedAmount != "" {
+		parsed, err := decimal.NewFromString(trimmedAmount)
+		if err == nil && parsed.GreaterThan(decimal.Zero) {
+			return parsed.Mul(decimal.NewFromInt(100)).Round(0).IntPart(), true
+		}
+	}
+	if fallbackMoney > 0 {
+		return decimal.NewFromFloat(fallbackMoney).Mul(decimal.NewFromInt(100)).Round(0).IntPart(), true
+	}
+	return 0, false
+}
+
+func creemLegacyTopUpCreditedBalanceCents(topUp *TopUp, ctx *topUpHistoryContext) (int64, bool) {
+	products := ctx.getCreemProducts()
+	if len(products) == 0 {
+		return 0, false
+	}
+	topUpMoney := decimal.NewFromFloat(topUp.Money).Round(2)
+	var matchedQuota int64
+	matches := 0
+	for i := range products {
+		if products[i].Quota <= 0 || !topUpHistoryCreemCurrencyCompatible(products[i].Currency) {
+			continue
+		}
+		if !decimal.NewFromFloat(products[i].Price).Round(2).Equal(topUpMoney) {
+			continue
+		}
+		matchedQuota = products[i].Quota
+		matches++
+		if matches > 1 {
+			return 0, false
+		}
+	}
+	if matches != 1 {
+		return 0, false
+	}
+	return matchedQuota, true
+}
+
+func topUpHistoryCreemProducts() []topUpHistoryCreemProduct {
+	raw := strings.TrimSpace(setting.CreemProducts)
+	if DB != nil {
+		value, ok, err := accountBalanceMigrationDBOptionValue("CreemProducts")
+		if err == nil && ok && strings.TrimSpace(value) != "" {
+			raw = value
+		}
+	}
+	if raw == "" {
+		return nil
+	}
+	var products []topUpHistoryCreemProduct
+	if err := common.UnmarshalJsonStr(raw, &products); err != nil {
+		return nil
+	}
+	return products
+}
+
+func topUpHistoryCreemCurrencyCompatible(currency string) bool {
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "", "CNY", "USD":
+		return true
+	default:
+		return false
+	}
+}
+
+func topUpHistoryQuotaPerUnit() (decimal.Decimal, bool) {
+	value, ok, err := accountBalanceMigrationDBOptionValue(accountBalanceMigrationQuotaPerUnitOption)
+	if err != nil || !ok || strings.TrimSpace(value) == "" {
+		return decimal.Zero, false
+	}
+	quotaPerUnit, err := decimal.NewFromString(strings.TrimSpace(value))
+	if err != nil || quotaPerUnit.LessThanOrEqual(decimal.Zero) {
+		return decimal.Zero, false
+	}
+	return quotaPerUnit, true
+}
+
+func topUpHistoryCentsQuotaThreshold() int64 {
+	return topUpHistoryKyrenCentsQuotaMax
+}
+
+func topUpHistoryCNYDisplay(cents int64) string {
+	if cents > int64(math.MaxInt) || cents < -int64(math.MaxInt)-1 {
+		return "¥" + decimal.NewFromInt(cents).Div(decimal.NewFromInt(100)).StringFixed(2)
+	}
+	return "¥" + AccountBalanceCNYFromCents(int(cents)).StringFixed(2)
+}
+
+func topUpHistoryRawAuditDisplay(topUp *TopUp) string {
+	if topUp == nil {
+		return "legacy/raw amount: unavailable"
+	}
+	return fmt.Sprintf("legacy/raw amount: %d, money: %.2f", topUp.Amount, topUp.Money)
 }
 
 func GetUserTopUps(userId int, pageInfo *common.PageInfo) (topups []*TopUp, total int64, err error) {

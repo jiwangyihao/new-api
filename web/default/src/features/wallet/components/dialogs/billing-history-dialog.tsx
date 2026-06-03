@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { Search, Copy, Check, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatNumber } from '@/lib/format'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import {
@@ -59,6 +58,24 @@ import {
   getPaymentMethodName,
   formatTimestamp,
 } from '../../lib/billing'
+import type { TopupRecord } from '../../types'
+
+function formatCreditedBalanceCents(cents: number): string {
+  return `¥${(cents / 100).toFixed(2)}`
+}
+
+function getCreditedBalanceDisplay(record: TopupRecord): string {
+  const display = record.credited_balance_display?.trim()
+  if (display) return display
+
+  const cents = record.credited_balance_cents
+  if (typeof cents === 'number' && Number.isFinite(cents) && cents > 0) {
+    return formatCreditedBalanceCents(cents)
+  }
+
+
+  return '-'
+}
 
 interface BillingHistoryDialogProps {
   open: boolean
@@ -244,11 +261,7 @@ export function BillingHistoryDialog({
                               {t('Amount')}
                             </Label>
                             <div className='text-sm font-semibold'>
-                              {formatCurrencyFromUSD(record.amount, {
-                                digitsLarge: 2,
-                                digitsSmall: 2,
-                                abbreviate: false,
-                              })}
+                              {getCreditedBalanceDisplay(record)}
                             </div>
                           </div>
                           <div className='space-y-1'>

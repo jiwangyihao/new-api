@@ -39,6 +39,12 @@ function readAffiliateRewardsSource(): string {
   )
 }
 
+function readBillingHistoryDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/billing-history-dialog.tsx',
+    'utf8'
+  )
+}
 
 describe('wallet Kyren payment flow', () => {
   test('submits Kyren payment with local top-up product id', async () => {
@@ -117,5 +123,16 @@ describe('wallet page layout', () => {
     assert.doesNotMatch(source, /Transfer to Balance/)
     assert.match(source, /value=\{referralShareText\}/)
     assert.match(source, /CopyButton[\s\S]*value=\{referralShareText\}/)
+  })
+
+  test('billing history uses credited balance DTO fields instead of amount units', () => {
+    const source = readBillingHistoryDialogSource()
+
+    assert.match(source, /credited_balance_display/)
+    assert.match(source, /credited_balance_cents/)
+    assert.match(source, /getCreditedBalanceDisplay\(record\)/)
+    assert.match(source, /record\.credited_balance_display\?\.trim\(\)/)
+    assert.match(source, /record\.credited_balance_cents/)
+    assert.doesNotMatch(source, /formatCurrencyFromUSD\(record\.amount/)
   })
 })

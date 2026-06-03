@@ -2146,7 +2146,7 @@ git commit -m "fix(i18n): 更新账户余额分制文案"
 - 修改：`docs/superpowers/plans/2026-05-30-account-balance-cents-migration.md`
 - 测试：文档验收清单由任务 13 静态检查覆盖。
 
-- [ ] **步骤 1：补充回滚 runbook 验收**
+- [x] **步骤 1：补充回滚 runbook 验收**
 
 在规格「回滚策略」下保留并细化以下可执行检查项：
 
@@ -2159,11 +2159,11 @@ git commit -m "fix(i18n): 更新账户余额分制文案"
 6. 明确不实现自动反向迁移；如必须回退，唯一支持路径是恢复数据库备份。
 ```
 
-- [ ] **步骤 2：最终 gate 检查**
+- [x] **步骤 2：最终 gate 检查**
 
 任务 13 静态扫描必须确认计划和规格中同时包含「恢复迁移前数据库备份」「部署旧版本服务」「验证用户余额和充值入口」「不实现自动反向迁移」。缺任一项不得交付。
 
-- [ ] **步骤 3：提交**
+- [x] **步骤 3：提交**
 
 ```bash
 git add docs/superpowers/specs/2026-05-30-account-balance-cents-migration-design.md docs/superpowers/plans/2026-05-30-account-balance-cents-migration.md

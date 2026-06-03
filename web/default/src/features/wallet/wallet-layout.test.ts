@@ -46,6 +46,60 @@ function readBillingHistoryDialogSource(): string {
   )
 }
 
+function readWalletStatsCardSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/wallet-stats-card.tsx',
+    'utf8'
+  )
+}
+
+function readCreemProductsSectionSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/creem-products-section.tsx',
+    'utf8'
+  )
+}
+
+function readCreemConfirmDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/creem-confirm-dialog.tsx',
+    'utf8'
+  )
+}
+
+function readRechargeFormCardSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/recharge-form-card.tsx',
+    'utf8'
+  )
+}
+
+function readTransferDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/transfer-dialog.tsx',
+    'utf8'
+  )
+}
+
+function readUseAffiliateSource(): string {
+  return readFileSync('src/features/wallet/hooks/use-affiliate.ts', 'utf8')
+}
+
+function readPaymentConfirmDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/payment-confirm-dialog.tsx',
+    'utf8'
+  )
+}
+
+function readWalletFormatSource(): string {
+  return readFileSync('src/features/wallet/lib/format.ts', 'utf8')
+}
+
+function readUsePaymentSource(): string {
+  return readFileSync('src/features/wallet/hooks/use-payment.ts', 'utf8')
+}
+
 describe('wallet Kyren payment flow', () => {
   test('submits Kyren payment with local top-up product id', async () => {
     const calls: Array<{ product_id: string }> = []
@@ -123,6 +177,115 @@ describe('wallet page layout', () => {
     assert.doesNotMatch(source, /Transfer to Balance/)
     assert.match(source, /value=\{referralShareText\}/)
     assert.match(source, /CopyButton[\s\S]*value=\{referralShareText\}/)
+  })
+
+  test('wallet balance displays use account balance CNY cents formatting', () => {
+    const source = readWalletStatsCardSource()
+
+    assert.match(
+      source,
+      /formatAccountBalanceForPlanPurchase\(props\.user\?\.quota \?\? 0\)/
+    )
+  })
+
+  test('Creem and Kyren products display credited CNY account balance', () => {
+    const creemProductsSource = readCreemProductsSectionSource()
+    const creemDialogSource = readCreemConfirmDialogSource()
+    const rechargeSource = readRechargeFormCardSource()
+
+    for (const source of [
+      creemProductsSource,
+      creemDialogSource,
+      rechargeSource,
+    ]) {
+      assert.match(
+        source,
+        /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
+      )
+      assert.doesNotMatch(source, /formatNumber\(product\.quota\)/)
+      assert.doesNotMatch(source, /\{\{quota\}\} quota/)
+    }
+  })
+
+  test('Kyren top-up products keep direct checkout without wallet confirmation dialog', () => {
+    const walletSource = readWalletSource()
+    const rechargeSource = readRechargeFormCardSource()
+    const kyrenHandlerStart = walletSource.indexOf(
+      'const handleKyrenTopUpProductSelect'
+    )
+    const kyrenHandlerEnd = walletSource.indexOf(
+      'const handleWaffoMethodSelect',
+      kyrenHandlerStart
+    )
+    const usePaymentSource = readUsePaymentSource()
+    const paymentHandlerStart = usePaymentSource.indexOf(
+      'const processKyrenPayment'
+    )
+    const paymentHandlerEnd = usePaymentSource.indexOf(
+      'const processWaffoPayment',
+      paymentHandlerStart
+    )
+    const kyrenHandler = walletSource.slice(kyrenHandlerStart, kyrenHandlerEnd)
+    const paymentHandler = usePaymentSource.slice(
+      paymentHandlerStart,
+      paymentHandlerEnd
+    )
+
+    assert.match(
+      rechargeSource,
+      /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
+    )
+    assert.match(paymentHandler, /processKyrenTopUpProductPayment/)
+    assert.doesNotMatch(
+      kyrenHandler,
+      /setConfirmDialogOpen|setCreemDialogOpen/
+    )
+  })
+
+  test('affiliate reward transfer accepts CNY amount and submits account balance cents', () => {
+    const transferSource = readTransferDialogSource()
+    const affiliateSource = readUseAffiliateSource()
+
+    assert.doesNotMatch(transferSource, /QUOTA_PER_DOLLAR/)
+    assert.match(transferSource, /MIN_TRANSFER_AMOUNT_CNY = 0\.01/)
+    assert.match(transferSource, /min=\{MIN_TRANSFER_AMOUNT_CNY\}/)
+    assert.match(transferSource, /step=\{MIN_TRANSFER_AMOUNT_CNY\}/)
+    assert.match(transferSource, /onConfirm\(amount\)/)
+    assert.match(
+      transferSource,
+      /formatAccountBalanceForPlanPurchase\(availableQuota\)/
+    )
+    assert.match(affiliateSource, /accountBalanceCnyToCents/)
+    assert.match(
+      affiliateSource,
+      /const amountCents = accountBalanceCnyToCents\(amountCny\)/
+    )
+    assert.match(
+      affiliateSource,
+      /transferAffiliateQuota\(\{ quota: amountCents \}\)/
+    )
+  })
+
+  test('payment confirmation separates credited balance from amount paid', () => {
+    const source = readPaymentConfirmDialogSource()
+
+    assert.match(source, /t\('Topup Amount'\)/)
+    assert.match(source, /t\('You Pay'\)/)
+    assert.match(source, /formatAccountBalanceForPlanPurchase/)
+    assert.match(source, /accountBalanceCnyToCents\(topupAmount\)/)
+    assert.doesNotMatch(source, /topupAmount \* usdExchangeRate/)
+  })
+
+  test('regular top-up presets display credited CNY amount without exchange-rate conversion', () => {
+    const rechargeSource = readRechargeFormCardSource()
+    const formatSource = readWalletFormatSource()
+
+    assert.match(formatSource, /const displayValue = presetValue/)
+    assert.doesNotMatch(formatSource, /presetValue \* usdExchangeRate/)
+    assert.match(
+      rechargeSource,
+      /formatAccountBalanceForPlanPurchase\(\s*accountBalanceCnyToCents\(displayValue\)\s*\)/
+    )
   })
 
   test('billing history uses credited balance DTO fields instead of amount units', () => {

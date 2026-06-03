@@ -18,7 +18,10 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatLocalCurrencyAmount } from '@/lib/currency'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,7 +47,6 @@ interface PaymentConfirmDialogProps {
   calculating: boolean
   processing: boolean
   discountRate?: number
-  usdExchangeRate?: number
 }
 
 export function PaymentConfirmDialog({
@@ -57,7 +59,6 @@ export function PaymentConfirmDialog({
   calculating,
   processing,
   discountRate = DEFAULT_DISCOUNT_RATE,
-  usdExchangeRate = 1,
 }: PaymentConfirmDialogProps) {
   const { t } = useTranslation()
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
@@ -82,11 +83,9 @@ export function PaymentConfirmDialog({
               {t('Topup Amount')}
             </span>
             <span className='text-lg font-semibold'>
-              {formatLocalCurrencyAmount(topupAmount * usdExchangeRate, {
-                digitsLarge: 2,
-                digitsSmall: 2,
-                abbreviate: false,
-              })}
+              {formatAccountBalanceForPlanPurchase(
+                accountBalanceCnyToCents(topupAmount)
+              )}
             </span>
           </div>
 

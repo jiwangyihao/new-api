@@ -19,7 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatQuota } from '@/lib/format'
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -31,7 +35,8 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { QUOTA_PER_DOLLAR } from '../../constants'
+
+const MIN_TRANSFER_AMOUNT_CNY = 0.01
 
 interface TransferDialogProps {
   open: boolean
@@ -49,14 +54,18 @@ export function TransferDialog({
   transferring,
 }: TransferDialogProps) {
   const { t } = useTranslation()
-  const [amount, setAmount] = useState(QUOTA_PER_DOLLAR)
+  const [amount, setAmount] = useState(MIN_TRANSFER_AMOUNT_CNY)
 
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setAmount(QUOTA_PER_DOLLAR)
+      setAmount(MIN_TRANSFER_AMOUNT_CNY)
     }
   }, [open])
+  const maxAmount = accountBalanceCentsToCnyAmount(availableQuota)
+  const minimumTransferDisplay = formatAccountBalanceForPlanPurchase(
+    accountBalanceCnyToCents(MIN_TRANSFER_AMOUNT_CNY)
+  )
 
   const handleConfirm = async () => {
     const success = await onConfirm(amount)
@@ -83,7 +92,7 @@ export function TransferDialog({
               {t('Available Rewards')}
             </Label>
             <div className='text-2xl font-semibold'>
-              {formatQuota(availableQuota)}
+              {formatAccountBalanceForPlanPurchase(availableQuota)}
             </div>
           </div>
 
@@ -99,13 +108,13 @@ export function TransferDialog({
               type='number'
               value={amount}
               onChange={(e) => setAmount(Number(e.target.value))}
-              min={QUOTA_PER_DOLLAR}
-              max={availableQuota}
-              step={QUOTA_PER_DOLLAR}
+              min={MIN_TRANSFER_AMOUNT_CNY}
+              max={maxAmount}
+              step={MIN_TRANSFER_AMOUNT_CNY}
               className='font-mono text-lg'
             />
             <p className='text-muted-foreground text-xs'>
-              {t('Minimum:')} {formatQuota(QUOTA_PER_DOLLAR)}
+              {t('Minimum:')} {minimumTransferDisplay}
             </p>
           </div>
         </div>

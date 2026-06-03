@@ -19,7 +19,10 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useEffect } from 'react'
 import { Gift, ExternalLink, Loader2, Receipt, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatNumber } from '@/lib/format'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -69,7 +72,6 @@ interface RechargeFormCardProps {
   topupLink?: string
   loading?: boolean
   priceRatio?: number
-  usdExchangeRate?: number
   onOpenBilling?: () => void
   creemProducts?: CreemProduct[]
   enableCreemTopup?: boolean
@@ -103,7 +105,6 @@ export function RechargeFormCard({
   topupLink,
   loading,
   priceRatio = 1,
-  usdExchangeRate = 1,
   onOpenBilling,
   creemProducts,
   enableCreemTopup,
@@ -244,8 +245,7 @@ export function RechargeFormCard({
                       } = calculatePresetPricing(
                         preset.value,
                         priceRatio,
-                        discount,
-                        usdExchangeRate
+                        discount
                       )
                       return (
                         <Button
@@ -261,7 +261,9 @@ export function RechargeFormCard({
                         >
                           <div className='flex w-full items-center justify-between'>
                             <div className='text-base font-semibold sm:text-lg'>
-                              {formatNumber(displayValue)}
+                              {formatAccountBalanceForPlanPurchase(
+                                accountBalanceCnyToCents(displayValue)
+                              )}
                             </div>
                             {hasDiscount && (
                               <div className='text-xs font-medium text-green-600'>
@@ -498,9 +500,7 @@ export function RechargeFormCard({
                       {product.currency} {product.amount}
                     </span>
                     <span>
-                      {t('{{quota}} quota', {
-                        quota: formatNumber(product.quota),
-                      })}
+                      {formatAccountBalanceForPlanPurchase(product.quota)}
                     </span>
                   </div>
                   {product.description && (

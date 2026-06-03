@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { getCurrencyDisplay } from '@/lib/currency'
 import { formatPlanPrice } from './format'
 
 export interface AccountBalancePaymentInput {
@@ -37,26 +36,33 @@ export interface AccountBalancePaymentState {
   disabledReason: AccountBalancePaymentDisabledReason
 }
 
-function getAccountBalanceQuotaPerUnit(): number {
-  const { config } = getCurrencyDisplay()
-  return config.quotaPerUnit > 0 ? config.quotaPerUnit : 500000
+export function accountBalanceCentsToCnyAmount(balanceCents: number): number {
+  if (!Number.isFinite(balanceCents) || balanceCents <= 0) return 0
+  return balanceCents / 100
+}
+
+export function accountBalanceCnyToCents(amountCny: number): number {
+  if (!Number.isFinite(amountCny) || amountCny <= 0) return 0
+  return Math.round(amountCny * 100)
 }
 
 export function accountBalanceQuotaToCnyAmount(quota: number): number {
-  if (!Number.isFinite(quota) || quota <= 0) return 0
-  return quota / getAccountBalanceQuotaPerUnit()
+  return accountBalanceCentsToCnyAmount(quota)
 }
 
 export function formatAccountBalanceForPlanPurchase(quota: number): string {
-  return formatPlanPrice(accountBalanceQuotaToCnyAmount(quota), 'CNY')
+  return formatPlanPrice(accountBalanceCentsToCnyAmount(quota), 'CNY')
 }
 
 export function getAccountBalancePaymentState(
   input: AccountBalancePaymentInput
 ): AccountBalancePaymentState {
   const supported = input.currency?.toUpperCase() === 'CNY'
-  const balanceAmount = accountBalanceQuotaToCnyAmount(input.accountBalanceQuota)
-  const sufficient = supported && balanceAmount >= input.priceAmount
+  const requiredBalanceCents = Math.round(input.priceAmount * 100)
+  const sufficient =
+    supported &&
+    Number.isFinite(requiredBalanceCents) &&
+    input.accountBalanceQuota >= requiredBalanceCents
 
   return {
     supported,

@@ -1673,7 +1673,7 @@ git commit -m "fix(billing): 禁止模型调用写账户余额"
 - 修改：`web/default/src/features/wallet/lib/payment.ts`
 - 测试：`web/default/src/features/subscriptions/lib/subscription-balance.test.ts`、`web/default/src/features/wallet/wallet-layout.test.ts`
 
-- [ ] **步骤 1：编写前端红测**
+- [x] **步骤 1：编写前端红测**
 
 ```ts
 test('account balance cents convert to CNY for plan purchase', () => {
@@ -1693,7 +1693,7 @@ test('account balance cents convert to CNY for plan purchase', () => {
 邀请奖励转余额测试断言：`transfer-dialog.tsx` 输入 `40.00` 时 `use-affiliate.ts` 提交 `4000` 分，最小单位 / step 为 `0.01` CNY 或 1 分；`wallet/constants.ts` 中 `QUOTA_PER_DOLLAR = 500000` 不得被账户余额划转链路引用，修改旧倍率不影响提交值。
 
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 cd web/default
@@ -1702,7 +1702,7 @@ bun test src/features/subscriptions/lib/subscription-balance.test.ts src/feature
 
 预期：FAIL，当前 helper 仍除以 `quotaPerUnit`。
 
-- [ ] **步骤 3：实现 default helper**
+- [x] **步骤 3：实现 default helper**
 
 `subscription-balance.ts` 改为：
 
@@ -1720,11 +1720,11 @@ export function accountBalanceCnyToCents(amountCny: number): number {
 
 `getAccountBalancePaymentState` 用 `balanceCents >= Math.round(priceAmount * 100)`。
 
-- [ ] **步骤 4：更新钱包充值和产品展示**
+- [x] **步骤 4：更新钱包充值和产品展示**
 
 普通充值输入、预设、支付确认和邀请奖励转余额使用「到账余额 CNY 元」。Kyren 直接跳转策略不新增确认弹窗，但产品按钮/说明必须在跳转前展示到账余额 CNY 元，测试覆盖点击 `¥39.90` 产品后调用 Kyren checkout。`calculatePresetPricing` 不再用 `usdExchangeRate` / `quota_per_unit` 二次展示账户余额。确认弹窗展示到账余额和渠道实付金额。`transfer-dialog.tsx` / `hooks/use-affiliate.ts` 将 CNY 元输入转为分提交，最小值 / step 不再依赖 `QUOTA_PER_DOLLAR`。`creem-products-section.tsx`、`dialogs/creem-confirm-dialog.tsx` 和 `recharge-form-card.tsx` 中 Kyren 产品列表均通过 account-balance helper 展示 `quota` 分值，删除 `t('{{quota}} quota')`、`t('Quota') + formatNumber(product.quota)` / `formatNumber(product.quota)` 这类 raw quota 文案。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 cd web/default
@@ -1734,7 +1734,7 @@ bun run typecheck
 
 预期：测试 PASS，`tsc -b` 退出码 0。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add web/default/src/features/subscriptions/lib/subscription-balance.ts web/default/src/features/subscriptions/lib/subscription-balance.test.ts web/default/src/features/wallet/components/wallet-stats-card.tsx web/default/src/features/wallet/components/recharge-form-card.tsx web/default/src/features/wallet/components/creem-products-section.tsx web/default/src/features/wallet/components/dialogs/payment-confirm-dialog.tsx web/default/src/features/wallet/components/dialogs/creem-confirm-dialog.tsx web/default/src/features/wallet/index.tsx web/default/src/features/wallet/hooks/use-affiliate.ts web/default/src/features/wallet/constants.ts web/default/src/features/wallet/lib/payment.ts web/default/src/features/wallet/wallet-layout.test.ts

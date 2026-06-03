@@ -23,6 +23,7 @@ import { toast } from 'sonner'
 import { getSelf } from '@/lib/api'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useAuthStore } from '@/stores/auth-store'
+import { accountBalanceCnyToCents } from '@/features/subscriptions/lib'
 import {
   getAffiliateCode,
   getInvitationEntitlement,
@@ -75,12 +76,19 @@ export function useAffiliate() {
     copyToClipboard(affiliateLink)
   }, [affiliateLink, copyToClipboard])
 
-  // Transfer affiliate quota to balance
-  const transferQuota = useCallback(async (quota: number): Promise<boolean> => {
+  // Transfer affiliate CNY amount to balance cents
+  const transferQuota = useCallback(async (
+    amountCny: number
+  ): Promise<boolean> => {
+    const amountCents = accountBalanceCnyToCents(amountCny)
+    if (amountCents <= 0) {
+      toast.error(i18next.t('Transfer failed'))
+      return false
+    }
+
     try {
       setTransferring(true)
-      const response = await transferAffiliateQuota({ quota })
-
+      const response = await transferAffiliateQuota({ quota: amountCents })
       if (response.success) {
         toast.success(response.message || i18next.t('Transfer successful'))
         await getSelf()

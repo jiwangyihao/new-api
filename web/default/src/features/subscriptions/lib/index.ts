@@ -33,6 +33,8 @@ export {
   type PlanFormValues,
 } from './plan-form'
 export {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
   accountBalanceQuotaToCnyAmount,
   formatAccountBalanceForPlanPurchase,
   getAccountBalancePaymentState,

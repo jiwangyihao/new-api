@@ -9,7 +9,6 @@ import vi from '@/i18n/locales/vi.json'
 import zh from '@/i18n/locales/zh.json'
 
 const requiredKeys = [
-  '{{quota}} quota',
   'Amount is required',
   'Amount must be at least 0.01 CNY',
   'Duplicate Kyren top-up product ID',
@@ -72,7 +71,7 @@ const requiredKeys = [
   'Product status',
   'Refresh Kyren status',
   'Save Kyren settings',
-  'Quota must be at least 1',
+  'Credited balance must be at least ¥0.01',
   'Save the plan before syncing Kyren product status.',
   'Search Kyren top-up products...',
   'Server address is not configured',

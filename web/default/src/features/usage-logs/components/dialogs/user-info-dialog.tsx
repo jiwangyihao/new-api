@@ -166,7 +166,7 @@ export function UserInfoDialog({
                 {userAccountInfo.aff_quota !== undefined &&
                   userAccountInfo.aff_quota > 0 && (
                     <InfoItem
-                      label={t('Invitation Quota')}
+                      label={t('Invitation Account Balance')}
                       value={formatAccountBalanceForPlanPurchase(
                         userAccountInfo.aff_quota
                       )}
@@ -175,7 +175,7 @@ export function UserInfoDialog({
                 {userAccountInfo.aff_history_quota !== undefined &&
                   userAccountInfo.aff_history_quota > 0 && (
                     <InfoItem
-                      label={t('Invitation History Quota')}
+                      label={t('Invitation History Account Balance')}
                       value={formatAccountBalanceForPlanPurchase(
                         userAccountInfo.aff_history_quota
                       )}

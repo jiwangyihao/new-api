@@ -197,7 +197,7 @@ const TopupHistoryModal = ({ visible, onCancel, t }) => {
         render: renderPaymentMethod,
       },
       {
-        title: t('充值额度'),
+        title: t('到账余额'),
         dataIndex: 'amount',
         key: 'amount',
         render: (_, record) => {

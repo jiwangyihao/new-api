@@ -82,7 +82,7 @@ export function ProfileHeader({ profile, loading }: ProfileHeaderProps) {
     {
       label: t('Current Balance'),
       value: formatAccountBalanceForPlanPurchase(profile.quota),
-      description: t('Remaining quota'),
+      description: t('Remaining account balance'),
       icon: WalletCards,
     },
     {

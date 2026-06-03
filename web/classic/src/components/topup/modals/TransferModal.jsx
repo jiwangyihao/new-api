@@ -47,7 +47,7 @@ const TransferModal = ({
       title={
         <div className='flex items-center'>
           <CreditCard className='mr-2' size={18} />
-          {t('划转邀请额度')}
+          {t('划转邀请账户余额')}
         </div>
       }
       visible={openTransfer}
@@ -59,7 +59,7 @@ const TransferModal = ({
       <div className='space-y-4'>
         <div>
           <Typography.Text strong className='block mb-2'>
-            {t('可用邀请额度')}
+            {t('可用邀请账户余额')}
           </Typography.Text>
           <Input
             value={formatAccountBalance(availableCents)}
@@ -69,7 +69,7 @@ const TransferModal = ({
         </div>
         <div>
           <Typography.Text strong className='block mb-2'>
-            {t('划转额度')} · {t('最低') + minimumTransferDisplay}
+            {t('划转账户余额')} · {t('最低') + minimumTransferDisplay}
           </Typography.Text>
           <InputNumber
             min={MIN_TRANSFER_AMOUNT_CNY}

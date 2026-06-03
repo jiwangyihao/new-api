@@ -2078,7 +2078,7 @@ git commit -m "fix(web-classic): 账户余额按分展示和输入"
 - 修改：`web/classic/src/i18n/locales/{en,zh,fr,ja,ru,vi,zh-CN,zh-TW}.json`
 - 测试：`web/default/src/features/subscriptions/account-balance-i18n.test.ts`、`web/default/src/features/subscriptions/kyren-i18n.test.ts`、`web/classic/src/helpers/account-balance-i18n.test.js`。
 
-- [ ] **步骤 1：编写 i18n 红测**
+- [x] **步骤 1：编写 i18n 红测**
 
 新增测试断言新增 key 在所有 locale 存在：
 
@@ -2094,7 +2094,7 @@ const requiredAccountBalanceKeys = [
 
 classic 同样检查 8 个 locale。
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 cd web/default
@@ -2105,11 +2105,11 @@ bun test src/helpers/account-balance-i18n.test.js
 
 预期：FAIL，缺少 key。
 
-- [ ] **步骤 3：补齐翻译**
+- [x] **步骤 3：补齐翻译**
 
 更新所有 locale。账户余额链路使用 Account Balance / Wallet Balance / Top-up credit / 账户余额 / 到账余额，不再使用 Quota / 额度 / quota units。非账户余额用量文案不改。
 
-- [ ] **步骤 4：运行静态扫描**
+- [x] **步骤 4：运行静态扫描**
 
 使用 `search` 工具检查账户余额相关文件中误导性文案：
 
@@ -2119,7 +2119,7 @@ Quota|额度|quota units|{{quota}} quota|credited with quota
 
 每个命中必须分类记录：账户余额文件中的误导性命中必须修复；usage logs、channel used_quota、API key quota、subscription token 中允许保留。修复后重跑本扫描，直到所有命中都有明确分类且账户余额链路无误导性文案。
 
-- [ ] **步骤 5：运行 i18n 测试**
+- [x] **步骤 5：运行 i18n 测试**
 
 ```bash
 cd web/default
@@ -2130,7 +2130,7 @@ bun test src/helpers/account-balance-i18n.test.js
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add web/default/src/i18n/locales web/default/src/features/subscriptions/account-balance-i18n.test.ts web/classic/src/i18n/locales web/classic/src/helpers/account-balance-i18n.test.js

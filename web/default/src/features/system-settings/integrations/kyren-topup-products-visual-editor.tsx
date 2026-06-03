@@ -189,7 +189,7 @@ export function validateKyrenTopUpProducts(
     }
 
     if (!Number.isFinite(product.quota) || product.quota <= 0) {
-      throw new Error('Quota must be at least 1')
+      throw new Error('Credited balance must be at least ¥0.01')
     }
 
     return {

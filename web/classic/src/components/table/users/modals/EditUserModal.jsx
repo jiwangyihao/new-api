@@ -170,7 +170,7 @@ const EditUserModal = (props) => {
       });
       const { success, message } = res.data;
       if (success) {
-        showSuccess(t('调整额度成功'));
+        showSuccess(t('调整账户余额成功'));
         setAdjustModalOpen(false);
         setAdjustQuotaLocal('');
         setAdjustAmountLocal('');
@@ -198,16 +198,16 @@ const EditUserModal = (props) => {
     switch (adjustMode) {
       case 'add':
         result = current + Math.abs(val);
-        return `${t('当前额度')}：${formatAccountBalance(current)}，+${formatAccountBalance(
+        return `${t('当前账户余额')}：${formatAccountBalance(current)}，+${formatAccountBalance(
           Math.abs(val),
         )} = ${formatAccountBalance(result)}`;
       case 'subtract':
         result = current - Math.abs(val);
-        return `${t('当前额度')}：${formatAccountBalance(current)}，-${formatAccountBalance(
+        return `${t('当前账户余额')}：${formatAccountBalance(current)}，-${formatAccountBalance(
           Math.abs(val),
         )} = ${formatAccountBalance(result)}`;
       case 'override':
-        return `${t('当前额度')}：${formatAccountBalance(current)} → ${formatAccountBalance(
+        return `${t('当前账户余额')}：${formatAccountBalance(current)} → ${formatAccountBalance(
           val,
         )}`;
       default:
@@ -343,7 +343,7 @@ const EditUserModal = (props) => {
                           {t('权限设置')}
                         </Text>
                         <div className='text-xs text-gray-600'>
-                          {t('用户额度管理')}
+                          {t('用户账户余额管理')}
                         </div>
                       </div>
                     </div>
@@ -362,12 +362,12 @@ const EditUserModal = (props) => {
                       </Col>
 
                       <Col span={14}>
-                        <Form.Slot label={t('调整额度')}>
+                        <Form.Slot label={t('调整账户余额')}>
                           <Button
                             icon={<IconEdit />}
                             onClick={() => setAdjustModalOpen(true)}
                           >
-                            {t('调整额度')}
+                            {t('调整账户余额')}
                           </Button>
                         </Form.Slot>
                       </Col>
@@ -379,8 +379,8 @@ const EditUserModal = (props) => {
                           onClick={() => setShowQuotaInput((v) => !v)}
                         >
                           {showQuotaInput
-                            ? `▾ ${t('收起原生额度输入')}`
-                            : `▸ ${t('使用原生额度输入')}`}
+                            ? `▾ ${t('收起原生账户余额分输入')}`
+                            : `▸ ${t('使用原生账户余额分输入')}`}
                         </div>
                         <div
                           style={{ display: showQuotaInput ? 'block' : 'none' }}
@@ -388,8 +388,8 @@ const EditUserModal = (props) => {
                         >
                           <Form.InputNumber
                             field='quota'
-                            label={t('额度')}
-                            placeholder={t('请输入额度')}
+                            label={t('账户余额分')}
+                            placeholder={t('请输入账户余额分')}
                             style={{ width: '100%' }}
                             readonly
                           />
@@ -444,7 +444,7 @@ const EditUserModal = (props) => {
         formApiRef={formApiRef}
       />
 
-      {/* 调整额度模态框 */}
+      {/* 调整账户余额模态框 */}
       <Modal
         centered
         visible={adjustModalOpen}
@@ -460,7 +460,7 @@ const EditUserModal = (props) => {
         title={
           <div className='flex items-center'>
             <IconEdit className='mr-2' />
-            {t('调整额度')}
+            {t('调整账户余额')}
           </div>
         }
       >
@@ -520,18 +520,18 @@ const EditUserModal = (props) => {
           onClick={() => setShowAdjustQuotaRaw((v) => !v)}
         >
           {showAdjustQuotaRaw
-            ? `▾ ${t('收起原生额度输入')}`
-            : `▸ ${t('使用原生额度输入')}`}
+            ? `▾ ${t('收起原生账户余额分输入')}`
+            : `▸ ${t('使用原生账户余额分输入')}`}
         </div>
         <div
           style={{ display: showAdjustQuotaRaw ? 'block' : 'none' }}
           className='mt-2'
         >
           <div className='mb-1'>
-            <Text size='small'>{t('额度')}</Text>
+            <Text size='small'>{t('账户余额分')}</Text>
           </div>
           <InputNumber
-            placeholder={t('输入额度')}
+            placeholder={t('输入账户余额分')}
             value={adjustQuotaLocal}
             min={adjustMode === 'override' ? undefined : 0}
             onChange={(val) => {

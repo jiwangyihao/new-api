@@ -212,7 +212,7 @@ export function SidebarModulesCard() {
         {
           key: 'redemption',
           title: t('Redemption Codes'),
-          description: t('Manage redemption codes for quota top-up'),
+          description: t('Manage redemption codes for account balance top-up'),
         },
         {
           key: 'trial_code',

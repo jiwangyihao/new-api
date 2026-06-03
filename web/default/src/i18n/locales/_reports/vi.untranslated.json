@@ -1,10 +1,10 @@
 {
-  "Base input and output token prices for this tier.": "Base input and output token prices for this tier.",
-  "Each tier supports up to 2 conditions. The last tier without conditions is the fallback.": "Each tier supports up to 2 conditions. The last tier without conditions is the fallback.",
-  "Set separate prices for cache reads and writes.": "Set separate prices for cache reads and writes.",
   "adminOps.concurrency.title": "Concurrency and queue",
   "adminOps.description": "Read-only operational monitoring for system health, traffic, concurrency queues, channels, model performance, and recent errors.",
   "adminOps.failedToLoad": "Failed to load operations monitoring",
   "adminOps.failedToLoadDescription": "The monitoring snapshot or concurrency detail request failed. Refresh and check server logs if the problem continues.",
-  "adminOps.healthSummary.title": "System and dependency health"
+  "adminOps.healthSummary.title": "System and dependency health",
+  "Base input and output token prices for this tier.": "Base input and output token prices for this tier.",
+  "Each tier supports up to 2 conditions. The last tier without conditions is the fallback.": "Each tier supports up to 2 conditions. The last tier without conditions is the fallback.",
+  "Set separate prices for cache reads and writes.": "Set separate prices for cache reads and writes."
 }

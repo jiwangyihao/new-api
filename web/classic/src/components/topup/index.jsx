@@ -109,7 +109,7 @@ const TopUp = () => {
   const [activeSubscriptions, setActiveSubscriptions] = useState([]);
   const [allSubscriptions, setAllSubscriptions] = useState([]);
 
-  // 预设充值额度选项
+  // 预设到账余额选项
   const [presetAmounts, setPresetAmounts] = useState([]);
   const [selectedPreset, setSelectedPreset] = useState(null);
 
@@ -167,7 +167,7 @@ const TopUp = () => {
         showSuccess(t('兑换成功！'));
         Modal.success({
           title: t('兑换成功！'),
-          content: t('成功兑换额度：') + formatAccountBalance(data),
+          content: t('成功兑换账户余额：') + formatAccountBalance(data),
           centered: true,
         });
         if (userState.user) {
@@ -685,7 +685,7 @@ const TopUp = () => {
             setCreemProducts([]);
           }
 
-          // 如果没有自定义充值数量选项，根据最小充值金额生成预设充值额度选项
+          // 如果没有自定义充值数量选项，根据最低到账余额生成预设选项
           if (topupInfo.amount_options.length === 0) {
             setPresetAmounts(generatePresetAmounts(minTopUpValue));
           }
@@ -724,7 +724,7 @@ const TopUp = () => {
     }
   };
 
-  // 划转邀请额度
+  // 划转邀请账户余额
   const transfer = async (transferAmountCents) => {
     const amountCents = Number(
       transferAmountCents || accountBalanceCnyToCents(transferAmount),
@@ -737,7 +737,7 @@ const TopUp = () => {
     }
     const availableCents = Number(userState?.user?.aff_quota || 0);
     if (amountCents > availableCents) {
-      showError(t('划转金额不能大于可用邀请额度'));
+      showError(t('划转金额不能大于可用邀请账户余额'));
       return;
     }
     const res = await API.post(`/api/user/aff_transfer`, {
@@ -876,7 +876,7 @@ const TopUp = () => {
     setSelectedCreemProduct(null);
   };
 
-  // 选择预设充值额度
+  // 选择预设到账余额
   const selectPresetAmount = (preset) => {
     setTopUpCount(preset.value);
     setSelectedPreset(preset.value);
@@ -887,7 +887,7 @@ const TopUp = () => {
     setAmount(discountedAmount);
   };
 
-  // 根据最小充值金额生成预设充值额度选项
+  // 根据最低到账余额生成预设充值选项
   const generatePresetAmounts = (minAmount) => {
     const multipliers = [1, 5, 10, 30, 50, 100, 300, 500];
     return multipliers.map((multiplier) => ({

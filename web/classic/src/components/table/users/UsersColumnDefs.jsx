@@ -181,7 +181,7 @@ const renderInviteInfo = (text, record, t) => {
           {t('收益')}: {formatAccountBalance(record.aff_history_quota)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
-          {t('邀请余额')}: {formatAccountBalance(record.aff_quota)}
+          {t('邀请账户余额')}: {formatAccountBalance(record.aff_quota)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
           {record.inviter_id === 0

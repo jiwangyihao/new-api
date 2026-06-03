@@ -106,7 +106,7 @@ export const getRedemptionsColumns = ({
       },
     },
     {
-      title: t('额度'),
+      title: t('账户余额'),
       dataIndex: 'quota',
       render: (text, record) => {
         return (

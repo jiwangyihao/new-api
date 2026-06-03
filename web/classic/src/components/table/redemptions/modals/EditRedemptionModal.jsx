@@ -282,7 +282,7 @@ const EditRedemptionModal = (props) => {
                 </Card>
 
                 <Card className='!rounded-2xl shadow-sm border-0'>
-                  {/* Header: Quota Settings */}
+                  {/* Header: Account Balance Settings */}
                   <div className='flex items-center mb-2'>
                     <Avatar
                       size='small'
@@ -293,10 +293,10 @@ const EditRedemptionModal = (props) => {
                     </Avatar>
                     <div>
                       <Text className='text-lg font-medium'>
-                        {t('额度设置')}
+                        {t('余额设置')}
                       </Text>
                       <div className='text-xs text-gray-600'>
-                        {t('设置兑换码的额度和数量')}
+                        {t('设置兑换码的账户余额和数量')}
                       </div>
                     </div>
                   </div>
@@ -328,8 +328,8 @@ const EditRedemptionModal = (props) => {
                         onClick={() => setShowQuotaInput((v) => !v)}
                       >
                         {showQuotaInput
-                          ? `▾ ${t('收起原生额度输入')}`
-                          : `▸ ${t('使用原生额度输入')}`}
+                          ? `▾ ${t('收起原生账户余额分输入')}`
+                          : `▸ ${t('使用原生账户余额分输入')}`}
                       </div>
                       <div
                         style={{ display: showQuotaInput ? 'block' : 'none' }}
@@ -337,16 +337,16 @@ const EditRedemptionModal = (props) => {
                       >
                         <Form.InputNumber
                           field='quota'
-                          label={t('额度')}
-                          placeholder={t('输入额度')}
+                          label={t('账户余额分')}
+                          placeholder={t('输入账户余额分')}
                           rules={[
-                            { required: true, message: t('请输入额度') },
+                            { required: true, message: t('请输入账户余额分') },
                             {
                               validator: (rule, v) => {
                                 const num = parseInt(v, 10);
                                 return num > 0
                                   ? Promise.resolve()
-                                  : Promise.reject(t('额度必须大于0'));
+                                  : Promise.reject(t('账户余额分必须大于0'));
                               },
                             },
                           ]}

@@ -209,7 +209,7 @@ const InvitationCard = ({
             <div className='flex items-start gap-2'>
               <Badge dot type='success' />
               <Text type='tertiary' className='text-sm'>
-                {t('通过划转功能将奖励额度转入到您的账户余额中')}
+                {t('通过划转功能将奖励账户余额转入到您的账户余额中')}
               </Text>
             </div>
 

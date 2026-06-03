@@ -139,22 +139,22 @@ const UserInfoModal = ({
             </div>
           )}
 
-          {/* 邀请获得额度 */}
+          {/* 邀请获得账户余额 */}
           {userInfoData.aff_quota !== undefined &&
             userInfoData.aff_quota > 0 && (
               <div style={infoItemStyle}>
-                {renderLabel(t('邀请获得额度'), 'success')}
+                {renderLabel(t('邀请获得账户余额'), 'success')}
                 <div style={valueStyle}>
                   {formatAccountBalance(userInfoData.aff_quota)}
                 </div>
               </div>
             )}
 
-          {/* 邀请历史额度 */}
+          {/* 邀请历史账户余额 */}
           {userInfoData.aff_history_quota !== undefined &&
             userInfoData.aff_history_quota > 0 && (
               <div style={infoItemStyle}>
-                {renderLabel(t('邀请历史额度'), 'success')}
+                {renderLabel(t('邀请历史账户余额'), 'success')}
                 <div style={valueStyle}>
                   {formatAccountBalance(userInfoData.aff_history_quota)}
                 </div>

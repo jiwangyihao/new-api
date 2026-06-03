@@ -37,7 +37,7 @@ describe('validateKyrenTopUpProducts', () => {
     )
   })
 
-  test('rejects invalid amount, currency, quota, and empty id', () => {
+  test('rejects invalid amount, currency, credited balance, and empty id', () => {
     assert.throws(
       () => validateKyrenTopUpProducts([validProduct({ amount: '0.009' })]),
       /amount/i
@@ -48,7 +48,7 @@ describe('validateKyrenTopUpProducts', () => {
     )
     assert.throws(
       () => validateKyrenTopUpProducts([validProduct({ quota: 0 })]),
-      /quota/i
+      /Credited balance must be at least ¥0.01/
     )
     assert.throws(
       () => validateKyrenTopUpProducts([validProduct({ id: '   ' })]),
@@ -79,7 +79,7 @@ describe('validateKyrenTopUpProducts', () => {
     )
     assert.throws(
       () => validateKyrenTopUpProducts([validProduct({ quota: 0 })]),
-      /Quota must be at least 1/
+      /Credited balance must be at least ¥0.01/
     )
   })
 })

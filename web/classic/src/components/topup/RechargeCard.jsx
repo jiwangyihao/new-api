@@ -574,7 +574,7 @@ const RechargeCard = ({
                   onClick={topUp}
                   loading={isSubmitting}
                 >
-                  {t('兑换额度')}
+                  {t('兑换账户余额')}
                 </Button>
               </div>
             }
@@ -660,7 +660,7 @@ const RechargeCard = ({
             tab={
               <div className='flex items-center gap-2'>
                 <Wallet size={16} />
-                {t('额度充值')}
+                {t('账户余额充值')}
               </div>
             }
             itemKey='topup'

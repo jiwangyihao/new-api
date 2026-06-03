@@ -37,6 +37,7 @@ import { IconSearch } from '@douyinfe/semi-icons';
 import { API, timestamp2string } from '../../../helpers';
 import { isAdmin } from '../../../helpers/utils';
 import { useIsMobile } from '../../../hooks/common/useIsMobile';
+import { formatAccountBalance } from '../../../helpers/account-balance.js';
 const { Text } = Typography;
 
 // 状态映射配置
@@ -56,17 +57,13 @@ const PAYMENT_METHOD_MAP = {
   wxpay: '微信',
 };
 
-const formatCreditedBalanceCents = (cents) => {
-  return `¥${(cents / 100).toFixed(2)}`;
-};
-
 const getCreditedBalanceDisplay = (record) => {
-  const display = record?.credited_balance_display?.trim();
-  if (display) return display;
+  const display = record?.credited_balance_display;
+  if (typeof display === 'string' && display.trim()) return display.trim();
 
-  const cents = record?.credited_balance_cents;
-  if (typeof cents === 'number' && Number.isFinite(cents) && cents > 0) {
-    return formatCreditedBalanceCents(cents);
+  const cents = Number(record?.credited_balance_cents);
+  if (Number.isFinite(cents) && cents > 0) {
+    return formatAccountBalance(cents);
   }
 
   return '-';

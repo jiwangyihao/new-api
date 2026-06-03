@@ -24,9 +24,12 @@ import {
   downloadTextAsFile,
   showError,
   showSuccess,
-  renderQuota,
 } from '../../../../helpers';
-import { getQuotaPerUnit } from '../../../../helpers/quota';
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../../../helpers/account-balance.js';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
   Button,
@@ -41,7 +44,6 @@ import {
   Avatar,
   Row,
   Col,
-  InputNumber,
 } from '@douyinfe/semi-ui';
 import {
   IconCreditCard,
@@ -60,12 +62,9 @@ const EditRedemptionModal = (props) => {
   const formApiRef = useRef(null);
   const [showQuotaInput, setShowQuotaInput] = useState(false);
 
-  const quotaToCNYAmount = (quota) => Number(quota || 0) / getQuotaPerUnit();
-  const cnyAmountToQuota = (amount) => Math.round(Number(amount || 0) * getQuotaPerUnit());
-
   const getInitValues = () => ({
     name: '',
-    quota: cnyAmountToQuota(100),
+    quota: accountBalanceCnyToCents(100),
     amount: 100,
     count: 1,
     expired_time: null,
@@ -85,7 +84,10 @@ const EditRedemptionModal = (props) => {
       } else {
         data.expired_time = new Date(data.expired_time * 1000);
       }
-      data.amount = Number(quotaToCNYAmount(data.quota || 0).toFixed(0));
+      data.amount =
+        data.type === 'subscription'
+          ? 0
+          : accountBalanceCentsToCnyAmount(data.quota || 0);
       formApiRef.current?.setValues({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -104,15 +106,18 @@ const EditRedemptionModal = (props) => {
   }, [props.editingRedemption.id]);
 
   const submit = async (values) => {
-    let name = values.name;
-    if (!isEdit && (!name || name === '')) {
-      name = renderQuota(values.quota);
-    }
     setLoading(true);
     let localInputs = { ...values };
+    const isSubscription = localInputs.type === 'subscription';
     localInputs.count = parseInt(localInputs.count) || 0;
-    localInputs.quota = localInputs.amount;
-    if (localInputs.quota <= 0) {
+    localInputs.quota = isSubscription
+      ? 0
+      : accountBalanceCnyToCents(localInputs.amount);
+    let name = values.name;
+    if (!isEdit && (!name || name === '')) {
+      name = formatAccountBalance(localInputs.quota);
+    }
+    if (!isSubscription && localInputs.quota <= 0) {
       showError(t('请输入金额'));
       setLoading(false);
       return;
@@ -312,7 +317,7 @@ const EditRedemptionModal = (props) => {
                           formApiRef.current?.setValue('amount', amount);
                           formApiRef.current?.setValue(
                             'quota',
-                            cnyAmountToQuota(amount),
+                            accountBalanceCnyToCents(amount),
                           );
                         }}
                         showClear
@@ -326,7 +331,10 @@ const EditRedemptionModal = (props) => {
                           ? `▾ ${t('收起原生额度输入')}`
                           : `▸ ${t('使用原生额度输入')}`}
                       </div>
-                      <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                      <div
+                        style={{ display: showQuotaInput ? 'block' : 'none' }}
+                        className='mt-2'
+                      >
                         <Form.InputNumber
                           field='quota'
                           label={t('额度')}
@@ -347,7 +355,7 @@ const EditRedemptionModal = (props) => {
                             formApiRef.current?.setValue('quota', quota);
                             formApiRef.current?.setValue(
                               'amount',
-                              Number(quotaToCNYAmount(quota).toFixed(0)),
+                              accountBalanceCentsToCnyAmount(quota),
                             );
                           }}
                           style={{ width: '100%' }}

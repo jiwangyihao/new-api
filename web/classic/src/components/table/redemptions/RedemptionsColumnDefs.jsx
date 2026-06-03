@@ -20,7 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Tag, Button, Space, Popover, Dropdown } from '@douyinfe/semi-ui';
 import { IconMore } from '@douyinfe/semi-icons';
-import { renderQuota, timestamp2string } from '../../../helpers';
+import { timestamp2string } from '../../../helpers';
+import { formatAccountBalance } from '../../../helpers/account-balance.js';
 import {
   REDEMPTION_STATUS,
   REDEMPTION_STATUS_MAP,
@@ -107,11 +108,13 @@ export const getRedemptionsColumns = ({
     {
       title: t('额度'),
       dataIndex: 'quota',
-      render: (text) => {
+      render: (text, record) => {
         return (
           <div>
             <Tag color='grey' shape='circle'>
-              {renderQuota(parseInt(text))}
+              {record.type === 'subscription'
+                ? '-'
+                : formatAccountBalance(parseInt(text))}
             </Tag>
           </div>
         );

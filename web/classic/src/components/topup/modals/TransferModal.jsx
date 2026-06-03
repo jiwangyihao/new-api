@@ -20,6 +20,13 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Modal, Typography, Input, InputNumber } from '@douyinfe/semi-ui';
 import { CreditCard } from 'lucide-react';
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../../helpers/account-balance.js';
+
+const MIN_TRANSFER_AMOUNT_CNY = 0.01;
 
 const TransferModal = ({
   t,
@@ -27,11 +34,14 @@ const TransferModal = ({
   transfer,
   handleTransferCancel,
   userState,
-  renderQuota,
-  getQuotaPerUnit,
   transferAmount,
   setTransferAmount,
 }) => {
+  const availableCents = Number(userState?.user?.aff_quota || 0);
+  const maxAmount = accountBalanceCentsToCnyAmount(availableCents);
+  const minimumTransferDisplay = formatAccountBalance(
+    accountBalanceCnyToCents(MIN_TRANSFER_AMOUNT_CNY),
+  );
   return (
     <Modal
       title={
@@ -41,7 +51,7 @@ const TransferModal = ({
         </div>
       }
       visible={openTransfer}
-      onOk={transfer}
+      onOk={() => transfer(accountBalanceCnyToCents(transferAmount))}
       onCancel={handleTransferCancel}
       maskClosable={false}
       centered
@@ -52,20 +62,22 @@ const TransferModal = ({
             {t('可用邀请额度')}
           </Typography.Text>
           <Input
-            value={renderQuota(userState?.user?.aff_quota)}
+            value={formatAccountBalance(availableCents)}
             disabled
             className='!rounded-lg'
           />
         </div>
         <div>
           <Typography.Text strong className='block mb-2'>
-            {t('划转额度')} · {t('最低') + renderQuota(getQuotaPerUnit())}
+            {t('划转额度')} · {t('最低') + minimumTransferDisplay}
           </Typography.Text>
           <InputNumber
-            min={getQuotaPerUnit()}
-            max={userState?.user?.aff_quota || 0}
+            min={MIN_TRANSFER_AMOUNT_CNY}
+            max={maxAmount}
             value={transferAmount}
-            onChange={(value) => setTransferAmount(value)}
+            onChange={(value) => setTransferAmount(Number(value || 0))}
+            step={MIN_TRANSFER_AMOUNT_CNY}
+            precision={2}
             className='w-full !rounded-lg'
           />
         </div>

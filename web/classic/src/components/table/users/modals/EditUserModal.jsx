@@ -23,13 +23,12 @@ import {
   API,
   showError,
   showSuccess,
-  renderQuota,
-  getCurrencyConfig,
 } from '../../../../helpers';
 import {
-  quotaToDisplayAmount,
-  displayAmountToQuota,
-} from '../../../../helpers/quota';
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../../../helpers/account-balance.js';
 import { useIsMobile } from '../../../../hooks/common/useIsMobile';
 import {
   Button,
@@ -93,7 +92,6 @@ const EditUserModal = (props) => {
     remark: '',
   });
 
-
   const handleCancel = () => props.handleClose();
 
   const loadUser = async () => {
@@ -103,9 +101,7 @@ const EditUserModal = (props) => {
     const { success, message, data } = res.data;
     if (success) {
       data.password = '';
-      data.quota_amount = Number(
-        quotaToDisplayAmount(data.quota || 0).toFixed(6),
-      );
+      data.quota_amount = accountBalanceCentsToCnyAmount(data.quota || 0);
       setInputs({ ...getInitValues(), ...data });
     } else {
       showError(message);
@@ -156,9 +152,14 @@ const EditUserModal = (props) => {
 
   /* --------------------- atomic quota adjust -------------------- */
   const adjustQuota = async () => {
-    const quotaVal = parseInt(adjustQuotaLocal) || 0;
+    const quotaVal = accountBalanceCnyToCents(adjustAmountLocal);
     if (quotaVal <= 0 && adjustMode !== 'override') return;
-    if (adjustMode === 'override' && (adjustQuotaLocal === '' || adjustQuotaLocal == null)) return;
+    if (
+      adjustMode === 'override' &&
+      (adjustAmountLocal === '' || adjustAmountLocal == null)
+    ) {
+      return;
+    }
     setAdjustLoading(true);
     try {
       const res = await API.post('/api/user/manage', {
@@ -177,9 +178,7 @@ const EditUserModal = (props) => {
         if (userRes.data.success) {
           const data = userRes.data.data;
           data.password = '';
-          data.quota_amount = Number(
-            quotaToDisplayAmount(data.quota || 0).toFixed(6),
-          );
+          data.quota_amount = accountBalanceCentsToCnyAmount(data.quota || 0);
           setInputs({ ...getInitValues(), ...data });
         }
         props.refresh();
@@ -199,12 +198,18 @@ const EditUserModal = (props) => {
     switch (adjustMode) {
       case 'add':
         result = current + Math.abs(val);
-        return `${t('当前额度')}：${renderQuota(current)}，+${renderQuota(Math.abs(val))} = ${renderQuota(result)}`;
+        return `${t('当前额度')}：${formatAccountBalance(current)}，+${formatAccountBalance(
+          Math.abs(val),
+        )} = ${formatAccountBalance(result)}`;
       case 'subtract':
         result = current - Math.abs(val);
-        return `${t('当前额度')}：${renderQuota(current)}，-${renderQuota(Math.abs(val))} = ${renderQuota(result)}`;
+        return `${t('当前额度')}：${formatAccountBalance(current)}，-${formatAccountBalance(
+          Math.abs(val),
+        )} = ${formatAccountBalance(result)}`;
       case 'override':
-        return `${t('当前额度')}：${renderQuota(current)} → ${renderQuota(val)}`;
+        return `${t('当前额度')}：${formatAccountBalance(current)} → ${formatAccountBalance(
+          val,
+        )}`;
       default:
         return '';
     }
@@ -348,9 +353,9 @@ const EditUserModal = (props) => {
                         <Form.InputNumber
                           field='quota_amount'
                           label={t('金额')}
-                          prefix={getCurrencyConfig().symbol}
-                          precision={6}
-                          step={0.000001}
+                          prefix='¥'
+                          precision={2}
+                          step={0.01}
                           style={{ width: '100%' }}
                           readonly
                         />
@@ -377,7 +382,10 @@ const EditUserModal = (props) => {
                             ? `▾ ${t('收起原生额度输入')}`
                             : `▸ ${t('使用原生额度输入')}`}
                         </div>
-                        <div style={{ display: showQuotaInput ? 'block' : 'none' }} className='mt-2'>
+                        <div
+                          style={{ display: showQuotaInput ? 'block' : 'none' }}
+                          className='mt-2'
+                        >
                           <Form.InputNumber
                             field='quota'
                             label={t('额度')}
@@ -485,12 +493,12 @@ const EditUserModal = (props) => {
             <Text size='small'>{t('金额')}</Text>
           </div>
           <InputNumber
-            prefix={getCurrencyConfig().symbol}
+            prefix='¥'
             placeholder={t('输入金额')}
             value={adjustAmountLocal}
-            precision={6}
+            precision={2}
             min={adjustMode === 'override' ? undefined : 0}
-            step={0.000001}
+            step={0.01}
             onChange={(val) => {
               const amount = val === '' || val == null ? '' : val;
               setAdjustAmountLocal(amount);
@@ -498,8 +506,8 @@ const EditUserModal = (props) => {
                 amount === ''
                   ? ''
                   : adjustMode === 'override'
-                    ? displayAmountToQuota(amount)
-                    : displayAmountToQuota(Math.abs(amount)),
+                    ? accountBalanceCnyToCents(amount)
+                    : accountBalanceCnyToCents(Math.abs(amount)),
               );
             }}
             style={{ width: '100%' }}
@@ -515,7 +523,10 @@ const EditUserModal = (props) => {
             ? `▾ ${t('收起原生额度输入')}`
             : `▸ ${t('使用原生额度输入')}`}
         </div>
-        <div style={{ display: showAdjustQuotaRaw ? 'block' : 'none' }} className='mt-2'>
+        <div
+          style={{ display: showAdjustQuotaRaw ? 'block' : 'none' }}
+          className='mt-2'
+        >
           <div className='mb-1'>
             <Text size='small'>{t('额度')}</Text>
           </div>
@@ -530,13 +541,13 @@ const EditUserModal = (props) => {
                 quota === ''
                   ? ''
                   : adjustMode === 'override'
-                    ? Number(quotaToDisplayAmount(quota).toFixed(6))
-                    : Number(quotaToDisplayAmount(Math.abs(quota)).toFixed(6)),
+                    ? accountBalanceCentsToCnyAmount(quota)
+                    : accountBalanceCentsToCnyAmount(Math.abs(quota)),
               );
             }}
             style={{ width: '100%' }}
             showClear
-            step={500000}
+            step={100}
           />
         </div>
       </Modal>

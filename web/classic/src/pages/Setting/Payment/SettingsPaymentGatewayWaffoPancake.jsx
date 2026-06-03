@@ -129,12 +129,12 @@ export default function SettingsPaymentGatewayWaffoPancake(props) {
       values.WaffoPancakeEnabled &&
       Number(values.WaffoPancakeUnitPrice) <= 0
     ) {
-      showError(t('充值价格必须大于 0'));
+      showError(t('渠道实付单价必须大于 0'));
       return;
     }
 
     if (values.WaffoPancakeEnabled && Number(values.WaffoPancakeMinTopUp) < 1) {
-      showError(t('最低充值美元数量必须大于 0'));
+      showError(t('最低到账余额（CNY）必须大于 0'));
       return;
     }
 
@@ -384,18 +384,18 @@ export default function SettingsPaymentGatewayWaffoPancake(props) {
               <Form.InputNumber
                 field='WaffoPancakeUnitPrice'
                 precision={2}
-                label={t('充值价格（x元/美金）')}
-                placeholder={t('例如：7，就是7元/美金')}
-                extraText={t('按 1 美元对应的站内价格填写')}
+                label={t('渠道实付单价（每 1 CNY 到账余额）')}
+                placeholder={t('例如：1.00，表示每到账 1 CNY 余额实付 1.00')}
+                extraText={t('Waffo Pancake 对每 1 CNY 到账账户余额收取的实付单价')}
                 min={0}
               />
             </Col>
             <Col xs={24} sm={12} md={8} lg={8} xl={8}>
               <Form.InputNumber
                 field='WaffoPancakeMinTopUp'
-                label={t('最低充值美元数量')}
-                placeholder={t('例如：2，就是最低充值2$')}
-                extraText={t('用户单次最少可充值的美元数量')}
+                label={t('最低到账余额（CNY）')}
+                placeholder={t('例如：2，表示最低到账 2 CNY 余额')}
+                extraText={t('用户单次最少到账的账户余额，单位 CNY')}
                 min={1}
               />
             </Col>

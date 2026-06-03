@@ -28,13 +28,13 @@ import {
   Space,
 } from '@douyinfe/semi-ui';
 import { Copy, Users, BarChart2, TrendingUp, Gift, Zap } from 'lucide-react';
+import { formatAccountBalance } from '../../helpers/account-balance.js';
 
 const { Text } = Typography;
 
 const InvitationCard = ({
   t,
   userState,
-  renderQuota,
   setOpenTransfer,
   affLink,
   handleAffLinkClick,
@@ -100,7 +100,7 @@ const InvitationCard = ({
                       className='text-base sm:text-2xl font-bold mb-2'
                       style={{ color: 'white' }}
                     >
-                      {renderQuota(userState?.user?.aff_quota || 0)}
+                      {formatAccountBalance(userState?.user?.aff_quota || 0)}
                     </div>
                     <div className='flex items-center justify-center text-sm'>
                       <TrendingUp
@@ -125,7 +125,7 @@ const InvitationCard = ({
                       className='text-base sm:text-2xl font-bold mb-2'
                       style={{ color: 'white' }}
                     >
-                      {renderQuota(userState?.user?.aff_history_quota || 0)}
+                      {formatAccountBalance(userState?.user?.aff_history_quota || 0)}
                     </div>
                     <div className='flex items-center justify-center text-sm'>
                       <BarChart2

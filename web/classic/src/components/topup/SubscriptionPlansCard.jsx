@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -97,6 +97,17 @@ function submitEpayForm({ url, params }) {
   document.body.removeChild(form);
 }
 
+function createBalanceIdempotencyKey() {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+  } catch (e) {
+    // ignore
+  }
+  return `balance-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 const SubscriptionPlansCard = ({
   t,
   loading = false,
@@ -110,6 +121,8 @@ const SubscriptionPlansCard = ({
   activeSubscriptions = [],
   allSubscriptions = [],
   reloadSubscriptionSelf,
+  accountBalanceCents = 0,
+  reloadUserBalance,
   withCard = true,
 }) => {
   const [open, setOpen] = useState(false);
@@ -117,18 +130,21 @@ const SubscriptionPlansCard = ({
   const [paying, setPaying] = useState(false);
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const balanceIdempotencyKeyRef = useRef('');
 
   const epayMethods = useMemo(() => getEpayMethods(payMethods), [payMethods]);
 
   const openBuy = (p) => {
     setSelectedPlan(p);
     setSelectedEpayMethod(epayMethods?.[0]?.type || '');
+    balanceIdempotencyKeyRef.current = createBalanceIdempotencyKey();
     setOpen(true);
   };
 
   const closeBuy = () => {
     setOpen(false);
     setSelectedPlan(null);
+    balanceIdempotencyKeyRef.current = '';
     setPaying(false);
   };
 
@@ -211,6 +227,39 @@ const SubscriptionPlansCard = ({
       if (res.data?.message === 'success') {
         submitEpayForm({ url: res.data.url, params: res.data.data });
         showSuccess(t('已发起支付'));
+        closeBuy();
+      } else {
+        const errorMsg =
+          typeof res.data?.data === 'string'
+            ? res.data.data
+            : res.data?.message || t('支付失败');
+        showError(errorMsg);
+      }
+    } catch (e) {
+      showError(t('支付请求失败'));
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const payBalance = async () => {
+    const plan = selectedPlan?.plan;
+    if (!plan?.id) {
+      showError(t('请选择订阅套餐'));
+      return;
+    }
+    if (!balanceIdempotencyKeyRef.current) {
+      balanceIdempotencyKeyRef.current = createBalanceIdempotencyKey();
+    }
+    setPaying(true);
+    try {
+      const res = await API.post('/api/subscription/balance/pay', {
+        plan_id: plan.id,
+        idempotency_key: balanceIdempotencyKeyRef.current,
+      });
+      if (res.data?.success || res.data?.message === 'success') {
+        showSuccess(t('订阅购买成功'));
+        await Promise.all([reloadSubscriptionSelf?.(), reloadUserBalance?.()]);
         closeBuy();
       } else {
         const errorMsg =
@@ -709,6 +758,8 @@ const SubscriptionPlansCard = ({
         onPayStripe={payStripe}
         onPayCreem={payCreem}
         onPayEpay={payEpay}
+        onPayBalance={payBalance}
+        accountBalanceCents={accountBalanceCents}
       />
     </>
   );

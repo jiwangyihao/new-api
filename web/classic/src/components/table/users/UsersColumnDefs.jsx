@@ -23,7 +23,6 @@ import {
   Space,
   Tag,
   Tooltip,
-  Progress,
   Popover,
   Typography,
   Dropdown,
@@ -34,6 +33,7 @@ import {
   renderQuota,
   timestamp2string,
 } from '../../../helpers';
+import { formatAccountBalance } from '../../../helpers/account-balance.js';
 
 const renderTimestamp = (text) => (text ? timestamp2string(text) : '-');
 
@@ -143,19 +143,14 @@ const renderStatistics = (text, record, showEnableDisableModal, t) => {
 const renderQuotaUsage = (text, record, t) => {
   const { Paragraph } = Typography;
   const used = parseInt(record.used_quota) || 0;
-  const remain = parseInt(record.quota) || 0;
-  const total = used + remain;
-  const percent = total > 0 ? (remain / total) * 100 : 0;
+  const balance = parseInt(record.quota) || 0;
   const popoverContent = (
     <div className='text-xs p-2'>
       <Paragraph copyable={{ content: renderQuota(used) }}>
         {t('已用额度')}: {renderQuota(used)}
       </Paragraph>
-      <Paragraph copyable={{ content: renderQuota(remain) }}>
-        {t('剩余额度')}: {renderQuota(remain)} ({percent.toFixed(0)}%)
-      </Paragraph>
-      <Paragraph copyable={{ content: renderQuota(total) }}>
-        {t('总额度')}: {renderQuota(total)}
+      <Paragraph copyable={{ content: formatAccountBalance(balance) }}>
+        {t('账户余额')}: {formatAccountBalance(balance)}
       </Paragraph>
     </div>
   );
@@ -163,13 +158,9 @@ const renderQuotaUsage = (text, record, t) => {
     <Popover content={popoverContent} position='top'>
       <Tag color='white' shape='circle'>
         <div className='flex flex-col items-end'>
-          <span className='text-xs leading-none'>{`${renderQuota(remain)} / ${renderQuota(total)}`}</span>
-          <Progress
-            percent={percent}
-            aria-label='quota usage'
-            format={() => `${percent.toFixed(0)}%`}
-            style={{ width: '100%', marginTop: '1px', marginBottom: 0 }}
-          />
+          <span className='text-xs leading-none'>
+            {formatAccountBalance(balance)}
+          </span>
         </div>
       </Tag>
     </Popover>
@@ -187,7 +178,10 @@ const renderInviteInfo = (text, record, t) => {
           {t('邀请')}: {renderNumber(record.aff_count)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
-          {t('收益')}: {renderQuota(record.aff_history_quota)}
+          {t('收益')}: {formatAccountBalance(record.aff_history_quota)}
+        </Tag>
+        <Tag color='white' shape='circle' className='!text-xs'>
+          {t('邀请余额')}: {formatAccountBalance(record.aff_quota)}
         </Tag>
         <Tag color='white' shape='circle' className='!text-xs'>
           {record.inviter_id === 0
@@ -333,7 +327,7 @@ export const getUsersColumns = ({
         renderStatistics(text, record, showEnableDisableModal, t),
     },
     {
-      title: t('剩余额度/总额度'),
+      title: t('账户余额'),
       key: 'quota_usage',
       render: (text, record) => renderQuotaUsage(text, record, t),
     },

@@ -235,17 +235,17 @@ export default function SettingsPaymentGateway(props) {
               <Form.InputNumber
                 field='StripeUnitPrice'
                 precision={2}
-                label={t('充值价格（x元/美金）')}
-                placeholder={t('例如：7，就是7元/美金')}
-                extraText={t('按 1 美元对应的站内价格填写')}
+                label={t('渠道实付单价（每 1 CNY 到账余额）')}
+                placeholder={t('例如：8.00，表示每到账 1 CNY 余额实付 8.00')}
+                extraText={t('Stripe 对每 1 CNY 到账账户余额收取的实付单价')}
               />
             </Col>
             <Col xs={24} sm={24} md={8} lg={8} xl={8}>
               <Form.InputNumber
                 field='StripeMinTopUp'
-                label={t('最低充值美元数量')}
-                placeholder={t('例如：2，就是最低充值2$')}
-                extraText={t('用户单次最少可充值的美元数量')}
+                label={t('最低到账余额（CNY）')}
+                placeholder={t('例如：2，表示最低到账 2 CNY 余额')}
+                extraText={t('用户单次最少到账的账户余额，单位 CNY')}
               />
             </Col>
             <Col xs={24} sm={24} md={8} lg={8} xl={8}>

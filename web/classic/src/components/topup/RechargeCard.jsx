@@ -48,6 +48,10 @@ import {
 import { IconGift } from '@douyinfe/semi-icons';
 import { useMinimumLoadingTime } from '../../hooks/common/useMinimumLoadingTime';
 import { getCurrencyConfig } from '../../helpers/render';
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../helpers/account-balance.js';
 import SubscriptionPlansCard from './SubscriptionPlansCard';
 
 const { Text } = Typography;
@@ -62,11 +66,9 @@ const RechargeCard = ({
   presetAmounts,
   selectedPreset,
   selectPresetAmount,
-  formatLargeNumber,
   priceRatio,
   topUpCount,
   minTopUp,
-  renderQuotaWithAmount,
   getAmount,
   setTopUpCount,
   setSelectedPreset,
@@ -96,6 +98,7 @@ const RechargeCard = ({
   activeSubscriptions = [],
   allSubscriptions = [],
   reloadSubscriptionSelf,
+  reloadUserBalance,
 }) => {
   const onlineFormApiRef = useRef(null);
   const redeemFormApiRef = useRef(null);
@@ -149,7 +152,7 @@ const RechargeCard = ({
                     className='text-base sm:text-2xl font-bold mb-2'
                     style={{ color: 'white' }}
                   >
-                    {renderQuota(userState?.user?.quota)}
+                    {formatAccountBalance(userState?.user?.quota)}
                   </div>
                   <div className='flex items-center justify-center text-sm'>
                     <Wallet
@@ -245,7 +248,7 @@ const RechargeCard = ({
                   <Col xs={24} sm={24} md={24} lg={10} xl={10}>
                     <Form.InputNumber
                       field='topUpCount'
-                      label={t('充值数量')}
+                      label={t('到账余额')}
                       disabled={
                         !enableOnlineTopUp &&
                         !enableStripeTopUp &&
@@ -253,7 +256,8 @@ const RechargeCard = ({
                         !enableWaffoPancakeTopUp
                       }
                       placeholder={
-                        t('充值数量，最低 ') + renderQuotaWithAmount(minTopUp)
+                        t('到账余额，最低 ') +
+                        formatAccountBalance(accountBalanceCnyToCents(minTopUp))
                       }
                       value={topUpCount}
                       min={minTopUp}
@@ -293,7 +297,7 @@ const RechargeCard = ({
                           }
                         >
                           <Text type='secondary' className='text-red-600'>
-                            {t('实付金额：')}
+                            {t('渠道实付金额：')}
                             <span style={{ color: 'red' }}>
                               {renderAmount()}
                             </span>
@@ -378,9 +382,11 @@ const RechargeCard = ({
                               minTopupVal > Number(topUpCount || 0) ? (
                               <Tooltip
                                 content={
-                                  t('此支付方式最低充值金额为') +
+                                  t('此支付方式最低到账余额为') +
                                   ' ' +
-                                  minTopupVal
+                                  formatAccountBalance(
+                                    accountBalanceCnyToCents(minTopupVal),
+                                  )
                                 }
                                 key={payMethod.type}
                               >
@@ -403,10 +409,9 @@ const RechargeCard = ({
                 <Form.Slot
                   label={
                     <div className='flex items-center gap-2'>
-                      <span>{t('选择充值额度')}</span>
+                      <span>{t('选择到账余额')}</span>
                       {(() => {
-                        const { symbol, rate, type } = getCurrencyConfig();
-                        if (type === 'USD') return null;
+                        const { symbol } = getCurrencyConfig();
 
                         return (
                           <span
@@ -416,7 +421,7 @@ const RechargeCard = ({
                               fontWeight: 'normal',
                             }}
                           >
-                            (1 $ = {rate.toFixed(2)} {symbol})
+                            {t('渠道实付金额按当前支付配置计算')} · {symbol}
                           </span>
                         );
                       })()}
@@ -435,34 +440,10 @@ const RechargeCard = ({
                       const actualPay = discountedPrice;
                       const save = originalPrice - discountedPrice;
 
-                      // 根据当前货币类型换算显示金额和数量
-                      const { symbol, rate, type } = getCurrencyConfig();
-                      const statusStr = localStorage.getItem('status');
-                      let usdRate = 7; // 默认CNY汇率
-                      try {
-                        if (statusStr) {
-                          const s = JSON.parse(statusStr);
-                          usdRate = s?.usd_exchange_rate || 7;
-                        }
-                      } catch (e) {}
-
-                      let displayValue = preset.value; // 显示的数量
-                      let displayActualPay = actualPay;
-                      let displaySave = save;
-
-                      if (type === 'USD') {
-                        // 数量保持USD，价格从CNY转USD
-                        displayActualPay = actualPay / usdRate;
-                        displaySave = save / usdRate;
-                      } else if (type === 'CNY') {
-                        // 数量转CNY，价格已是CNY
-                        displayValue = preset.value * usdRate;
-                      } else if (type === 'CUSTOM') {
-                        // 数量和价格都转自定义货币
-                        displayValue = preset.value * rate;
-                        displayActualPay = (actualPay / usdRate) * rate;
-                        displaySave = (save / usdRate) * rate;
-                      }
+                      const { symbol } = getCurrencyConfig();
+                      const balanceCents = accountBalanceCnyToCents(
+                        preset.value,
+                      );
 
                       return (
                         <Card
@@ -491,7 +472,7 @@ const RechargeCard = ({
                               style={{ margin: '0 0 8px 0' }}
                             >
                               <Coins size={18} />
-                              {formatLargeNumber(displayValue)} {symbol}
+                              {formatAccountBalance(balanceCents)}
                               {hasDiscount && (
                                 <Tag style={{ marginLeft: 4 }} color='green'>
                                   {t('折').includes('off')
@@ -512,9 +493,9 @@ const RechargeCard = ({
                               }}
                             >
                               {t('实付')} {symbol}
-                              {displayActualPay.toFixed(2)}，
+                              {actualPay.toFixed(2)}，
                               {hasDiscount
-                                ? `${t('节省')} ${symbol}${displaySave.toFixed(2)}`
+                                ? `${t('节省')} ${symbol}${save.toFixed(2)}`
                                 : `${t('节省')} ${symbol}0.00`}
                             </div>
                           </div>
@@ -540,7 +521,7 @@ const RechargeCard = ({
                           {product.name}
                         </div>
                         <div className='text-sm text-gray-600 mb-2'>
-                          {t('充值额度')}: {product.quota}
+                          {t('到账余额')}: {formatAccountBalance(product.quota)}
                         </div>
                         <div className='text-lg font-semibold text-blue-600'>
                           {product.currency === 'EUR' ? '€' : '$'}
@@ -669,6 +650,8 @@ const RechargeCard = ({
                 activeSubscriptions={activeSubscriptions}
                 allSubscriptions={allSubscriptions}
                 reloadSubscriptionSelf={reloadSubscriptionSelf}
+                accountBalanceCents={userState?.user?.quota}
+                reloadUserBalance={reloadUserBalance}
                 withCard={false}
               />
             </div>

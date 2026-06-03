@@ -25,10 +25,12 @@ import {
   showInfo,
   showSuccess,
   renderQuota,
-  renderQuotaWithAmount,
   copy,
-  getQuotaPerUnit,
 } from '../../helpers';
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../helpers/account-balance.js';
 import { Modal, Toast } from '@douyinfe/semi-ui';
 import { useTranslation } from 'react-i18next';
 import { UserContext } from '../../context/User';
@@ -39,6 +41,11 @@ import InvitationCard from './InvitationCard';
 import TransferModal from './modals/TransferModal';
 import PaymentConfirmModal from './modals/PaymentConfirmModal';
 import TopupHistoryModal from './modals/TopupHistoryModal';
+
+const MIN_TRANSFER_AMOUNT_CNY = 0.01;
+const MIN_TRANSFER_AMOUNT_CENTS = accountBalanceCnyToCents(
+  MIN_TRANSFER_AMOUNT_CNY,
+);
 
 const TopUp = () => {
   const { t } = useTranslation();
@@ -160,7 +167,7 @@ const TopUp = () => {
         showSuccess(t('兑换成功！'));
         Modal.success({
           title: t('兑换成功！'),
-          content: t('成功兑换额度：') + renderQuota(data),
+          content: t('成功兑换额度：') + formatAccountBalance(data),
           centered: true,
         });
         if (userState.user) {
@@ -219,7 +226,10 @@ const TopUp = () => {
       await requestAmountByPayment(payment);
 
       if (topUpCount < selectedMinTopUp) {
-        showError(t('充值数量不能小于') + selectedMinTopUp);
+        showError(
+          t('到账余额不能小于') +
+            formatAccountBalance(accountBalanceCnyToCents(selectedMinTopUp)),
+        );
         return;
       }
       setOpen(true);
@@ -267,7 +277,10 @@ const TopUp = () => {
     }
 
     if (topUpCount < minTopUp) {
-      showError('充值数量不能小于' + minTopUp);
+      showError(
+        t('到账余额不能小于') +
+          formatAccountBalance(accountBalanceCnyToCents(minTopUp)),
+      );
       return;
     }
     setConfirmLoading(true);
@@ -381,7 +394,10 @@ const TopUp = () => {
   const waffoTopUp = async (payMethodIndex) => {
     try {
       if (topUpCount < waffoMinTopUp) {
-        showError(t('充值数量不能小于') + waffoMinTopUp);
+        showError(
+          t('到账余额不能小于') +
+            formatAccountBalance(accountBalanceCnyToCents(waffoMinTopUp)),
+        );
         return;
       }
       setPaymentLoading(true);
@@ -439,7 +455,10 @@ const TopUp = () => {
   const waffoPancakeTopUp = async () => {
     const minTopUpValue = Number(waffoPancakeMinTopUp || 1);
     if (topUpCount < minTopUpValue) {
-      showError(t('充值数量不能小于') + minTopUpValue);
+      showError(
+        t('到账余额不能小于') +
+          formatAccountBalance(accountBalanceCnyToCents(minTopUpValue)),
+      );
       return;
     }
 
@@ -706,13 +725,23 @@ const TopUp = () => {
   };
 
   // 划转邀请额度
-  const transfer = async () => {
-    if (transferAmount < getQuotaPerUnit()) {
-      showError(t('划转金额最低为') + ' ' + renderQuota(getQuotaPerUnit()));
+  const transfer = async (transferAmountCents) => {
+    const amountCents = Number(
+      transferAmountCents || accountBalanceCnyToCents(transferAmount),
+    );
+    if (!Number.isFinite(amountCents) || amountCents < MIN_TRANSFER_AMOUNT_CENTS) {
+      showError(
+        t('划转金额最低为') + ' ' + formatAccountBalance(MIN_TRANSFER_AMOUNT_CENTS),
+      );
+      return;
+    }
+    const availableCents = Number(userState?.user?.aff_quota || 0);
+    if (amountCents > availableCents) {
+      showError(t('划转金额不能大于可用邀请额度'));
       return;
     }
     const res = await API.post(`/api/user/aff_transfer`, {
-      quota: transferAmount,
+      quota: amountCents,
     });
     const { success, message } = res.data;
     if (success) {
@@ -742,7 +771,7 @@ const TopUp = () => {
   useEffect(() => {
     // 始终获取最新用户数据，确保余额等统计信息准确
     getUserQuota().then();
-    setTransferAmount(getQuotaPerUnit());
+    setTransferAmount(MIN_TRANSFER_AMOUNT_CNY);
   }, []);
 
   useEffect(() => {
@@ -858,11 +887,6 @@ const TopUp = () => {
     setAmount(discountedAmount);
   };
 
-  // 格式化大数字显示
-  const formatLargeNumber = (num) => {
-    return num.toString();
-  };
-
   // 根据最小充值金额生成预设充值额度选项
   const generatePresetAmounts = (minAmount) => {
     const multipliers = [1, 5, 10, 30, 50, 100, 300, 500];
@@ -880,8 +904,6 @@ const TopUp = () => {
         transfer={transfer}
         handleTransferCancel={handleTransferCancel}
         userState={userState}
-        renderQuota={renderQuota}
-        getQuotaPerUnit={getQuotaPerUnit}
         transferAmount={transferAmount}
         setTransferAmount={setTransferAmount}
       />
@@ -894,7 +916,6 @@ const TopUp = () => {
         handleCancel={handleCancel}
         confirmLoading={confirmLoading}
         topUpCount={topUpCount}
-        renderQuotaWithAmount={renderQuotaWithAmount}
         amountLoading={amountLoading}
         renderAmount={renderAmount}
         payWay={payWay}
@@ -931,7 +952,7 @@ const TopUp = () => {
               {selectedCreemProduct.price}
             </p>
             <p>
-              {t('充值额度')}：{selectedCreemProduct.quota}
+              {t('到账余额')}：{formatAccountBalance(selectedCreemProduct.quota)}
             </p>
             <p>{t('是否确认充值？')}</p>
           </>
@@ -952,11 +973,9 @@ const TopUp = () => {
           presetAmounts={presetAmounts}
           selectedPreset={selectedPreset}
           selectPresetAmount={selectPresetAmount}
-          formatLargeNumber={formatLargeNumber}
           priceRatio={priceRatio}
           topUpCount={topUpCount}
           minTopUp={minTopUp}
-          renderQuotaWithAmount={renderQuotaWithAmount}
           getAmount={getAmount}
           setTopUpCount={setTopUpCount}
           setSelectedPreset={setSelectedPreset}
@@ -984,11 +1003,11 @@ const TopUp = () => {
           activeSubscriptions={activeSubscriptions}
           allSubscriptions={allSubscriptions}
           reloadSubscriptionSelf={getSubscriptionSelf}
+          reloadUserBalance={getUserQuota}
         />
         <InvitationCard
           t={t}
           userState={userState}
-          renderQuota={renderQuota}
           setOpenTransfer={setOpenTransfer}
           affLink={affLink}
           handleAffLinkClick={handleAffLinkClick}

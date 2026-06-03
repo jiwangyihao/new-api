@@ -1964,7 +1964,7 @@ git commit -m "fix(web-default): 管理端余额输入改为元"
 - 修改：`web/classic/src/components/table/usage-logs/modals/UserInfoModal.jsx`
 - 测试：`web/classic/src/helpers/account-balance.test.js`。
 
-- [ ] **步骤 1：创建 classic helper 红测**
+- [x] **步骤 1：创建 classic helper 红测**
 
 ```js
 import assert from 'node:assert/strict'
@@ -2000,7 +2000,7 @@ describe('classic account balance helper', () => {
 })
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 cd web/classic
@@ -2009,7 +2009,7 @@ bun test src/helpers/account-balance.test.js
 
 预期：FAIL，文件不存在。
 
-- [ ] **步骤 3：实现 classic helper**
+- [x] **步骤 3：实现 classic helper**
 
 创建 `account-balance.js`：
 
@@ -2031,7 +2031,7 @@ export const formatAccountBalance = (cents) => {
 }
 ```
 
-- [ ] **步骤 4：替换 classic 账户余额入口**
+- [x] **步骤 4：替换 classic 账户余额入口**
 
 将以下账户余额显示 / 输入从 `renderQuota`、`renderQuotaWithAmount`、`getQuotaPerUnit`、`quotaToDisplayAmount`、`displayAmountToQuota` 改为 `accountBalance` helper：
 
@@ -2052,7 +2052,7 @@ export const formatAccountBalance = (cents) => {
 
 classic 测试矩阵必须覆盖每个规格入口至少一个分制行为或禁止旧 helper 的 source 断言：`RechargeCard`、`InvitationCard`、`TransferModal`、`RedemptionsColumnDefs`、`EditRedemptionModal`、`CheckinCalendar`、`SettingsCreditLimit`、`SettingsCheckin`、`EditUserModal`、`UserInfoModal`、`TopupHistoryModal` 分别验证 `4000 -> ¥40.00`、`40.00 -> 4000` 或使用 `credited_balance_*`，不得只依赖 eslint。
 
-- [ ] **步骤 5：运行 classic 测试 / lint**
+- [x] **步骤 5：运行 classic 测试 / lint**
 
 ```bash
 cd web/classic
@@ -2062,7 +2062,7 @@ bun run eslint -- --quiet src/helpers/account-balance.js src/components/topup/in
 
 预期：测试 PASS，eslint 对目标文件无错误。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add web/classic/src/helpers web/classic/src/components/topup web/classic/src/components/table/redemptions web/classic/src/components/settings/personal web/classic/src/pages/Setting/Operation web/classic/src/pages/Setting/Payment web/classic/src/components/table/users web/classic/src/components/table/usage-logs

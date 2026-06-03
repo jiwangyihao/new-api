@@ -20,6 +20,7 @@ For commercial licensing, please contact support@quantumnous.com
 import React from 'react';
 import { Modal, Badge } from '@douyinfe/semi-ui';
 import { renderQuota, renderNumber } from '../../../../helpers';
+import { formatAccountBalance } from '../../../../helpers/account-balance.js';
 
 const UserInfoModal = ({
   showUserInfo,
@@ -96,7 +97,9 @@ const UserInfoModal = ({
           <div style={rowStyle}>
             <div style={colStyle}>
               {renderLabel(t('余额'), 'success')}
-              <div style={valueStyle}>{renderQuota(userInfoData.quota)}</div>
+              <div style={valueStyle}>
+                {formatAccountBalance(userInfoData.quota)}
+              </div>
             </div>
             <div style={colStyle}>
               {renderLabel(t('已用额度'), 'warning')}
@@ -142,7 +145,18 @@ const UserInfoModal = ({
               <div style={infoItemStyle}>
                 {renderLabel(t('邀请获得额度'), 'success')}
                 <div style={valueStyle}>
-                  {renderQuota(userInfoData.aff_quota)}
+                  {formatAccountBalance(userInfoData.aff_quota)}
+                </div>
+              </div>
+            )}
+
+          {/* 邀请历史额度 */}
+          {userInfoData.aff_history_quota !== undefined &&
+            userInfoData.aff_history_quota > 0 && (
+              <div style={infoItemStyle}>
+                {renderLabel(t('邀请历史额度'), 'success')}
+                <div style={valueStyle}>
+                  {formatAccountBalance(userInfoData.aff_history_quota)}
                 </div>
               </div>
             )}

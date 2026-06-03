@@ -34,6 +34,11 @@ import {
 const { Text } = Typography;
 import { API, showError, showSuccess } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../../helpers/account-balance';
 import { BookOpen, Plus, Trash2 } from 'lucide-react';
 
 export default function SettingsPaymentGatewayCreem(props) {
@@ -56,6 +61,7 @@ export default function SettingsPaymentGatewayCreem(props) {
     price: 0,
     quota: 0,
     currency: 'USD',
+    balance_cny: 0,
   });
   const formApiRef = useRef(null);
 
@@ -141,7 +147,10 @@ export default function SettingsPaymentGatewayCreem(props) {
   const openProductModal = (product = null) => {
     if (product) {
       setEditingProduct(product);
-      setProductForm({ ...product });
+      setProductForm({
+        ...product,
+        balance_cny: accountBalanceCentsToCnyAmount(product.quota),
+      });
     } else {
       setEditingProduct(null);
       setProductForm({
@@ -149,6 +158,7 @@ export default function SettingsPaymentGatewayCreem(props) {
         productId: '',
         price: 0,
         quota: 0,
+        balance_cny: 0,
         currency: 'USD',
       });
     }
@@ -163,22 +173,26 @@ export default function SettingsPaymentGatewayCreem(props) {
       productId: '',
       price: 0,
       quota: 0,
+      balance_cny: 0,
       currency: 'USD',
     });
   };
 
   const saveProduct = () => {
+    const quotaCents = accountBalanceCnyToCents(productForm.balance_cny);
     if (
       !productForm.name ||
       !productForm.productId ||
       productForm.price <= 0 ||
-      productForm.quota <= 0 ||
+      quotaCents <= 0 ||
       !productForm.currency
     ) {
       showError(t('请填写完整的产品信息'));
       return;
     }
 
+    const savedProduct = { ...productForm, quota: quotaCents };
+    delete savedProduct.balance_cny;
     let newProducts = [...products];
     if (editingProduct) {
       // 编辑现有产品
@@ -186,7 +200,7 @@ export default function SettingsPaymentGatewayCreem(props) {
         (p) => p.productId === editingProduct.productId,
       );
       if (index !== -1) {
-        newProducts[index] = { ...productForm };
+        newProducts[index] = savedProduct;
       }
     } else {
       // 添加新产品
@@ -194,7 +208,7 @@ export default function SettingsPaymentGatewayCreem(props) {
         showError(t('产品ID已存在'));
         return;
       }
-      newProducts.push({ ...productForm });
+      newProducts.push(savedProduct);
     }
 
     setProducts(newProducts);
@@ -225,9 +239,10 @@ export default function SettingsPaymentGatewayCreem(props) {
         `${record.currency === 'EUR' ? '€' : '$'}${price}`,
     },
     {
-      title: t('充值额度'),
+      title: t('到账余额'),
       dataIndex: 'quota',
       key: 'quota',
+      render: (_, record) => formatAccountBalance(record.quota),
     },
     {
       title: t('操作'),
@@ -409,16 +424,17 @@ export default function SettingsPaymentGatewayCreem(props) {
           </div>
           <div>
             <Text strong className='block mb-2'>
-              {t('充值额度')}
+              {t('到账余额（CNY）')}
             </Text>
             <InputNumber
-              value={productForm.quota}
+              value={productForm.balance_cny}
               onChange={(value) =>
-                setProductForm({ ...productForm, quota: value })
+                setProductForm({ ...productForm, balance_cny: value })
               }
-              placeholder={t('例如：100000')}
-              min={1}
-              precision={0}
+              placeholder={t('例如：100.00')}
+              min={0.01}
+              precision={2}
+              step={0.01}
               size='large'
               className='w-full'
             />

@@ -76,7 +76,7 @@ export default function SettingsGeneralPayment(props) {
       inputs.AmountOptions.trim() !== '' &&
       !verifyJSON(inputs.AmountOptions)
     ) {
-      showError(t('自定义充值数量选项不是合法的 JSON 数组'));
+      showError(t('账户余额充值选项（CNY）不是合法的 JSON 数组'));
       return;
     }
 
@@ -85,7 +85,7 @@ export default function SettingsGeneralPayment(props) {
       inputs.AmountDiscount.trim() !== '' &&
       !verifyJSON(inputs.AmountDiscount)
     ) {
-      showError(t('充值金额折扣配置不是合法的 JSON 对象'));
+      showError(t('到账余额折扣配置不是合法的 JSON 对象'));
       return;
     }
 
@@ -192,13 +192,13 @@ export default function SettingsGeneralPayment(props) {
             <Col xs={24} sm={24} md={12} lg={12} xl={12}>
               <Form.TextArea
                 field='AmountOptions'
-                label={t('自定义充值数量选项')}
+                label={t('账户余额充值选项（CNY）')}
                 placeholder={t(
                   '为一个 JSON 数组，例如：[10, 20, 50, 100, 200, 500]',
                 )}
                 autosize
                 extraText={t(
-                  '设置用户可选择的充值数量选项，例如：[10, 20, 50, 100, 200, 500]',
+                  '设置用户可选择的到账账户余额，单位 CNY，例如：[10, 20, 50, 100, 200, 500]',
                 )}
               />
             </Col>
@@ -207,13 +207,13 @@ export default function SettingsGeneralPayment(props) {
             <Col span={24}>
               <Form.TextArea
                 field='AmountDiscount'
-                label={t('充值金额折扣配置')}
+                label={t('到账余额折扣配置')}
                 placeholder={t(
                   '为一个 JSON 对象，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
                 )}
                 autosize
                 extraText={t(
-                  '设置不同充值金额对应的折扣，键为充值金额，值为折扣率，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
+                  '设置不同到账余额对应的折扣，键为 CNY 到账余额，值为折扣率，例如：{"100": 0.95, "200": 0.9, "500": 0.85}',
                 )}
               />
             </Col>

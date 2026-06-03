@@ -28,7 +28,7 @@ import {
   Divider,
   Tooltip,
 } from '@douyinfe/semi-ui';
-import { Crown, CalendarClock, Package } from 'lucide-react';
+import { Crown, CalendarClock, Package, WalletCards } from 'lucide-react';
 import { SiStripe } from 'react-icons/si';
 import { IconCreditCard } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../../helpers';
@@ -37,6 +37,7 @@ import {
   formatSubscriptionDuration,
   formatSubscriptionResetPeriod,
 } from '../../../helpers/subscriptionFormat';
+import { formatAccountBalance } from '../../../helpers/account-balance.js';
 
 const { Text } = Typography;
 
@@ -56,6 +57,8 @@ const SubscriptionPurchaseModal = ({
   onPayStripe,
   onPayCreem,
   onPayEpay,
+  onPayBalance,
+  accountBalanceCents = 0,
 }) => {
   const plan = selectedPlan?.plan;
   const totalAmount = Number(plan?.total_amount || 0);
@@ -69,11 +72,20 @@ const SubscriptionPurchaseModal = ({
   const hasStripe = enableStripeTopUp && !!plan?.stripe_price_id;
   const hasCreem = enableCreemTopUp && !!plan?.creem_product_id;
   const hasEpay = enableOnlineTopUp && epayMethods.length > 0;
-  const hasAnyPayment = hasStripe || hasCreem || hasEpay;
+  const hasBalancePayment = true;
+  const hasAnyPayment = hasBalancePayment || hasStripe || hasCreem || hasEpay;
   const purchaseLimit = Number(purchaseLimitInfo?.limit || 0);
   const purchaseCount = Number(purchaseLimitInfo?.count || 0);
   const purchaseLimitReached =
     purchaseLimit > 0 && purchaseCount >= purchaseLimit;
+  const balanceCents = Number(accountBalanceCents || 0);
+  const balanceSupportsPlan =
+    String(plan?.currency || 'CNY').toUpperCase() === 'CNY';
+  const balanceSufficient =
+    balanceSupportsPlan &&
+    balanceCents >= Math.round(Number(plan?.price_amount || 0) * 100);
+  const balancePaymentDisabled =
+    paying || purchaseLimitReached || !balanceSupportsPlan || !balanceSufficient;
 
   return (
     <Modal
@@ -156,6 +168,14 @@ const SubscriptionPurchaseModal = ({
                   {displayPrice}
                 </Text>
               </div>
+              <div className='flex justify-between items-center'>
+                <Text strong className='text-slate-700 dark:text-slate-200'>
+                  {t('账户余额')}：
+                </Text>
+                <Text className='text-slate-900 dark:text-slate-100'>
+                  {formatAccountBalance(balanceCents)}
+                </Text>
+              </div>
             </div>
           </Card>
 
@@ -168,12 +188,39 @@ const SubscriptionPurchaseModal = ({
               closeIcon={null}
             />
           )}
+          {hasBalancePayment && (!balanceSupportsPlan || !balanceSufficient) && (
+            <Banner
+              type='warning'
+              description={
+                balanceSupportsPlan
+                  ? t('账户余额不足，请先充值。')
+                  : t('账户余额支付仅支持 CNY 套餐。')
+              }
+              className='!rounded-xl'
+              closeIcon={null}
+            />
+          )}
 
           {hasAnyPayment ? (
             <div className='space-y-3'>
               <Text size='small' type='tertiary'>
                 {t('选择支付方式')}：
               </Text>
+              {hasBalancePayment && (
+                <Button
+                  theme='light'
+                  className='w-full justify-between'
+                  icon={<WalletCards size={14} />}
+                  onClick={onPayBalance}
+                  loading={paying}
+                  disabled={balancePaymentDisabled}
+                >
+                  <span>{t('余额支付')}</span>
+                  <Text size='small' type='tertiary'>
+                    {formatAccountBalance(balanceCents)}
+                  </Text>
+                </Button>
+              )}
 
               {/* Stripe / Creem */}
               {(hasStripe || hasCreem) && (

@@ -37,7 +37,8 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import Turnstile from 'react-turnstile';
-import { API, showError, showSuccess, renderQuota } from '../../../../helpers';
+import { API, showError, showSuccess } from '../../../../helpers';
+import { formatAccountBalance } from '../../../../helpers/account-balance.js';
 
 const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
   const [loading, setLoading] = useState(false);
@@ -133,7 +134,7 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
       const { success, data, message } = res.data;
       if (success) {
         showSuccess(
-          t('签到成功！获得') + ' ' + renderQuota(data.quota_awarded),
+          t('签到成功！获得') + ' ' + formatAccountBalance(data.quota_awarded),
         );
         // 刷新签到状态
         fetchCheckinStatus(currentMonth);
@@ -189,7 +190,7 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
     if (isCheckedIn) {
       return (
         <Tooltip
-          content={`${t('获得')} ${renderQuota(quotaAwarded)}`}
+          content={`${t('获得')} ${formatAccountBalance(quotaAwarded)}`}
           position='top'
         >
           <div className='absolute inset-0 flex flex-col items-center justify-center cursor-pointer'>
@@ -197,7 +198,7 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
               <Check size={14} className='text-white' strokeWidth={3} />
             </div>
             <div className='text-[10px] font-medium text-green-600 dark:text-green-400 leading-none'>
-              {renderQuota(quotaAwarded)}
+              {formatAccountBalance(quotaAwarded)}
             </div>
           </div>
         </Tooltip>
@@ -298,13 +299,13 @@ const CheckinCalendar = ({ t, status, turnstileEnabled, turnstileSiteKey }) => {
           </div>
           <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
             <div className='text-xl font-bold text-orange-600'>
-              {renderQuota(monthlyQuota, 6)}
+              {formatAccountBalance(monthlyQuota)}
             </div>
             <div className='text-xs text-gray-500'>{t('本月获得')}</div>
           </div>
           <div className='text-center p-2.5 bg-slate-50 dark:bg-slate-800 rounded-lg'>
             <div className='text-xl font-bold text-blue-600'>
-              {renderQuota(checkinData.stats?.total_quota || 0, 6)}
+              {formatAccountBalance(checkinData.stats?.total_quota || 0)}
             </div>
             <div className='text-xs text-gray-500'>{t('累计获得')}</div>
           </div>

@@ -21,6 +21,10 @@ import React from 'react';
 import { Modal, Typography, Card, Skeleton } from '@douyinfe/semi-ui';
 import { SiAlipay, SiWechat, SiStripe } from 'react-icons/si';
 import { CreditCard } from 'lucide-react';
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalance,
+} from '../../../helpers/account-balance.js';
 
 const { Text } = Typography;
 
@@ -31,7 +35,6 @@ const PaymentConfirmModal = ({
   handleCancel,
   confirmLoading,
   topUpCount,
-  renderQuotaWithAmount,
   amountLoading,
   renderAmount,
   payWay,
@@ -65,15 +68,15 @@ const PaymentConfirmModal = ({
           <div className='space-y-3'>
             <div className='flex justify-between items-center'>
               <Text strong className='text-slate-700 dark:text-slate-200'>
-                {t('充值数量')}：
+                {t('到账余额')}：
               </Text>
               <Text className='text-slate-900 dark:text-slate-100'>
-                {renderQuotaWithAmount(topUpCount)}
+                {formatAccountBalance(accountBalanceCnyToCents(topUpCount))}
               </Text>
             </div>
             <div className='flex justify-between items-center'>
               <Text strong className='text-slate-700 dark:text-slate-200'>
-                {t('实付金额')}：
+                {t('渠道实付金额')}：
               </Text>
               {amountLoading ? (
                 <Skeleton.Title style={{ width: '60px', height: '16px' }} />

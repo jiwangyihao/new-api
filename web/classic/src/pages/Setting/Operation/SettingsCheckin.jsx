@@ -27,14 +27,30 @@ import {
   showWarning,
 } from '../../../helpers';
 import { useTranslation } from 'react-i18next';
+import {
+  accountBalanceCentsToCnyAmount,
+  accountBalanceCnyToCents,
+} from '../../../helpers/account-balance.js';
+
+const CHECKIN_ACCOUNT_BALANCE_FIELDS = new Set([
+  'checkin_setting.min_quota',
+  'checkin_setting.max_quota',
+]);
+
+const toFormAmountValue = (value) =>
+  value === '' || value == null ? '' : String(value);
 
 export default function SettingsCheckin(props) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [inputs, setInputs] = useState({
     'checkin_setting.enabled': false,
-    'checkin_setting.min_quota': 1000,
-    'checkin_setting.max_quota': 10000,
+    'checkin_setting.min_quota': toFormAmountValue(
+      accountBalanceCentsToCnyAmount(1000),
+    ),
+    'checkin_setting.max_quota': toFormAmountValue(
+      accountBalanceCentsToCnyAmount(10000),
+    ),
   });
   const refForm = useRef();
   const [inputsRow, setInputsRow] = useState(inputs);
@@ -49,9 +65,11 @@ export default function SettingsCheckin(props) {
     const updateArray = compareObjects(inputs, inputsRow);
     if (!updateArray.length) return showWarning(t('你似乎并没有修改什么'));
     const requestQueue = updateArray.map((item) => {
-      let value = '';
+      let value;
       if (typeof inputs[item.key] === 'boolean') {
         value = String(inputs[item.key]);
+      } else if (CHECKIN_ACCOUNT_BALANCE_FIELDS.has(item.key)) {
+        value = String(accountBalanceCnyToCents(inputs[item.key]));
       } else {
         value = String(inputs[item.key]);
       }
@@ -84,7 +102,9 @@ export default function SettingsCheckin(props) {
     const currentInputs = {};
     for (let key in props.options) {
       if (Object.keys(inputs).includes(key)) {
-        currentInputs[key] = props.options[key];
+        currentInputs[key] = CHECKIN_ACCOUNT_BALANCE_FIELDS.has(key)
+          ? toFormAmountValue(accountBalanceCentsToCnyAmount(props.options[key]))
+          : props.options[key];
       }
     }
     setInputs(currentInputs);
@@ -105,7 +125,7 @@ export default function SettingsCheckin(props) {
               type='tertiary'
               style={{ marginBottom: 16, display: 'block' }}
             >
-              {t('签到功能允许用户每日签到获取随机额度奖励')}
+              {t('签到功能允许用户每日签到获取随机 CNY 账户余额奖励')}
             </Typography.Text>
             <Row gutter={16}>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
@@ -121,20 +141,28 @@ export default function SettingsCheckin(props) {
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
                   field={'checkin_setting.min_quota'}
-                  label={t('签到最小额度')}
-                  placeholder={t('签到奖励的最小额度')}
+                  label={t('签到最小账户余额奖励')}
+                  placeholder={t('例如：1.00')}
                   onChange={handleFieldChange('checkin_setting.min_quota')}
                   min={0}
+                  step={0.01}
+                  precision={2}
+                  suffix={t('元')}
+                  extraText={t('单位：CNY 元，保存后按账户余额分生效')}
                   disabled={!inputs['checkin_setting.enabled']}
                 />
               </Col>
               <Col xs={24} sm={12} md={8} lg={8} xl={8}>
                 <Form.InputNumber
                   field={'checkin_setting.max_quota'}
-                  label={t('签到最大额度')}
-                  placeholder={t('签到奖励的最大额度')}
+                  label={t('签到最大账户余额奖励')}
+                  placeholder={t('例如：10.00')}
                   onChange={handleFieldChange('checkin_setting.max_quota')}
                   min={0}
+                  step={0.01}
+                  precision={2}
+                  suffix={t('元')}
+                  extraText={t('单位：CNY 元，保存后按账户余额分生效')}
                   disabled={!inputs['checkin_setting.enabled']}
                 />
               </Col>

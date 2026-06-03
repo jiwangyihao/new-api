@@ -30,6 +30,7 @@ import {
   IconSend,
 } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../helpers';
+import { formatAccountBalance } from '../../helpers/account-balance.js';
 import { createSectionTitle } from '../../helpers/dashboard';
 
 export const useDashboardStats = (
@@ -50,7 +51,7 @@ export const useDashboardStats = (
         items: [
           {
             title: t('当前余额'),
-            value: renderQuota(userState?.user?.quota),
+            value: formatAccountBalance(userState?.user?.quota),
             icon: <IconMoneyExchangeStroked />,
             avatarColor: 'blue',
             trendData: [],

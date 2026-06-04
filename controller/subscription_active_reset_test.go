@@ -17,7 +17,7 @@ func setupSubscriptionActiveResetTestDB(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}))
 }
 
 func performSetActiveSubscriptionRequest(t *testing.T, userID int, body string) *httptest.ResponseRecorder {

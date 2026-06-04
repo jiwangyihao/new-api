@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "Minimum par défaut d’avertissements d’abus GPT",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Les limites des offres et les limites automatiques basées sur la concurrence ne peuvent jamais être inférieures à cette valeur.",
     "Save GPT abuse limits": "Enregistrer les limites d’abus GPT",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Configurez l’interruption temporaire du service GPT lorsque les avertissements de sécurité en amont atteignent la limite quotidienne."
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Configurez l’interruption temporaire du service GPT lorsque les avertissements de sécurité en amont atteignent la limite quotidienne.",
+    "Activate a subscription to see GPT safety warning status.": "Activez un abonnement pour voir l’état des avertissements de sécurité GPT.",
+    "GPT safety warning limit reached": "Limite d’avertissements de sécurité GPT atteinte",
+    "GPT safety warnings are observation only": "Les avertissements de sécurité GPT sont uniquement observés",
+    "GPT safety warnings unavailable": "Avertissements de sécurité GPT indisponibles",
+    "GPT safety warnings will pause service at the daily limit": "Les avertissements de sécurité GPT suspendront le service à la limite quotidienne",
+    "GPT service is paused": "Le service GPT est suspendu",
+    "GPT service resumes at {{time}}": "Le service GPT reprend à {{time}}",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "L’interruption du service est activée ; atteindre la limite suspend l’accès GPT jusqu’au lendemain.",
+    "Warnings are counted for visibility; service is not paused automatically.": "Les avertissements sont comptabilisés pour visibilité ; le service n’est pas suspendu automatiquement."
   }
 }

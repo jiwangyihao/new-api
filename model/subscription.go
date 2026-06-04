@@ -186,15 +186,16 @@ type SubscriptionPlan struct {
 	// Total quota (amount in quota units, 0 = unlimited)
 	TotalAmount int64 `json:"total_amount" gorm:"type:bigint;not null;default:0"`
 
-	MonthlyTokenLimit  int64   `json:"monthly_token_limit" gorm:"type:bigint;not null;default:0"`
-	ConcurrencyLimit   int     `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
-	QueueCapacity      int     `json:"queue_capacity" gorm:"type:int;not null;default:0"`
-	IsTrial            bool    `json:"is_trial" gorm:"default:false"`
-	InviteTrial        bool    `json:"invite_trial" gorm:"default:false"`
-	PublicVisible      bool    `json:"public_visible" gorm:"default:true"`
-	TrialDurationHours int     `json:"trial_duration_hours" gorm:"type:int;not null;default:0"`
-	RewardEligible     bool    `json:"reward_eligible" gorm:"default:true"`
-	BusinessCode       *string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
+	MonthlyTokenLimit    int64   `json:"monthly_token_limit" gorm:"type:bigint;not null;default:0"`
+	ConcurrencyLimit     int     `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
+	QueueCapacity        int     `json:"queue_capacity" gorm:"type:int;not null;default:0"`
+	GPTAbuseWarningLimit int     `json:"gpt_abuse_warning_limit" gorm:"type:int;not null;default:0"`
+	IsTrial              bool    `json:"is_trial" gorm:"default:false"`
+	InviteTrial          bool    `json:"invite_trial" gorm:"default:false"`
+	PublicVisible        bool    `json:"public_visible" gorm:"default:true"`
+	TrialDurationHours   int     `json:"trial_duration_hours" gorm:"type:int;not null;default:0"`
+	RewardEligible       bool    `json:"reward_eligible" gorm:"default:true"`
+	BusinessCode         *string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
 
 	// Quota reset period for plan
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
@@ -388,19 +389,24 @@ type PublicSubscriptionSummary struct {
 }
 
 type SelfSubscriptionSummary struct {
-	ActiveSubscriptionId int    `json:"active_subscription_id,omitempty"`
-	ActiveCount          int    `json:"active_count"`
-	SubscriptionId       int    `json:"subscription_id"`
-	PlanId               int    `json:"plan_id"`
-	PrimaryPlanTitle     string `json:"primary_plan_title"`
-	TokenLimit           int64  `json:"token_limit"`
-	TokenUsed            int64  `json:"token_used"`
-	TokenRemaining       int64  `json:"token_remaining"`
-	TokenUnlimited       bool   `json:"token_unlimited"`
-	ConcurrencyLimit     int    `json:"concurrency_limit"`
-	QueueCapacity        int    `json:"queue_capacity"`
-	NextResetTime        int64  `json:"next_reset_time,omitempty"`
-	EndTime              int64  `json:"end_time,omitempty"`
+	ActiveSubscriptionId     int    `json:"active_subscription_id,omitempty"`
+	ActiveCount              int    `json:"active_count"`
+	SubscriptionId           int    `json:"subscription_id"`
+	PlanId                   int    `json:"plan_id"`
+	PrimaryPlanTitle         string `json:"primary_plan_title"`
+	TokenLimit               int64  `json:"token_limit"`
+	TokenUsed                int64  `json:"token_used"`
+	TokenRemaining           int64  `json:"token_remaining"`
+	TokenUnlimited           bool   `json:"token_unlimited"`
+	ConcurrencyLimit         int    `json:"concurrency_limit"`
+	QueueCapacity            int    `json:"queue_capacity"`
+	GPTAbuseWarningLimit     int    `json:"gpt_abuse_warning_limit"`
+	GPTAbuseWarningCount     int    `json:"gpt_abuse_warning_count"`
+	GPTAbuseWarningRemaining int    `json:"gpt_abuse_warning_remaining"`
+	GPTAbuseSuspendedUntil   int64  `json:"gpt_abuse_suspended_until,omitempty"`
+	GPTAbuseLimitEnabled     bool   `json:"gpt_abuse_limit_enabled"`
+	NextResetTime            int64  `json:"next_reset_time,omitempty"`
+	EndTime                  int64  `json:"end_time,omitempty"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {
@@ -1078,6 +1084,7 @@ type SubscriptionPreConsumeResult struct {
 	ConcurrencyLimit        int
 	QueueCapacity           int
 	PlanId                  int
+	PlanIsTrial             bool
 	PlanTitle               string
 }
 
@@ -1438,6 +1445,27 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	return nil, sawDistributorSubscription, nil
 }
 
+func ResolveGPTAbuseWarningLimit(plan *SubscriptionPlan) int {
+	minimum := common.GPTAbuseDefaultWarningLimit
+	if minimum < 1 {
+		minimum = 1
+	}
+	if plan == nil {
+		return minimum
+	}
+	if plan.GPTAbuseWarningLimit > 0 {
+		return maxInt(plan.GPTAbuseWarningLimit, minimum)
+	}
+	return maxInt(plan.ConcurrencyLimit, minimum)
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 	if userId <= 0 {
 		return SelfSubscriptionSummary{}, errors.New("invalid userId")
@@ -1447,7 +1475,7 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 	if err != nil {
 		return SelfSubscriptionSummary{}, err
 	}
-	summary := SelfSubscriptionSummary{ActiveSubscriptionId: setting.ActiveSubscriptionId}
+	summary := SelfSubscriptionSummary{ActiveSubscriptionId: setting.ActiveSubscriptionId, GPTAbuseLimitEnabled: common.GPTAbuseLimitEnabled}
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		selection, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
 		if err != nil {
@@ -1472,11 +1500,32 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 		}
 		summary.ConcurrencyLimit = livePlanConcurrencyLimit(&sub, selection.Plan)
 		summary.QueueCapacity = livePlanQueueCapacity(selection.Plan)
+		summary.GPTAbuseWarningLimit = ResolveGPTAbuseWarningLimit(selection.Plan)
 		summary.NextResetTime = sub.NextResetTime
 		summary.EndTime = sub.EndTime
 		return nil
 	})
-	return summary, err
+	if err != nil {
+		return summary, err
+	}
+	if summary.GPTAbuseWarningLimit <= 0 {
+		summary.GPTAbuseWarningLimit = ResolveGPTAbuseWarningLimit(nil)
+	}
+	dayStart, dayEnd := GPTAbuseDayWindow(now)
+	count, countErr := CountGPTAbuseSignalsForUser(userId, dayStart, dayEnd)
+	if countErr != nil {
+		return summary, countErr
+	}
+	summary.GPTAbuseWarningCount = count
+	if summary.GPTAbuseWarningLimit > count {
+		summary.GPTAbuseWarningRemaining = summary.GPTAbuseWarningLimit - count
+	}
+	if susp, suspErr := GetActiveGPTAbuseSuspension(userId, now); suspErr != nil {
+		return summary, suspErr
+	} else if susp != nil {
+		summary.GPTAbuseSuspendedUntil = susp.SuspendedUntil
+	}
+	return summary, nil
 }
 
 func HasActiveDistributorSubscription(userId int) (bool, error) {
@@ -1518,6 +1567,7 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor
 	result.PlanId = sub.PlanId
+	result.PlanIsTrial = plan != nil && plan.IsTrial
 	if plan != nil {
 		result.PlanTitle = plan.Title
 	}

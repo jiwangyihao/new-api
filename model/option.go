@@ -155,6 +155,8 @@ func InitOptionMap() {
 	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
 	common.OptionMap["SubscriptionConcurrencyTTLSeconds"] = strconv.Itoa(common.SubscriptionConcurrencyTTLSeconds)
 	common.OptionMap["SubscriptionConcurrencyQueueCapacity"] = strconv.Itoa(common.SubscriptionConcurrencyQueueCapacity)
+	common.OptionMap["GPTAbuseLimitEnabled"] = strconv.FormatBool(common.GPTAbuseLimitEnabled)
+	common.OptionMap["GPTAbuseDefaultWarningLimit"] = strconv.Itoa(common.GPTAbuseDefaultWarningLimit)
 	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
 	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
 	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
@@ -428,6 +430,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.SubscriptionConcurrencyFailOpen = boolValue
 		case "SubscriptionConcurrencyRequireRedis":
 			common.SubscriptionConcurrencyRequireRedis = boolValue
+		case "GPTAbuseLimitEnabled":
+			common.GPTAbuseLimitEnabled = boolValue
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -648,6 +652,11 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
 	case "ModelRequestRateLimitGroup":
 		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
+	case "GPTAbuseDefaultWarningLimit":
+		common.GPTAbuseDefaultWarningLimit, _ = strconv.Atoi(value)
+		if common.GPTAbuseDefaultWarningLimit < 1 {
+			common.GPTAbuseDefaultWarningLimit = 1
+		}
 	case "RetryTimes":
 		common.RetryTimes, _ = strconv.Atoi(value)
 	case "DataExportInterval":

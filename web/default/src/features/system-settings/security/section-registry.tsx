@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { GPTAbuseLimitsSection } from '../request-limits/gpt-abuse-limits-section'
 import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SensitiveWordsSection } from '../request-limits/sensitive-words-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
@@ -36,6 +37,19 @@ const SECURITY_SECTIONS = [
             settings.ModelRequestRateLimitSuccessCount,
           ModelRequestRateLimitDurationMinutes:
             settings.ModelRequestRateLimitDurationMinutes,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'gpt-abuse',
+    titleKey: 'GPT abuse limits',
+    descriptionKey: 'Configure GPT service interruption for safety warnings',
+    build: (settings: SecuritySettings) => (
+      <GPTAbuseLimitsSection
+        defaultValues={{
+          GPTAbuseLimitEnabled: settings.GPTAbuseLimitEnabled,
+          GPTAbuseDefaultWarningLimit: settings.GPTAbuseDefaultWarningLimit,
         }}
       />
     ),

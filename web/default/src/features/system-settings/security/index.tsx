@@ -28,6 +28,8 @@ const defaultSecuritySettings: SecuritySettings = {
   ModelRequestRateLimitCount: 0,
   ModelRequestRateLimitSuccessCount: 1000,
   ModelRequestRateLimitDurationMinutes: 1,
+  GPTAbuseLimitEnabled: false,
+  GPTAbuseDefaultWarningLimit: 5,
   CheckSensitiveEnabled: false,
   CheckSensitiveOnPromptEnabled: false,
   SensitiveWords: '',

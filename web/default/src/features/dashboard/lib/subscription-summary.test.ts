@@ -18,8 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildSubscriptionSummaryView } from './subscription-summary'
 import type { SelfSubscriptionSummary } from '@/features/subscriptions/types'
+import { buildSubscriptionSummaryView } from './subscription-summary'
 
 function summary(
   overrides: Partial<SelfSubscriptionSummary> = {}
@@ -27,10 +27,14 @@ function summary(
   return {
     active_count: 1,
     token_limit: 1000,
-    token_used: 0,
-    token_remaining: 1000,
+    token_used: 250,
+    token_remaining: 750,
     token_unlimited: false,
     concurrency_limit: 1,
+    gpt_abuse_warning_limit: 5,
+    gpt_abuse_warning_count: 0,
+    gpt_abuse_warning_remaining: 5,
+    gpt_abuse_limit_enabled: false,
     ...overrides,
   }
 }
@@ -49,6 +53,139 @@ test('formatSubscriptionSummary displays finite remaining tokens', () => {
 
   assert.equal(result.remainingLabel, '750')
   assert.equal(result.healthLevel, 'healthy')
+})
+
+test('formatSubscriptionSummary exposes GPT abuse warning usage', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      gpt_abuse_warning_limit: 5,
+      gpt_abuse_warning_count: 2,
+      gpt_abuse_warning_remaining: 3,
+      gpt_abuse_limit_enabled: true,
+    })
+  )
+
+  assert.equal(result.gptAbuseWarningLabel, '2 / 5')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '3')
+  assert.equal(result.gptAbuseLimitEnabled, true)
+  assert.equal(
+    result.gptAbuseStatusLabelKey,
+    'GPT safety warnings will pause service at the daily limit'
+  )
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'Service interruption is enabled; reaching the limit pauses GPT access until the next day.'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, null)
+})
+
+test('formatSubscriptionSummary marks GPT abuse disabled as observe-only', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      gpt_abuse_warning_limit: 5,
+      gpt_abuse_warning_count: 2,
+      gpt_abuse_warning_remaining: 3,
+      gpt_abuse_limit_enabled: false,
+    })
+  )
+
+  assert.equal(result.gptAbuseWarningLabel, '2 / 5')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '3')
+  assert.equal(result.gptAbuseLimitEnabled, false)
+  assert.equal(
+    result.gptAbuseStatusLabelKey,
+    'GPT safety warnings are observation only'
+  )
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'Warnings are counted for visibility; service is not paused automatically.'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, null)
+})
+
+test('formatSubscriptionSummary exposes active GPT abuse suspension recovery time', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      gpt_abuse_warning_limit: 5,
+      gpt_abuse_warning_count: 5,
+      gpt_abuse_warning_remaining: 0,
+      gpt_abuse_suspended_until: 1_700_000_000,
+      gpt_abuse_limit_enabled: true,
+    })
+  )
+
+  assert.equal(result.gptAbuseWarningLabel, '5 / 5')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '0')
+  assert.equal(result.gptAbuseSuspendedUntil, 1_700_000_000)
+  assert.equal(result.gptAbuseStatusLabelKey, 'GPT service is paused')
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'GPT service resumes at {{time}}'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, 1_700_000_000)
+})
+
+test('formatSubscriptionSummary keeps GPT abuse UI fields safe without active subscription', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      active_count: 0,
+      gpt_abuse_warning_limit: 5,
+      gpt_abuse_warning_count: 2,
+      gpt_abuse_warning_remaining: 3,
+      gpt_abuse_limit_enabled: true,
+    })
+  )
+
+  assert.equal(result.remainingLabel, 'Subscription required')
+  assert.equal(result.gptAbuseWarningLabel, '0 / 0')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '0')
+  assert.equal(result.gptAbuseLimitEnabled, false)
+  assert.equal(result.gptAbuseSuspendedUntil, null)
+  assert.equal(result.gptAbuseStatusLabelKey, 'GPT safety warnings unavailable')
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'Activate a subscription to see GPT safety warning status.'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, null)
+})
+
+test('formatSubscriptionSummary warns when GPT abuse limit is exhausted but not suspended', () => {
+  const result = buildSubscriptionSummaryView(
+    summary({
+      gpt_abuse_warning_limit: 5,
+      gpt_abuse_warning_count: 5,
+      gpt_abuse_warning_remaining: 0,
+      gpt_abuse_limit_enabled: true,
+    })
+  )
+
+  assert.equal(result.gptAbuseWarningLabel, '5 / 5')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '0')
+  assert.equal(
+    result.gptAbuseStatusLabelKey,
+    'GPT safety warning limit reached'
+  )
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'Service interruption is enabled; reaching the limit pauses GPT access until the next day.'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, null)
+})
+
+test('formatSubscriptionSummary keeps GPT abuse UI fields safe without active summary', () => {
+  const result = buildSubscriptionSummaryView(undefined)
+
+  assert.equal(result.remainingLabel, 'Subscription required')
+  assert.equal(result.gptAbuseWarningLabel, '0 / 0')
+  assert.equal(result.gptAbuseWarningRemainingLabel, '0')
+  assert.equal(result.gptAbuseLimitEnabled, false)
+  assert.equal(result.gptAbuseSuspendedUntil, null)
+  assert.equal(result.gptAbuseStatusLabelKey, 'GPT safety warnings unavailable')
+  assert.equal(
+    result.gptAbuseStatusDescriptionKey,
+    'Activate a subscription to see GPT safety warning status.'
+  )
+  assert.equal(result.gptAbuseStatusTimestamp, null)
 })
 
 test('formatSubscriptionSummary treats unlimited only when token_unlimited is true', () => {

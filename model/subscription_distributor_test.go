@@ -207,6 +207,7 @@ func TestEnsureSubscriptionPlanTableSQLite_CreatesBusinessCodeUniqueIndexOnFresh
 	require.NoError(t, ensureSubscriptionPlanTableSQLite())
 	require.True(t, DB.Migrator().HasIndex("subscription_plans", "idx_subscription_plans_business_code"))
 	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "kyren_product_id"))
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "gpt_abuse_warning_limit"))
 
 	code := "basic_monthly"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7210, Title: "Basic A", Enabled: true, BusinessCode: &code}).Error)
@@ -265,10 +266,12 @@ func TestEnsureSubscriptionPlanTableSQLite_AddsKyrenProductIdToLegacyTable(t *te
 
 	require.NoError(t, ensureSubscriptionPlanTableSQLite())
 	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "kyren_product_id"))
+	require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, "gpt_abuse_warning_limit"))
 
 	var legacyPlan SubscriptionPlan
 	require.NoError(t, DB.First(&legacyPlan, 7213).Error)
 	assert.Equal(t, "", legacyPlan.KyrenProductId)
+	assert.Equal(t, 0, legacyPlan.GPTAbuseWarningLimit)
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", 7213).Update("kyren_product_id", "prod_legacy").Error)
 	require.NoError(t, DB.First(&legacyPlan, 7213).Error)
 	assert.Equal(t, "prod_legacy", legacyPlan.KyrenProductId)
@@ -465,6 +468,23 @@ func TestPreConsumeUserSubscriptionByUnitsReturnsPlanMetadata(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7632, repeat.PlanId)
 	assert.Equal(t, "plan-meta", repeat.PlanTitle)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsReturnsPlanTrialMarker(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7651, Username: "trial_marker_user", Status: common.UserStatusEnabled, AffCode: "aff7651"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	trialCode := "trial-marker"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7652, Title: "Trial Marker", Enabled: true, IsTrial: true, BusinessCode: &trialCode}).Error)
+	seedUserSubscriptionForDistributorTest(t, 7653, 7651, 7652, 0, 0, 0, "trial_code")
+
+	pre, err := PreConsumeUserSubscriptionByUnits("trial-marker-ok", 7651, "gpt-4o", 0, 0, 10)
+	require.NoError(t, err)
+	assert.True(t, pre.PlanIsTrial)
+
+	repeat, err := PreConsumeUserSubscriptionByUnits("trial-marker-ok", 7651, "gpt-4o", 0, 0, 10)
+	require.NoError(t, err)
+	assert.True(t, repeat.PlanIsTrial)
 }
 
 func TestPreConsumeUserSubscriptionByUnitsRejectsLegacyAmountSubscriptions(t *testing.T) {

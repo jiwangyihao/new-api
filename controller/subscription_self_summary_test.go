@@ -15,7 +15,7 @@ import (
 func setupSubscriptionSelfSummaryTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}))
 }
 
 func performGetSubscriptionSelfSummaryRequest(t *testing.T, userID int) *httptest.ResponseRecorder {
@@ -108,6 +108,10 @@ func requireSubscriptionSelfSummaryFields(t *testing.T, summary map[string]inter
 		"token_remaining",
 		"token_unlimited",
 		"concurrency_limit",
+		"gpt_abuse_warning_limit",
+		"gpt_abuse_warning_count",
+		"gpt_abuse_warning_remaining",
+		"gpt_abuse_limit_enabled",
 	} {
 		assert.Contains(t, summary, field)
 	}
@@ -175,6 +179,10 @@ func TestGetSubscriptionSelfReturnsSummaryAndCompatFields(t *testing.T) {
 	assert.Equal(t, int64(750), summaryInt64(t, summary, "token_remaining"))
 	assert.False(t, summaryBool(t, summary, "token_unlimited"))
 	assert.Equal(t, int64(3), summaryInt64(t, summary, "concurrency_limit"))
+	assert.Equal(t, int64(5), summaryInt64(t, summary, "gpt_abuse_warning_limit"))
+	assert.Equal(t, int64(0), summaryInt64(t, summary, "gpt_abuse_warning_count"))
+	assert.Equal(t, int64(5), summaryInt64(t, summary, "gpt_abuse_warning_remaining"))
+	assert.False(t, summaryBool(t, summary, "gpt_abuse_limit_enabled"))
 }
 
 func TestGetSubscriptionSelfSummaryUsesPrimaryBillableSubscription(t *testing.T) {
@@ -196,6 +204,37 @@ func TestGetSubscriptionSelfSummaryUsesPrimaryBillableSubscription(t *testing.T)
 	assert.Equal(t, int64(200), summaryInt64(t, summary, "token_used"))
 	assert.Equal(t, int64(800), summaryInt64(t, summary, "token_remaining"))
 	assert.Equal(t, int64(1), summaryInt64(t, summary, "concurrency_limit"))
+}
+
+func TestGetSubscriptionSelfSummaryIncludesGPTAbuseWarningUsage(t *testing.T) {
+	setupSubscriptionSelfSummaryTestDB(t)
+	oldDefault := common.GPTAbuseDefaultWarningLimit
+	oldEnabled := common.GPTAbuseLimitEnabled
+	common.GPTAbuseDefaultWarningLimit = 5
+	common.GPTAbuseLimitEnabled = true
+	t.Cleanup(func() {
+		common.GPTAbuseDefaultWarningLimit = oldDefault
+		common.GPTAbuseLimitEnabled = oldEnabled
+	})
+	const userID = 8251
+	const planID = 8252
+	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_gpt_abuse")
+	seedSubscriptionSelfSummaryPlan(t, planID, "GPT Abuse Plan", "self-summary-gpt-abuse", 1000, 3, false, false)
+	seedSubscriptionSelfSummarySubscription(t, 8253, userID, planID, 1000, 100, 3, "order", 3600)
+	start, _ := model.GPTAbuseDayWindow(common.GetTimestamp())
+	records := []model.GPTAbuseSignalLog{
+		{CreatedAt: start + 10, UserId: userID, Kind: "cyber_policy", CountEligible: true, DedupeKey: "summary-gpt-abuse-a"},
+		{CreatedAt: start + 20, UserId: userID, Kind: "content_policy_violation", CountEligible: true, DedupeKey: "summary-gpt-abuse-b"},
+	}
+	require.NoError(t, model.DB.Create(&records).Error)
+
+	recorder := performGetSubscriptionSelfSummaryRequest(t, userID)
+	summary := requireSubscriptionSelfSummary(t, subscriptionSelfSummaryData(t, recorder))
+
+	assert.Equal(t, int64(5), summaryInt64(t, summary, "gpt_abuse_warning_limit"))
+	assert.Equal(t, int64(2), summaryInt64(t, summary, "gpt_abuse_warning_count"))
+	assert.Equal(t, int64(3), summaryInt64(t, summary, "gpt_abuse_warning_remaining"))
+	assert.True(t, summaryBool(t, summary, "gpt_abuse_limit_enabled"))
 }
 
 func TestGetSubscriptionSelfSummarySkipsExhaustedPrimaryCandidate(t *testing.T) {

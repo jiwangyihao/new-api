@@ -284,6 +284,8 @@ func migrateDB() error {
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&OAuthProviderLock{},
+		&GPTAbuseSignalLog{},
+		&GPTAbuseUserSuspension{},
 		&PerfMetric{},
 	)
 	if err != nil {
@@ -343,6 +345,8 @@ func migrateDBFast() error {
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&OAuthProviderLock{}, "OAuthProviderLock"},
+		{&GPTAbuseSignalLog{}, "GPTAbuseSignalLog"},
+		{&GPTAbuseUserSuspension{}, "GPTAbuseUserSuspension"},
 		{&PerfMetric{}, "PerfMetric"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
@@ -439,6 +443,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`monthly_token_limit`" + ` bigint NOT NULL DEFAULT 0,
 ` + "`concurrency_limit`" + ` integer NOT NULL DEFAULT 0,
 ` + "`queue_capacity`" + ` integer NOT NULL DEFAULT 0,
+` + "`gpt_abuse_warning_limit`" + ` integer NOT NULL DEFAULT 0,
 ` + "`is_trial`" + ` numeric DEFAULT 0,
 ` + "`invite_trial`" + ` numeric DEFAULT 0,
 ` + "`public_visible`" + ` numeric DEFAULT 1,
@@ -484,6 +489,7 @@ PRIMARY KEY (` + "`id`" + `)
 			{Name: "monthly_token_limit", DDL: "`monthly_token_limit` bigint NOT NULL DEFAULT 0"},
 			{Name: "concurrency_limit", DDL: "`concurrency_limit` integer NOT NULL DEFAULT 0"},
 			{Name: "queue_capacity", DDL: "`queue_capacity` integer NOT NULL DEFAULT 0"},
+			{Name: "gpt_abuse_warning_limit", DDL: "`gpt_abuse_warning_limit` integer NOT NULL DEFAULT 0"},
 			{Name: "is_trial", DDL: "`is_trial` numeric DEFAULT 0"},
 			{Name: "invite_trial", DDL: "`invite_trial` numeric DEFAULT 0"},
 			{Name: "public_visible", DDL: "`public_visible` numeric DEFAULT 1"},

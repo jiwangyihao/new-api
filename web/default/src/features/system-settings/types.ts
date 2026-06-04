@@ -312,6 +312,8 @@ export type SecuritySettings = {
   ModelRequestRateLimitCount: number
   ModelRequestRateLimitSuccessCount: number
   ModelRequestRateLimitDurationMinutes: number
+  GPTAbuseLimitEnabled: boolean
+  GPTAbuseDefaultWarningLimit: number
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string

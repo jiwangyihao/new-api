@@ -43,6 +43,7 @@ export const subscriptionPlanSchema = z.object({
   monthly_token_limit: z.number().optional(),
   concurrency_limit: z.number().optional(),
   queue_capacity: z.number().optional(),
+  gpt_abuse_warning_limit: z.number().optional(),
   is_trial: z.boolean().optional(),
   invite_trial: z.boolean().optional(),
   public_visible: z.boolean().optional(),
@@ -70,6 +71,7 @@ export interface PublicSubscriptionPlan {
   monthly_token_limit: number
   concurrency_limit: number
   queue_capacity: number
+  gpt_abuse_warning_limit: number
   public_visible: boolean
   enabled?: boolean
   is_trial?: boolean
@@ -151,8 +153,7 @@ export interface SubscriptionKyrenProductStatus {
   currency_matches?: boolean
 }
 
-export interface SubscriptionKyrenProductSyncStatus
-  extends SubscriptionKyrenProductStatus {
+export interface SubscriptionKyrenProductSyncStatus extends SubscriptionKyrenProductStatus {
   synced?: boolean
   local_error?: string
 }
@@ -217,6 +218,11 @@ export interface SelfSubscriptionSummary {
   token_unlimited: boolean
   concurrency_limit: number
   queue_capacity?: number
+  gpt_abuse_warning_limit: number
+  gpt_abuse_warning_count: number
+  gpt_abuse_warning_remaining: number
+  gpt_abuse_suspended_until?: number
+  gpt_abuse_limit_enabled: boolean
   next_reset_time?: number
   end_time?: number
 }

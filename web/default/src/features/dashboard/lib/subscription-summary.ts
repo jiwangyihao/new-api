@@ -28,6 +28,13 @@ export interface SubscriptionSummaryView {
   timeLabelKey: string
   timeTimestamp: number | null
   statusLabelKey: string
+  gptAbuseWarningLabel: string
+  gptAbuseWarningRemainingLabel: string
+  gptAbuseSuspendedUntil: number | null
+  gptAbuseLimitEnabled: boolean
+  gptAbuseStatusLabelKey: string
+  gptAbuseStatusDescriptionKey: string
+  gptAbuseStatusTimestamp: number | null
 }
 
 function normalizeAmount(value: number | undefined): number {
@@ -48,6 +55,52 @@ export function formatSubscriptionTokenAmount(value: number): string {
   return `${millions < 10 ? millions.toFixed(2) : millions.toFixed(1)}M`
 }
 
+interface GPTAbuseStatusView {
+  gptAbuseStatusLabelKey: string
+  gptAbuseStatusDescriptionKey: string
+  gptAbuseStatusTimestamp: number | null
+}
+
+function buildGPTAbuseStatus(
+  enabled: boolean,
+  remaining: number,
+  suspendedUntil: number | null
+): GPTAbuseStatusView {
+  if (!enabled) {
+    return {
+      gptAbuseStatusLabelKey: 'GPT safety warnings are observation only',
+      gptAbuseStatusDescriptionKey:
+        'Warnings are counted for visibility; service is not paused automatically.',
+      gptAbuseStatusTimestamp: null,
+    }
+  }
+
+  if (suspendedUntil) {
+    return {
+      gptAbuseStatusLabelKey: 'GPT service is paused',
+      gptAbuseStatusDescriptionKey: 'GPT service resumes at {{time}}',
+      gptAbuseStatusTimestamp: suspendedUntil,
+    }
+  }
+
+  if (remaining <= 0) {
+    return {
+      gptAbuseStatusLabelKey: 'GPT safety warning limit reached',
+      gptAbuseStatusDescriptionKey:
+        'Service interruption is enabled; reaching the limit pauses GPT access until the next day.',
+      gptAbuseStatusTimestamp: null,
+    }
+  }
+
+  return {
+    gptAbuseStatusLabelKey:
+      'GPT safety warnings will pause service at the daily limit',
+    gptAbuseStatusDescriptionKey:
+      'Service interruption is enabled; reaching the limit pauses GPT access until the next day.',
+    gptAbuseStatusTimestamp: null,
+  }
+}
+
 export function buildSubscriptionSummaryView(
   summary: SelfSubscriptionSummary | undefined,
   _recentTokens = 0
@@ -61,9 +114,29 @@ export function buildSubscriptionSummaryView(
       timeLabelKey: 'Subscription expires at',
       timeTimestamp: null,
       statusLabelKey: 'Subscription required',
+      gptAbuseWarningLabel: '0 / 0',
+      gptAbuseWarningRemainingLabel: '0',
+      gptAbuseSuspendedUntil: null,
+      gptAbuseLimitEnabled: false,
+      gptAbuseStatusLabelKey: 'GPT safety warnings unavailable',
+      gptAbuseStatusDescriptionKey:
+        'Activate a subscription to see GPT safety warning status.',
+      gptAbuseStatusTimestamp: null,
     }
   }
 
+  const gptAbuseLimit = normalizeAmount(summary.gpt_abuse_warning_limit)
+  const gptAbuseCount = normalizeAmount(summary.gpt_abuse_warning_count)
+  const gptAbuseRemaining = normalizeAmount(summary.gpt_abuse_warning_remaining)
+  const gptAbuseWarningLabel = `${gptAbuseCount} / ${gptAbuseLimit}`
+  const gptAbuseWarningRemainingLabel = `${gptAbuseRemaining}`
+  const gptAbuseSuspendedUntil = summary.gpt_abuse_suspended_until || null
+  const gptAbuseLimitEnabled = summary.gpt_abuse_limit_enabled === true
+  const gptAbuseStatus = buildGPTAbuseStatus(
+    gptAbuseLimitEnabled,
+    gptAbuseRemaining,
+    gptAbuseSuspendedUntil
+  )
   const used = normalizeAmount(summary.token_used)
 
   if (summary.token_unlimited) {
@@ -77,6 +150,11 @@ export function buildSubscriptionSummaryView(
         : 'Subscription expires at',
       timeTimestamp: summary.next_reset_time || summary.end_time || null,
       statusLabelKey: 'Healthy',
+      gptAbuseWarningLabel,
+      gptAbuseWarningRemainingLabel,
+      gptAbuseSuspendedUntil,
+      gptAbuseLimitEnabled,
+      ...gptAbuseStatus,
     }
   }
 
@@ -100,5 +178,10 @@ export function buildSubscriptionSummaryView(
       : 'Subscription expires at',
     timeTimestamp: summary.next_reset_time || summary.end_time || null,
     statusLabelKey,
+    gptAbuseWarningLabel,
+    gptAbuseWarningRemainingLabel,
+    gptAbuseSuspendedUntil,
+    gptAbuseLimitEnabled,
+    ...gptAbuseStatus,
   }
 }

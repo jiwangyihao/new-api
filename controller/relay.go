@@ -76,24 +76,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ws          *websocket.Conn
 	)
 
-	if relayFormat == types.RelayFormatOpenAIRealtime {
-		var err error
-		ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
-		if err != nil {
-			helper.WssError(c, ws, types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry()).ToOpenAIError())
-			return
-		}
-		defer ws.Close()
-	}
-
 	defer func() {
 		if newAPIError != nil {
 			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
 			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
-			switch relayFormat {
-			case types.RelayFormatOpenAIRealtime:
+			switch {
+			case relayFormat == types.RelayFormatOpenAIRealtime && ws != nil:
 				helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			case types.RelayFormatClaude:
+			case relayFormat == types.RelayFormatClaude:
 				c.JSON(newAPIError.StatusCode, gin.H{
 					"type":  "error",
 					"error": newAPIError.ToClaudeError(),
@@ -212,6 +202,30 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			logger.LogError(c, channelErr.Error())
 			newAPIError = channelErr
 			break
+		}
+		relayInfo.InitChannelMeta(c)
+		if mappedModel, isMapped, err := helper.ResolveMappedModelName(relayInfo.OriginModelName, common.GetContextKeyString(c, constant.ContextKeyChannelModelMapping)); err != nil {
+			newAPIError = types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+			break
+		} else if isMapped {
+			relayInfo.UpstreamModelName = mappedModel
+			relayInfo.IsModelMapped = true
+			if relayInfo.ChannelMeta != nil {
+				relayInfo.ChannelMeta.UpstreamModelName = mappedModel
+			}
+		}
+		if newAPIError = service.EnforceGPTAbuseSuspension(c, relayInfo); newAPIError != nil {
+			break
+		}
+		if relayFormat == types.RelayFormatOpenAIRealtime && ws == nil {
+			var err error
+			ws, err = upgrader.Upgrade(c.Writer, c.Request, nil)
+			if err != nil {
+				newAPIError = types.NewError(err, types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+				break
+			}
+			defer ws.Close()
+			relayInfo.ClientWs = ws
 		}
 
 		addUsedChannel(c, channel.Id)

@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
-import { ArrowRight, Flame, CalendarClock } from 'lucide-react'
+import { ArrowRight, Flame, CalendarClock, ShieldAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { formatNumber, formatTimestampToDate } from '@/lib/format'
@@ -89,7 +89,6 @@ function getSummarySparkline(
   return undefined
 }
 
-
 const HEALTH_CONFIG: Record<
   SubscriptionSummaryHealthLevel,
   { dotClass: string }
@@ -104,7 +103,6 @@ const HEALTH_CONFIG: Record<
     dotClass: 'bg-destructive',
   },
 }
-
 
 export function SummaryCards() {
   const { t } = useTranslation()
@@ -156,6 +154,11 @@ export function SummaryCards() {
   )
 
   const healthCfg = HEALTH_CONFIG[summaryView.healthLevel]
+  const gptAbuseStatusDescription = summaryView.gptAbuseStatusTimestamp
+    ? t(summaryView.gptAbuseStatusDescriptionKey, {
+        time: formatTimestampToDate(summaryView.gptAbuseStatusTimestamp),
+      })
+    : t(summaryView.gptAbuseStatusDescriptionKey)
 
   const sparklineData = useMemo(
     () =>
@@ -247,7 +250,7 @@ export function SummaryCards() {
               {summaryView.remainingLabel}
             </div>
 
-            <div className='grid grid-cols-2 gap-2'>
+            <div className='grid grid-cols-1 gap-2 sm:grid-cols-3'>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
                   <Flame className='size-3 shrink-0' aria-hidden='true' />
@@ -257,17 +260,35 @@ export function SummaryCards() {
                   {formatSubscriptionTokenAmount(recentUsage)}
                 </div>
               </div>
+              <div className='bg-background/60 rounded-lg px-2.5 py-2 sm:col-span-3'>
+                <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
+                  <ShieldAlert className='size-3 shrink-0' aria-hidden='true' />
+                  <span className='truncate'>{t('GPT safety warnings')}</span>
+                </div>
+                <div className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'>
+                  {summaryView.gptAbuseWarningLabel}
+                </div>
+                <div
+                  className='text-muted-foreground mt-1 text-[11px] leading-snug'
+                  title={gptAbuseStatusDescription}
+                >
+                  <span className='font-medium'>
+                    {t(summaryView.gptAbuseStatusLabelKey)}
+                  </span>
+                  <span> · {gptAbuseStatusDescription}</span>
+                </div>
+              </div>
               <div className='bg-background/60 rounded-lg px-2.5 py-2'>
                 <div className='text-muted-foreground flex items-center gap-1 text-[11px] leading-none font-medium'>
                   <CalendarClock
                     className='size-3 shrink-0'
                     aria-hidden='true'
                   />
-                  <span className='truncate'>{t(summaryView.timeLabelKey)}</span>
+                  <span className='truncate'>
+                    {t(summaryView.timeLabelKey)}
+                  </span>
                 </div>
-                <div
-                  className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'
-                >
+                <div className='text-foreground mt-1.5 truncate text-xs font-semibold tabular-nums'>
                   {summaryView.timeTimestamp
                     ? formatTimestampToDate(summaryView.timeTimestamp)
                     : '-'}
@@ -276,10 +297,7 @@ export function SummaryCards() {
             </div>
           </div>
 
-          <Button
-            className='justify-between'
-            render={<Link to='/wallet' />}
-          >
+          <Button className='justify-between' render={<Link to='/wallet' />}>
             <span>{t('Wallet')}</span>
             <ArrowRight data-icon='inline-end' />
           </Button>

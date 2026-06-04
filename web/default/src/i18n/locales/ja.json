@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "GPT 不正利用警告のデフォルト最小値",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "プラン上限と同時実行数に基づく自動上限は、この値を下回りません。",
     "Save GPT abuse limits": "GPT 不正利用制限を保存",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "上流の安全警告が 1 日の上限に達した場合の一時的な GPT サービス停止を設定します。"
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "上流の安全警告が 1 日の上限に達した場合の一時的な GPT サービス停止を設定します。",
+    "Activate a subscription to see GPT safety warning status.": "サブスクリプションを有効にすると GPT 安全警告の状態を確認できます。",
+    "GPT safety warning limit reached": "GPT 安全警告の上限に達しました",
+    "GPT safety warnings are observation only": "GPT 安全警告は観測のみです",
+    "GPT safety warnings unavailable": "GPT 安全警告は利用できません",
+    "GPT safety warnings will pause service at the daily limit": "GPT 安全警告は 1 日の上限でサービスを停止します",
+    "GPT service is paused": "GPT サービスは停止中です",
+    "GPT service resumes at {{time}}": "GPT サービスは {{time}} に再開します",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "サービス停止が有効です。上限に達すると翌日まで GPT アクセスが停止されます。",
+    "Warnings are counted for visibility; service is not paused automatically.": "警告は可視化のために集計され、自動的にサービス停止は行われません。"
   }
 }

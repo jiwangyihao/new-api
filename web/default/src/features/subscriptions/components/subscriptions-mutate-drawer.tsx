@@ -386,7 +386,7 @@ export function SubscriptionsMutateDrawer({
                 />
               </div>
 
-              <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
+              <div className='grid grid-cols-1 gap-3 sm:grid-cols-3'>
                 <FormField
                   control={form.control}
                   name='concurrency_limit'
@@ -429,6 +429,32 @@ export function SubscriptionsMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t('0 means use global queue capacity')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='gpt_abuse_warning_limit'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('GPT abuse warning limit')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          {...field}
+                          type='number'
+                          min={0}
+                          onChange={(e) =>
+                            field.onChange(parseInt(e.target.value, 10) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          '0 means automatic: max(concurrency limit, system minimum)'
+                        )}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

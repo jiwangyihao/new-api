@@ -26,10 +26,22 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	err = common.Unmarshal(responseBody, &responsesResponse)
+	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
+		c.Set(common.UpstreamRequestIdKey, upID)
+	}
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+		if service.ShouldMonitorGPTAbuse(info) {
+			signal := service.ClassifyGPTAbuseSignalFromHTTPError(resp.StatusCode, responseBody)
+			signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+			if info != nil {
+				signal.RequestedModel = info.OriginModelName
+				signal.UpstreamModel = info.UpstreamModelName
+			}
+			service.RecordGPTAbuseSignal(c, info, signal)
+		}
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
@@ -78,6 +90,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	defer service.CloseResponseBodyGracefully(resp)
 
 	var usage = &dto.Usage{}
+	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
+		c.Set(common.UpstreamRequestIdKey, upID)
+	}
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 
@@ -87,6 +102,18 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
+		}
+		if service.ShouldMonitorGPTAbuse(info) {
+			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResponse.Type, []byte(data))
+			if signal.Matched {
+				signal.StatusCode = resp.StatusCode
+				signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
+				if info != nil {
+					signal.RequestedModel = info.OriginModelName
+					signal.UpstreamModel = info.UpstreamModelName
+				}
+				service.RecordGPTAbuseSignal(c, info, signal)
+			}
 		}
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {

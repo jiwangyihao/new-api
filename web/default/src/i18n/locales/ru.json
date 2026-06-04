@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "Минимум предупреждений о злоупотреблении GPT по умолчанию",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Лимиты тарифов и автоматические лимиты на основе параллельности не могут быть ниже этого значения.",
     "Save GPT abuse limits": "Сохранить ограничения злоупотреблений GPT",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Настройте временную приостановку сервиса GPT, когда предупреждения безопасности апстрима достигают дневного лимита."
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Настройте временную приостановку сервиса GPT, когда предупреждения безопасности апстрима достигают дневного лимита.",
+    "Activate a subscription to see GPT safety warning status.": "Активируйте подписку, чтобы видеть статус предупреждений безопасности GPT.",
+    "GPT safety warning limit reached": "Лимит предупреждений безопасности GPT достигнут",
+    "GPT safety warnings are observation only": "Предупреждения безопасности GPT только отслеживаются",
+    "GPT safety warnings unavailable": "Предупреждения безопасности GPT недоступны",
+    "GPT safety warnings will pause service at the daily limit": "Предупреждения безопасности GPT при дневном лимите приостановят сервис",
+    "GPT service is paused": "Сервис GPT приостановлен",
+    "GPT service resumes at {{time}}": "Сервис GPT возобновится в {{time}}",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "Приостановка сервиса включена; достижение лимита приостанавливает доступ к GPT до следующего дня.",
+    "Warnings are counted for visibility; service is not paused automatically.": "Предупреждения учитываются для отображения; сервис не приостанавливается автоматически."
   }
 }

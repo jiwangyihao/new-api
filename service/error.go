@@ -91,21 +91,26 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		return
 	}
 	CloseResponseBodyGracefully(resp)
+	return relayErrorHandlerFromBody(ctx, resp.StatusCode, responseBody, showBodyWhenFail)
+}
+
+func relayErrorHandlerFromBody(ctx context.Context, statusCode int, responseBody []byte, showBodyWhenFail bool) (newApiErr *types.NewAPIError) {
+	newApiErr = types.InitOpenAIError(types.ErrorCodeBadResponseStatusCode, statusCode)
 	var errResponse dto.GeneralErrorResponse
 	buildErrWithBody := func(message string) error {
 		if message == "" {
-			return fmt.Errorf("bad response status code %d, body: %s", resp.StatusCode, string(responseBody))
+			return fmt.Errorf("bad response status code %d, body: %s", statusCode, string(responseBody))
 		}
-		return fmt.Errorf("bad response status code %d, message: %s, body: %s", resp.StatusCode, message, string(responseBody))
+		return fmt.Errorf("bad response status code %d, message: %s, body: %s", statusCode, message, string(responseBody))
 	}
 
-	err = common.Unmarshal(responseBody, &errResponse)
+	err := common.Unmarshal(responseBody, &errResponse)
 	if err != nil {
 		if showBodyWhenFail {
 			newApiErr.Err = buildErrWithBody("")
 		} else {
-			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", resp.StatusCode, string(responseBody)))
-			newApiErr.Err = fmt.Errorf("bad response status code %d", resp.StatusCode)
+			logger.LogError(ctx, fmt.Sprintf("bad response status code %d, body: %s", statusCode, string(responseBody)))
+			newApiErr.Err = fmt.Errorf("bad response status code %d", statusCode)
 		}
 		return
 	}
@@ -114,14 +119,14 @@ func RelayErrorHandler(ctx context.Context, resp *http.Response, showBodyWhenFai
 		// General format error (OpenAI, Anthropic, Gemini, etc.)
 		oaiError := errResponse.TryToOpenAIError()
 		if oaiError != nil {
-			newApiErr = types.WithOpenAIError(*oaiError, resp.StatusCode)
+			newApiErr = types.WithOpenAIError(*oaiError, statusCode)
 			if showBodyWhenFail {
 				newApiErr.Err = buildErrWithBody(newApiErr.Error())
 			}
 			return
 		}
 	}
-	newApiErr = types.NewOpenAIError(errors.New(errResponse.ToMessage()), types.ErrorCodeBadResponseStatusCode, resp.StatusCode)
+	newApiErr = types.NewOpenAIError(errors.New(errResponse.ToMessage()), types.ErrorCodeBadResponseStatusCode, statusCode)
 	if showBodyWhenFail {
 		newApiErr.Err = buildErrWithBody(newApiErr.Error())
 	}

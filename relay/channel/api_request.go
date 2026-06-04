@@ -47,6 +47,25 @@ const (
 	headerPassthroughRegexPrefixV2 = "regex:"
 )
 
+const (
+	SubscriptionMarkerHeaderName = "X-NewAPI-Subscription-Marker"
+	SubscriptionTrialMarkerValue = "trial"
+)
+
+func FinalizeSubscriptionMarkerHeader(headers http.Header, info *common.RelayInfo) {
+	if headers == nil {
+		return
+	}
+	for key := range headers {
+		if strings.EqualFold(key, SubscriptionMarkerHeaderName) {
+			delete(headers, key)
+		}
+	}
+	if info != nil && info.SubscriptionTrialMarker == SubscriptionTrialMarkerValue {
+		headers.Set(SubscriptionMarkerHeaderName, SubscriptionTrialMarkerValue)
+	}
+}
+
 var passthroughSkipHeaderNamesLower = map[string]struct{}{
 	// RFC 7230 hop-by-hop headers.
 	"connection":          {},
@@ -371,6 +390,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
+	FinalizeSubscriptionMarkerHeader(targetHeader, info)
 	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
@@ -515,6 +535,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	FinalizeSubscriptionMarkerHeader(req.Header, info)
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -524,7 +545,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		return nil, errors.New("resp is nil")
 	}
 
-	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
+	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 

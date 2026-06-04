@@ -17,19 +17,20 @@ type SubscriptionPlanDTO struct {
 }
 
 type PublicSubscriptionPlan struct {
-	Id                int     `json:"id"`
-	Title             string  `json:"title"`
-	Subtitle          string  `json:"subtitle"`
-	PriceAmount       float64 `json:"price_amount"`
-	Currency          string  `json:"currency"`
-	DurationUnit      string  `json:"duration_unit"`
-	DurationValue     int     `json:"duration_value"`
-	CustomSeconds     int64   `json:"custom_seconds"`
-	MonthlyTokenLimit int64   `json:"monthly_token_limit"`
-	ConcurrencyLimit  int     `json:"concurrency_limit"`
-	PublicVisible     bool    `json:"public_visible"`
-	QueueCapacity     int     `json:"queue_capacity"`
-	KyrenProductId    string  `json:"kyren_product_id"`
+	Id                   int     `json:"id"`
+	Title                string  `json:"title"`
+	Subtitle             string  `json:"subtitle"`
+	PriceAmount          float64 `json:"price_amount"`
+	Currency             string  `json:"currency"`
+	DurationUnit         string  `json:"duration_unit"`
+	DurationValue        int     `json:"duration_value"`
+	CustomSeconds        int64   `json:"custom_seconds"`
+	MonthlyTokenLimit    int64   `json:"monthly_token_limit"`
+	ConcurrencyLimit     int     `json:"concurrency_limit"`
+	GPTAbuseWarningLimit int     `json:"gpt_abuse_warning_limit"`
+	PublicVisible        bool    `json:"public_visible"`
+	QueueCapacity        int     `json:"queue_capacity"`
+	KyrenProductId       string  `json:"kyren_product_id"`
 }
 
 type PublicSubscriptionPlanDTO struct {
@@ -39,19 +40,20 @@ type PublicSubscriptionPlanDTO struct {
 func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDTO {
 	return PublicSubscriptionPlanDTO{
 		Plan: PublicSubscriptionPlan{
-			Id:                p.Id,
-			Title:             p.Title,
-			Subtitle:          p.Subtitle,
-			PriceAmount:       p.PriceAmount,
-			Currency:          p.Currency,
-			DurationUnit:      p.DurationUnit,
-			DurationValue:     p.DurationValue,
-			CustomSeconds:     p.CustomSeconds,
-			MonthlyTokenLimit: p.MonthlyTokenLimit,
-			ConcurrencyLimit:  p.ConcurrencyLimit,
-			QueueCapacity:     p.QueueCapacity,
-			PublicVisible:     p.PublicVisible,
-			KyrenProductId:    p.KyrenProductId,
+			Id:                   p.Id,
+			Title:                p.Title,
+			Subtitle:             p.Subtitle,
+			PriceAmount:          p.PriceAmount,
+			Currency:             p.Currency,
+			DurationUnit:         p.DurationUnit,
+			DurationValue:        p.DurationValue,
+			CustomSeconds:        p.CustomSeconds,
+			MonthlyTokenLimit:    p.MonthlyTokenLimit,
+			ConcurrencyLimit:     p.ConcurrencyLimit,
+			GPTAbuseWarningLimit: p.GPTAbuseWarningLimit,
+			QueueCapacity:        p.QueueCapacity,
+			PublicVisible:        p.PublicVisible,
+			KyrenProductId:       p.KyrenProductId,
 		},
 	}
 }
@@ -242,6 +244,10 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.GPTAbuseWarningLimit < 0 {
+		common.ApiErrorMsg(c, "安全警告次数不能为负数")
+		return
+	}
 	req.Plan.UpgradeGroup = ""
 	if req.Plan.QueueCapacity < 0 {
 		common.ApiErrorMsg(c, "排队容量不能为负数")
@@ -300,6 +306,11 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "总额度不能为负数")
 		return
 	}
+	if req.Plan.GPTAbuseWarningLimit < 0 {
+		common.ApiErrorMsg(c, "安全警告次数不能为负数")
+		return
+	}
+
 	req.Plan.UpgradeGroup = ""
 	if req.Plan.QueueCapacity < 0 {
 		common.ApiErrorMsg(c, "排队容量不能为负数")
@@ -331,6 +342,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"upgrade_group":              "",
 			"quota_reset_period":         req.Plan.QuotaResetPeriod,
 			"quota_reset_custom_seconds": req.Plan.QuotaResetCustomSeconds,
+			"gpt_abuse_warning_limit":    req.Plan.GPTAbuseWarningLimit,
 			"monthly_token_limit":        req.Plan.MonthlyTokenLimit,
 			"concurrency_limit":          req.Plan.ConcurrencyLimit,
 			"queue_capacity":             req.Plan.QueueCapacity,

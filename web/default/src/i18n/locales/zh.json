@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "默认最小 GPT 滥用警告次数",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "套餐配置上限和基于并发自动计算的上限都不会低于该值。",
     "Save GPT abuse limits": "保存 GPT 滥用限制",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "配置当上游安全警告达到每日上限时临时中断 GPT 服务。"
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "配置当上游安全警告达到每日上限时临时中断 GPT 服务。",
+    "Activate a subscription to see GPT safety warning status.": "激活订阅后可查看 GPT 安全警告状态。",
+    "GPT safety warning limit reached": "已达到 GPT 安全警告上限",
+    "GPT safety warnings are observation only": "GPT 安全警告仅统计观察",
+    "GPT safety warnings unavailable": "GPT 安全警告不可用",
+    "GPT safety warnings will pause service at the daily limit": "达到每日上限后将暂停 GPT 服务",
+    "GPT service is paused": "GPT 服务已暂停",
+    "GPT service resumes at {{time}}": "GPT 服务将于 {{time}} 恢复",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "已启用服务中断；达到上限后将暂停 GPT 访问至次日。",
+    "Warnings are counted for visibility; service is not paused automatically.": "警告仅用于可视化统计，不会自动暂停服务。"
   }
 }

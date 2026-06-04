@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "Số cảnh báo lạm dụng GPT tối thiểu mặc định",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Giới hạn của gói và giới hạn tự động dựa trên mức đồng thời không bao giờ thấp hơn giá trị này.",
     "Save GPT abuse limits": "Lưu giới hạn lạm dụng GPT",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Cấu hình tạm ngừng dịch vụ GPT khi cảnh báo an toàn từ upstream đạt giới hạn hằng ngày."
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Cấu hình tạm ngừng dịch vụ GPT khi cảnh báo an toàn từ upstream đạt giới hạn hằng ngày.",
+    "Activate a subscription to see GPT safety warning status.": "Kích hoạt gói đăng ký để xem trạng thái cảnh báo an toàn GPT.",
+    "GPT safety warning limit reached": "Đã đạt giới hạn cảnh báo an toàn GPT",
+    "GPT safety warnings are observation only": "Cảnh báo an toàn GPT chỉ được quan sát",
+    "GPT safety warnings unavailable": "Chưa có cảnh báo an toàn GPT",
+    "GPT safety warnings will pause service at the daily limit": "Cảnh báo an toàn GPT sẽ tạm ngừng dịch vụ khi đạt giới hạn hằng ngày",
+    "GPT service is paused": "Dịch vụ GPT đang tạm ngừng",
+    "GPT service resumes at {{time}}": "Dịch vụ GPT sẽ khôi phục lúc {{time}}",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "Tạm ngừng dịch vụ đã bật; khi đạt giới hạn, quyền truy cập GPT sẽ tạm ngừng đến ngày tiếp theo.",
+    "Warnings are counted for visibility; service is not paused automatically.": "Cảnh báo chỉ được tính để hiển thị; dịch vụ sẽ không tự động tạm ngừng."
   }
 }

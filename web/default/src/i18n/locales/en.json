@@ -5062,6 +5062,15 @@
     "Default minimum GPT abuse warnings": "Default minimum GPT abuse warnings",
     "Plan limits and automatic concurrency-based limits are never allowed below this value.": "Plan limits and automatic concurrency-based limits are never allowed below this value.",
     "Save GPT abuse limits": "Save GPT abuse limits",
-    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit."
+    "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.": "Configure temporary GPT service interruption when upstream safety warnings reach the daily limit.",
+    "Activate a subscription to see GPT safety warning status.": "Activate a subscription to see GPT safety warning status.",
+    "GPT safety warning limit reached": "GPT safety warning limit reached",
+    "GPT safety warnings are observation only": "GPT safety warnings are observation only",
+    "GPT safety warnings unavailable": "GPT safety warnings unavailable",
+    "GPT safety warnings will pause service at the daily limit": "GPT safety warnings will pause service at the daily limit",
+    "GPT service is paused": "GPT service is paused",
+    "GPT service resumes at {{time}}": "GPT service resumes at {{time}}",
+    "Service interruption is enabled; reaching the limit pauses GPT access until the next day.": "Service interruption is enabled; reaching the limit pauses GPT access until the next day.",
+    "Warnings are counted for visibility; service is not paused automatically.": "Warnings are counted for visibility; service is not paused automatically."
   }
 }

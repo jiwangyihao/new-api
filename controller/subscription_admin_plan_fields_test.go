@@ -45,7 +45,7 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 		RewardEligible: true,
 	}).Error)
 
-	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated","kyren_product_id":"prod_kyren_plan"}}`)
+	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"gpt_abuse_warning_limit":7,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated","kyren_product_id":"prod_kyren_plan"}}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var plan model.SubscriptionPlan
@@ -53,6 +53,7 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 	assert.Equal(t, int64(1_000_000_000), plan.MonthlyTokenLimit)
 	assert.Equal(t, 3, plan.ConcurrencyLimit)
 	assert.Equal(t, 12, plan.QueueCapacity)
+	assert.Equal(t, 7, plan.GPTAbuseWarningLimit)
 	assert.True(t, plan.IsTrial)
 	assert.True(t, plan.InviteTrial)
 	assert.False(t, plan.PublicVisible)

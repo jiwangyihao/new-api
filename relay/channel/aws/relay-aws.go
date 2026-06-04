@@ -27,6 +27,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	bedrockruntimeTypes "github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/aws/smithy-go/auth/bearer"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 // getAwsErrorStatusCode extracts HTTP status code from AWS SDK error
@@ -45,6 +47,26 @@ func newAwsInvokeContext() (context.Context, context.CancelFunc) {
 		return context.Background(), func() {}
 	}
 	return context.WithTimeout(context.Background(), time.Duration(common.RelayTimeout)*time.Second)
+}
+
+func addSubscriptionMarkerMiddleware(info *relaycommon.RelayInfo) func(*bedrockruntime.Options) {
+	return func(o *bedrockruntime.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			return stack.Finalize.Add(
+				middleware.FinalizeMiddlewareFunc("newApiSubscriptionMarker", func(
+					ctx context.Context,
+					in middleware.FinalizeInput,
+					next middleware.FinalizeHandler,
+				) (middleware.FinalizeOutput, middleware.Metadata, error) {
+					if req, ok := in.Request.(*smithyhttp.Request); ok && req != nil {
+						channel.FinalizeSubscriptionMarkerHeader(req.Header, info)
+					}
+					return next.HandleFinalize(ctx, in)
+				}),
+				middleware.Before,
+			)
+		})
+	}
 }
 
 func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.Client, error) {
@@ -71,7 +93,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 			Region:                  region,
 			BearerAuthTokenProvider: bearer.StaticTokenProvider{Token: bearer.Token{Value: apiKey}},
 			HTTPClient:              httpClient,
-		})
+		}, addSubscriptionMarkerMiddleware(info))
 	case 3:
 		ak := awsSecret[0]
 		sk := awsSecret[1]
@@ -80,7 +102,7 @@ func newAwsClient(c *gin.Context, info *relaycommon.RelayInfo) (*bedrockruntime.
 			Region:      region,
 			Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(ak, sk, "")),
 			HTTPClient:  httpClient,
-		})
+		}, addSubscriptionMarkerMiddleware(info))
 	default:
 		return nil, errors.New("invalid aws secret key")
 	}

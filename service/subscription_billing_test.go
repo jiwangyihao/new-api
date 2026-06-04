@@ -266,6 +266,35 @@ func TestSubscriptionBillingPreConsumeUsesReturnedPlanMetadata(t *testing.T) {
 	assert.Equal(t, int64(0), readLogger.reads.Load(), "preconsume should not reread the chosen subscription only to get plan metadata")
 }
 
+func TestPreConsumeBillingSyncsSubscriptionTrialMarker(t *testing.T) {
+	truncate(t)
+	const userID = 9061
+	const tokenID = 9062
+	const planID = 9063
+	const subID = 9064
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-trial-marker", 10_000)
+	ensureSubscriptionBillingTables(t)
+	trialCode := "trial-marker-billing"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Trial Marker", Enabled: true, IsTrial: true, BusinessCode: &trialCode}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, AmountTotal: 1, TokenLimit: 0, TokenUsed: 0, Status: "active", GrantReason: "trial_code", StartTime: time.Now().Unix(), EndTime: time.Now().Add(24 * time.Hour).Unix()}).Error)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-trial-marker", "req-trial-marker", "subscription_only")
+
+	apiErr := PreConsumeBilling(ctx, 6, relayInfo)
+	require.Nil(t, apiErr)
+	assert.Equal(t, "trial", relayInfo.SubscriptionTrialMarker)
+}
+
+func TestClearRelayBillingStateClearsSubscriptionTrialMarker(t *testing.T) {
+	info := &relaycommon.RelayInfo{SubscriptionTrialMarker: "trial"}
+
+	clearRelayBillingState(info)
+
+	assert.Empty(t, info.SubscriptionTrialMarker)
+}
+
 func TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields(t *testing.T) {
 	truncate(t)
 	const userID = 8051

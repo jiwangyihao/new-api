@@ -443,9 +443,15 @@ func (s *BillingSession) syncRelayInfo() {
 		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
+		if sub.PlanIsTrial {
+			info.SubscriptionTrialMarker = "trial"
+		} else {
+			info.SubscriptionTrialMarker = ""
+		}
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+		info.SubscriptionTrialMarker = ""
 	}
 }
 
@@ -496,6 +502,7 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.SubscriptionDistributorTokenBilling = false
 	info.SubscriptionPlanId = 0
 	info.SubscriptionPlanTitle = ""
+	info.SubscriptionTrialMarker = ""
 }
 
 func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {

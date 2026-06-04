@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -115,6 +116,13 @@ func parseVolcengineAuth(apiKey string) (appID, token string, err error) {
 	return parts[0], parts[1], nil
 }
 
+func buildVolcengineTTSDialHeader(token string, info *relaycommon.RelayInfo) http.Header {
+	header := http.Header{}
+	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
+	channel.FinalizeSubscriptionMarkerHeader(header, info)
+	return header
+}
+
 func mapVoiceType(openAIVoice string) string {
 	if voice, ok := openAIToVolcengineVoiceMap[openAIVoice]; ok {
 		return voice
@@ -202,8 +210,7 @@ func handleTTSWebSocketResponse(c *gin.Context, requestURL string, volcRequest V
 		)
 	}
 
-	header := http.Header{}
-	header.Set("Authorization", fmt.Sprintf("Bearer;%s", token))
+	header := buildVolcengineTTSDialHeader(token, info)
 
 	conn, resp, dialErr := websocket.DefaultDialer.DialContext(context.Background(), requestURL, header)
 	if dialErr != nil {

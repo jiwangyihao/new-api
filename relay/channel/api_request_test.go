@@ -3,6 +3,7 @@ package channel
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -190,4 +191,163 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))
 	require.Empty(t, upstreamReq.Header.Get("X-Codex-Beta-Features"))
+}
+
+func TestFinalizeSubscriptionMarkerHeaderSetsTrialMarker(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+	req.Header["x-newapi-subscription-marker"] = []string{"spoofed"}
+
+	FinalizeSubscriptionMarkerHeader(req.Header, &relaycommon.RelayInfo{SubscriptionTrialMarker: "trial"})
+
+	requireOnlyTrialSubscriptionMarkerHeader(t, req.Header)
+}
+
+func TestFinalizeSubscriptionMarkerHeaderRemovesSpoofedNonTrialMarker(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+	req.Header["x-newapi-subscription-marker"] = []string{"trial"}
+	req.Header["X-NewAPI-Subscription-Marker"] = []string{"trial"}
+
+	FinalizeSubscriptionMarkerHeader(req.Header, &relaycommon.RelayInfo{})
+
+	requireNoSubscriptionMarkerHeader(t, req.Header)
+}
+
+func TestFinalizeSubscriptionMarkerHeaderIgnoresNonTrialMarkerValue(t *testing.T) {
+	t.Parallel()
+
+	for _, marker := range []string{"paid", "wrong", ""} {
+		marker := marker
+		t.Run(subscriptionMarkerTestName(marker), func(t *testing.T) {
+			t.Parallel()
+
+			req := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+			req.Header["x-newapi-subscription-marker"] = []string{"trial"}
+			req.Header["X-NewAPI-Subscription-Marker"] = []string{"wrong"}
+
+			FinalizeSubscriptionMarkerHeader(req.Header, &relaycommon.RelayInfo{SubscriptionTrialMarker: marker})
+
+			requireNoSubscriptionMarkerHeader(t, req.Header)
+		})
+	}
+}
+
+func TestFinalizeSubscriptionMarkerHeaderRemovesRuntimeOverrideSpoof(t *testing.T) {
+	t.Parallel()
+
+	t.Run("channel_passthrough_and_client_header_override", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		ctx.Request.Header.Set(SubscriptionMarkerHeaderName, "trial")
+
+		info := &relaycommon.RelayInfo{
+			IsChannelTest: false,
+			ChannelMeta: &relaycommon.ChannelMeta{
+				HeadersOverride: map[string]any{
+					"*":                          "",
+					SubscriptionMarkerHeaderName: "{client_header:X-NewAPI-Subscription-Marker}",
+				},
+			},
+		}
+
+		headers, err := processHeaderOverride(info, ctx)
+		require.NoError(t, err)
+		upstreamReq := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+		applyHeaderOverrideToRequest(upstreamReq, headers)
+		require.Equal(t, "trial", upstreamReq.Header.Get(SubscriptionMarkerHeaderName))
+
+		FinalizeSubscriptionMarkerHeader(upstreamReq.Header, info)
+
+		requireNoSubscriptionMarkerHeader(t, upstreamReq.Header)
+	})
+
+	t.Run("runtime_pass_headers_override", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		recorder := httptest.NewRecorder()
+		ctx, _ := gin.CreateTestContext(recorder)
+		ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+
+		info := &relaycommon.RelayInfo{
+			IsChannelTest: false,
+			RequestHeaders: map[string]string{
+				SubscriptionMarkerHeaderName: "trial",
+			},
+			ChannelMeta: &relaycommon.ChannelMeta{
+				ParamOverride: map[string]any{
+					"operations": []any{
+						map[string]any{
+							"mode":  "pass_headers",
+							"value": []any{SubscriptionMarkerHeaderName},
+						},
+					},
+				},
+			},
+		}
+
+		_, err := relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-4.1"}`), info)
+		require.NoError(t, err)
+		require.True(t, info.UseRuntimeHeadersOverride)
+
+		headers, err := processHeaderOverride(info, ctx)
+		require.NoError(t, err)
+		upstreamReq := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+		applyHeaderOverrideToRequest(upstreamReq, headers)
+		require.Equal(t, "trial", upstreamReq.Header.Get(SubscriptionMarkerHeaderName))
+
+		FinalizeSubscriptionMarkerHeader(upstreamReq.Header, info)
+
+		requireNoSubscriptionMarkerHeader(t, upstreamReq.Header)
+	})
+}
+
+func TestFinalizeSubscriptionMarkerHeaderKeepsTrialAfterOverrideDeletes(t *testing.T) {
+	t.Parallel()
+
+	upstreamReq := httptest.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", nil)
+	upstreamReq.Header["x-newapi-subscription-marker"] = []string{"wrong"}
+	applyHeaderOverrideToRequest(upstreamReq, map[string]string{
+		SubscriptionMarkerHeaderName: "paid",
+	})
+
+	FinalizeSubscriptionMarkerHeader(upstreamReq.Header, &relaycommon.RelayInfo{SubscriptionTrialMarker: "trial"})
+
+	requireOnlyTrialSubscriptionMarkerHeader(t, upstreamReq.Header)
+}
+
+func subscriptionMarkerTestName(marker string) string {
+	if marker == "" {
+		return "empty"
+	}
+	return marker
+}
+
+func requireNoSubscriptionMarkerHeader(t *testing.T, headers http.Header) {
+	t.Helper()
+
+	require.Empty(t, headers.Get(SubscriptionMarkerHeaderName))
+	markerHeaderName := strings.ToLower(SubscriptionMarkerHeaderName)
+	for key := range headers {
+		require.NotEqual(t, markerHeaderName, strings.ToLower(key))
+	}
+}
+
+func requireOnlyTrialSubscriptionMarkerHeader(t *testing.T, headers http.Header) {
+	t.Helper()
+
+	require.Equal(t, "trial", headers.Get(SubscriptionMarkerHeaderName))
+	markerHeaderName := strings.ToLower(SubscriptionMarkerHeaderName)
+	matchedKeys := 0
+	for key, values := range headers {
+		if strings.ToLower(key) != markerHeaderName {
+			continue
+		}
+		matchedKeys++
+		require.Equal(t, []string{"trial"}, values)
+	}
+	require.Equal(t, 1, matchedKeys)
 }

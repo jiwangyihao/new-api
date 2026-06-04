@@ -98,7 +98,7 @@
 - 修改：`model/account_balance.go`
 - 测试：`model/account_balance_test.go`
 
-- [ ] **步骤 1：编写金额转换和分制扣减失败测试**
+- [x] **步骤 1：编写金额转换和分制扣减失败测试**
 
 在 `model/account_balance_test.go` 中新增测试：
 
@@ -189,7 +189,7 @@ func TestAccountBalanceTxInvalidatesAfterCommitOnly(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：
 
@@ -199,7 +199,7 @@ go test ./model -run 'TestAccountBalanceCentsFromCNY|TestDeductAndIncreaseUserAc
 
 预期：FAIL，至少包含 `undefined: AccountBalanceCentsFromCNY` 或 `undefined: IncreaseUserAccountBalanceTx`。
 
-- [ ] **步骤 3：实现 helper**
+- [x] **步骤 3：实现 helper**
 
 在 `model/account_balance.go` 中实现：
 
@@ -238,7 +238,7 @@ func IncreaseUserAccountBalanceTx(tx *gorm.DB, userId int, cents int) error {
 
 保留 `DeductUserAccountBalanceTx`，但把参数名改为 `cents`，错误信息保持兼容；`DeductUserAccountBalanceTx` 与 `IncreaseUserAccountBalanceTx` 的公开签名保持 `error`，事务内只更新数据库。调用方必须在 `DB.Transaction` 成功返回后统一调用 `InvalidateUserCache(userId)`，或使用 `AccountBalanceTxCacheInvalidator` 这类 after-commit 收集器记录 userId 并在事务提交后失效；不得在事务提交前删除缓存，避免并发请求在提交前把旧余额回填到 Redis。后续充值、补单、兑换码、签到、邀请奖励、管理员调额不得直接使用裸 `Update("quota", ...)` 作为完整实现，除非同事务成功后显式执行 after-commit 缓存失效并有测试覆盖。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 运行：
 
@@ -248,7 +248,7 @@ go test ./model -run 'TestAccountBalanceCentsFromCNY|TestDeductAndIncreaseUserAc
 
 预期：PASS。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add model/account_balance.go model/account_balance_test.go
@@ -265,7 +265,7 @@ git commit -m "feat(balance): 新增账户余额分制工具"
 - 修改：`model/main.go`
 - 测试：`model/account_balance_migration_test.go`
 
-- [ ] **步骤 1：编写迁移红测**
+- [x] **步骤 1：编写迁移红测**
 
 在 `model/account_balance_migration_test.go` 中新增测试，覆盖：
 
@@ -517,7 +517,7 @@ func TestEnsureAccountBalanceCentsMigrationRollbackDoesNotChangeRuntimeOptions(t
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./model -run 'TestEnsureAccountBalanceCentsMigration|TestFlushBatchUpdateTypeForMigration|TestTopUpAmountUnitColumnAutoMigrateSQLite' -count=1
@@ -525,7 +525,7 @@ go test ./model -run 'TestEnsureAccountBalanceCentsMigration|TestFlushBatchUpdat
 
 预期：FAIL，包含 `undefined: EnsureAccountBalanceCentsMigration`。
 
-- [ ] **步骤 3：实现可重试 batch drain 和检查型 Option 写入**
+- [x] **步骤 3：实现可重试 batch drain 和检查型 Option 写入**
 
 在 `model/utils.go` 增加：
 
@@ -655,7 +655,7 @@ data-stage-only 重试必须从 DB Option 重新加载已迁移的 runtime 配�
 迁移必须记录结构化审计日志，可通过 `logAccountBalanceMigrationStats(stats)` 实现并在测试中捕获。日志字段至少包含：`quota_per_unit` 与来源、每类更新数量（users、aff_quota、aff_history、wallet redemptions、blank wallet redemptions、checkins、KyrenProducts、CreemProducts、runtime options）、pending top-up 过期数量、签到配置迁移及舍入为 0 的数量、历史成功 `top_ups.amount` / `top_ups.money` skipped 数、data/final/time marker 写入状态、用户缓存清理方式、数量、失败原因和 Redis disabled skip 原因。
 
 
-- [ ] **步骤 3A：新增 TopUp 金额单位字段迁移**
+- [x] **步骤 3A：新增 TopUp 金额单位字段迁移**
 
 在 `model/topup.go` 增加：
 
@@ -670,7 +670,7 @@ type TopUp struct {
 ```
 
 在 `model/main.go` 的 AutoMigrate 与 SQLite 兼容路径确保 `top_ups.amount_unit` 自动补列；SQLite 使用 `ALTER TABLE ... ADD COLUMN`，MySQL / PostgreSQL 依赖 GORM 等价兼容逻辑。编写 `TestTopUpAmountUnitColumnAutoMigrateSQLite`，断言 SQLite AutoMigrate 后存在 `amount_unit`，并且旧记录空值可读、新订单可写 `account_balance_cents`。
-- [ ] **步骤 4：实现 JSON Option 迁移**
+- [x] **步骤 4：实现 JSON Option 迁移**
 
 在 `model/account_balance_migration.go` 中使用 `common.UnmarshalJsonStr` / `common.Marshal`：
 
@@ -701,7 +701,7 @@ func migrateKyrenTopUpProductsOptionTx(tx *gorm.DB, quotaPerUnit decimal.Decimal
 
 对 `CreemProducts` 同样处理 `quota` / `Quota`。不要引入 `encoding/json` marshal/unmarshal。
 
-- [ ] **步骤 5：运行迁移测试验证通过**
+- [x] **步骤 5：运行迁移测试验证通过**
 
 ```bash
 go test ./model -run 'TestEnsureAccountBalanceCentsMigration|TestFlushBatchUpdateTypeForMigration|TestTopUpAmountUnitColumnAutoMigrateSQLite|TestAccountBalanceCentsFromCNY' -count=1
@@ -709,7 +709,7 @@ go test ./model -run 'TestEnsureAccountBalanceCentsMigration|TestFlushBatchUpdat
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add model/account_balance_migration.go model/account_balance_migration_test.go model/utils.go model/account_balance.go model/option.go model/topup.go model/main.go
@@ -726,7 +726,7 @@ git commit -m "feat(balance): 增加账户余额分制迁移"
 - 测试：`controller/loadtest_runtime_test.go`
 - 修改：`docs/superpowers/specs/2026-05-30-account-balance-cents-migration-design.md`
 
-- [ ] **步骤 1：编写旧实例本地 drain 红测**
+- [x] **步骤 1：编写旧实例本地 drain 红测**
 
 在 `controller/loadtest_runtime_test.go` 增加仅 loopback 可调用的 drain 测试。该入口复用已有 `LOADTEST_RUNTIME_STATS_ENABLED=true` + loopback 约束，不对公网开放：
 
@@ -768,7 +768,7 @@ func TestLoadtestRuntimeDrainUserQuotaBatchReportsPendingWhenFlushFails(t *testi
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TestLoadtestRuntimeDrainUserQuotaBatch' -count=1
@@ -776,7 +776,7 @@ go test ./controller -run 'TestLoadtestRuntimeDrainUserQuotaBatch' -count=1
 
 预期：FAIL，返回 `404` 或缺少测试 helper。
 
-- [ ] **步骤 3：实现旧实例本地 drain 入口**
+- [x] **步骤 3：实现旧实例本地 drain 入口**
 
 在 `RegisterLoadtestRuntimeRoute` 内新增本地 POST 入口：
 
@@ -807,7 +807,7 @@ r.POST("/debug/loadtest/runtime/batch-update/user-quota/drain", func(c *gin.Cont
 `errorString(err)` 是当前文件内的小 helper；`err == nil` 时返回空字符串。不要绕过已有 loopback / env gate。
 
 
-- [ ] **步骤 4：把短停机运维顺序写入规格**
+- [x] **步骤 4：把短停机运维顺序写入规格**
 
 在规格文档「迁移策略」后补充可执行顺序：
 
@@ -824,7 +824,7 @@ r.POST("/debug/loadtest/runtime/batch-update/user-quota/drain", func(c *gin.Cont
 7. 启动包含本计划迁移代码的新版本。新版本在 HTTP 服务和后台任务启动前执行 `EnsureAccountBalanceCentsMigration()`。
 ```
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./controller -run 'TestLoadtestRuntimeDrainUserQuotaBatch|TestLoadtestRuntimeRoute' -count=1
@@ -832,7 +832,7 @@ go test ./controller -run 'TestLoadtestRuntimeDrainUserQuotaBatch|TestLoadtestRu
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add controller/loadtest_runtime.go controller/loadtest_runtime_test.go docs/superpowers/specs/2026-05-30-account-balance-cents-migration-design.md
@@ -847,7 +847,7 @@ git commit -m "feat(balance): 增加余额迁移旧实例 drain 入口"
 - 修改：`model/user_cache.go`
 - 测试：`model/account_balance_migration_test.go`。
 - 本任务依赖任务 2A 的发布边界：预迁移版本不能包含本任务启动接入；迁移版本才包含本任务。
-- [ ] **步骤 1：编写缓存清理红测**
+- [x] **步骤 1：编写缓存清理红测**
 
 在 `model/account_balance_migration_test.go` 增加：
 
@@ -881,7 +881,7 @@ func TestEnsureAccountBalanceCentsMigrationDoesNotFinalizeWhenCacheClearFails(t 
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./model -run 'TestEnsureAccountBalanceCentsMigrationInvalidatesOldUserCache|TestEnsureAccountBalanceCentsMigrationDoesNotFinalizeWhenCacheClearFails' -count=1
@@ -889,7 +889,7 @@ go test ./model -run 'TestEnsureAccountBalanceCentsMigrationInvalidatesOldUserCa
 
 预期：FAIL，旧缓存仍返回 `20000000` 或缓存 seed helper 未实现。
 
-- [ ] **步骤 3：实现用户缓存清理**
+- [x] **步骤 3：实现用户缓存清理**
 
 在 `model/user_cache.go` 增加批量失效接口。优先逐用户删除，不依赖 Redis `KEYS`：
 
@@ -909,7 +909,7 @@ func InvalidateAllUserCacheByIDs(userIds []int) error {
 
 迁移阶段先查询所有用户 ID，数据提交后调用该函数；Redis 未启用时返回 nil。Redis 删除任一用户缓存失败时，`EnsureAccountBalanceCentsMigration()` 必须返回错误，保留 `AccountBalanceCentsDataMigrated=true`，但不得写 `AccountBalanceCentsMigratedAt` 和 `AccountBalanceCentsMigrated`；下一次启动只重试运行时同步、缓存清理和最终标记，严禁重复除法。
 
-- [ ] **步骤 4：接入启动顺序**
+- [x] **步骤 4：接入启动顺序**
 
 在 `main.go` 的 `InitResources()` 中，移动或插入迁移调用，顺序必须是：
 
@@ -925,7 +925,7 @@ if err = model.EnsureAccountBalanceCentsMigration(); err != nil {
 
 `EnsureAccountBalanceCentsMigration()` 必须早于 `common.StartSystemMonitor()`、`model.SyncOptions()`、`model.InitBatchUpdater()`、异步任务轮询和 HTTP 服务启动。
 
-- [ ] **步骤 5：运行测试验证通过**
+- [x] **步骤 5：运行测试验证通过**
 
 ```bash
 go test ./model -run 'TestEnsureAccountBalanceCentsMigrationInvalidatesOldUserCache|TestEnsureAccountBalanceCentsMigrationDoesNotFinalizeWhenCacheClearFails|TestEnsureAccountBalanceCentsMigration' -count=1
@@ -933,7 +933,7 @@ go test ./model -run 'TestEnsureAccountBalanceCentsMigrationInvalidatesOldUserCa
 
 预期：PASS。
 
-- [ ] **步骤 6：提交**
+- [x] **步骤 6：提交**
 
 ```bash
 git add main.go model/user_cache.go model/account_balance_migration.go model/account_balance_migration_test.go
@@ -948,7 +948,7 @@ git commit -m "feat(balance): 接入分制迁移启动流程"
 - 修改：`controller/subscription_payment_balance.go`
 - 测试：`controller/subscription_payment_balance_test.go` 或现有订阅支付测试文件
 
-- [ ] **步骤 1：编写余额购买红测**
+- [x] **步骤 1：编写余额购买红测**
 
 新增测试：
 
@@ -967,7 +967,7 @@ func TestSubscriptionBalancePayAmountUsesCents(t *testing.T) {
 }
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 ```bash
 go test ./controller -run 'TestSubscriptionBalancePayAmountUsesCents' -count=1
@@ -975,7 +975,7 @@ go test ./controller -run 'TestSubscriptionBalancePayAmountUsesCents' -count=1
 
 预期：FAIL，返回旧倍率金额。
 
-- [ ] **步骤 3：修改实现**
+- [x] **步骤 3：修改实现**
 
 将 `subscriptionBalancePayAmount` 改为：
 
@@ -994,7 +994,7 @@ func subscriptionBalancePayAmount(price float64) (int, error) {
 
 移除本函数对 `common.QuotaPerUnit` 的依赖。
 
-- [ ] **步骤 4：运行测试验证通过**
+- [x] **步骤 4：运行测试验证通过**
 
 ```bash
 go test ./controller -run 'TestSubscriptionBalancePayAmountUsesCents|Test.*Balance.*Subscription' -count=1
@@ -1002,7 +1002,7 @@ go test ./controller -run 'TestSubscriptionBalancePayAmountUsesCents|Test.*Balan
 
 预期：PASS。
 
-- [ ] **步骤 5：提交**
+- [x] **步骤 5：提交**
 
 ```bash
 git add controller/subscription_payment_balance.go controller/subscription_payment_balance_test.go

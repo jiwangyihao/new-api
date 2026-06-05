@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -146,6 +147,75 @@ func TestClassifyGPTAbuseSignalFromSSETrustedAccessForCyber(t *testing.T) {
 	assert.Equal(t, GPTAbuseSeverityHigh, signal.Severity)
 	assert.Equal(t, GPTAbuseSourceSSEMetadata, signal.Source)
 	assert.True(t, signal.CountEligible)
+	require.NotEmpty(t, signal.Extra)
+	var extra map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(signal.Extra, &extra))
+	warning, ok := extra["upstream_warning"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "response.metadata", warning["event_type"])
+	assert.Contains(t, warning["raw_error"], "trusted_access_for_cyber")
+}
+
+func TestClassifyGPTAbuseSignalFromSSEEventStoresUpstreamWarningDetails(t *testing.T) {
+	payload := []byte(`{"type":"response.failed","metadata":{"tenant":"secret-tenant"},"response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`)
+
+	signal := ClassifyGPTAbuseSignalFromSSEEvent("response.failed", payload)
+
+	require.True(t, signal.Matched)
+	require.NotEmpty(t, signal.Extra)
+	var extra map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(signal.Extra, &extra))
+	warning, ok := extra["upstream_warning"].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, signal.Extra, "secret-tenant")
+	assert.NotContains(t, warning["raw_error"], "secret-tenant")
+	assert.Equal(t, "response.failed", warning["event_type"])
+	assert.Equal(t, "failed", warning["response_status"])
+	assert.Equal(t, "cyber_policy", warning["error_code"])
+	assert.Equal(t, "invalid_request_error", warning["error_type"])
+	assert.Equal(t, "This request has been flagged for possible cybersecurity risk.", warning["error_message"])
+	assert.Contains(t, warning["raw_error"], "cyber_policy")
+}
+
+func TestClassifyGPTAbuseSignalExtraTruncatesCodeAndType(t *testing.T) {
+	longCode := strings.Repeat("c", 5000)
+	longType := strings.Repeat("t", 5000)
+	body := []byte(`{"error":{"message":"Possible cybersecurity risk detected","type":"` + longType + `","code":"` + longCode + `"}}`)
+
+	signal := ClassifyGPTAbuseSignalFromHTTPError(http.StatusBadRequest, body)
+
+	require.True(t, signal.Matched)
+	var extra map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(signal.Extra, &extra))
+	warning, ok := extra["upstream_warning"].(map[string]any)
+	require.True(t, ok)
+	assert.LessOrEqual(t, len(warning["error_code"].(string)), 4096)
+	assert.LessOrEqual(t, len(warning["error_type"].(string)), 4096)
+}
+
+func TestRecordGPTAbuseSignalPersistsUpstreamWarningDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseSignalServiceTest(t)
+	common.GPTAbuseLimitEnabled = false
+	c := newGPTAbuseSignalTestContext("/v1/responses")
+	info := newGPTAbuseSignalTestRelayInfo()
+	info.RequestURLPath = "/v1/responses"
+
+	signal := ClassifyGPTAbuseSignalFromHTTPError(http.StatusBadRequest, []byte(`{"error":{"message":"Network security warning: possible abuse policy violation","type":"invalid_request_error","code":"policy_violation"}}`))
+	signal.UpstreamRequestId = "req-upstream-warning"
+	RecordGPTAbuseSignal(c, info, signal)
+
+	var got model.GPTAbuseSignalLog
+	require.NoError(t, model.DB.Where("upstream_request_id = ?", "req-upstream-warning").First(&got).Error)
+	require.NotEmpty(t, got.Extra)
+	var extra map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(got.Extra, &extra))
+	warning, ok := extra["upstream_warning"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "http_error", warning["event_type"])
+	assert.Equal(t, "policy_violation", warning["error_code"])
+	assert.Equal(t, "invalid_request_error", warning["error_type"])
+	assert.Equal(t, "Network security warning: possible abuse policy violation", warning["error_message"])
 }
 
 func TestGPTUpstreamRequestIDPrefersOpenAIRequestID(t *testing.T) {

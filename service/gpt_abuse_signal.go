@@ -46,6 +46,7 @@ type GPTAbuseSignal struct {
 	UpstreamRequestId string
 	Stream            bool
 	CountEligible     bool
+	Extra             string
 }
 
 type gptErrorEnvelope struct {
@@ -66,14 +67,17 @@ func ClassifyGPTAbuseSignalFromHTTPError(statusCode int, body []byte) GPTAbuseSi
 func ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data []byte) GPTAbuseSignal {
 	eventType = strings.TrimSpace(eventType)
 	if eventType == "response.metadata" && containsTrustedAccessForCyber(string(data)) {
-		return GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindHighRiskCyberReroute, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceSSEMetadata, CountEligible: true, Stream: true}
+		return GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindHighRiskCyberReroute, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceSSEMetadata, CountEligible: true, Stream: true, Extra: gptAbuseUpstreamWarningExtra(eventType, "", gptErrorObject{}, `{"openai_verification_recommendation":["trusted_access_for_cyber"]}`)}
 	}
 	if eventType != "response.failed" && eventType != "response.error" {
 		return GPTAbuseSignal{}
 	}
-	errorObject := parseGPTSSEErrorObject(data)
+	errorObject, responseStatus := parseGPTSSEErrorObject(data)
 	signal := classifyGPTAbuseError(http.StatusInternalServerError, errorObject, GPTAbuseSourceSSEResponseFailed)
 	signal.Stream = true
+	if signal.Matched {
+		signal.Extra = gptAbuseUpstreamWarningExtra(eventType, responseStatus, errorObject, gptAbuseErrorObjectRaw(errorObject))
+	}
 	return signal
 }
 
@@ -255,6 +259,7 @@ func buildGPTAbuseSignalLog(c *gin.Context, info *relaycommon.RelayInfo, signal 
 		Source:               signal.Source,
 		Kind:                 signal.Kind,
 		Severity:             signal.Severity,
+		Extra:                signal.Extra,
 		StatusCode:           signal.StatusCode,
 		ErrorCode:            signal.ErrorCode,
 		ErrorType:            signal.ErrorType,
@@ -352,20 +357,21 @@ func parseGPTErrorObject(body []byte) gptErrorObject {
 	return envelope.Error
 }
 
-func parseGPTSSEErrorObject(data []byte) gptErrorObject {
+func parseGPTSSEErrorObject(data []byte) (gptErrorObject, string) {
 	var payload struct {
 		Error    gptErrorObject `json:"error"`
 		Response struct {
-			Error gptErrorObject `json:"error"`
+			Status string         `json:"status"`
+			Error  gptErrorObject `json:"error"`
 		} `json:"response"`
 	}
 	if err := common.Unmarshal(data, &payload); err != nil {
-		return gptErrorObject{Message: string(data)}
+		return gptErrorObject{Message: string(data)}, ""
 	}
 	if payload.Response.Error.Message != "" || payload.Response.Error.Type != "" || payload.Response.Error.Code != nil {
-		return payload.Response.Error
+		return payload.Response.Error, payload.Response.Status
 	}
-	return payload.Error
+	return payload.Error, payload.Response.Status
 }
 
 func classifyGPTAbuseError(statusCode int, errObj gptErrorObject, source string) GPTAbuseSignal {
@@ -401,6 +407,9 @@ func classifyGPTAbuseError(statusCode int, errObj gptErrorObject, source string)
 		base.Matched = false
 		base.CountEligible = false
 	}
+	if base.Matched && base.Extra == "" {
+		base.Extra = gptAbuseUpstreamWarningExtra(source, "", errObj, "")
+	}
 	return base
 }
 
@@ -431,6 +440,55 @@ func isGenericGPTPolicyViolationMessage(message string) bool {
 		return true
 	}
 	return false
+}
+
+func gptAbuseErrorObjectRaw(errObj gptErrorObject) string {
+	fields := map[string]any{}
+	if message := strings.TrimSpace(errObj.Message); message != "" {
+		fields["message"] = truncateGPTAbuseWarningDetail(message)
+	}
+	if errType := strings.TrimSpace(errObj.Type); errType != "" {
+		fields["type"] = truncateGPTAbuseWarningDetail(errType)
+	}
+	if code := strings.TrimSpace(anyToString(errObj.Code)); code != "" {
+		fields["code"] = truncateGPTAbuseWarningDetail(code)
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	data, err := common.Marshal(fields)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func gptAbuseUpstreamWarningExtra(eventType string, responseStatus string, errObj gptErrorObject, rawError string) string {
+	warning := map[string]any{
+		"event_type":    strings.TrimSpace(eventType),
+		"error_code":    truncateGPTAbuseWarningDetail(strings.TrimSpace(anyToString(errObj.Code))),
+		"error_type":    truncateGPTAbuseWarningDetail(strings.TrimSpace(errObj.Type)),
+		"error_message": truncateGPTAbuseWarningDetail(strings.TrimSpace(errObj.Message)),
+	}
+	if status := strings.TrimSpace(responseStatus); status != "" {
+		warning["response_status"] = status
+	}
+	if raw := truncateGPTAbuseWarningDetail(strings.TrimSpace(rawError)); raw != "" {
+		warning["raw_error"] = raw
+	}
+	extra, err := common.Marshal(map[string]any{"upstream_warning": warning})
+	if err != nil {
+		return ""
+	}
+	return string(extra)
+}
+
+func truncateGPTAbuseWarningDetail(value string) string {
+	const maxLen = 4096
+	if len(value) <= maxLen {
+		return value
+	}
+	return value[:maxLen]
 }
 
 func containsTrustedAccessForCyber(value string) bool {

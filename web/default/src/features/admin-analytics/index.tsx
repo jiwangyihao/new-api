@@ -1,5 +1,6 @@
 import { useEffect, useMemo, type JSX, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
+import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -8,9 +9,13 @@ import { Label } from '@/components/ui/label'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
-import { ADMIN_ANALYTICS_TABS } from './constants'
+import { ADMIN_ANALYTICS_MAX_LIMIT, ADMIN_ANALYTICS_TABS } from './constants'
 import { buildAdminAnalyticsDrilldown } from './lib/drilldown'
-import { switchAdminAnalyticsTab } from './lib/filters'
+import {
+  enableAdminAnalyticsAllRows,
+  enableAdminAnalyticsPagedRows,
+  switchAdminAnalyticsTab,
+} from './lib/filters'
 import {
   formatAdminMoneyBreakdown,
   formatAdminPercent,
@@ -314,6 +319,19 @@ function AdminAnalyticsFilterBar(props: {
                     {t('adminAnalytics.filters.excludedMode.excludedOnly')}
                   </NativeSelectOption>
                 </NativeSelect>
+                <Button
+                  type='button'
+                  variant='outline'
+                  size='sm'
+                  render={
+                    <Link
+                      to='/system-settings/billing/$section'
+                      params={{ section: 'statistics' }}
+                    />
+                  }
+                >
+                  {t('adminAnalytics.filters.manageExcludedUsers')}
+                </Button>
               </div>
               <div className='grid gap-2'>
                 <Label htmlFor='admin-analytics-currency'>
@@ -372,6 +390,10 @@ function AdminAnalyticsFilterBar(props: {
                   }}
                 />
               </div>
+              <PaidAnalyticsRowControls
+                value={props.value}
+                onApply={props.onApply}
+              />
             </>
           ) : (
             <div className='grid gap-2'>
@@ -395,6 +417,105 @@ function AdminAnalyticsFilterBar(props: {
         <ActiveFilterSummary value={props.value} onApply={props.onApply} />
       </CardContent>
     </Card>
+  )
+}
+
+function PaidAnalyticsRowControls(props: {
+  value: AdminAnalyticsCanonicalFilters
+  onApply: (next: AdminAnalyticsCanonicalFilters) => void
+}): JSX.Element {
+  const { t } = useTranslation()
+  const isAllRows = props.value.limit === 0
+  const pageSize = isAllRows ? ADMIN_ANALYTICS_MAX_LIMIT : props.value.limit
+  const currentPage = isAllRows
+    ? 1
+    : Math.floor(props.value.offset / Math.max(pageSize, 1)) + 1
+
+  return (
+    <div className='grid gap-2 lg:col-span-2'>
+      <Label>{t('adminAnalytics.pagination.displayMode')}</Label>
+      <div className='flex flex-wrap items-center gap-2'>
+        <Button
+          type='button'
+          size='sm'
+          variant={isAllRows ? 'default' : 'outline'}
+          onClick={() =>
+            props.onApply(enableAdminAnalyticsAllRows(props.value))
+          }
+        >
+          {t('adminAnalytics.pagination.allRows')}
+        </Button>
+        <Button
+          type='button'
+          size='sm'
+          variant={isAllRows ? 'outline' : 'default'}
+          onClick={() =>
+            props.onApply(enableAdminAnalyticsPagedRows(props.value))
+          }
+        >
+          {t('adminAnalytics.pagination.pagedRows')}
+        </Button>
+        {!isAllRows ? (
+          <>
+            <NativeSelect
+              aria-label={t('adminAnalytics.pagination.pageSize')}
+              value={String(pageSize)}
+              onChange={(event) =>
+                props.onApply(
+                  enableAdminAnalyticsPagedRows(
+                    props.value,
+                    Number(event.target.value)
+                  )
+                )
+              }
+            >
+              <NativeSelectOption value='20'>20</NativeSelectOption>
+              <NativeSelectOption value='50'>50</NativeSelectOption>
+              <NativeSelectOption value={String(ADMIN_ANALYTICS_MAX_LIMIT)}>
+                {ADMIN_ANALYTICS_MAX_LIMIT}
+              </NativeSelectOption>
+            </NativeSelect>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              disabled={props.value.offset <= 0}
+              onClick={() =>
+                props.onApply({
+                  ...props.value,
+                  offset: Math.max(props.value.offset - pageSize, 0),
+                })
+              }
+            >
+              {t('adminAnalytics.pagination.previousPage')}
+            </Button>
+            <Button
+              type='button'
+              size='sm'
+              variant='outline'
+              onClick={() =>
+                props.onApply({
+                  ...props.value,
+                  offset: props.value.offset + pageSize,
+                })
+              }
+            >
+              {t('adminAnalytics.pagination.nextPage')}
+            </Button>
+            <span className='text-muted-foreground text-xs'>
+              {t('adminAnalytics.pagination.currentPage', {
+                page: currentPage,
+              })}
+            </span>
+          </>
+        ) : null}
+      </div>
+      <div className='text-muted-foreground text-xs'>
+        {isAllRows
+          ? t('adminAnalytics.pagination.allRowsDescription')
+          : t('adminAnalytics.pagination.pagedRowsDescription')}
+      </div>
+    </div>
   )
 }
 

@@ -3,6 +3,8 @@ import test from 'node:test'
 import {
   buildAdminAnalyticsApiParams,
   buildAdminAnalyticsCanonicalFilters,
+  enableAdminAnalyticsAllRows,
+  enableAdminAnalyticsPagedRows,
   switchAdminAnalyticsTab,
 } from './filters'
 
@@ -45,8 +47,9 @@ test('new paid subscription analytics tabs are accepted', () => {
     'paid-subscription-value'
   )
   assert.equal(
-    buildAdminAnalyticsCanonicalFilters({ tab: 'invitation-paid-subscriptions' })
-      .tab,
+    buildAdminAnalyticsCanonicalFilters({
+      tab: 'invitation-paid-subscriptions',
+    }).tab,
     'invitation-paid-subscriptions'
   )
 })
@@ -131,7 +134,10 @@ test('subscription id is serialized only when descriptor opts in', () => {
     subscription_id: 9,
   })
 
-  assert.equal(buildAdminAnalyticsApiParams(filters).has('subscription_id'), false)
+  assert.equal(
+    buildAdminAnalyticsApiParams(filters).has('subscription_id'),
+    false
+  )
   assert.equal(
     buildAdminAnalyticsApiParams(filters, { includeSubscriptionID: true }).get(
       'subscription_id'
@@ -167,7 +173,10 @@ test('new paid subscription analytics tabs do not send default range until expli
 })
 
 test('analytics filters support unbounded list requests', () => {
-  const filters = buildAdminAnalyticsCanonicalFilters({ limit: 'all', top_n: '0' })
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    limit: 'all',
+    top_n: '0',
+  })
 
   assert.equal(filters.limit, 0)
   assert.equal(filters.top_n, 0)
@@ -240,12 +249,36 @@ test('switching tabs resets list limits for the target tab family', () => {
   assert.equal(nextLegacyFilters.top_n, 20)
 })
 
+test('paid analytics list controls can switch between all rows and paged rows', () => {
+  const paged = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+    limit: '25',
+    top_n: '25',
+    offset: '50',
+  })
+
+  const allRows = enableAdminAnalyticsAllRows(paged)
+  assert.equal(allRows.limit, 0)
+  assert.equal(allRows.top_n, 0)
+  assert.equal(allRows.offset, 0)
+
+  const nextPaged = enableAdminAnalyticsPagedRows(allRows, 30)
+  assert.equal(nextPaged.limit, 30)
+  assert.equal(nextPaged.top_n, 30)
+  assert.equal(nextPaged.offset, 0)
+})
 
 test('legacy tabs still send their default recent range', () => {
-  const filters = buildAdminAnalyticsCanonicalFilters({ tab: 'overview' }, 1_000_000)
+  const filters = buildAdminAnalyticsCanonicalFilters(
+    { tab: 'overview' },
+    1_000_000
+  )
   const params = buildAdminAnalyticsApiParams(filters)
 
-  assert.equal(params.get('start_timestamp'), String(1_000_000 - 30 * 24 * 60 * 60))
+  assert.equal(
+    params.get('start_timestamp'),
+    String(1_000_000 - 30 * 24 * 60 * 60)
+  )
   assert.equal(params.get('end_timestamp'), '1000000')
 })
 
@@ -340,7 +373,6 @@ test('api params omit deprecated analytics params', () => {
   assert.equal(params.has(deprecatedRequestDimensionParam), false)
   assert.equal(params.has('groups'), false)
 })
-
 
 test('usage params omit sort unless requested', () => {
   const filters = buildAdminAnalyticsCanonicalFilters({ sort_by: 'metric' })

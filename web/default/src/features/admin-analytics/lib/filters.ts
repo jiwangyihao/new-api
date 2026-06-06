@@ -211,6 +211,29 @@ function clampAdminAnalyticsLimit(value: number): number {
   return Math.min(value, ADMIN_ANALYTICS_MAX_LIMIT)
 }
 
+export function enableAdminAnalyticsAllRows(
+  filters: AdminAnalyticsCanonicalFilters
+): AdminAnalyticsCanonicalFilters {
+  return {
+    ...filters,
+    limit: adminAnalyticsNoLimit,
+    top_n: adminAnalyticsNoLimit,
+    offset: 0,
+  }
+}
+
+export function enableAdminAnalyticsPagedRows(
+  filters: AdminAnalyticsCanonicalFilters,
+  pageSize = ADMIN_ANALYTICS_MAX_LIMIT
+): AdminAnalyticsCanonicalFilters {
+  const limit = clampAdminAnalyticsLimit(pageSize)
+  return {
+    ...filters,
+    limit: limit === adminAnalyticsNoLimit ? ADMIN_ANALYTICS_MAX_LIMIT : limit,
+    top_n: limit === adminAnalyticsNoLimit ? ADMIN_ANALYTICS_MAX_LIMIT : limit,
+    offset: 0,
+  }
+}
 function parseBoolean(value: unknown, fallback: boolean): boolean {
   const raw = firstString(value)?.trim().toLowerCase()
   if (raw === undefined) return fallback
@@ -355,7 +378,8 @@ export function buildAdminAnalyticsApiParams(
   if (filters.snapshot_at !== undefined) {
     params.append('snapshot_at', String(filters.snapshot_at))
   }
-  if (filters.currency !== undefined) params.append('currency', filters.currency)
+  if (filters.currency !== undefined)
+    params.append('currency', filters.currency)
   params.append('excluded_mode', filters.excluded_mode)
   params.append('active_only', String(filters.active_only))
   if (filters.inviter_id !== undefined) {

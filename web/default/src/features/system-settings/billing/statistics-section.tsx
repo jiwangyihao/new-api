@@ -16,13 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState, type JSX } from 'react'
+import * as z from 'zod'
 import { useFieldArray, useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import * as z from 'zod'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { formatTimestampToDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -34,7 +35,8 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { formatTimestampToDate } from '@/lib/format'
+import { searchUsers } from '@/features/users/api'
+import type { User } from '@/features/users/types'
 import {
   SettingsFormActionBar,
   SettingsFormSaveButton,
@@ -109,7 +111,94 @@ export function formatSubscriptionAnalyticsExcludedBy(
   if (value === undefined || value <= 0) return '—'
   return String(value)
 }
+function ExcludedUserSearchSelect(props: {
+  disabled: boolean
+  onSelect: (user: User) => void
+}): JSX.Element {
+  const { t } = useTranslation()
+  const [keyword, setKeyword] = useState('')
+  const [users, setUsers] = useState<User[]>([])
+  const [loading, setLoading] = useState(false)
 
+  async function handleSearch() {
+    const trimmed = keyword.trim()
+    if (!trimmed) {
+      setUsers([])
+      return
+    }
+    setLoading(true)
+    try {
+      const response = await searchUsers({
+        keyword: trimmed,
+        p: 1,
+        page_size: 8,
+      })
+      if (response.success) {
+        setUsers(response.data?.items ?? [])
+      } else {
+        toast.error(response.message || t('Failed to search users'))
+      }
+    } catch {
+      toast.error(t('Failed to search users'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className='space-y-2 md:col-span-2'>
+      <FormLabel>
+        {t('systemSettings.billing.statistics.searchUsers')}
+      </FormLabel>
+      <div className='flex gap-2'>
+        <Input
+          value={keyword}
+          placeholder={t(
+            'systemSettings.billing.statistics.searchUsersPlaceholder'
+          )}
+          disabled={props.disabled}
+          onChange={(event) => setKeyword(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return
+            event.preventDefault()
+            void handleSearch()
+          }}
+        />
+        <Button
+          type='button'
+          variant='outline'
+          disabled={props.disabled || loading}
+          onClick={() => void handleSearch()}
+        >
+          {loading ? t('Loading...') : t('Search')}
+        </Button>
+      </div>
+      {users.length > 0 ? (
+        <div className='rounded-md border p-1'>
+          {users.map((user) => (
+            <Button
+              key={user.id}
+              type='button'
+              variant='ghost'
+              className='h-auto w-full justify-start px-2 py-1.5 text-left'
+              disabled={props.disabled}
+              onClick={() => props.onSelect(user)}
+            >
+              <span className='flex flex-col'>
+                <span>{user.username || `#${user.id}`}</span>
+                <span className='text-muted-foreground text-xs'>
+                  #{user.id}
+                  {user.display_name ? ` · ${user.display_name}` : ''}
+                  {user.email ? ` · ${user.email}` : ''}
+                </span>
+              </span>
+            </Button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 export function SubscriptionAnalyticsStatisticsSection(
   props: SubscriptionAnalyticsStatisticsSectionProps
@@ -161,7 +250,7 @@ export function SubscriptionAnalyticsStatisticsSection(
             type='button'
             variant='outline'
             onClick={() =>
-              excludedUsers.append({ user_id: 1, username: '', reason: '' })
+              excludedUsers.append({ user_id: 0, username: '', reason: '' })
             }
             disabled={updateOption.isPending}
           >
@@ -182,6 +271,16 @@ export function SubscriptionAnalyticsStatisticsSection(
           <FormDescription>
             {t('systemSettings.billing.statistics.help')}
           </FormDescription>
+          <ExcludedUserSearchSelect
+            disabled={updateOption.isPending}
+            onSelect={(user) =>
+              excludedUsers.append({
+                user_id: user.id,
+                username: user.username,
+                reason: '',
+              })
+            }
+          />
           {excludedUsers.fields.length === 0 ? (
             <div className='text-muted-foreground rounded-md border p-3 text-sm'>
               {t('systemSettings.billing.statistics.noExcludedUsers')}

@@ -67,16 +67,13 @@ func normalizeAdminUsageQuery(query AdminAnalyticsUsageQuery) AdminAnalyticsUsag
 	if query.PlanAttribution == "" {
 		query.PlanAttribution = dto.AdminPlanAttributionCurrent
 	}
-	if query.TopN <= 0 {
-		query.TopN = query.Limit
-	}
-	if query.TopN <= 0 {
+	if query.TopN < 0 {
 		query.TopN = AdminAnalyticsDefaultLimit
 	} else if query.TopN > AdminAnalyticsMaxLimit {
 		query.TopN = AdminAnalyticsMaxLimit
 	}
-	if query.Limit <= 0 {
-		query.Limit = query.TopN
+	if query.Limit < 0 || (query.Limit == AdminAnalyticsNoLimit && !query.LimitExplicit) {
+		query.Limit = AdminAnalyticsDefaultLimit
 	}
 	return query
 }

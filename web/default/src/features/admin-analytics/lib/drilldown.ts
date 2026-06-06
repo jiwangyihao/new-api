@@ -29,16 +29,7 @@ export function buildAdminAnalyticsDrilldown(
   if (target === null || target === undefined) return null
   switch (target.kind) {
     case 'admin_users':
-      return {
-        to: '/users',
-        search: {
-          userId: target.user_id,
-          userIds: target.user_ids,
-          status: target.user_status,
-          planId: target.plan_id,
-          inviterId: target.inviter_id,
-        },
-      }
+      return null
     case 'admin_usage_logs':
       return {
         to: '/usage-logs/$section',
@@ -75,17 +66,7 @@ export function buildAdminAnalyticsDrilldown(
         },
       }
     case 'paid_subscription_value_user':
-      return {
-        to: '/admin-analytics',
-        search: {
-          ...withAdminAnalyticsTab(
-            withoutSubscriptionID(filters),
-            'paid-subscription-value'
-          ),
-          user_ids:
-            target.user_id !== undefined ? [target.user_id] : filters.user_ids,
-        },
-      }
+      return null
     case 'paid_subscription_value_subscription': {
       const search = withAdminAnalyticsTab(
         withoutSubscriptionID(filters),
@@ -120,17 +101,7 @@ export function buildAdminAnalyticsDrilldown(
         },
       }
     case 'invitation_paid_invitee':
-      return {
-        to: '/admin-analytics',
-        search: {
-          ...withAdminAnalyticsTab(
-            withoutSubscriptionID(filters),
-            'invitation-paid-subscriptions'
-          ),
-          inviter_id: target.inviter_id,
-          invitee_id: target.invitee_id,
-        },
-      }
+      return null
     default:
       return null
   }

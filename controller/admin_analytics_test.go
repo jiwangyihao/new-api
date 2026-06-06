@@ -139,6 +139,24 @@ func TestAdminAnalyticsOverviewParserStillDefaultsToThirtyDays(t *testing.T) {
 	require.False(t, query.TimeRangeExplicit)
 }
 
+func TestAdminAnalyticsParserDefaultsToConservativeLimit(t *testing.T) {
+	ctx, _ := newAdminAnalyticsParserContext(t, "/api/admin-analytics/overview")
+
+	query, err := parseAdminAnalyticsQuery(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, model.AdminAnalyticsDefaultLimit, query.Limit)
+}
+
+func TestAdminAnalyticsParserAcceptsNoLimit(t *testing.T) {
+	ctx, _ := newAdminAnalyticsParserContext(t, "/api/admin-analytics/overview?limit=0")
+
+	query, err := parseAdminAnalyticsQuery(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, model.AdminAnalyticsNoLimit, query.Limit)
+}
+
 func TestPaidSubscriptionValueParserParsesSharedFilters(t *testing.T) {
 	ctx, _ := newAdminAnalyticsParserContext(t, "/api/admin-analytics/paid-subscription-value/users?snapshot_at=1000&plan_ids=2&plan_ids=1&user_ids=4&user_ids=3&sources=order&sources=admin&grant_reasons=order&grant_reasons=redemption&business_codes=pro&business_codes=team&currency=CNY&excluded_mode=include_excluded&active_only=true&subscription_id=11&inviter_id=5&invitee_id=6&limit=50&offset=7&sort_order=asc")
 
@@ -183,6 +201,7 @@ func TestInvitationPaidParserParsesSharedFilters(t *testing.T) {
 	require.Equal(t, dto.AdminAnalyticsSortAsc, query.SortOrder)
 
 }
+
 type adminAnalyticsPanelEnvelopeResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
@@ -192,13 +211,25 @@ type adminAnalyticsPanelEnvelopeResponse struct {
 			SnapshotAt     int64 `json:"snapshot_at"`
 		} `json:"range"`
 		Data struct {
-			Summary       map[string]any `json:"summary"`
-			Users         struct{ Items []map[string]any `json:"items"` } `json:"users"`
-			Subscriptions struct{ Items []map[string]any `json:"items"` } `json:"subscriptions"`
-			Plans         struct{ Items []map[string]any `json:"items"` } `json:"plans"`
-			Sources       struct{ Items []map[string]any `json:"items"` } `json:"sources"`
-			Inviters      struct{ Items []map[string]any `json:"items"` } `json:"inviters"`
-			Invitees      struct{ Items []map[string]any `json:"items"` } `json:"invitees"`
+			Summary map[string]any `json:"summary"`
+			Users   struct {
+				Items []map[string]any `json:"items"`
+			} `json:"users"`
+			Subscriptions struct {
+				Items []map[string]any `json:"items"`
+			} `json:"subscriptions"`
+			Plans struct {
+				Items []map[string]any `json:"items"`
+			} `json:"plans"`
+			Sources struct {
+				Items []map[string]any `json:"items"`
+			} `json:"sources"`
+			Inviters struct {
+				Items []map[string]any `json:"items"`
+			} `json:"inviters"`
+			Invitees struct {
+				Items []map[string]any `json:"items"`
+			} `json:"invitees"`
 		} `json:"data"`
 	} `json:"data"`
 }
@@ -468,17 +499,18 @@ func TestAdminAnalyticsDrilldownUsersAcceptsRepeatedUserID(t *testing.T) {
 	require.NotContains(t, body, `"user_id":3`)
 }
 
-func TestAdminAnalyticsDrilldownUsersClampsLimitTo100(t *testing.T) {
+func TestAdminAnalyticsDrilldownUsersAllowsAllRows(t *testing.T) {
 	setupAdminAnalyticsControllerTestDBs(t)
 	seedAdminAnalyticsControllerUsers(t, 150)
 
 	now := time.Now().Unix()
-	target := "/api/admin-analytics/drilldown/users?start_timestamp=" + strconv.FormatInt(now-60, 10) + "&end_timestamp=" + strconv.FormatInt(now, 10) + "&limit=500"
+	target := "/api/admin-analytics/drilldown/users?start_timestamp=" + strconv.FormatInt(now-60, 10) + "&end_timestamp=" + strconv.FormatInt(now, 10) + "&limit=0"
 	recorder := performAdminAnalyticsRequest(t, target, GetAdminAnalyticsDrilldownUsers)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Contains(t, recorder.Body.String(), `"limit":100`)
+	require.Contains(t, recorder.Body.String(), `"limit":150`)
 	require.Contains(t, recorder.Body.String(), `"total":150`)
+	require.NotContains(t, recorder.Body.String(), `"has_more":true`)
 }
 
 func TestAdminAnalyticsDrilldownUsersDoesNotExposeSensitiveFields(t *testing.T) {

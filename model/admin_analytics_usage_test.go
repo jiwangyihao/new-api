@@ -116,6 +116,19 @@ func TestAdminAnalyticsUsageSortsByRequestedMetricAndOrder(t *testing.T) {
 	require.Equal(t, dto.AdminAnalyticsSortAsc, res.Data.Groups.SortOrder)
 }
 
+func TestAdminAnalyticsUsageZeroLimitKeepsAllGroups(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	now := time.Now().Unix()
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 1, Username: "one", CreatedAt: now - 10, Type: LogTypeConsume, MeteredTokens: intPtrForAdminAnalyticsTest(10)}).Error)
+	require.NoError(t, LOG_DB.Create(&Log{UserId: 2, Username: "two", CreatedAt: now - 9, Type: LogTypeConsume, MeteredTokens: intPtrForAdminAnalyticsTest(20)}).Error)
+
+	res, err := GetAdminUsageConsumptionSummary(AdminAnalyticsUsageQuery{AdminAnalyticsQuery: AdminAnalyticsQuery{StartTimestamp: now - 60, EndTimestamp: now, SnapshotAt: now, Limit: 0, LimitExplicit: true}, GroupBy: dto.AdminUsageGroupByUser, Metric: dto.AdminUsageMetricTotalTokens})
+
+	require.NoError(t, err)
+	require.Len(t, res.Data.Groups.Items, 2)
+	require.False(t, res.Data.Groups.Page.HasMore)
+}
+
 func TestAdminAnalyticsUsageQueryValidatesGroupByMetricAttributionAndTopN(t *testing.T) {
 	require.ErrorIs(t, ValidateAdminUsageQuery(AdminAnalyticsUsageQuery{GroupBy: "bad", Metric: dto.AdminUsageMetricTotalTokens, PlanAttribution: dto.AdminPlanAttributionCurrent}, "summary"), ErrAdminAnalyticsInvalidGroupBy)
 	require.ErrorIs(t, ValidateAdminUsageQuery(AdminAnalyticsUsageQuery{GroupBy: dto.AdminUsageGroupByUser, Metric: "bad", PlanAttribution: dto.AdminPlanAttributionCurrent}, "summary"), ErrAdminAnalyticsInvalidMetric)

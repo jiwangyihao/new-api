@@ -17,6 +17,28 @@ test('empty search defaults to overview and recent 30 days', () => {
   assert.equal(filters.start_timestamp, 1_000_000 - 30 * 24 * 60 * 60)
 })
 
+test('legacy analytics filters keep conservative list defaults', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({ tab: 'overview' })
+
+  assert.equal(filters.limit, 20)
+  assert.equal(filters.top_n, 20)
+  assert.equal(buildAdminAnalyticsApiParams(filters).get('limit'), '20')
+  assert.equal(
+    buildAdminAnalyticsApiParams(filters, { includeUsage: true }).get('top_n'),
+    '20'
+  )
+})
+
+test('paid subscription analytics filters default to explicit all rows', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+  })
+
+  assert.equal(filters.limit, 0)
+  assert.equal(filters.top_n, 0)
+  assert.equal(buildAdminAnalyticsApiParams(filters).get('limit'), '0')
+})
+
 test('new paid subscription analytics tabs are accepted', () => {
   assert.equal(
     buildAdminAnalyticsCanonicalFilters({ tab: 'paid-subscription-value' }).tab,
@@ -143,6 +165,19 @@ test('new paid subscription analytics tabs do not send default range until expli
   )
   assert.equal(explicitParams.get('end_timestamp'), '1000000')
 })
+
+test('analytics filters support unbounded list requests', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({ limit: 'all', top_n: '0' })
+
+  assert.equal(filters.limit, 0)
+  assert.equal(filters.top_n, 0)
+  assert.equal(buildAdminAnalyticsApiParams(filters).get('limit'), '0')
+  assert.equal(
+    buildAdminAnalyticsApiParams(filters, { includeUsage: true }).get('top_n'),
+    '0'
+  )
+})
+
 test('switching between paid subscription analytics tabs clears stale implicit time range', () => {
   const legacyFilters = buildAdminAnalyticsCanonicalFilters(
     { tab: 'overview' },
@@ -189,6 +224,20 @@ test('switching between paid subscription analytics tabs clears stale implicit t
   assert.equal(inviteFilters.time_range_explicit, false)
   assert.equal(inviteParams.has('start_timestamp'), false)
   assert.equal(inviteParams.has('end_timestamp'), false)
+})
+
+test('switching tabs resets list limits for the target tab family', () => {
+  const legacyFilters = buildAdminAnalyticsCanonicalFilters({ tab: 'overview' })
+  const paidFilters = switchAdminAnalyticsTab(
+    legacyFilters,
+    'paid-subscription-value'
+  )
+  assert.equal(paidFilters.limit, 0)
+  assert.equal(paidFilters.top_n, 0)
+
+  const nextLegacyFilters = switchAdminAnalyticsTab(paidFilters, 'overview')
+  assert.equal(nextLegacyFilters.limit, 20)
+  assert.equal(nextLegacyFilters.top_n, 20)
 })
 
 

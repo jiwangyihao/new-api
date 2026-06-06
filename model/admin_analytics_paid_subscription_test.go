@@ -243,9 +243,9 @@ func TestPaidSubscriptionValueUsesCalendarResetBoundariesForFutureTokens(t *test
 func TestPaidSubscriptionValueDailyWeeklyCustomResetProratesCycleValue(t *testing.T) {
 	snapshot := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC).Unix()
 	periods := []struct {
-		name          string
-		period        string
-		customSeconds int64
+		name           string
+		period         string
+		customSeconds  int64
 		wantTokenValue float64
 	}{
 		{name: "daily", period: SubscriptionResetDaily, wantTokenValue: 42},
@@ -565,6 +565,84 @@ func TestInvitationPaidSubscriptionsCountsInviteRelationshipsWithoutPaidRows(t *
 	require.Equal(t, 1, res.Data.Inviters.Items[0].PaidInviteeCount)
 }
 
+func TestInvitationPaidSubscriptionsPaidFiltersScopeRelationshipCounts(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	matchedPlan := adminPaidTestPlan(1, 50, adminPaidTestCurrencyCNY)
+	otherPlan := adminPaidTestPlan(2, 70, adminPaidTestCurrencyCNY)
+	require.NoError(t, DB.Create(&matchedPlan).Error)
+	require.NoError(t, DB.Create(&otherPlan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	matchedInvitee := adminPaidTestUser(2, "matched")
+	matchedInvitee.InviterId = inviter.Id
+	otherInvitee := adminPaidTestUser(3, "other")
+	otherInvitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&matchedInvitee).Error)
+	require.NoError(t, DB.Create(&otherInvitee).Error)
+	matched := adminPaidTestSubscription(1, matchedInvitee.Id, matchedPlan.Id, snapshot, "order")
+	other := adminPaidTestSubscription(2, otherInvitee.Id, otherPlan.Id, snapshot, "admin")
+	require.NoError(t, DB.Create(&matched).Error)
+	require.NoError(t, DB.Create(&other).Error)
+
+	res, err := GetAdminInvitationPaidSubscriptionsInviters(AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, PlanIDs: []int{matchedPlan.Id}, Sources: []dto.AdminAnalyticsSource{dto.AdminAnalyticsSourceOrder}, Currency: adminPaidTestCurrencyCNY, Limit: 20})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Data.Summary.InviterCount)
+	require.Equal(t, 1, res.Data.Summary.InviteeCount)
+	require.Equal(t, 1, res.Data.Summary.PaidInviteeCount)
+	require.Len(t, res.Data.Inviters.Items, 1)
+	require.Equal(t, 1, res.Data.Inviters.Items[0].InviteeCount)
+	adminPaidRequireAmount(t, res.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 50)
+}
+
+func TestInvitationPaidSubscriptionsSubscriptionIDDoesNotScopeAggregates(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(1, 50, adminPaidTestCurrencyCNY)
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := adminPaidTestUser(2, "invitee")
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+	first := adminPaidTestSubscription(1, invitee.Id, plan.Id, snapshot, "order")
+	second := adminPaidTestSubscription(2, invitee.Id, plan.Id, snapshot, "order")
+	second.StartTime += 100
+	second.EndTime += 100
+	require.NoError(t, DB.Create(&first).Error)
+	require.NoError(t, DB.Create(&second).Error)
+
+	res, err := GetAdminInvitationPaidSubscriptionsSummary(AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, SubscriptionID: second.Id, Currency: adminPaidTestCurrencyCNY, Limit: 20})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, res.Data.Summary.InviterCount)
+	require.Equal(t, 1, res.Data.Summary.InviteeCount)
+	adminPaidRequireAmount(t, res.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 100)
+}
+
+func TestInvitationPaidSubscriptionsExcludedAuditStopsAtSnapshot(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(1, 50, adminPaidTestCurrencyCNY)
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := adminPaidTestUser(2, "excluded")
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+	adminPaidSetExcludedUsersForTest(t, []adminPaidExcludedUserForTest{{UserID: invitee.Id, Reason: "internal"}})
+	sub := adminPaidTestSubscription(1, invitee.Id, plan.Id, snapshot, "order")
+	sub.StartTime = snapshot - 15*86400
+	sub.EndTime = snapshot + 45*86400
+	require.NoError(t, DB.Create(&sub).Error)
+
+	res, err := GetAdminInvitationPaidSubscriptionsSummary(AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, ExcludedMode: dto.AdminAnalyticsExcludedModeIncludeExcluded, Currency: adminPaidTestCurrencyCNY, Limit: 20})
+
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, res.Data.Summary.ExcludedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 50)
+}
+
 func TestInvitationPaidSubscriptionsAllHistoryStopsAtSnapshot(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()
@@ -873,7 +951,7 @@ func TestInvitationPaidSubscriptionsExcludedModeAuditsPaidExcludedInvitees(t *te
 	require.NoError(t, err)
 	require.Empty(t, included.Data.Invitees.Items)
 	require.Empty(t, included.Data.Summary.RecognizedInvitationPaidAmountByCurrency)
-	adminPaidRequireAmount(t, included.Data.Summary.ExcludedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 60)
+	adminPaidRequireAmount(t, included.Data.Summary.ExcludedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 30)
 	adminPaidRequireAmount(t, included.Data.Summary.ExcludedActiveRemainingValueByCurrency, adminPaidTestCurrencyCNY, 33)
 
 	base.ExcludedMode = dto.AdminAnalyticsExcludedModeIncludeExcluded
@@ -882,7 +960,7 @@ func TestInvitationPaidSubscriptionsExcludedModeAuditsPaidExcludedInvitees(t *te
 	require.Len(t, withExcluded.Data.Invitees.Items, 1)
 	require.True(t, withExcluded.Data.Invitees.Items[0].Excluded)
 	require.Equal(t, "ops", withExcluded.Data.Invitees.Items[0].ExcludedReason)
-	adminPaidRequireAmount(t, withExcluded.Data.Invitees.Items[0].WouldHavePaidAmountByCurrency, adminPaidTestCurrencyCNY, 60)
+	adminPaidRequireAmount(t, withExcluded.Data.Invitees.Items[0].WouldHavePaidAmountByCurrency, adminPaidTestCurrencyCNY, 30)
 	adminPaidRequireAmount(t, withExcluded.Data.Invitees.Items[0].WouldHaveActiveRemainingValueByCurrency, adminPaidTestCurrencyCNY, 33)
 
 	base.ExcludedMode = dto.AdminAnalyticsExcludedModeExcludedOnly
@@ -890,7 +968,7 @@ func TestInvitationPaidSubscriptionsExcludedModeAuditsPaidExcludedInvitees(t *te
 	require.NoError(t, err)
 	require.Len(t, onlyExcluded.Data.Invitees.Items, 1)
 	require.Empty(t, onlyExcluded.Data.Summary.RecognizedInvitationPaidAmountByCurrency)
-	adminPaidRequireAmount(t, onlyExcluded.Data.Summary.ExcludedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 60)
+	adminPaidRequireAmount(t, onlyExcluded.Data.Summary.ExcludedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 30)
 }
 
 type adminPaidExcludedUserForTest struct {

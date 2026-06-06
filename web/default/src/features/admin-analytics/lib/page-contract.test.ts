@@ -140,6 +140,31 @@ test('descriptor options participate in request parameter construction', () => {
   assert.equal(params.get('sort_by'), 'recognized_remaining_value')
 })
 
+test('invitation paid aggregate descriptors do not serialize subscription id', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'invitation-paid-subscriptions',
+    snapshot_at: 123,
+    subscription_id: 9,
+  })
+  const descriptors = buildAdminAnalyticsRequestDescriptors(filters)
+
+  for (const id of [
+    'invitation-paid-subscriptions/summary',
+    'invitation-paid-subscriptions/inviters',
+    'invitation-paid-subscriptions/invitees',
+  ]) {
+    const descriptor = descriptors.find((item) => item.id === id)
+    assert.ok(descriptor)
+    assert.equal(descriptor.buildParams(filters).has('subscription_id'), false)
+  }
+
+  const subscriptions = descriptors.find(
+    (item) => item.id === 'invitation-paid-subscriptions/subscriptions'
+  )
+  assert.ok(subscriptions)
+  assert.equal(subscriptions.buildParams(filters).get('subscription_id'), '9')
+})
+
 test('warning reasons are stable and sorted', () => {
   assert.deepEqual(
     warningReasons([{ reason: 'b' }, { reason: 'a' }, { reason: 'b' }]),

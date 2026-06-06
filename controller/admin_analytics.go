@@ -109,11 +109,11 @@ var (
 		"inviter_user_id":                   "inviter_user_id",
 	}
 	adminInvitationPaidInviteeSortBy = map[string]string{
-		"recognized_paid_amount":             "recognized_paid_amount",
-		"active_remaining_value":             "active_remaining_value",
-		"paid_subscription_snapshot_count":   "paid_subscription_snapshot_count",
-		"registered_at":                      "registered_at",
-		"invitee_user_id":                    "invitee_user_id",
+		"recognized_paid_amount":           "recognized_paid_amount",
+		"active_remaining_value":           "active_remaining_value",
+		"paid_subscription_snapshot_count": "paid_subscription_snapshot_count",
+		"registered_at":                    "registered_at",
+		"invitee_user_id":                  "invitee_user_id",
 	}
 	adminInvitationPaidSubscriptionSortBy = map[string]string{
 		"recognized_paid_amount":     "recognized_paid_amount",
@@ -604,7 +604,7 @@ func parseAdminPaidSubscriptionSharedQuery(c *gin.Context) (model.AdminAnalytics
 	default:
 		return model.AdminAnalyticsQuery{}, errors.New("invalid excluded_mode")
 	}
-	return model.AdminAnalyticsQuery{Granularity: dto.AdminAnalyticsGranularityDay, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, Sources: sources, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), InviterID: inviterID, SubscriptionID: subscriptionID, InviteeID: inviteeID, Currency: strings.TrimSpace(c.Query("currency")), ExcludedMode: excludedMode, ActiveOnly: activeOnly}, nil
+	return model.AdminAnalyticsQuery{Granularity: dto.AdminAnalyticsGranularityDay, Limit: limit, LimitExplicit: c.Query("limit") != "", Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, Sources: sources, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), InviterID: inviterID, SubscriptionID: subscriptionID, InviteeID: inviteeID, Currency: strings.TrimSpace(c.Query("currency")), ExcludedMode: excludedMode, ActiveOnly: activeOnly}, nil
 }
 
 func parseAdminAnalyticsSnapshotAt(c *gin.Context) (int64, error) {
@@ -753,7 +753,7 @@ func parseAdminAnalyticsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error)
 	if end < snapshotAt {
 		snapshotAt = end
 	}
-	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, TimeRangeExplicit: c.Query("start_timestamp") != "" || c.Query("end_timestamp") != "", RangeMode: model.AdminAnalyticsRangeModeDefault, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
+	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, LimitExplicit: c.Query("limit") != "", Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, TimeRangeExplicit: c.Query("start_timestamp") != "" || c.Query("end_timestamp") != "", RangeMode: model.AdminAnalyticsRangeModeDefault, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
 }
 
 func parseAdminUsageAnalyticsQuery(c *gin.Context, endpoint string) (model.AdminAnalyticsUsageQuery, error) {
@@ -806,9 +806,6 @@ func parseAdminAnalyticsTimeRange(c *gin.Context) (int64, int64, error) {
 
 func parseAdminAnalyticsLimit(c *gin.Context, key string, defaultValue int) (int, error) {
 	limit := defaultValue
-	if limit <= 0 {
-		limit = model.AdminAnalyticsDefaultLimit
-	}
 	if raw := strings.TrimSpace(c.Query(key)); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -816,7 +813,7 @@ func parseAdminAnalyticsLimit(c *gin.Context, key string, defaultValue int) (int
 		}
 		limit = parsed
 	}
-	if limit <= 0 {
+	if limit < 0 {
 		return 0, errors.New("invalid " + key)
 	}
 	if limit > model.AdminAnalyticsMaxLimit {

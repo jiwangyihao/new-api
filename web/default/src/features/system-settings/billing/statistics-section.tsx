@@ -34,6 +34,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { formatTimestampToDate } from '@/lib/format'
 import {
   SettingsFormActionBar,
   SettingsFormSaveButton,
@@ -46,6 +47,8 @@ const excludedUserSchema = z.object({
   user_id: z.coerce.number().int().positive(),
   username: z.string().trim().optional(),
   reason: z.string().trim().optional(),
+  excluded_at: z.coerce.number().int().nonnegative().optional(),
+  excluded_by: z.coerce.number().int().nonnegative().optional(),
 })
 
 const statisticsSettingsSchema = z.object({
@@ -69,16 +72,18 @@ export function normalizeSubscriptionAnalyticsExcludedUsers(
   )
   return values.excludedUsers.map((item) => {
     const existing = existingByUserID.get(item.user_id)
+    const excludedAt =
+      existing?.excluded_at ??
+      (existingUsers.length === 0 ? item.excluded_at : undefined)
+    const excludedBy =
+      existing?.excluded_by ??
+      (existingUsers.length === 0 ? item.excluded_by : undefined)
     return {
       user_id: item.user_id,
       ...(item.username ? { username: item.username } : {}),
       ...(item.reason ? { reason: item.reason } : {}),
-      ...(existing?.excluded_at !== undefined
-        ? { excluded_at: existing.excluded_at }
-        : {}),
-      ...(existing?.excluded_by !== undefined
-        ? { excluded_by: existing.excluded_by }
-        : {}),
+      ...(excludedAt !== undefined ? { excluded_at: excludedAt } : {}),
+      ...(excludedBy !== undefined ? { excluded_by: excludedBy } : {}),
     }
   })
 }
@@ -91,6 +96,20 @@ export function buildSubscriptionAnalyticsExcludedUsersUpdate(
     value: JSON.stringify(excludedUsers),
   }
 }
+export function formatSubscriptionAnalyticsExcludedAt(
+  value: number | undefined
+): string {
+  if (value === undefined || value <= 0) return '—'
+  return formatTimestampToDate(value)
+}
+
+export function formatSubscriptionAnalyticsExcludedBy(
+  value: number | undefined
+): string {
+  if (value === undefined || value <= 0) return '—'
+  return String(value)
+}
+
 
 export function SubscriptionAnalyticsStatisticsSection(
   props: SubscriptionAnalyticsStatisticsSectionProps
@@ -171,7 +190,7 @@ export function SubscriptionAnalyticsStatisticsSection(
           {excludedUsers.fields.map((field, index) => (
             <div
               key={field.id}
-              className='grid gap-3 rounded-md border p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_auto]'
+              className='grid gap-3 rounded-md border p-3 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]'
             >
               <FormField
                 control={form.control}
@@ -226,6 +245,22 @@ export function SubscriptionAnalyticsStatisticsSection(
                   </FormItem>
                 )}
               />
+              <div className='space-y-2'>
+                <FormLabel>
+                  {t('systemSettings.billing.statistics.excludedAt')}
+                </FormLabel>
+                <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm'>
+                  {formatSubscriptionAnalyticsExcludedAt(field.excluded_at)}
+                </div>
+              </div>
+              <div className='space-y-2'>
+                <FormLabel>
+                  {t('systemSettings.billing.statistics.excludedBy')}
+                </FormLabel>
+                <div className='text-muted-foreground rounded-md border px-3 py-2 text-sm'>
+                  {formatSubscriptionAnalyticsExcludedBy(field.excluded_by)}
+                </div>
+              </div>
               <div className='flex items-end'>
                 <Button
                   type='button'

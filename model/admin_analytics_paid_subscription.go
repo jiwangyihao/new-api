@@ -450,6 +450,10 @@ func adminShouldShowExcludedRow(excluded bool, mode dto.AdminAnalyticsExcludedMo
 	}
 }
 
+func adminInvitationRelationshipRequiresPaidScope(query AdminAnalyticsQuery) bool {
+	return len(query.PlanIDs) > 0 || len(query.Sources) > 0 || len(query.GrantReasons) > 0 || len(query.BusinessCodes) > 0
+}
+
 func adminIncludeInMain(excluded bool, mode dto.AdminAnalyticsExcludedMode) bool {
 	return !excluded && mode != dto.AdminAnalyticsExcludedModeExcludedOnly
 }
@@ -1008,44 +1012,12 @@ type adminInvitationRelationshipRow struct {
 	ExcludedBy     int
 }
 
-func adminInvitationRelationshipRequiresPaidMatch(query AdminAnalyticsQuery) bool {
-	return len(query.PlanIDs) > 0 || len(query.Sources) > 0 || len(query.GrantReasons) > 0 || len(query.BusinessCodes) > 0 || query.SubscriptionID > 0
-}
-
-func loadAdminInvitationPaidInviteeIDs(query AdminAnalyticsQuery) ([]int, error) {
-	if !adminInvitationRelationshipRequiresPaidMatch(query) {
-		return nil, nil
-	}
-	rows, err := loadAdminInvitationPaidRows(query, true)
-	if err != nil {
-		return nil, err
-	}
-	seen := map[int]struct{}{}
-	ids := make([]int, 0, len(rows))
-	for i := range rows {
-		id := rows[i].Invitee.Id
-		if id <= 0 {
-			continue
-		}
-		if _, ok := seen[id]; ok {
-			continue
-		}
-		seen[id] = struct{}{}
-		ids = append(ids, id)
-	}
-	return ids, nil
-}
-
 func loadAdminInvitationRelationshipRows(query AdminAnalyticsQuery) ([]adminInvitationRelationshipRow, error) {
 	var invitees []User
 	if err := DB.Where("inviter_id > ?", 0).Find(&invitees).Error; err != nil {
 		return nil, err
 	}
 	excludedUsers := setting.GetSubscriptionAnalyticsExcludedUsers()
-	paidInviteeIDs, err := loadAdminInvitationPaidInviteeIDs(query)
-	if err != nil {
-		return nil, err
-	}
 	filtered := make([]User, 0, len(invitees))
 	for i := range invitees {
 		invitee := invitees[i]
@@ -1053,9 +1025,6 @@ func loadAdminInvitationRelationshipRows(query AdminAnalyticsQuery) ([]adminInvi
 			continue
 		}
 		if !adminPaidUserMatchesQuery(invitee, query) {
-			continue
-		}
-		if adminInvitationRelationshipRequiresPaidMatch(query) && !adminIntInSet(invitee.Id, paidInviteeIDs) {
 			continue
 		}
 		filtered = append(filtered, invitee)
@@ -1126,6 +1095,9 @@ func adminInferExcludedInvitationPaidAuditUnits(sub UserSubscription, plan Subsc
 	segments, _ := adminInferInvitationPaidUnitSegments(sub, plan)
 	units := 0.0
 	for _, segment := range segments {
+		if segment.AcquiredAt > query.SnapshotAt {
+			continue
+		}
 		if query.TimeRangeExplicit && (segment.AcquiredAt < query.StartTimestamp || segment.AcquiredAt > query.EndTimestamp) {
 			continue
 		}
@@ -1312,6 +1284,24 @@ func buildAdminInvitationPaidSubscriptionsData(query AdminAnalyticsQuery) (admin
 	return adminBuildInvitationPaidDataFromRows(query, rows, relationships, true)
 }
 
+func adminInvitationPaidScopedInvitees(query AdminAnalyticsQuery, rows []adminInvitationPaidRow) map[int]struct{} {
+	if !adminInvitationRelationshipRequiresPaidScope(query) {
+		return nil
+	}
+	invitees := make(map[int]struct{}, len(rows))
+	for i := range rows {
+		row := rows[i]
+		if row.RecognizedUnits <= 0 && !row.Active {
+			continue
+		}
+		if !adminShouldShowExcludedRow(row.Excluded, query.ExcludedMode) {
+			continue
+		}
+		invitees[row.Invitee.Id] = struct{}{}
+	}
+	return invitees
+}
+
 func adminBuildInvitationPaidDataFromRows(query AdminAnalyticsQuery, rows []adminInvitationPaidRow, relationships []adminInvitationRelationshipRow, applySubscriptionIDToList bool) (adminInvitationPaidBuild, error) {
 	recognized := adminMoneyAccumulator{}
 	activeAmount := adminMoneyAccumulator{}
@@ -1327,10 +1317,16 @@ func adminBuildInvitationPaidDataFromRows(query AdminAnalyticsQuery, rows []admi
 	inviteeGroups := map[int]*adminInvitationInviteeGroup{}
 	subscriptionItems := make([]dto.AdminInvitationPaidSubscriptionRecord, 0, len(rows))
 
+	paidScopedInvitees := adminInvitationPaidScopedInvitees(query, rows)
 	for i := range relationships {
 		relationship := relationships[i]
 		if !adminShouldShowExcludedRow(relationship.Excluded, query.ExcludedMode) {
 			continue
+		}
+		if paidScopedInvitees != nil {
+			if _, ok := paidScopedInvitees[relationship.Invitee.Id]; !ok {
+				continue
+			}
 		}
 		adminAccumulateInvitationRelationship(inviterGroups, relationship)
 		main := adminIncludeInMain(relationship.Excluded, query.ExcludedMode)

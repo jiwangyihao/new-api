@@ -26,34 +26,17 @@ test('usage logs target uses common section and milliseconds', () => {
   assert.equal(target?.search.tokenId, 2)
 })
 
-test('users target only maps whitelist search fields', () => {
+test('users target does not create a route navigation', () => {
   const target = buildAdminAnalyticsDrilldown(filters, {
     kind: 'admin_users',
     user_id: 1,
     plan_id: 2,
     inviter_id: 3,
   })
-  assert.equal(target?.to, '/users')
-  assert.equal(target?.search.userId, 1)
-  assert.equal(target?.search.planId, 2)
-  assert.equal(target?.search.inviterId, 3)
-  assert.equal(target?.search.key, undefined)
+
+  assert.equal(target, null)
 })
 
-test('users target preserves multiple user ids and omits unknown fields', () => {
-  const target = buildAdminAnalyticsDrilldown(filters, {
-    kind: 'admin_users',
-    user_ids: [2, 1],
-    token_id: 9,
-    channel_id: 3,
-    status: 'error',
-  })
-
-  assert.deepEqual(target?.search.userIds, [2, 1])
-  assert.equal(target?.search.tokenId, undefined)
-  assert.equal(target?.search.channel, undefined)
-  assert.equal(target?.search.status, undefined)
-})
 
 test('admin analytics targets keep canonical repeated filters', () => {
   const target = buildAdminAnalyticsDrilldown(filters, {
@@ -116,7 +99,7 @@ test('paid subscription value subscription fallback clears stale subscription id
   assert.deepEqual(target?.search.plan_ids, [4])
 })
 
-test('paid subscription value user target clears stale subscription id', () => {
+test('paid subscription value user target does not create a route navigation', () => {
   const base = buildAdminAnalyticsCanonicalFilters({
     subscription_id: 999,
   })
@@ -125,11 +108,10 @@ test('paid subscription value user target clears stale subscription id', () => {
     user_id: 3,
   })
 
-  assert.equal(target?.to, '/admin-analytics')
-  assert.equal(target?.search.tab, 'paid-subscription-value')
-  assert.equal(target?.search.subscription_id, undefined)
-  assert.deepEqual(target?.search.user_ids, [3])
+  assert.equal(target, null)
 })
+
+
 
 test('paid subscription value subscription target replaces stale subscription id', () => {
   const base = buildAdminAnalyticsCanonicalFilters({
@@ -145,7 +127,7 @@ test('paid subscription value subscription target replaces stale subscription id
   assert.equal(target?.search.subscription_id, 123)
 })
 
-test('invitation paid invitee target preserves filters and writes inviter and invitee', () => {
+test('invitation paid invitee target does not create a route navigation', () => {
   const base = buildAdminAnalyticsCanonicalFilters({
     tab: 'invitation-paid-subscriptions',
     snapshot_at: 123,
@@ -160,15 +142,7 @@ test('invitation paid invitee target preserves filters and writes inviter and in
     invitee_id: 8,
   })
 
-  assert.equal(target?.to, '/admin-analytics')
-  assert.equal(target?.search.tab, 'invitation-paid-subscriptions')
-  assert.equal(target?.search.snapshot_at, 123)
-  assert.equal(target?.search.currency, 'CNY')
-  assert.equal(target?.search.excluded_mode, 'include_excluded')
-  assert.deepEqual(target?.search.plan_ids, [2, 4])
-  assert.deepEqual(target?.search.sources, ['order'])
-  assert.equal(target?.search.inviter_id, 7)
-  assert.equal(target?.search.invitee_id, 8)
+  assert.equal(target, null)
 })
 
 test('invitation paid inviter target writes inviter filter', () => {

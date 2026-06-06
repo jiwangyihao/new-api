@@ -11,8 +11,9 @@ import (
 )
 
 const (
+	AdminAnalyticsNoLimit      = 0
 	AdminAnalyticsDefaultLimit = 20
-	AdminAnalyticsMaxLimit     = 100
+	AdminAnalyticsMaxLimit     = 10000
 )
 
 type AdminAnalyticsRangeMode string
@@ -29,6 +30,7 @@ type AdminAnalyticsQuery struct {
 	SnapshotAt                 int64
 	Granularity                dto.AdminAnalyticsGranularity
 	Limit                      int
+	LimitExplicit              bool
 	Offset                     int
 	SortBy                     string
 	SortOrder                  dto.AdminAnalyticsSortOrder
@@ -77,10 +79,8 @@ func normalizeAdminAnalyticsQuery(query AdminAnalyticsQuery) AdminAnalyticsQuery
 	if query.Granularity == "" {
 		query.Granularity = dto.AdminAnalyticsGranularityDay
 	}
-	if query.Limit <= 0 {
+	if query.Limit < 0 || (query.Limit == AdminAnalyticsNoLimit && !query.LimitExplicit) {
 		query.Limit = AdminAnalyticsDefaultLimit
-	} else if query.Limit > AdminAnalyticsMaxLimit {
-		query.Limit = AdminAnalyticsMaxLimit
 	}
 	if query.Offset < 0 {
 		query.Offset = 0
@@ -102,10 +102,8 @@ func normalizeAdminPaidSubscriptionAnalyticsQuery(query AdminAnalyticsQuery) Adm
 	if query.Granularity == "" {
 		query.Granularity = dto.AdminAnalyticsGranularityDay
 	}
-	if query.Limit <= 0 {
+	if query.Limit < 0 || (query.Limit == AdminAnalyticsNoLimit && !query.LimitExplicit) {
 		query.Limit = AdminAnalyticsDefaultLimit
-	} else if query.Limit > AdminAnalyticsMaxLimit {
-		query.Limit = AdminAnalyticsMaxLimit
 	}
 	if query.Offset < 0 {
 		query.Offset = 0
@@ -137,21 +135,27 @@ func adminActiveSubscriptionStatuses(query AdminAnalyticsQuery) []string {
 }
 
 func buildAdminAnalyticsPage(total int, limit int, offset int) dto.AdminAnalyticsPage {
-	if limit <= 0 {
-		limit = AdminAnalyticsDefaultLimit
-	}
 	if offset < 0 {
 		offset = 0
+	}
+	if limit < 0 {
+		limit = AdminAnalyticsDefaultLimit
+	}
+	if limit == AdminAnalyticsNoLimit {
+		limit = total - offset
+		if limit < 0 {
+			limit = 0
+		}
 	}
 	return dto.AdminAnalyticsPage{Limit: limit, Offset: offset, Total: total, HasMore: offset+limit < total}
 }
 
 func paginateAdminAnalyticsList[T any](items []T, limit int, offset int) ([]T, dto.AdminAnalyticsPage) {
 	page := buildAdminAnalyticsPage(len(items), limit, offset)
-	if offset >= len(items) {
+	if offset >= len(items) || page.Limit <= 0 {
 		return []T{}, page
 	}
-	end := offset + limit
+	end := offset + page.Limit
 	if end > len(items) {
 		end = len(items)
 	}

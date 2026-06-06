@@ -78,6 +78,8 @@ const excludedModes = new Set<string>([
   'excluded_only',
 ])
 
+const adminAnalyticsNoLimit = 0
+
 const paidSubscriptionAnalyticsTabs = new Set<AdminAnalyticsTab>([
   'paid-subscription-value',
   'invitation-paid-subscriptions',
@@ -103,6 +105,8 @@ export function switchAdminAnalyticsTab(
       time_range_explicit: false,
       offset: 0,
       sort_by: undefined,
+      limit: adminAnalyticsNoLimit,
+      top_n: adminAnalyticsNoLimit,
       ...(filters.currency !== undefined ? { currency: filters.currency } : {}),
     }
   }
@@ -112,6 +116,8 @@ export function switchAdminAnalyticsTab(
     excluded_mode: 'included_only',
     active_only: false,
     time_range_explicit: true,
+    limit: ADMIN_ANALYTICS_DEFAULT_LIMIT,
+    top_n: ADMIN_ANALYTICS_DEFAULT_LIMIT,
     offset: 0,
     sort_by: undefined,
   }
@@ -192,9 +198,17 @@ function parseAllowedArray<T extends string>(
 }
 
 function parseLimit(value: unknown): number {
+  const raw = firstString(value)?.trim().toLowerCase()
+  if (raw === 'all' || raw === '0') return 0
   const parsed = parseInteger(value)
-  if (parsed === undefined || parsed <= 0) return ADMIN_ANALYTICS_DEFAULT_LIMIT
+  if (parsed === undefined || parsed < 0) return ADMIN_ANALYTICS_DEFAULT_LIMIT
+  if (parsed === 0) return 0
   return Math.min(parsed, ADMIN_ANALYTICS_MAX_LIMIT)
+}
+
+function clampAdminAnalyticsLimit(value: number): number {
+  if (value <= 0) return adminAnalyticsNoLimit
+  return Math.min(value, ADMIN_ANALYTICS_MAX_LIMIT)
 }
 
 function parseBoolean(value: unknown, fallback: boolean): boolean {
@@ -242,6 +256,12 @@ export function buildAdminAnalyticsCanonicalFilters(
   )
   const snapshotAt = parseInteger(raw.snapshot_at)
   const currency = parseOptionalString(raw.currency)
+  const limit = paidSubscriptionAnalyticsTabs.has(tab)
+    ? (parseInteger(raw.limit) ?? adminAnalyticsNoLimit)
+    : parseLimit(raw.limit)
+  const topN = paidSubscriptionAnalyticsTabs.has(tab)
+    ? (parseInteger(raw.top_n) ?? adminAnalyticsNoLimit)
+    : parseLimit(raw.top_n)
   return {
     tab,
     start_timestamp: startTimestamp,
@@ -293,8 +313,8 @@ export function buildAdminAnalyticsCanonicalFilters(
       planAttributions,
       'current'
     ),
-    top_n: parseLimit(raw.top_n),
-    limit: parseLimit(raw.limit),
+    top_n: clampAdminAnalyticsLimit(topN),
+    limit: clampAdminAnalyticsLimit(limit),
     offset: Math.max(parseInteger(raw.offset) ?? 0, 0),
     sort_by: firstString(raw.sort_by)?.trim() || undefined,
     sort_order: parseEnum<AdminAnalyticsSortOrder>(

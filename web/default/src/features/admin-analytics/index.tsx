@@ -4,14 +4,14 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
 import { ADMIN_ANALYTICS_TABS } from './constants'
 import { buildAdminAnalyticsDrilldown } from './lib/drilldown'
+import { switchAdminAnalyticsTab } from './lib/filters'
 import {
-  formatAdminMoneyAmount,
   formatAdminMoneyBreakdown,
   formatAdminPercent,
   formatAdminTokens,
@@ -20,7 +20,15 @@ import {
   buildAdminAnalyticsRequestDescriptors,
   fetchAdminAnalyticsDescriptor,
 } from './lib/page-contract'
-import { switchAdminAnalyticsTab } from './lib/filters'
+import {
+  invitationPaidInviteeCardValues,
+  invitationPaidInviterCardValues,
+  invitationPaidSubscriptionCardValues,
+  paidSubscriptionValuePlanCardValues,
+  paidSubscriptionValueSourceCardValues,
+  paidSubscriptionValueSubscriptionCardValues,
+  paidSubscriptionValueUserCardValues,
+} from './lib/panel-fields'
 import type {
   AdminAnalyticsCanonicalFilters,
   AdminAnalyticsDrilldownTarget,
@@ -77,8 +85,7 @@ type InvitationPaidSubscriptionsPanelResponses = {
 
 function isPaidSubscriptionAnalyticsTab(tab: AdminAnalyticsTab): boolean {
   return (
-    tab === 'paid-subscription-value' ||
-    tab === 'invitation-paid-subscriptions'
+    tab === 'paid-subscription-value' || tab === 'invitation-paid-subscriptions'
   )
 }
 
@@ -372,7 +379,7 @@ function AdminAnalyticsFilterBar(props: {
               <Input
                 id='admin-analytics-top-n'
                 type='number'
-                min={1}
+                min={0}
                 max={100}
                 value={props.value.top_n}
                 onChange={(event) => {
@@ -430,14 +437,21 @@ function ActiveFilterSummary(props: {
     chips.push({
       key: 'subscription_id',
       label: `${t('adminAnalytics.filters.subscriptionId')}: ${props.value.subscription_id}`,
-      clear: () => props.onApply({ ...props.value, subscription_id: undefined }),
+      clear: () =>
+        props.onApply({ ...props.value, subscription_id: undefined }),
     })
   }
   if (chips.length === 0) return null
   return (
     <div className='flex flex-wrap gap-2'>
       {chips.map((chip) => (
-        <Button key={chip.key} type='button' variant='outline' size='xs' onClick={chip.clear}>
+        <Button
+          key={chip.key}
+          type='button'
+          variant='outline'
+          size='xs'
+          onClick={chip.clear}
+        >
           {chip.label} · {t('adminAnalytics.filters.clear')}
         </Button>
       ))}
@@ -459,11 +473,12 @@ function dateTimeInputToUnixSeconds(value: string): number | undefined {
 }
 
 function normalizeAdminAnalyticsLimit(value: string): number {
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed)) return 20
-  return Math.min(Math.max(Math.trunc(parsed), 1), 100)
+  const trimmed = value.trim().toLowerCase()
+  if (trimmed === 'all' || trimmed === '0') return 0
+  const parsed = Number(trimmed)
+  if (!Number.isFinite(parsed)) return 0
+  return Math.min(Math.max(Math.trunc(parsed), 0), 100)
 }
-
 
 function adminAnalyticsTabLabelKey(tab: AdminAnalyticsTab): string {
   return (
@@ -915,11 +930,15 @@ function PaidSubscriptionValuePanel(props: {
         />
         <Metric
           labelKey='adminAnalytics.metrics.tokenBasedValue'
-          value={formatAdminMoneyBreakdown(summary.token_based_value_by_currency)}
+          value={formatAdminMoneyBreakdown(
+            summary.token_based_value_by_currency
+          )}
         />
         <Metric
           labelKey='adminAnalytics.metrics.timeBasedValue'
-          value={formatAdminMoneyBreakdown(summary.time_based_value_by_currency)}
+          value={formatAdminMoneyBreakdown(
+            summary.time_based_value_by_currency
+          )}
         />
         <Metric
           labelKey='adminAnalytics.metrics.excludedAuditValue'
@@ -940,17 +959,16 @@ function PaidSubscriptionValuePanel(props: {
           value={summary.token_value_unavailable_count}
         />
       </MetricGrid>
-      <RankingList
+      <AnalyticsCardGrid
         titleKey='adminAnalytics.rankings.paidSubscriptionUsers'
         items={users.map((item) => ({
           key: String(item.user_id),
-          label: item.username || String(item.user_id),
-          value: formatAdminMoneyBreakdown(
-            item.recognized_remaining_value_by_currency
-          ),
-          drilldown: item.drilldown,
+          title: item.username || String(item.user_id),
+          description: item.display_name
+            ? `#${item.user_id} · ${item.display_name}`
+            : `#${item.user_id}`,
+          values: paidSubscriptionValueUserCardValues(item),
         }))}
-        onDrilldown={props.onDrilldown}
       />
       <AnalyticsCardGrid
         titleKey='adminAnalytics.rankings.paidSubscriptionPlans'
@@ -958,22 +976,7 @@ function PaidSubscriptionValuePanel(props: {
           key: String(item.plan_id),
           title: item.plan_name || String(item.plan_id),
           description: item.plan_business_code,
-          values: [
-            {
-              labelKey: 'adminAnalytics.metrics.remainingValue',
-              value: formatAdminMoneyBreakdown(
-                item.recognized_remaining_value_by_currency
-              ),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.activePaidUsers',
-              value: formatAdminTokens(item.active_user_count),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.activePaidSubscriptions',
-              value: formatAdminTokens(item.active_subscription_count),
-            },
-          ],
+          values: paidSubscriptionValuePlanCardValues(item),
         }))}
       />
       <AnalyticsCardGrid
@@ -982,24 +985,7 @@ function PaidSubscriptionValuePanel(props: {
           key: `${item.source}:${item.grant_reason}`,
           title: item.source || t('Unknown'),
           description: item.grant_reason || item.source_attribution,
-          values: [
-            {
-              labelKey: 'adminAnalytics.metrics.remainingValue',
-              value: formatAdminMoneyBreakdown(
-                item.recognized_remaining_value_by_currency
-              ),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.excludedAuditValue',
-              value: formatAdminMoneyBreakdown(
-                item.excluded_remaining_value_by_currency
-              ),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.subscriptionCount',
-              value: formatAdminTokens(item.subscription_count),
-            },
-          ],
+          values: paidSubscriptionValueSourceCardValues(item),
         }))}
       />
       <AnalyticsCardGrid
@@ -1009,32 +995,7 @@ function PaidSubscriptionValuePanel(props: {
           title: `${item.username || item.user_id} · ${item.plan_name}`,
           description: `${item.source} / ${item.grant_reason}`,
           drilldown: item.drilldown,
-          values: [
-            {
-              labelKey: 'adminAnalytics.fields.planPrice',
-              value: formatAdminMoneyAmount(item.plan_price),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.recognizedRemainingValue',
-              value: formatAdminMoneyAmount(item.recognized_remaining_value),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.valuationBasis',
-              value: item.valuation_basis,
-            },
-            {
-              labelKey: 'adminAnalytics.fields.sourceAttribution',
-              value: item.source_attribution,
-            },
-            {
-              labelKey: 'adminAnalytics.fields.orderRecordedAmount',
-              value: formatAdminMoneyAmount(item.order_recorded_amount),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.excludedReason',
-              value: item.excluded ? item.excluded_reason || '—' : '—',
-            },
-          ],
+          values: paidSubscriptionValueSubscriptionCardValues(item),
         }))}
         onDrilldown={props.onDrilldown}
       />
@@ -1102,14 +1063,13 @@ function InvitationPaidSubscriptionsPanel(props: {
           value={summary.active_paid_invitee_count}
         />
       </MetricGrid>
-      <RankingList
+      <AnalyticsCardGrid
         titleKey='adminAnalytics.rankings.invitationPaidInviters'
         items={inviters.map((item) => ({
           key: String(item.inviter_user_id),
-          label: item.inviter_username || String(item.inviter_user_id),
-          value: formatAdminMoneyBreakdown(
-            item.recognized_invitation_paid_amount_by_currency
-          ),
+          title: item.inviter_username || String(item.inviter_user_id),
+          description: `#${item.inviter_user_id}`,
+          values: invitationPaidInviterCardValues(item),
           drilldown: item.drilldown,
         }))}
         onDrilldown={props.onDrilldown}
@@ -1119,32 +1079,9 @@ function InvitationPaidSubscriptionsPanel(props: {
         items={invitees.map((item) => ({
           key: String(item.invitee_user_id),
           title: item.invitee_username || String(item.invitee_user_id),
-          description: `#${item.inviter_user_id}`,
-          drilldown: item.drilldown,
-          values: [
-            {
-              labelKey: 'adminAnalytics.metrics.invitationPaidAmount',
-              value: formatAdminMoneyBreakdown(
-                item.recognized_paid_amount_by_currency
-              ),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.activeInvitationRemainingValue',
-              value: formatAdminMoneyBreakdown(
-                item.active_remaining_value_by_currency
-              ),
-            },
-            {
-              labelKey: 'adminAnalytics.metrics.activePaidSubscriptions',
-              value: formatAdminTokens(item.active_paid_subscription_count),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.excludedReason',
-              value: item.excluded ? item.excluded_reason || '—' : '—',
-            },
-          ],
+          description: `#${item.invitee_user_id}`,
+          values: invitationPaidInviteeCardValues(item),
         }))}
-        onDrilldown={props.onDrilldown}
       />
       <AnalyticsCardGrid
         titleKey='adminAnalytics.rankings.invitationPaidRecords'
@@ -1153,32 +1090,7 @@ function InvitationPaidSubscriptionsPanel(props: {
           title: `${item.invitee_user_id} · ${item.plan_name}`,
           description: `${item.source} / ${item.grant_reason}`,
           drilldown: item.drilldown,
-          values: [
-            {
-              labelKey: 'adminAnalytics.fields.planPrice',
-              value: formatAdminMoneyAmount(item.plan_price),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.confirmationUnits',
-              value: String(item.recognized_paid_units),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.invitationPaidAmount',
-              value: formatAdminMoneyAmount(item.recognized_paid_amount),
-            },
-            {
-              labelKey: 'adminAnalytics.fields.unitInferenceBasis',
-              value: item.unit_inference_basis,
-            },
-            {
-              labelKey: 'adminAnalytics.fields.sourceAttribution',
-              value: item.source_attribution,
-            },
-            {
-              labelKey: 'adminAnalytics.fields.orderRecordedAmount',
-              value: formatAdminMoneyAmount(item.order_recorded_amount),
-            },
-          ],
+          values: invitationPaidSubscriptionCardValues(item),
         }))}
         onDrilldown={props.onDrilldown}
       />
@@ -1203,7 +1115,7 @@ function AnalyticsCardGrid(props: {
     <div className='space-y-2'>
       <div className='text-sm font-medium'>{t(props.titleKey)}</div>
       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
-        {props.items.slice(0, 12).map((item) => (
+        {props.items.map((item) => (
           <DrilldownCard
             key={item.key}
             target={item.drilldown}
@@ -1360,7 +1272,7 @@ function RankingList(props: {
   return (
     <div className='space-y-2'>
       <div className='text-sm font-medium'>{t(props.titleKey)}</div>
-      {props.items.slice(0, 10).map((item) => (
+      {props.items.map((item) => (
         <DrilldownCard
           key={item.key}
           target={item.drilldown}
@@ -1379,14 +1291,11 @@ function isSupportedDrilldownTarget(
   target: AdminAnalyticsDrilldownTarget | null | undefined
 ): target is AdminAnalyticsDrilldownTarget {
   switch (target?.kind) {
-    case 'admin_users':
     case 'admin_usage_logs':
     case 'admin_subscriptions':
     case 'admin_invitations':
-    case 'paid_subscription_value_user':
     case 'paid_subscription_value_subscription':
     case 'invitation_paid_inviter':
-    case 'invitation_paid_invitee':
       return true
     default:
       return false

@@ -65,6 +65,17 @@ func setupAdminAnalyticsTestDBs(t *testing.T) adminAnalyticsModelTestDBs {
 	return adminAnalyticsModelTestDBs{DB: businessDB, LogDB: logDB}
 }
 
+func TestPaginateAdminAnalyticsListNoLimitReturnsAllItems(t *testing.T) {
+	items := []int{1, 2, 3, 4}
+
+	paged, page := paginateAdminAnalyticsList(items, AdminAnalyticsNoLimit, 0)
+
+	require.Equal(t, items, paged)
+	require.Equal(t, 4, page.Limit)
+	require.Equal(t, 4, page.Total)
+	require.False(t, page.HasMore)
+}
+
 func TestAdminAnalyticsActiveSubscriptionScopeIsSharedBySnapshotDomains(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	now := time.Now().Unix()

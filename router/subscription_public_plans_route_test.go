@@ -46,19 +46,20 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	require.Len(t, payload.Data, 2)
 
 	allowedPlanKeys := map[string]struct{}{
-		"id":                  {},
-		"title":               {},
-		"subtitle":            {},
-		"price_amount":        {},
-		"currency":            {},
-		"duration_unit":       {},
-		"duration_value":      {},
-		"custom_seconds":      {},
-		"monthly_token_limit": {},
-		"concurrency_limit":   {},
-		"queue_capacity":      {},
-		"public_visible":      {},
-		"kyren_product_id":    {},
+		"id":                      {},
+		"title":                   {},
+		"subtitle":                {},
+		"price_amount":            {},
+		"currency":                {},
+		"duration_unit":           {},
+		"duration_value":          {},
+		"custom_seconds":          {},
+		"monthly_token_limit":     {},
+		"concurrency_limit":       {},
+		"queue_capacity":          {},
+		"public_visible":          {},
+		"gpt_abuse_warning_limit": {},
+		"kyren_product_id":        {},
 	}
 
 	assert.Equal(t, "Public High", payload.Data[0].Plan["title"])

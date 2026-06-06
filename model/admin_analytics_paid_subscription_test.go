@@ -717,6 +717,120 @@ func TestInvitationPaidSubscriptionsInfersRepeatedUnitsFromExtendedSnapshot(t *t
 	require.InDelta(t, 100, item.RecognizedPaidAmount.Amount, 0.0001)
 }
 
+func TestInvitationPaidSubscriptionsPrefersRewardEventAmountSnapshot(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC).Unix()
+	plan := adminPaidTestPlan(1, 80, adminPaidTestCurrencyCNY)
+	plan.DurationUnit = SubscriptionDurationMonth
+	plan.DurationValue = 1
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := adminPaidTestUser(2, "invitee")
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+	sub := adminPaidTestSubscription(1, invitee.Id, plan.Id, snapshot, "redemption")
+	sub.StartTime = time.Date(2026, 5, 31, 21, 8, 14, 0, time.UTC).Unix()
+	sub.EndTime = sub.StartTime + 30*86400
+	require.NoError(t, DB.Create(&sub).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: invitee.Id, SourceType: InvitationRewardEventSourceSubscriptionRedemption, SourceId: 10, SourceRedemptionId: 10, SourceSubscriptionId: sub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: sub.StartTime, EventEndTime: sub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot, UpdatedAt: snapshot}).Error)
+
+	query := AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, Currency: adminPaidTestCurrencyCNY, Limit: 20}
+	summary, err := GetAdminInvitationPaidSubscriptionsSummary(query)
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 80)
+	adminPaidRequireAmount(t, summary.Data.Summary.ActiveInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 80)
+
+	subs, err := GetAdminInvitationPaidSubscriptionsSubscriptions(query)
+	require.NoError(t, err)
+	require.Len(t, subs.Data.Subscriptions.Items, 1)
+	require.InDelta(t, 1, subs.Data.Subscriptions.Items[0].RecognizedPaidUnits, 0.0001)
+	require.Equal(t, adminInvitationPaidUnitEventSnapshot, subs.Data.Subscriptions.Items[0].UnitInferenceBasis)
+	require.InDelta(t, 80, subs.Data.Subscriptions.Items[0].RecognizedPaidAmount.Amount, 0.0001)
+}
+
+func TestInvitationPaidSubscriptionsEventSnapshotPreventsFallbackOutsideRange(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC).Unix()
+	plan := adminPaidTestPlan(1, 80, adminPaidTestCurrencyCNY)
+	plan.DurationUnit = SubscriptionDurationMonth
+	plan.DurationValue = 1
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := adminPaidTestUser(2, "invitee")
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+	sub := adminPaidTestSubscription(1, invitee.Id, plan.Id, snapshot, "redemption")
+	sub.StartTime = time.Date(2026, 5, 31, 21, 8, 14, 0, time.UTC).Unix()
+	sub.EndTime = sub.StartTime + 30*86400
+	require.NoError(t, DB.Create(&sub).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: invitee.Id, SourceType: InvitationRewardEventSourceSubscriptionRedemption, SourceId: 10, SourceRedemptionId: 10, SourceSubscriptionId: sub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: sub.StartTime, EventEndTime: sub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot, UpdatedAt: snapshot}).Error)
+
+	query := AdminAnalyticsQuery{SnapshotAt: snapshot, TimeRangeExplicit: true, StartTimestamp: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC).Unix(), EndTimestamp: time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC).Unix(), RangeMode: AdminAnalyticsRangeModeAllHistory, Currency: adminPaidTestCurrencyCNY, Limit: 20}
+	summary, err := GetAdminInvitationPaidSubscriptionsSummary(query)
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 0)
+	adminPaidRequireAmount(t, summary.Data.Summary.ActiveInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 80)
+}
+
+func TestInvitationPaidSubscriptionsAggregatesRewardEventSnapshots(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(1, 80, adminPaidTestCurrencyCNY)
+	plan.DurationUnit = SubscriptionDurationDay
+	plan.DurationValue = 30
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	invitee := adminPaidTestUser(2, "invitee")
+	invitee.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&invitee).Error)
+	sub := adminPaidTestSubscription(1, invitee.Id, plan.Id, snapshot, "redemption")
+	sub.StartTime = snapshot - 60*86400
+	sub.EndTime = snapshot + 30*86400
+	require.NoError(t, DB.Create(&sub).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: invitee.Id, SourceType: InvitationRewardEventSourceSubscriptionRedemption, SourceId: 10, SourceRedemptionId: 10, SourceSubscriptionId: sub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: sub.StartTime, EventEndTime: sub.StartTime + 30*86400, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot - 60, UpdatedAt: snapshot - 60}).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: invitee.Id, SourceType: InvitationRewardEventSourceSubscriptionRedemption, SourceId: 11, SourceRedemptionId: 11, SourceSubscriptionId: sub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: sub.StartTime + 30*86400, EventEndTime: sub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot - 30, UpdatedAt: snapshot - 30}).Error)
+
+	query := AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, Currency: adminPaidTestCurrencyCNY, Limit: 20}
+	summary, err := GetAdminInvitationPaidSubscriptionsSummary(query)
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 160)
+	adminPaidRequireAmount(t, summary.Data.Summary.ActiveInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 80)
+	subs, err := GetAdminInvitationPaidSubscriptionsSubscriptions(query)
+	require.NoError(t, err)
+	require.Len(t, subs.Data.Subscriptions.Items, 1)
+	require.InDelta(t, 2, subs.Data.Subscriptions.Items[0].RecognizedPaidUnits, 0.0001)
+	require.InDelta(t, 160, subs.Data.Subscriptions.Items[0].RecognizedPaidAmount.Amount, 0.0001)
+}
+
+func TestInvitationPaidSubscriptionsIgnoresFilteredOutEventCurrencyMismatch(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(1, 80, adminPaidTestCurrencyCNY)
+	require.NoError(t, DB.Create(&plan).Error)
+	inviter := adminPaidTestUser(1, "inviter")
+	require.NoError(t, DB.Create(&inviter).Error)
+	target := adminPaidTestUser(2, "target")
+	target.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&target).Error)
+	ignored := adminPaidTestUser(3, "ignored")
+	ignored.InviterId = inviter.Id
+	require.NoError(t, DB.Create(&ignored).Error)
+	targetSub := adminPaidTestSubscription(1, target.Id, plan.Id, snapshot, "redemption")
+	require.NoError(t, DB.Create(&targetSub).Error)
+	ignoredSub := adminPaidTestSubscription(2, ignored.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	require.NoError(t, DB.Create(&ignoredSub).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: target.Id, SourceType: InvitationRewardEventSourceSubscriptionRedemption, SourceId: 10, SourceRedemptionId: 10, SourceSubscriptionId: targetSub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: targetSub.StartTime, EventEndTime: targetSub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot, UpdatedAt: snapshot}).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: ignored.Id, SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: 20, SourceOrderId: 20, SourceSubscriptionId: ignoredSub.Id, SourceAmountCents: 8000, SourceCurrency: adminPaidTestCurrencyCNY, EventStartTime: ignoredSub.StartTime, EventEndTime: ignoredSub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot, UpdatedAt: snapshot}).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{InviterId: inviter.Id, InviteeId: ignored.Id, SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: 21, SourceOrderId: 21, SourceSubscriptionId: ignoredSub.Id, SourceAmountCents: 8000, SourceCurrency: "USD", EventStartTime: ignoredSub.StartTime, EventEndTime: ignoredSub.EndTime, Status: InvitationRewardEventStatusActive, CreatedAt: snapshot, UpdatedAt: snapshot}).Error)
+
+	query := AdminAnalyticsQuery{SnapshotAt: snapshot, RangeMode: AdminAnalyticsRangeModeAllHistory, Currency: adminPaidTestCurrencyCNY, Sources: []dto.AdminAnalyticsSource{dto.AdminAnalyticsSourceRedemption}, Limit: 20}
+	summary, err := GetAdminInvitationPaidSubscriptionsSummary(query)
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedInvitationPaidAmountByCurrency, adminPaidTestCurrencyCNY, 80)
+}
 func TestInvitationPaidSubscriptionsExcludesGiftSourcesFromMainAndAudit(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()

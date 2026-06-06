@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -21,6 +22,7 @@ const (
 
 	adminInvitationPaidUnitPeriodAligned   = "period_aligned"
 	adminInvitationPaidUnitPeriodFraction  = "period_fraction"
+	adminInvitationPaidUnitEventSnapshot   = "event_snapshot"
 	adminInvitationPaidUnitSnapshotMinimum = "snapshot_minimum"
 )
 
@@ -984,23 +986,27 @@ func adminCompareInt64(left int64, right int64) int {
 }
 
 type adminInvitationPaidRow struct {
-	Subscription        UserSubscription
-	Plan                SubscriptionPlan
-	Invitee             User
-	Inviter             User
-	Source              dto.AdminAnalyticsSource
-	SourceAttribution   string
-	RecognizedUnits     float64
-	RecognizedAmount    float64
-	ExcludedAuditAmount float64
-	UnitBasis           string
-	Active              bool
-	ActiveValue         *adminSubscriptionValue
-	Excluded            bool
-	ExcludedReason      string
-	ExcludedAt          int64
-	ExcludedBy          int
-	Order               *SubscriptionOrder
+	Subscription          UserSubscription
+	Plan                  SubscriptionPlan
+	Invitee               User
+	Inviter               User
+	Source                dto.AdminAnalyticsSource
+	SourceAttribution     string
+	RecognizedUnits       float64
+	RecognizedAmount      float64
+	RecognizedCurrency    string
+	ExcludedAuditAmount   float64
+	ExcludedAuditCurrency string
+	UnitBasis             string
+	Active                bool
+	ActivePaidAmount      float64
+	ActivePaidCurrency    string
+	ActiveValue           *adminSubscriptionValue
+	Excluded              bool
+	ExcludedReason        string
+	ExcludedAt            int64
+	ExcludedBy            int
+	Order                 *SubscriptionOrder
 }
 
 type adminInvitationRelationshipRow struct {
@@ -1073,6 +1079,13 @@ type adminInvitationPaidUnitSegment struct {
 	AcquiredAt int64
 }
 
+type adminInvitationPaidEventSnapshot struct {
+	RecognizedUnits  float64
+	RecognizedAmount float64
+	ActiveAmount     float64
+	Currency         string
+}
+
 func adminInferInvitationPaidUnits(sub UserSubscription, plan SubscriptionPlan, query AdminAnalyticsQuery) (float64, string) {
 	segments, basis := adminInferInvitationPaidUnitSegments(sub, plan)
 	units := 0.0
@@ -1086,6 +1099,39 @@ func adminInferInvitationPaidUnits(sub UserSubscription, plan SubscriptionPlan, 
 		units += segment.Units
 	}
 	return units, basis
+}
+
+func adminInvitationPaidEventSnapshots(subscriptionIDs []int, query AdminAnalyticsQuery) (map[int]adminInvitationPaidEventSnapshot, error) {
+	if len(subscriptionIDs) == 0 {
+		return map[int]adminInvitationPaidEventSnapshot{}, nil
+	}
+	var events []InvitationRewardEvent
+	if err := DB.Where("source_subscription_id IN ? AND status = ?", subscriptionIDs, InvitationRewardEventStatusActive).Find(&events).Error; err != nil {
+		return nil, err
+	}
+	snapshots := make(map[int]adminInvitationPaidEventSnapshot, len(events))
+	for i := range events {
+		event := events[i]
+		currency := strings.TrimSpace(event.SourceCurrency)
+		if event.SourceSubscriptionId <= 0 || event.SourceAmountCents <= 0 || currency == "" {
+			continue
+		}
+		snapshot := snapshots[event.SourceSubscriptionId]
+		if snapshot.Currency != "" && snapshot.Currency != currency {
+			return nil, fmt.Errorf("invitation reward event currency mismatch for subscription %d", event.SourceSubscriptionId)
+		}
+		snapshot.Currency = currency
+		amount := float64(event.SourceAmountCents) / 100
+		if event.EventStartTime <= query.SnapshotAt && (!query.TimeRangeExplicit || (event.EventStartTime >= query.StartTimestamp && event.EventStartTime <= query.EndTimestamp)) {
+			snapshot.RecognizedUnits++
+			snapshot.RecognizedAmount += amount
+		}
+		if event.EventStartTime <= query.SnapshotAt && event.EventEndTime > query.SnapshotAt {
+			snapshot.ActiveAmount += amount
+		}
+		snapshots[event.SourceSubscriptionId] = snapshot
+	}
+	return snapshots, nil
 }
 
 func adminInferExcludedInvitationPaidAuditUnits(sub UserSubscription, plan SubscriptionPlan, query AdminAnalyticsQuery) float64 {
@@ -1227,39 +1273,63 @@ func loadAdminInvitationPaidRows(query AdminAnalyticsQuery, filterSubscriptionID
 			continue
 		}
 		excluded := excludedUsers[invitee.Id]
-		units, unitBasis := adminInferInvitationPaidUnits(sub, plan, query)
-		excludedAuditAmount := 0.0
-		if excluded.UserID > 0 {
-			excludedAuditAmount = plan.PriceAmount * adminInferExcludedInvitationPaidAuditUnits(sub, plan, query)
+		rows = append(rows, adminInvitationPaidRow{
+			Subscription:      sub,
+			Plan:              plan,
+			Invitee:           invitee,
+			Inviter:           inviter,
+			Source:            source,
+			SourceAttribution: adminPaidSourceAttribution(sub),
+			Excluded:          excluded.UserID > 0,
+			ExcludedReason:    excluded.Reason,
+			ExcludedAt:        excluded.ExcludedAt,
+			ExcludedBy:        excluded.ExcludedBy,
+			Order:             orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
+		})
+	}
+	candidateSubscriptionIDs := make([]int, 0, len(rows))
+	for i := range rows {
+		candidateSubscriptionIDs = append(candidateSubscriptionIDs, rows[i].Subscription.Id)
+	}
+	eventSnapshots, err := adminInvitationPaidEventSnapshots(candidateSubscriptionIDs, query)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		row := &rows[i]
+		units, unitBasis := adminInferInvitationPaidUnits(row.Subscription, row.Plan, query)
+		recognizedAmount := row.Plan.PriceAmount * units
+		recognizedCurrency := row.Plan.Currency
+		eventSnapshot, hasEventSnapshot := eventSnapshots[row.Subscription.Id]
+		if hasEventSnapshot {
+			units = eventSnapshot.RecognizedUnits
+			unitBasis = adminInvitationPaidUnitEventSnapshot
+			recognizedAmount = eventSnapshot.RecognizedAmount
+			recognizedCurrency = eventSnapshot.Currency
 		}
-		active := sub.Status == "active" && sub.StartTime <= query.SnapshotAt && sub.EndTime > query.SnapshotAt
-		var activeValue *adminSubscriptionValue
-		if active {
-			value, err := adminRecognizedRemainingValue(sub, plan, query.SnapshotAt)
+		row.RecognizedUnits = units
+		row.RecognizedAmount = recognizedAmount
+		row.RecognizedCurrency = recognizedCurrency
+		row.ExcludedAuditCurrency = row.Plan.Currency
+		if row.Excluded {
+			row.ExcludedAuditAmount = recognizedAmount
+			row.ExcludedAuditCurrency = recognizedCurrency
+		}
+		row.UnitBasis = unitBasis
+		row.Active = row.Subscription.Status == "active" && row.Subscription.StartTime <= query.SnapshotAt && row.Subscription.EndTime > query.SnapshotAt
+		row.ActivePaidAmount = row.Plan.PriceAmount
+		row.ActivePaidCurrency = row.Plan.Currency
+		if hasEventSnapshot {
+			row.ActivePaidAmount = eventSnapshot.ActiveAmount
+			row.ActivePaidCurrency = eventSnapshot.Currency
+		}
+		if row.Active {
+			value, err := adminRecognizedRemainingValue(row.Subscription, row.Plan, query.SnapshotAt)
 			if err != nil {
 				return nil, err
 			}
-			activeValue = &value
+			row.ActiveValue = &value
 		}
-		rows = append(rows, adminInvitationPaidRow{
-			Subscription:        sub,
-			Plan:                plan,
-			Invitee:             invitee,
-			Inviter:             inviter,
-			Source:              source,
-			SourceAttribution:   adminPaidSourceAttribution(sub),
-			RecognizedUnits:     units,
-			RecognizedAmount:    plan.PriceAmount * units,
-			ExcludedAuditAmount: excludedAuditAmount,
-			UnitBasis:           unitBasis,
-			Active:              active,
-			ActiveValue:         activeValue,
-			Excluded:            excluded.UserID > 0,
-			ExcludedReason:      excluded.Reason,
-			ExcludedAt:          excluded.ExcludedAt,
-			ExcludedBy:          excluded.ExcludedBy,
-			Order:               orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
-		})
 	}
 	return rows, nil
 }
@@ -1341,11 +1411,11 @@ func adminBuildInvitationPaidDataFromRows(query AdminAnalyticsQuery, rows []admi
 		if row.RecognizedUnits <= 0 && !row.Active {
 			continue
 		}
-		currency := row.Plan.Currency
+		currency := row.RecognizedCurrency
 		if row.Excluded {
-			excludedPaid.add(currency, row.ExcludedAuditAmount)
+			excludedPaid.add(row.ExcludedAuditCurrency, row.ExcludedAuditAmount)
 			if row.ActiveValue != nil {
-				excludedActiveRemaining.add(currency, row.ActiveValue.RecognizedRemainingValue)
+				excludedActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
 			}
 		}
 		main := adminIncludeInMain(row.Excluded, query.ExcludedMode)
@@ -1355,10 +1425,10 @@ func adminBuildInvitationPaidDataFromRows(query AdminAnalyticsQuery, rows []admi
 				paidInvitees[row.Invitee.Id] = struct{}{}
 			}
 			if row.Active {
-				activeAmount.add(currency, row.Plan.PriceAmount)
+				activeAmount.add(row.ActivePaidCurrency, row.ActivePaidAmount)
 				activePaidInvitees[row.Invitee.Id] = struct{}{}
 				if row.ActiveValue != nil {
-					activeRemaining.add(currency, row.ActiveValue.RecognizedRemainingValue)
+					activeRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
 				}
 			}
 		}
@@ -1431,7 +1501,7 @@ func adminAccumulateInvitationInviter(groups map[int]*adminInvitationInviterGrou
 	}
 	if row.Excluded {
 		group.HasExcluded = true
-		group.ExcludedPaid.add(row.Plan.Currency, row.ExcludedAuditAmount)
+		group.ExcludedPaid.add(row.ExcludedAuditCurrency, row.ExcludedAuditAmount)
 		if row.ActiveValue != nil {
 			group.ExcludedActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
 		}
@@ -1447,9 +1517,9 @@ func adminAccumulateInvitationInviter(groups map[int]*adminInvitationInviterGrou
 				group.LatestPaidTime = row.Subscription.StartTime
 			}
 		}
-		group.Recognized.add(row.Plan.Currency, row.RecognizedAmount)
+		group.Recognized.add(row.RecognizedCurrency, row.RecognizedAmount)
 		if row.Active {
-			group.ActiveAmount.add(row.Plan.Currency, row.Plan.PriceAmount)
+			group.ActiveAmount.add(row.ActivePaidCurrency, row.ActivePaidAmount)
 			group.ActivePaidInviteeIDs[row.Invitee.Id] = struct{}{}
 			if row.ActiveValue != nil {
 				group.ActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
@@ -1520,7 +1590,7 @@ func adminAccumulateInvitationInvitee(groups map[int]*adminInvitationInviteeGrou
 	}
 	if row.Excluded {
 		group.HasExcluded = true
-		group.WouldHavePaid.add(row.Plan.Currency, row.ExcludedAuditAmount)
+		group.WouldHavePaid.add(row.ExcludedAuditCurrency, row.ExcludedAuditAmount)
 		if row.ActiveValue != nil {
 			group.WouldHaveActive.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
 		}
@@ -1531,10 +1601,10 @@ func adminAccumulateInvitationInvitee(groups map[int]*adminInvitationInviteeGrou
 		group.HasMain = true
 		group.SnapshotCount++
 		group.RecognizedUnits += row.RecognizedUnits
-		group.Recognized.add(row.Plan.Currency, row.RecognizedAmount)
+		group.Recognized.add(row.RecognizedCurrency, row.RecognizedAmount)
 		if row.Active {
 			group.ActiveCount++
-			group.ActiveAmount.add(row.Plan.Currency, row.Plan.PriceAmount)
+			group.ActiveAmount.add(row.ActivePaidCurrency, row.ActivePaidAmount)
 			if row.ActiveValue != nil {
 				group.ActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
 			}
@@ -1596,7 +1666,7 @@ func adminInvitationSubscriptionItem(row adminInvitationPaidRow) dto.AdminInvita
 		PlanName:             row.Plan.Title,
 		PlanPrice:            dto.AdminAnalyticsMoneyAmount{Amount: row.Plan.PriceAmount, Currency: row.Plan.Currency},
 		RecognizedPaidUnits:  row.RecognizedUnits,
-		RecognizedPaidAmount: dto.AdminAnalyticsMoneyAmount{Amount: row.RecognizedAmount, Currency: row.Plan.Currency},
+		RecognizedPaidAmount: dto.AdminAnalyticsMoneyAmount{Amount: row.RecognizedAmount, Currency: row.RecognizedCurrency},
 		UnitInferenceBasis:   row.UnitBasis,
 		Source:               row.Source,
 		GrantReason:          row.Subscription.GrantReason,

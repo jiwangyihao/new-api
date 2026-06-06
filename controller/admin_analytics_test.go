@@ -19,7 +19,7 @@ func setupAdminAnalyticsControllerTestDBs(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.InvitationMonthlyEntitlement{}, &model.InvitationRewardEvent{}))
 	require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
 	return db
 }

@@ -221,7 +221,7 @@ func buildAdminOpsSubscriptionCandidates(subs []UserSubscription, activeID int) 
 		return nil, nil, nil
 	}
 	defaultCandidate := candidates[0]
-	if isPaidSubscription(&defaultCandidate.sub) {
+	if isPaidEquivalentSubscription(&defaultCandidate.sub, defaultCandidate.plan) {
 		tier := subscriptionTierKey(defaultCandidate.plan)
 		if tier != "" {
 			for i := 1; i < len(candidates); i++ {

@@ -411,6 +411,183 @@ func TestResetUserSubscriptionQuotaConsumesOneMonthFromPaidSubscription(t *testi
 	assert.NotZero(t, sub.LastResetTime)
 }
 
+func TestPublicSubscriptionSummaryTreatsRedemptionAsPaid(t *testing.T) {
+	truncateTables(t)
+	code := "redemption_paid_summary"
+	plan := &SubscriptionPlan{Id: 7661, Title: "Redemption Paid", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}
+	require.NoError(t, DB.Create(plan).Error)
+	now := common.GetTimestamp()
+	sub := &UserSubscription{Id: 7662, UserId: 7663, PlanId: 7661, Status: "active", TokenLimit: 100, TokenUsed: 99, StartTime: now - 86400, EndTime: now + 70*86400, GrantReason: "redemption", Source: "redemption"}
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: sub, Plan: plan}}, sub.Id, now)
+
+	require.Len(t, summaries, 1)
+	require.NotNil(t, summaries[0].Subscription)
+	assert.Equal(t, "paid", summaries[0].Subscription.SourceLabel)
+	assert.True(t, summaries[0].Subscription.CanResetQuota)
+}
+
+func TestInvitationRewardCanResetWithSameTierRedemptionPayer(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7664, Username: "reward_redemption_reset", Status: common.UserStatusEnabled, AffCode: "aff7664"}).Error)
+	code := "reward_redemption_tier"
+	plan := &SubscriptionPlan{Id: 7665, Title: "Reward Redemption Tier", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}
+	require.NoError(t, DB.Create(plan).Error)
+	now := common.GetTimestamp()
+	redemptionEnd := now + 70*86400
+	rewardEnd := now + 3*86400
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7666, UserId: 7664, PlanId: 7665, Status: "active", TokenLimit: 100, TokenUsed: 0, StartTime: now - 86400, EndTime: redemptionEnd, GrantReason: "redemption", Source: "redemption"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7667, UserId: 7664, PlanId: 7665, Status: "active", TokenLimit: 100, TokenUsed: 88, AmountUsed: 12, StartTime: now - 86400, EndTime: rewardEnd, GrantReason: SubscriptionGrantMonthlyInviteEntitlement, Source: SubscriptionGrantMonthlyInviteEntitlement}).Error)
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: &UserSubscription{Id: 7666, UserId: 7664, PlanId: 7665, Status: "active", EndTime: redemptionEnd, GrantReason: "redemption", Source: "redemption"}, Plan: plan}, {Subscription: &UserSubscription{Id: 7667, UserId: 7664, PlanId: 7665, Status: "active", EndTime: rewardEnd, GrantReason: SubscriptionGrantMonthlyInviteEntitlement, Source: SubscriptionGrantMonthlyInviteEntitlement}, Plan: plan}}, 7667, now)
+	require.Len(t, summaries, 2)
+	require.NotNil(t, summaries[1].Subscription)
+	assert.True(t, summaries[1].Subscription.CanResetQuota)
+	assert.Equal(t, rewardEnd+(redemptionEnd-now), summaries[1].Subscription.EffectiveEndTime)
+
+	result, err := ResetUserSubscriptionQuota(7664, 7667)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	var reward UserSubscription
+	require.NoError(t, DB.First(&reward, 7667).Error)
+	assert.Equal(t, int64(0), reward.TokenUsed)
+	assert.Equal(t, int64(0), reward.AmountUsed)
+	assert.InDelta(t, rewardEnd, reward.EndTime, 2)
+	var payer UserSubscription
+	require.NoError(t, DB.First(&payer, 7666).Error)
+	assert.InDelta(t, redemptionEnd-30*86400, payer.EndTime, 2)
+}
+
+func TestResetUserSubscriptionQuotaConsumesOneMonthFromRedemptionSubscription(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7668, Username: "reset_redemption", Status: common.UserStatusEnabled, AffCode: "aff7668"}).Error)
+	code := "reset_redemption_tier"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7669, Title: "Reset Redemption", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	now := common.GetTimestamp()
+	end := now + 70*86400
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7670, UserId: 7668, PlanId: 7669, Status: "active", TokenLimit: 100, TokenUsed: 88, AmountUsed: 12, StartTime: now - 86400, EndTime: end, GrantReason: "redemption", Source: "redemption"}).Error)
+
+	result, err := ResetUserSubscriptionQuota(7668, 7670)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	var sub UserSubscription
+	require.NoError(t, DB.First(&sub, 7670).Error)
+	assert.Equal(t, int64(0), sub.TokenUsed)
+	assert.Equal(t, int64(0), sub.AmountUsed)
+	assert.InDelta(t, end-30*86400, sub.EndTime, 2)
+	assert.NotZero(t, sub.LastResetTime)
+}
+
+func TestPublicSubscriptionSummaryDoesNotResetInactivePaidEquivalentSubscriptions(t *testing.T) {
+	truncateTables(t)
+	code := "inactive_redemption_reset"
+	plan := &SubscriptionPlan{Id: 7671, Title: "Inactive Redemption", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}
+	now := common.GetTimestamp()
+	expired := &UserSubscription{Id: 7672, UserId: 7673, PlanId: 7671, Status: "active", EndTime: now - 60, GrantReason: "redemption", Source: "redemption"}
+	cancelled := &UserSubscription{Id: 7674, UserId: 7673, PlanId: 7671, Status: "cancelled", EndTime: now + 70*86400, GrantReason: "redemption", Source: "redemption"}
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: expired, Plan: plan}, {Subscription: cancelled, Plan: plan}}, 0, now)
+
+	require.Len(t, summaries, 2)
+	assert.False(t, summaries[0].Subscription.CanResetQuota)
+	assert.False(t, summaries[1].Subscription.CanResetQuota)
+}
+
+func TestInvitationRewardIgnoresInactiveRedemptionPaidRemainder(t *testing.T) {
+	truncateTables(t)
+	code := "inactive_redemption_payer"
+	plan := &SubscriptionPlan{Id: 7675, Title: "Inactive Redemption Payer", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}
+	now := common.GetTimestamp()
+	cancelledPaid := &UserSubscription{Id: 7676, UserId: 7677, PlanId: 7675, Status: "cancelled", EndTime: now + 70*86400, GrantReason: "redemption", Source: "redemption"}
+	expiredPaid := &UserSubscription{Id: 7678, UserId: 7677, PlanId: 7675, Status: "active", EndTime: now - 60, GrantReason: "redemption", Source: "redemption"}
+	reward := &UserSubscription{Id: 7679, UserId: 7677, PlanId: 7675, Status: "active", EndTime: now + 3*86400, GrantReason: SubscriptionGrantMonthlyInviteEntitlement, Source: SubscriptionGrantMonthlyInviteEntitlement}
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: cancelledPaid, Plan: plan}, {Subscription: expiredPaid, Plan: plan}, {Subscription: reward, Plan: plan}}, reward.Id, now)
+
+	require.Len(t, summaries, 3)
+	require.NotNil(t, summaries[2].Subscription)
+	assert.False(t, summaries[2].Subscription.CanResetQuota)
+	assert.Equal(t, reward.EndTime, summaries[2].Subscription.EffectiveEndTime)
+}
+
+func TestAdminPaidSubscriptionIsPaidEquivalentForReset(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7680, Username: "admin_paid_reset", Status: common.UserStatusEnabled, AffCode: "aff7680"}).Error)
+	code := "admin_paid_reset_tier"
+	plan := &SubscriptionPlan{Id: 7681, Title: "Admin Paid", Enabled: true, PriceAmount: 80, Currency: "CNY", TotalAmount: 1, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}
+	require.NoError(t, DB.Create(plan).Error)
+	now := common.GetTimestamp()
+	end := now + 70*86400
+	sub := &UserSubscription{Id: 7682, UserId: 7680, PlanId: 7681, Status: "active", TokenLimit: 100, TokenUsed: 88, AmountUsed: 12, StartTime: now - 3600, EndTime: end, GrantReason: "admin", Source: "admin"}
+	require.NoError(t, DB.Create(sub).Error)
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: sub, Plan: plan}}, sub.Id, now)
+	require.Len(t, summaries, 1)
+	require.NotNil(t, summaries[0].Subscription)
+	assert.Equal(t, "paid", summaries[0].Subscription.SourceLabel)
+	assert.True(t, summaries[0].Subscription.CanResetQuota)
+
+	result, err := ResetUserSubscriptionQuota(7680, 7682)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	var saved UserSubscription
+	require.NoError(t, DB.First(&saved, 7682).Error)
+	assert.Equal(t, int64(0), saved.TokenUsed)
+	assert.Equal(t, int64(0), saved.AmountUsed)
+	assert.InDelta(t, end-30*86400, saved.EndTime, 2)
+}
+
+func TestAdminTrialSubscriptionIsNotPaidEquivalentForReset(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7683, Username: "admin_trial_reset", Status: common.UserStatusEnabled, AffCode: "aff7683"}).Error)
+	trialCode := "admin_trial_reset_tier"
+	trialPlan := &SubscriptionPlan{Id: 7684, Title: "Admin Trial", Enabled: true, IsTrial: true, PriceAmount: 0, Currency: "CNY", BusinessCode: &trialCode}
+	require.NoError(t, DB.Create(trialPlan).Error)
+	freeCode := "admin_free_reset_tier"
+	freePlan := &SubscriptionPlan{Id: 7685, Title: "Admin Free", Enabled: true, PriceAmount: 0, Currency: "CNY", BusinessCode: &freeCode}
+	require.NoError(t, DB.Create(freePlan).Error)
+	now := common.GetTimestamp()
+	trialSub := &UserSubscription{Id: 7686, UserId: 7683, PlanId: 7684, Status: "active", TokenLimit: 0, TokenUsed: 0, StartTime: now - 3600, EndTime: now + 24*3600, GrantReason: "admin", Source: "admin"}
+	freeSub := &UserSubscription{Id: 7687, UserId: 7683, PlanId: 7685, Status: "active", TokenLimit: 100, TokenUsed: 10, StartTime: now - 3600, EndTime: now + 24*3600, GrantReason: "admin", Source: "admin"}
+	require.NoError(t, DB.Create(trialSub).Error)
+	require.NoError(t, DB.Create(freeSub).Error)
+
+	summaries := buildPublicSubscriptionSummaries([]SubscriptionSummary{{Subscription: trialSub, Plan: trialPlan}, {Subscription: freeSub, Plan: freePlan}}, trialSub.Id, now)
+	require.Len(t, summaries, 2)
+	assert.NotEqual(t, "paid", summaries[0].Subscription.SourceLabel)
+	assert.False(t, summaries[0].Subscription.CanResetQuota)
+	assert.NotEqual(t, "paid", summaries[1].Subscription.SourceLabel)
+	assert.False(t, summaries[1].Subscription.CanResetQuota)
+
+	_, err := ResetUserSubscriptionQuota(7683, 7686)
+	require.Error(t, err)
+	_, err = ResetUserSubscriptionQuota(7683, 7687)
+	require.Error(t, err)
+}
+
+func TestPreConsumeUserSubscriptionUsesSameTierRewardWhenRedemptionIsPaid(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7688, Username: "same_tier_redemption_reward", Status: common.UserStatusEnabled, AffCode: "aff7688"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedDistributorSubscriptionPlanForTest(t, 7689, "same_tier_redemption_reward", 100)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7690, UserId: 7688, PlanId: 7689, Status: "active", TokenLimit: 100, TokenUsed: 0, EndTime: now + 24*3600, GrantReason: "redemption", Source: "redemption"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7691, UserId: 7688, PlanId: 7689, Status: "active", TokenLimit: 100, TokenUsed: 25, EndTime: now + 3*86400, GrantReason: SubscriptionGrantMonthlyInviteEntitlement, Source: SubscriptionGrantMonthlyInviteEntitlement}).Error)
+
+	pre, err := PreConsumeUserSubscription("same-tier-redemption-reward", 7688, "gpt-4o", 0, 6)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7691, pre.UserSubscriptionId)
+	var paid UserSubscription
+	require.NoError(t, DB.First(&paid, 7690).Error)
+	assert.Equal(t, int64(0), paid.TokenUsed)
+	var reward UserSubscription
+	require.NoError(t, DB.First(&reward, 7691).Error)
+	assert.Equal(t, int64(31), reward.TokenUsed)
+}
+
 func TestPreConsumeUserSubscription_IgnoresAmountTotalForDistributorLimit(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7401, Username: "token_user", Status: common.UserStatusEnabled, AffCode: "aff7401"}).Error)

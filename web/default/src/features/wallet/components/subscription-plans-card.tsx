@@ -58,7 +58,7 @@ import type {
 import { getSubscriptionDisplayLabel } from '../lib/subscription-display'
 import type { PaymentMethod, TopupInfo } from '../types'
 
-type TranslationFn = ReturnType<typeof useTranslation>['t']
+type TranslationFn = (key: string, options?: Record<string, unknown>) => string
 
 interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
@@ -79,24 +79,59 @@ function getSubscriptionEndTime(
   return Number(subscription?.effective_end_time || subscription?.end_time || 0)
 }
 
-function getSubscriptionSourceLabel(
-  subscription: UserSubscriptionRecord['subscription'] | null | undefined,
+function getRawSubscriptionSource(
+  record: UserSubscriptionRecord | null | undefined
+): string {
+  const subscription = record?.subscription
+  return subscription?.grant_reason?.trim() || subscription?.source?.trim() || ''
+}
+
+function isPaidLikeSubscription(
+  record: UserSubscriptionRecord | null | undefined
+): boolean {
+  const subscription = record?.subscription
+  const sourceLabel = subscription?.source_label?.trim()
+  if (sourceLabel === 'paid') return true
+  const source = getRawSubscriptionSource(record)
+  if (source === 'order' || source === 'redemption') return true
+  if (source !== 'admin') return false
+  const plan = record?.plan
+  return !!plan && plan.price_amount > 0 && !plan.is_trial && !plan.invite_trial
+}
+
+export function getSubscriptionSourceLabel(
+  record: UserSubscriptionRecord | null | undefined,
   t: TranslationFn
 ): string {
-  const grantReason = subscription?.grant_reason || ''
-  if (
-    grantReason === 'order' ||
-    (!grantReason && subscription?.source === 'order')
-  ) {
+  const subscription = record?.subscription
+  const sourceLabel = subscription?.source_label?.trim()
+  if (sourceLabel === 'paid') return t('Paid plan')
+  if (sourceLabel === 'invitation_reward') return t('Invitation reward')
+  if (sourceLabel === 'trial') return t('Trial')
+  const source = getRawSubscriptionSource(record)
+  if (source === 'order' || source === 'redemption' || isPaidLikeSubscription(record)) {
     return t('Paid plan')
   }
-  if (grantReason === 'monthly_invite_entitlement') {
-    return t('Invitation reward')
-  }
-  if (grantReason === 'trial_code' || grantReason === 'invite_trial') {
-    return t('Trial')
-  }
+  if (source === 'monthly_invite_entitlement') return t('Invitation reward')
+  if (source === 'trial_code' || source === 'invite_trial') return t('Trial')
   return t('Unknown')
+}
+
+export function canResetSubscriptionQuotaFromRecord(
+  record: UserSubscriptionRecord | null | undefined,
+  now: number
+): boolean {
+  const subscription = record?.subscription
+  if (!subscription) return false
+  const endTime = getSubscriptionEndTime(subscription)
+  const isExpired = endTime < now
+  const isCancelled = subscription.status === 'cancelled'
+  const isActive = subscription.status === 'active' && !isExpired
+  return (
+    (subscription.can_reset_quota ?? isPaidLikeSubscription(record)) &&
+    isActive &&
+    !isCancelled
+  )
 }
 
 function formatUsedTokenCount(value: number, t: TranslationFn): string {
@@ -378,7 +413,7 @@ export function SubscriptionPlansCard({
                   const now = Date.now() / 1000
                   const endTime = getSubscriptionEndTime(subscription)
                   const subscriptionId = subscription?.id || 0
-                  const sourceLabel = getSubscriptionSourceLabel(subscription, t)
+                  const sourceLabel = getSubscriptionSourceLabel(sub, t)
                   const isExpired = endTime < now
                   const isCancelled = subscription?.status === 'cancelled'
                   const isActive =
@@ -386,11 +421,7 @@ export function SubscriptionPlansCard({
                   const isSelected =
                     !!subscription?.is_active_selected ||
                     (!!activeSubscriptionId && subscriptionId === activeSubscriptionId)
-                  const canResetQuota =
-                    (subscription?.can_reset_quota ??
-                      subscription?.grant_reason === 'order') &&
-                    isActive &&
-                    !isCancelled
+                  const canResetQuota = canResetSubscriptionQuotaFromRecord(sub, now)
                   const isSettingActive =
                     pendingActiveSubscriptionId === subscriptionId
                   const isResetting = resettingQuotaId === subscriptionId

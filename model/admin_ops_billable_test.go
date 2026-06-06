@@ -34,6 +34,26 @@ func TestGetAdminOpsUserConcurrencyLimitsMatchesPrimaryBillableInviteRewardSelec
 	assert.Equal(t, 5, limit.QueueCapacity)
 }
 
+func TestGetAdminOpsUserConcurrencyLimitsMatchesRedemptionPaidInviteRewardSelection(t *testing.T) {
+	truncateTables(t)
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	seedAdminOpsSubscriptionPlanForBillableTest(t, 7742, "Basic", "admin_ops_redemption_reward", 100, 3, 5)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&User{Id: 7741, Username: "admin-ops-redemption-tier", Status: common.UserStatusEnabled, AffCode: "aff7741"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7743, UserId: 7741, PlanId: 7742, Status: "active", TokenLimit: 100, TokenUsed: 10, EndTime: now + 24*3600, GrantReason: "redemption", Source: "redemption"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7744, UserId: 7741, PlanId: 7742, Status: "active", TokenLimit: 100, TokenUsed: 25, EndTime: now + 3*86400, GrantReason: SubscriptionGrantMonthlyInviteEntitlement, Source: SubscriptionGrantMonthlyInviteEntitlement}).Error)
+
+	limits, err := GetAdminOpsUserConcurrencyLimits([]int{7741})
+
+	require.NoError(t, err)
+	limit := limits[7741]
+	assert.Equal(t, 7742, limit.PlanID)
+	assert.EqualValues(t, 100, limit.TokenLimit)
+	assert.EqualValues(t, 25, limit.TokenUsed)
+	assert.Equal(t, 3, limit.Limit)
+	assert.Equal(t, 5, limit.QueueCapacity)
+}
+
 func TestGetAdminOpsUserConcurrencyLimitsMatchesActiveSubscriptionSelection(t *testing.T) {
 	truncateTables(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()

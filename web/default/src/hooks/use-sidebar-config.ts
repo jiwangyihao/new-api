@@ -33,7 +33,10 @@ export type SidebarModulesAdminConfig = Record<string, SidebarSectionConfig>
 // to signal "no narrowing" (empty/invalid/legacy users).
 export type SidebarModulesUserConfig = SidebarModulesAdminConfig | null
 
-export type SidebarModulesPermissionConfig = Record<string, Record<string, unknown> | boolean> | null | undefined
+export type SidebarModulesPermissionConfig =
+  | Record<string, Record<string, unknown> | boolean>
+  | null
+  | undefined
 
 /**
  * Default sidebar modules configuration
@@ -69,6 +72,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     subscription: true,
     analytics: true,
     ops: true,
+    invitation_commission: true,
   },
 }
 
@@ -130,6 +134,10 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/admin-analytics': { section: 'admin', module: 'analytics' },
   '/admin-ops': { section: 'admin', module: 'ops' },
   '/trial-abuse': { section: 'admin', module: 'trial_abuse' },
+  '/invitation-commission/withdrawals': {
+    section: 'admin',
+    module: 'invitation_commission',
+  },
   '/usage-logs': { section: 'console', module: 'log' },
   '/usage-logs/common': { section: 'console', module: 'log' },
   '/usage-logs/drawing': { section: 'console', module: 'midjourney' },
@@ -274,7 +282,12 @@ function isNavItemVisible(
   if ('items' in item && item.items) {
     // If has sub-items, show this collapsible item if at least one sub-item is visible
     return item.items.some((subItem) =>
-      isModuleEnabled(subItem.url as string, adminConfig, userConfig, permissionConfig)
+      isModuleEnabled(
+        subItem.url as string,
+        adminConfig,
+        userConfig,
+        permissionConfig
+      )
     )
   }
 
@@ -351,6 +364,51 @@ export function filterNavGroupsByRole(
   })
 }
 
+export function isAdminCommissionNavVisible(navGroups: NavGroup[]): boolean {
+  return navGroups.some(
+    (group) =>
+      group.id === 'admin' &&
+      group.items.some(
+        (item) =>
+          ('url' in item &&
+            item.url === '/invitation-commission/withdrawals') ||
+          ('items' in item &&
+            Array.isArray(item.items) &&
+            item.items.some(
+              (subItem) => subItem.url === '/invitation-commission/withdrawals'
+            ))
+      )
+  )
+}
+
+export function shouldFetchAdminTasksSummary(
+  userRole: number | undefined,
+  navGroups: NavGroup[]
+): boolean {
+  return Boolean(
+    userRole && userRole >= ROLE.ADMIN && isAdminCommissionNavVisible(navGroups)
+  )
+}
+
+export const shouldFetchAdminTasksSummaryForTest = shouldFetchAdminTasksSummary
+
+export async function resolvePendingCommissionWithdrawalsBadge(
+  fetchSummary: () => Promise<{ pending_commission_withdrawals: number }>,
+  _notifyError: (error: unknown) => void
+): Promise<string | undefined> {
+  try {
+    const summary = await fetchSummary()
+    return summary.pending_commission_withdrawals > 0
+      ? String(summary.pending_commission_withdrawals)
+      : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export const resolvePendingCommissionWithdrawalsBadgeForTest =
+  resolvePendingCommissionWithdrawalsBadge
+
 /**
  * Filter sidebar navigation groups by admin × user sidebar_modules config.
  *
@@ -397,7 +455,8 @@ export function useSidebarConfig(navGroups: NavGroup[]): NavGroup[] {
         navGroups,
         adminConfig,
         userConfig,
-        auth?.user?.permissions?.sidebar_modules as SidebarModulesPermissionConfig
+        auth?.user?.permissions
+          ?.sidebar_modules as SidebarModulesPermissionConfig
       ),
     [
       navGroups,

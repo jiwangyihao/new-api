@@ -50,6 +50,33 @@ func TestAccountBalanceCentsFromCNY(t *testing.T) {
 	}
 }
 
+func TestAccountBalanceIntFromCents(t *testing.T) {
+	cases := []struct {
+		name    string
+		amount  int64
+		want    int
+		wantErr bool
+	}{
+		{name: "positive cents", amount: 1200, want: 1200},
+		{name: "max int", amount: int64(math.MaxInt), want: math.MaxInt},
+		{name: "reject zero", amount: 0, wantErr: true},
+		{name: "reject negative", amount: -1, wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := AccountBalanceIntFromCents(tc.amount)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestDeductAndIncreaseUserAccountBalanceTxUseCents(t *testing.T) {
 	setupAccountBalanceTestDB(t)
 	user := &User{Id: 9101, Username: "balance-cents", Quota: 4000, Status: common.UserStatusEnabled}

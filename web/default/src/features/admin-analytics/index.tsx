@@ -1,17 +1,26 @@
-import { useMemo, type JSX, type ReactNode } from 'react'
+import { useEffect, useMemo, type JSX, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Label } from '@/components/ui/label'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
-import { adminAnalyticsApi } from './api'
 import { ADMIN_ANALYTICS_TABS } from './constants'
 import { buildAdminAnalyticsDrilldown } from './lib/drilldown'
-import { formatAdminPercent, formatAdminTokens } from './lib/format'
-import { buildAdminAnalyticsRequestDescriptors } from './lib/page-contract'
+import {
+  formatAdminMoneyAmount,
+  formatAdminMoneyBreakdown,
+  formatAdminPercent,
+  formatAdminTokens,
+} from './lib/format'
+import {
+  buildAdminAnalyticsRequestDescriptors,
+  fetchAdminAnalyticsDescriptor,
+} from './lib/page-contract'
+import { switchAdminAnalyticsTab } from './lib/filters'
 import type {
   AdminAnalyticsCanonicalFilters,
   AdminAnalyticsDrilldownTarget,
@@ -27,6 +36,8 @@ import type {
   AdminUsageBreakdownResponse,
   AdminUsageConsumptionSummaryResponse,
   AdminUsageTimeseriesResponse,
+  InvitationPaidSubscriptionsResponse,
+  PaidSubscriptionValueResponse,
   ApiResponse,
   FrontendAdminAnalyticsDrilldownTarget,
 } from './types'
@@ -47,6 +58,28 @@ type UsagePanelResponses = {
   summary?: PanelApiResponse<AdminUsageConsumptionSummaryResponse>
   timeseries?: PanelApiResponse<AdminUsageTimeseriesResponse>
   breakdown?: PanelApiResponse<AdminUsageBreakdownResponse>
+}
+
+type PaidSubscriptionValuePanelResponses = {
+  summary?: PanelApiResponse<PaidSubscriptionValueResponse>
+  users?: PanelApiResponse<PaidSubscriptionValueResponse>
+  subscriptions?: PanelApiResponse<PaidSubscriptionValueResponse>
+  plans?: PanelApiResponse<PaidSubscriptionValueResponse>
+  sources?: PanelApiResponse<PaidSubscriptionValueResponse>
+}
+
+type InvitationPaidSubscriptionsPanelResponses = {
+  summary?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
+  inviters?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
+  invitees?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
+  subscriptions?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
+}
+
+function isPaidSubscriptionAnalyticsTab(tab: AdminAnalyticsTab): boolean {
+  return (
+    tab === 'paid-subscription-value' ||
+    tab === 'invitation-paid-subscriptions'
+  )
 }
 
 function hasPanelData<TData>(
@@ -83,7 +116,7 @@ export function AdminAnalyticsPage(
   const queries = useQueries({
     queries: descriptors.map((descriptor) => ({
       queryKey: descriptor.queryKey,
-      queryFn: () => fetchDescriptor(descriptor.id, props.search),
+      queryFn: () => fetchAdminAnalyticsDescriptor(descriptor, props.search),
       enabled: descriptor.enabled,
     })),
   })
@@ -93,6 +126,16 @@ export function AdminAnalyticsPage(
   )
   const hasNetworkError = queries.some((query) => query.isError)
   const hasResponseError = queries.some((query) => panelFailed(query.data))
+  const summarySnapshot = hasPanelData(queries[0]?.data)
+    ? queries[0].data.data.range.snapshot_at
+    : undefined
+
+  useEffect(() => {
+    if (!isPaidSubscriptionAnalyticsTab(props.search.tab)) return
+    if (props.search.snapshot_at !== undefined) return
+    if (summarySnapshot === undefined) return
+    props.onSearchChange({ ...props.search, snapshot_at: summarySnapshot })
+  }, [props.search, props.onSearchChange, summarySnapshot])
 
   return (
     <SectionPageLayout>
@@ -106,7 +149,9 @@ export function AdminAnalyticsPage(
         <div className='space-y-4'>
           <AdminAnalyticsTabs
             value={props.search.tab}
-            onChange={(tab) => props.onSearchChange({ ...props.search, tab })}
+            onChange={(tab) =>
+              props.onSearchChange(switchAdminAnalyticsTab(props.search, tab))
+            }
           />
           <AdminAnalyticsFilterBar
             value={props.search}
@@ -170,7 +215,7 @@ function AdminAnalyticsFilterBar(props: {
       <CardHeader>
         <CardTitle>{t('Filters')}</CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className='space-y-3'>
         <div className='grid gap-3 sm:grid-cols-2 lg:grid-cols-4'>
           <div className='grid gap-2'>
             <Label htmlFor='admin-analytics-start-time'>
@@ -182,9 +227,16 @@ function AdminAnalyticsFilterBar(props: {
               value={startValue}
               onChange={(event) => {
                 const next = dateTimeInputToUnixSeconds(event.target.value)
-                if (next > 0) {
-                  props.onApply({ ...props.value, start_timestamp: next })
-                }
+                if (next === undefined) return
+                props.onApply({
+                  ...props.value,
+                  start_timestamp: next,
+                  time_range_explicit: isPaidSubscriptionAnalyticsTab(
+                    props.value.tab
+                  )
+                    ? true
+                    : props.value.time_range_explicit,
+                })
               }}
             />
           </div>
@@ -196,42 +248,213 @@ function AdminAnalyticsFilterBar(props: {
               value={endValue}
               onChange={(event) => {
                 const next = dateTimeInputToUnixSeconds(event.target.value)
-                if (next > 0) {
-                  props.onApply({ ...props.value, end_timestamp: next })
-                }
-              }}
-            />
-          </div>
-          <div className='grid gap-2'>
-            <Label htmlFor='admin-analytics-top-n'>{t('Top N')}</Label>
-            <Input
-              id='admin-analytics-top-n'
-              type='number'
-              min={1}
-              max={100}
-              value={props.value.top_n}
-              onChange={(event) => {
+                if (next === undefined) return
                 props.onApply({
                   ...props.value,
-                  top_n: normalizeAdminAnalyticsLimit(event.target.value),
+                  end_timestamp: next,
+                  time_range_explicit: isPaidSubscriptionAnalyticsTab(
+                    props.value.tab
+                  )
+                    ? true
+                    : props.value.time_range_explicit,
                 })
               }}
             />
           </div>
+          {isPaidSubscriptionAnalyticsTab(props.value.tab) ? (
+            <>
+              <div className='grid gap-2'>
+                <Label htmlFor='admin-analytics-time-range-explicit'>
+                  {t('adminAnalytics.filters.timeRangeExplicit')}
+                </Label>
+                <label className='flex h-8 items-center gap-2 text-sm'>
+                  <input
+                    id='admin-analytics-time-range-explicit'
+                    type='checkbox'
+                    checked={props.value.time_range_explicit}
+                    onChange={(event) =>
+                      props.onApply({
+                        ...props.value,
+                        time_range_explicit: event.target.checked,
+                      })
+                    }
+                  />
+                  {t('adminAnalytics.filters.enableTimeRange')}
+                </label>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='admin-analytics-excluded-mode'>
+                  {t('adminAnalytics.filters.excludedMode')}
+                </Label>
+                <NativeSelect
+                  id='admin-analytics-excluded-mode'
+                  value={props.value.excluded_mode}
+                  onChange={(event) =>
+                    props.onApply({
+                      ...props.value,
+                      excluded_mode: event.target
+                        .value as AdminAnalyticsCanonicalFilters['excluded_mode'],
+                    })
+                  }
+                >
+                  <NativeSelectOption value='included_only'>
+                    {t('adminAnalytics.filters.excludedMode.includedOnly')}
+                  </NativeSelectOption>
+                  <NativeSelectOption value='include_excluded'>
+                    {t('adminAnalytics.filters.excludedMode.includeExcluded')}
+                  </NativeSelectOption>
+                  <NativeSelectOption value='excluded_only'>
+                    {t('adminAnalytics.filters.excludedMode.excludedOnly')}
+                  </NativeSelectOption>
+                </NativeSelect>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='admin-analytics-currency'>
+                  {t('adminAnalytics.filters.currency')}
+                </Label>
+                <Input
+                  id='admin-analytics-currency'
+                  value={props.value.currency ?? ''}
+                  placeholder='CNY'
+                  onChange={(event) =>
+                    props.onApply({
+                      ...props.value,
+                      currency:
+                        event.target.value.trim().toUpperCase() || undefined,
+                    })
+                  }
+                />
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='admin-analytics-active-only'>
+                  {t('adminAnalytics.filters.activeOnly')}
+                </Label>
+                <label className='flex h-8 items-center gap-2 text-sm'>
+                  <input
+                    id='admin-analytics-active-only'
+                    type='checkbox'
+                    checked={props.value.active_only}
+                    onChange={(event) =>
+                      props.onApply({
+                        ...props.value,
+                        active_only: event.target.checked,
+                      })
+                    }
+                  />
+                  {t('adminAnalytics.filters.activeOnlyEnabled')}
+                </label>
+              </div>
+              <div className='grid gap-2'>
+                <Label htmlFor='admin-analytics-snapshot-at'>
+                  {t('adminAnalytics.filters.snapshotAt')}
+                </Label>
+                <Input
+                  id='admin-analytics-snapshot-at'
+                  type='datetime-local'
+                  value={
+                    props.value.snapshot_at === undefined
+                      ? ''
+                      : unixSecondsToDateTimeInput(props.value.snapshot_at)
+                  }
+                  onChange={(event) => {
+                    const next = dateTimeInputToUnixSeconds(event.target.value)
+                    props.onApply({
+                      ...props.value,
+                      snapshot_at: next,
+                    })
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <div className='grid gap-2'>
+              <Label htmlFor='admin-analytics-top-n'>{t('Top N')}</Label>
+              <Input
+                id='admin-analytics-top-n'
+                type='number'
+                min={1}
+                max={100}
+                value={props.value.top_n}
+                onChange={(event) => {
+                  props.onApply({
+                    ...props.value,
+                    top_n: normalizeAdminAnalyticsLimit(event.target.value),
+                  })
+                }}
+              />
+            </div>
+          )}
         </div>
+        <ActiveFilterSummary value={props.value} onApply={props.onApply} />
       </CardContent>
     </Card>
   )
 }
 
+function ActiveFilterSummary(props: {
+  value: AdminAnalyticsCanonicalFilters
+  onApply: (next: AdminAnalyticsCanonicalFilters) => void
+}): JSX.Element | null {
+  const { t } = useTranslation()
+  if (!isPaidSubscriptionAnalyticsTab(props.value.tab)) return null
+  const chips: Array<{ key: string; label: string; clear: () => void }> = []
+  if (props.value.user_ids.length > 0) {
+    chips.push({
+      key: 'user_ids',
+      label: `${t('adminAnalytics.filters.userIds')}: ${props.value.user_ids.join(', ')}`,
+      clear: () => props.onApply({ ...props.value, user_ids: [] }),
+    })
+  }
+  if (props.value.plan_ids.length > 0) {
+    chips.push({
+      key: 'plan_ids',
+      label: `${t('adminAnalytics.filters.planIds')}: ${props.value.plan_ids.join(', ')}`,
+      clear: () => props.onApply({ ...props.value, plan_ids: [] }),
+    })
+  }
+  if (props.value.inviter_id !== undefined) {
+    chips.push({
+      key: 'inviter_id',
+      label: `${t('adminAnalytics.filters.inviterId')}: ${props.value.inviter_id}`,
+      clear: () => props.onApply({ ...props.value, inviter_id: undefined }),
+    })
+  }
+  if (props.value.invitee_id !== undefined) {
+    chips.push({
+      key: 'invitee_id',
+      label: `${t('adminAnalytics.filters.inviteeId')}: ${props.value.invitee_id}`,
+      clear: () => props.onApply({ ...props.value, invitee_id: undefined }),
+    })
+  }
+  if (props.value.subscription_id !== undefined) {
+    chips.push({
+      key: 'subscription_id',
+      label: `${t('adminAnalytics.filters.subscriptionId')}: ${props.value.subscription_id}`,
+      clear: () => props.onApply({ ...props.value, subscription_id: undefined }),
+    })
+  }
+  if (chips.length === 0) return null
+  return (
+    <div className='flex flex-wrap gap-2'>
+      {chips.map((chip) => (
+        <Button key={chip.key} type='button' variant='outline' size='xs' onClick={chip.clear}>
+          {chip.label} · {t('adminAnalytics.filters.clear')}
+        </Button>
+      ))}
+    </div>
+  )
+}
+
 function unixSecondsToDateTimeInput(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return ''
+  if (!Number.isFinite(value) || value < 0) return ''
   return new Date(value * 1000).toISOString().slice(0, 16)
 }
 
-function dateTimeInputToUnixSeconds(value: string): number {
-  const timestamp = new Date(value).getTime()
-  if (!Number.isFinite(timestamp)) return 0
+function dateTimeInputToUnixSeconds(value: string): number | undefined {
+  const trimmed = value.trim()
+  if (trimmed === '') return undefined
+  const timestamp = new Date(trimmed).getTime()
+  if (Number.isNaN(timestamp)) return undefined
   return Math.floor(timestamp / 1000)
 }
 
@@ -241,48 +464,12 @@ function normalizeAdminAnalyticsLimit(value: string): number {
   return Math.min(Math.max(Math.trunc(parsed), 1), 100)
 }
 
-async function fetchDescriptor(
-  descriptorId: string,
-  filters: AdminAnalyticsCanonicalFilters
-): Promise<UnknownPanelResponse> {
-  switch (descriptorId) {
-    case 'overview':
-      return adminAnalyticsApi.overview(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'plan-distribution':
-      return adminAnalyticsApi.plans(filters) as Promise<UnknownPanelResponse>
-    case 'quota-distribution':
-      return adminAnalyticsApi.quota(filters) as Promise<UnknownPanelResponse>
-    case 'user-lifecycle':
-      return adminAnalyticsApi.users(filters) as Promise<UnknownPanelResponse>
-    case 'subscription-conversion':
-      return adminAnalyticsApi.conversion(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'invitation-rewards':
-      return adminAnalyticsApi.invitations(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/summary':
-      return adminAnalyticsApi.usageSummary(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/timeseries':
-      return adminAnalyticsApi.usageTimeseries(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/breakdown':
-      return adminAnalyticsApi.usageBreakdown(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'risks':
-      return adminAnalyticsApi.risks(filters) as Promise<UnknownPanelResponse>
-    default:
-      return adminAnalyticsApi.overview(
-        filters
-      ) as Promise<UnknownPanelResponse>
-  }
+
+function adminAnalyticsTabLabelKey(tab: AdminAnalyticsTab): string {
+  return (
+    ADMIN_ANALYTICS_TABS.find((item) => item.id === tab)?.labelKey ??
+    'adminAnalytics.tabs.overview'
+  )
 }
 
 function ActivePanel(props: {
@@ -320,10 +507,72 @@ function ActivePanel(props: {
       </PanelCard>
     )
   }
+
+  if (props.tab === 'paid-subscription-value') {
+    const responses: PaidSubscriptionValuePanelResponses = {
+      summary: props.responses[0] as
+        | PanelApiResponse<PaidSubscriptionValueResponse>
+        | undefined,
+      users: props.responses[1] as
+        | PanelApiResponse<PaidSubscriptionValueResponse>
+        | undefined,
+      subscriptions: props.responses[2] as
+        | PanelApiResponse<PaidSubscriptionValueResponse>
+        | undefined,
+      plans: props.responses[3] as
+        | PanelApiResponse<PaidSubscriptionValueResponse>
+        | undefined,
+      sources: props.responses[4] as
+        | PanelApiResponse<PaidSubscriptionValueResponse>
+        | undefined,
+    }
+    return (
+      <PanelCard
+        titleKey='adminAnalytics.tabs.paidSubscriptionValue'
+        loading={props.loading}
+        error={props.error}
+      >
+        <PaidSubscriptionValuePanel
+          responses={responses}
+          onDrilldown={handleDrilldown}
+        />
+      </PanelCard>
+    )
+  }
+
+  if (props.tab === 'invitation-paid-subscriptions') {
+    const responses: InvitationPaidSubscriptionsPanelResponses = {
+      summary: props.responses[0] as
+        | PanelApiResponse<InvitationPaidSubscriptionsResponse>
+        | undefined,
+      inviters: props.responses[1] as
+        | PanelApiResponse<InvitationPaidSubscriptionsResponse>
+        | undefined,
+      invitees: props.responses[2] as
+        | PanelApiResponse<InvitationPaidSubscriptionsResponse>
+        | undefined,
+      subscriptions: props.responses[3] as
+        | PanelApiResponse<InvitationPaidSubscriptionsResponse>
+        | undefined,
+    }
+    return (
+      <PanelCard
+        titleKey='adminAnalytics.tabs.invitationPaidSubscriptions'
+        loading={props.loading}
+        error={props.error}
+      >
+        <InvitationPaidSubscriptionsPanel
+          responses={responses}
+          onDrilldown={handleDrilldown}
+        />
+      </PanelCard>
+    )
+  }
+
   const response = props.responses[0]
   return (
     <PanelCard
-      titleKey={`adminAnalytics.tabs.${props.tab}`}
+      titleKey={adminAnalyticsTabLabelKey(props.tab)}
       loading={props.loading}
       error={props.error}
     >
@@ -414,6 +663,9 @@ function SinglePanel(props: {
           onDrilldown={props.onDrilldown}
         />
       )
+    case 'paid-subscription-value':
+    case 'invitation-paid-subscriptions':
+      return <EmptyAnalyticsPanel />
     case 'risks':
       return (
         <RisksPanel
@@ -640,6 +892,350 @@ function InvitationsPanel(props: {
   )
 }
 
+function PaidSubscriptionValuePanel(props: {
+  responses: PaidSubscriptionValuePanelResponses
+  onDrilldown: DrilldownHandler
+}): JSX.Element {
+  const { t } = useTranslation()
+  const summary = panelData(props.responses.summary)?.summary
+  const users = panelData(props.responses.users)?.users?.items ?? []
+  const subscriptions =
+    panelData(props.responses.subscriptions)?.subscriptions?.items ?? []
+  const plans = panelData(props.responses.plans)?.plans?.items ?? []
+  const sources = panelData(props.responses.sources)?.sources?.items ?? []
+  if (!summary) return <EmptyAnalyticsPanel />
+  return (
+    <div className='space-y-4'>
+      <MetricGrid>
+        <Metric
+          labelKey='adminAnalytics.metrics.remainingValue'
+          value={formatAdminMoneyBreakdown(
+            summary.recognized_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.tokenBasedValue'
+          value={formatAdminMoneyBreakdown(summary.token_based_value_by_currency)}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.timeBasedValue'
+          value={formatAdminMoneyBreakdown(summary.time_based_value_by_currency)}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.excludedAuditValue'
+          value={formatAdminMoneyBreakdown(
+            summary.excluded_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.activePaidSubscriptions'
+          value={summary.active_paid_subscription_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.activePaidUsers'
+          value={summary.active_paid_user_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.tokenValueUnavailable'
+          value={summary.token_value_unavailable_count}
+        />
+      </MetricGrid>
+      <RankingList
+        titleKey='adminAnalytics.rankings.paidSubscriptionUsers'
+        items={users.map((item) => ({
+          key: String(item.user_id),
+          label: item.username || String(item.user_id),
+          value: formatAdminMoneyBreakdown(
+            item.recognized_remaining_value_by_currency
+          ),
+          drilldown: item.drilldown,
+        }))}
+        onDrilldown={props.onDrilldown}
+      />
+      <AnalyticsCardGrid
+        titleKey='adminAnalytics.rankings.paidSubscriptionPlans'
+        items={plans.map((item) => ({
+          key: String(item.plan_id),
+          title: item.plan_name || String(item.plan_id),
+          description: item.plan_business_code,
+          values: [
+            {
+              labelKey: 'adminAnalytics.metrics.remainingValue',
+              value: formatAdminMoneyBreakdown(
+                item.recognized_remaining_value_by_currency
+              ),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.activePaidUsers',
+              value: formatAdminTokens(item.active_user_count),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.activePaidSubscriptions',
+              value: formatAdminTokens(item.active_subscription_count),
+            },
+          ],
+        }))}
+      />
+      <AnalyticsCardGrid
+        titleKey='adminAnalytics.rankings.paidSubscriptionSources'
+        items={sources.map((item) => ({
+          key: `${item.source}:${item.grant_reason}`,
+          title: item.source || t('Unknown'),
+          description: item.grant_reason || item.source_attribution,
+          values: [
+            {
+              labelKey: 'adminAnalytics.metrics.remainingValue',
+              value: formatAdminMoneyBreakdown(
+                item.recognized_remaining_value_by_currency
+              ),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.excludedAuditValue',
+              value: formatAdminMoneyBreakdown(
+                item.excluded_remaining_value_by_currency
+              ),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.subscriptionCount',
+              value: formatAdminTokens(item.subscription_count),
+            },
+          ],
+        }))}
+      />
+      <AnalyticsCardGrid
+        titleKey='adminAnalytics.rankings.paidSubscriptionRecords'
+        items={subscriptions.map((item) => ({
+          key: String(item.subscription_id),
+          title: `${item.username || item.user_id} · ${item.plan_name}`,
+          description: `${item.source} / ${item.grant_reason}`,
+          drilldown: item.drilldown,
+          values: [
+            {
+              labelKey: 'adminAnalytics.fields.planPrice',
+              value: formatAdminMoneyAmount(item.plan_price),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.recognizedRemainingValue',
+              value: formatAdminMoneyAmount(item.recognized_remaining_value),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.valuationBasis',
+              value: item.valuation_basis,
+            },
+            {
+              labelKey: 'adminAnalytics.fields.sourceAttribution',
+              value: item.source_attribution,
+            },
+            {
+              labelKey: 'adminAnalytics.fields.orderRecordedAmount',
+              value: formatAdminMoneyAmount(item.order_recorded_amount),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.excludedReason',
+              value: item.excluded ? item.excluded_reason || '—' : '—',
+            },
+          ],
+        }))}
+        onDrilldown={props.onDrilldown}
+      />
+    </div>
+  )
+}
+
+function InvitationPaidSubscriptionsPanel(props: {
+  responses: InvitationPaidSubscriptionsPanelResponses
+  onDrilldown: DrilldownHandler
+}): JSX.Element {
+  const summary = panelData(props.responses.summary)?.summary
+  const inviters = panelData(props.responses.inviters)?.inviters?.items ?? []
+  const invitees = panelData(props.responses.invitees)?.invitees?.items ?? []
+  const subscriptions =
+    panelData(props.responses.subscriptions)?.subscriptions?.items ?? []
+  if (!summary) return <EmptyAnalyticsPanel />
+  return (
+    <div className='space-y-4'>
+      <MetricGrid>
+        <Metric
+          labelKey='adminAnalytics.metrics.invitationPaidAmount'
+          value={formatAdminMoneyBreakdown(
+            summary.recognized_invitation_paid_amount_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.activeInvitationPaidAmount'
+          value={formatAdminMoneyBreakdown(
+            summary.active_invitation_paid_amount_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.activeInvitationRemainingValue'
+          value={formatAdminMoneyBreakdown(
+            summary.active_invitation_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.excludedInvitationPaidAmount'
+          value={formatAdminMoneyBreakdown(
+            summary.excluded_invitation_paid_amount_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.excludedActiveRemainingValue'
+          value={formatAdminMoneyBreakdown(
+            summary.excluded_active_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.inviterCount'
+          value={summary.inviter_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.inviteeCount'
+          value={summary.invitee_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.paidInviteeCount'
+          value={summary.paid_invitee_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.activePaidInviteeCount'
+          value={summary.active_paid_invitee_count}
+        />
+      </MetricGrid>
+      <RankingList
+        titleKey='adminAnalytics.rankings.invitationPaidInviters'
+        items={inviters.map((item) => ({
+          key: String(item.inviter_user_id),
+          label: item.inviter_username || String(item.inviter_user_id),
+          value: formatAdminMoneyBreakdown(
+            item.recognized_invitation_paid_amount_by_currency
+          ),
+          drilldown: item.drilldown,
+        }))}
+        onDrilldown={props.onDrilldown}
+      />
+      <AnalyticsCardGrid
+        titleKey='adminAnalytics.rankings.invitationPaidInvitees'
+        items={invitees.map((item) => ({
+          key: String(item.invitee_user_id),
+          title: item.invitee_username || String(item.invitee_user_id),
+          description: `#${item.inviter_user_id}`,
+          drilldown: item.drilldown,
+          values: [
+            {
+              labelKey: 'adminAnalytics.metrics.invitationPaidAmount',
+              value: formatAdminMoneyBreakdown(
+                item.recognized_paid_amount_by_currency
+              ),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.activeInvitationRemainingValue',
+              value: formatAdminMoneyBreakdown(
+                item.active_remaining_value_by_currency
+              ),
+            },
+            {
+              labelKey: 'adminAnalytics.metrics.activePaidSubscriptions',
+              value: formatAdminTokens(item.active_paid_subscription_count),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.excludedReason',
+              value: item.excluded ? item.excluded_reason || '—' : '—',
+            },
+          ],
+        }))}
+        onDrilldown={props.onDrilldown}
+      />
+      <AnalyticsCardGrid
+        titleKey='adminAnalytics.rankings.invitationPaidRecords'
+        items={subscriptions.map((item) => ({
+          key: String(item.subscription_id),
+          title: `${item.invitee_user_id} · ${item.plan_name}`,
+          description: `${item.source} / ${item.grant_reason}`,
+          drilldown: item.drilldown,
+          values: [
+            {
+              labelKey: 'adminAnalytics.fields.planPrice',
+              value: formatAdminMoneyAmount(item.plan_price),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.confirmationUnits',
+              value: String(item.recognized_paid_units),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.invitationPaidAmount',
+              value: formatAdminMoneyAmount(item.recognized_paid_amount),
+            },
+            {
+              labelKey: 'adminAnalytics.fields.unitInferenceBasis',
+              value: item.unit_inference_basis,
+            },
+            {
+              labelKey: 'adminAnalytics.fields.sourceAttribution',
+              value: item.source_attribution,
+            },
+            {
+              labelKey: 'adminAnalytics.fields.orderRecordedAmount',
+              value: formatAdminMoneyAmount(item.order_recorded_amount),
+            },
+          ],
+        }))}
+        onDrilldown={props.onDrilldown}
+      />
+    </div>
+  )
+}
+
+function AnalyticsCardGrid(props: {
+  titleKey: string
+  items: Array<{
+    key: string
+    title: string
+    description?: string
+    values: Array<{ labelKey: string; value: string }>
+    drilldown?: AdminAnalyticsDrilldownTarget | null
+  }>
+  onDrilldown?: DrilldownHandler
+}): JSX.Element {
+  const { t } = useTranslation()
+  if (props.items.length === 0) return <EmptyAnalyticsPanel />
+  return (
+    <div className='space-y-2'>
+      <div className='text-sm font-medium'>{t(props.titleKey)}</div>
+      <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
+        {props.items.slice(0, 12).map((item) => (
+          <DrilldownCard
+            key={item.key}
+            target={item.drilldown}
+            onDrilldown={props.onDrilldown}
+            className='rounded-md border p-3 text-left text-sm'
+          >
+            <div className='font-medium'>{item.title}</div>
+            {item.description ? (
+              <div className='text-muted-foreground text-xs'>
+                {item.description}
+              </div>
+            ) : null}
+            <dl className='mt-2 space-y-1'>
+              {item.values.map((value) => (
+                <div
+                  key={value.labelKey}
+                  className='grid grid-cols-[minmax(0,1fr)_auto] gap-3'
+                >
+                  <dt className='text-muted-foreground truncate'>
+                    {t(value.labelKey)}
+                  </dt>
+                  <dd className='text-right'>{value.value || '—'}</dd>
+                </div>
+              ))}
+            </dl>
+          </DrilldownCard>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function UsagePanel(props: {
   responses: UsagePanelResponses
   onDrilldown: DrilldownHandler
@@ -787,6 +1383,10 @@ function isSupportedDrilldownTarget(
     case 'admin_usage_logs':
     case 'admin_subscriptions':
     case 'admin_invitations':
+    case 'paid_subscription_value_user':
+    case 'paid_subscription_value_subscription':
+    case 'invitation_paid_inviter':
+    case 'invitation_paid_invitee':
       return true
     default:
       return false

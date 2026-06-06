@@ -12,9 +12,17 @@ export const ADMIN_ANALYTICS_TABS: Array<{
   { id: 'overview', labelKey: 'adminAnalytics.tabs.overview' },
   { id: 'plans', labelKey: 'adminAnalytics.tabs.plans' },
   { id: 'quota', labelKey: 'adminAnalytics.tabs.quota' },
+  {
+    id: 'paid-subscription-value',
+    labelKey: 'adminAnalytics.tabs.paidSubscriptionValue',
+  },
   { id: 'users', labelKey: 'adminAnalytics.tabs.users' },
   { id: 'conversion', labelKey: 'adminAnalytics.tabs.conversion' },
   { id: 'invitations', labelKey: 'adminAnalytics.tabs.invitations' },
+  {
+    id: 'invitation-paid-subscriptions',
+    labelKey: 'adminAnalytics.tabs.invitationPaidSubscriptions',
+  },
   { id: 'usage', labelKey: 'adminAnalytics.tabs.usage' },
   { id: 'risks', labelKey: 'adminAnalytics.tabs.risks' },
 ]

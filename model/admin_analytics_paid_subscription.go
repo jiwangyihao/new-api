@@ -1,0 +1,1770 @@
+package model
+
+import (
+	"errors"
+	"math"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting"
+)
+
+const (
+	adminPaidSubscriptionValuationTokenAndTime = "token_and_time"
+	adminPaidSubscriptionValuationTimeOnly     = "time_only"
+	adminPaidSubscriptionValuationNeverReset   = "token_never_reset"
+
+	adminPaidSubscriptionSourceAttributionSnapshot       = "snapshot"
+	adminPaidSubscriptionSourceAttributionMixedOrUnknown = "mixed_or_unknown"
+
+	adminInvitationPaidUnitPeriodAligned   = "period_aligned"
+	adminInvitationPaidUnitPeriodFraction  = "period_fraction"
+	adminInvitationPaidUnitSnapshotMinimum = "snapshot_minimum"
+)
+
+type adminMoneyAccumulator map[string]float64
+
+func (a adminMoneyAccumulator) add(currency string, amount float64) {
+	if amount == 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+		return
+	}
+	a[strings.TrimSpace(currency)] += amount
+}
+
+func (a adminMoneyAccumulator) amount(currency string) float64 {
+	return a[strings.TrimSpace(currency)]
+}
+
+func (a adminMoneyAccumulator) breakdown() []dto.AdminAnalyticsMoneyBreakdown {
+	return a.breakdownWithPreferredCurrency("")
+}
+
+func (a adminMoneyAccumulator) breakdownWithPreferredCurrency(currency string) []dto.AdminAnalyticsMoneyBreakdown {
+	if len(a) == 0 {
+		return []dto.AdminAnalyticsMoneyBreakdown{}
+	}
+	items := make([]dto.AdminAnalyticsMoneyBreakdown, 0, len(a))
+	for key, amount := range a {
+		if amount == 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
+			continue
+		}
+		items = append(items, dto.AdminAnalyticsMoneyBreakdown{Currency: key, Amount: amount})
+	}
+	preferred := strings.TrimSpace(currency)
+	sort.Slice(items, func(i, j int) bool {
+		if preferred != "" {
+			leftPreferred := items[i].Currency == preferred
+			rightPreferred := items[j].Currency == preferred
+			if leftPreferred != rightPreferred {
+				return leftPreferred
+			}
+		}
+		return items[i].Currency < items[j].Currency
+	})
+	return items
+}
+
+type adminSubscriptionValue struct {
+	RecognizedRemainingValue float64
+	TimeBasedValue           float64
+	TokenBasedValue          float64
+	TokenBasedValueAvailable bool
+	ValuationBasis           string
+	RemainingSeconds         int64
+}
+
+func adminPlanDurationSeconds(start int64, plan *SubscriptionPlan) (int64, error) {
+	if plan == nil {
+		return 0, errors.New("plan is nil")
+	}
+	end, err := calcPlanEndTime(time.Unix(start, 0).UTC(), plan)
+	if err != nil {
+		return 0, err
+	}
+	if end <= start {
+		return 0, errors.New("plan duration must be positive")
+	}
+	return end - start, nil
+}
+
+func adminSubscriptionPlanDurationSeconds(sub UserSubscription, plan SubscriptionPlan) (int64, error) {
+	return adminPlanDurationSeconds(sub.StartTime, &plan)
+}
+
+func adminSubscriptionTimeValue(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64) (float64, error) {
+	planDurationSeconds, err := adminSubscriptionPlanDurationSeconds(sub, plan)
+	if err != nil {
+		return 0, err
+	}
+	remainingSeconds := sub.EndTime - snapshotAt
+	if remainingSeconds < 0 {
+		remainingSeconds = 0
+	}
+	return plan.PriceAmount * float64(remainingSeconds) / float64(planDurationSeconds), nil
+}
+
+func adminSubscriptionTokenValue(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, planDurationSeconds int64) (float64, bool, error) {
+	if sub.TokenLimit <= 0 {
+		return 0, false, nil
+	}
+	if planDurationSeconds <= 0 {
+		return 0, true, errors.New("plan duration must be positive")
+	}
+	remainingTokens := sub.TokenLimit - sub.TokenUsed
+	if remainingTokens < 0 {
+		remainingTokens = 0
+	}
+	remainingTokenRatio := float64(remainingTokens) / float64(sub.TokenLimit)
+	period := NormalizeResetPeriod(plan.QuotaResetPeriod)
+	if period == SubscriptionResetNever {
+		return plan.PriceAmount * remainingTokenRatio, true, nil
+	}
+
+	currentCycleSeconds := adminCurrentTokenCycleSeconds(sub, plan, snapshotAt, planDurationSeconds)
+	if currentCycleSeconds <= 0 {
+		currentCycleSeconds = planDurationSeconds
+	}
+	currentCycleValue := adminTokenCycleValue(period, plan.PriceAmount, currentCycleSeconds, planDurationSeconds) * remainingTokenRatio
+	futureValue := adminFutureTokenCyclesValue(sub, plan, snapshotAt, planDurationSeconds, period)
+	return currentCycleValue + futureValue, true, nil
+}
+
+func adminCurrentTokenCycleSeconds(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, planDurationSeconds int64) int64 {
+	period := NormalizeResetPeriod(plan.QuotaResetPeriod)
+	cycleStart, cycleEnd := adminTokenCycleBounds(sub, plan, snapshotAt, planDurationSeconds, period)
+	if cycleEnd <= cycleStart {
+		return planDurationSeconds
+	}
+	return cycleEnd - cycleStart
+}
+
+func adminTokenCycleBounds(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, planDurationSeconds int64, period string) (int64, int64) {
+	if period == SubscriptionResetCustom && plan.QuotaResetCustomSeconds > 0 && sub.LastResetTime > 0 && sub.NextResetTime-sub.LastResetTime == plan.QuotaResetCustomSeconds && sub.LastResetTime <= snapshotAt && snapshotAt < sub.NextResetTime {
+		return sub.LastResetTime, sub.NextResetTime
+	}
+	snapshot := time.Unix(snapshotAt, 0).UTC()
+	switch period {
+	case SubscriptionResetDaily:
+		start := time.Date(snapshot.Year(), snapshot.Month(), snapshot.Day(), 0, 0, 0, 0, time.UTC).Unix()
+		return start, adminNextResetAfter(time.Unix(start, 0).UTC(), &plan, 0)
+	case SubscriptionResetWeekly:
+		weekday := int(snapshot.Weekday())
+		if weekday == 0 {
+			weekday = 7
+		}
+		start := time.Date(snapshot.Year(), snapshot.Month(), snapshot.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1-weekday).Unix()
+		return start, adminNextResetAfter(time.Unix(start, 0).UTC(), &plan, 0)
+	case SubscriptionResetMonthly:
+		start := time.Date(snapshot.Year(), snapshot.Month(), 1, 0, 0, 0, 0, time.UTC).Unix()
+		return start, adminNextResetAfter(time.Unix(start, 0).UTC(), &plan, 0)
+	case SubscriptionResetCustom:
+		if plan.QuotaResetCustomSeconds > 0 {
+			cycleSeconds := plan.QuotaResetCustomSeconds
+			base := sub.StartTime
+			if sub.LastResetTime > 0 {
+				base = sub.LastResetTime
+			}
+			if snapshotAt >= base {
+				elapsedCycles := (snapshotAt - base) / cycleSeconds
+				start := base + elapsedCycles*cycleSeconds
+				return start, start + cycleSeconds
+			}
+			return base, base + cycleSeconds
+		}
+	}
+	return sub.StartTime, sub.StartTime + planDurationSeconds
+}
+
+func adminTokenCycleValue(period string, price float64, cycleSeconds int64, planDurationSeconds int64) float64 {
+	if planDurationSeconds <= 0 || cycleSeconds <= 0 {
+		return 0
+	}
+	if period == SubscriptionResetMonthly {
+		return price
+	}
+	return price * float64(cycleSeconds) / float64(planDurationSeconds)
+}
+
+func adminFutureTokenCyclesValue(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, planDurationSeconds int64, period string) float64 {
+	if sub.EndTime <= snapshotAt || planDurationSeconds <= 0 {
+		return 0
+	}
+	nextReset := sub.NextResetTime
+	if nextReset <= snapshotAt || nextReset > sub.EndTime {
+		nextReset = adminNextResetAfter(time.Unix(snapshotAt, 0).UTC(), &plan, sub.EndTime)
+	}
+	if nextReset <= snapshotAt || nextReset >= sub.EndTime {
+		return 0
+	}
+
+	value := 0.0
+	for cursor := nextReset; cursor < sub.EndTime; {
+		cycleEnd := adminNextResetAfter(time.Unix(cursor, 0).UTC(), &plan, 0)
+		if cycleEnd <= cursor {
+			cycleEnd = sub.EndTime
+		}
+		segmentEnd := cycleEnd
+		if segmentEnd > sub.EndTime {
+			segmentEnd = sub.EndTime
+		}
+		cycleSeconds := cycleEnd - cursor
+		segmentSeconds := segmentEnd - cursor
+		if cycleSeconds <= 0 || segmentSeconds <= 0 {
+			break
+		}
+		value += adminTokenCycleValue(period, plan.PriceAmount, cycleSeconds, planDurationSeconds) * float64(segmentSeconds) / float64(cycleSeconds)
+		cursor = segmentEnd
+	}
+	return value
+}
+
+func adminNextResetAfter(base time.Time, plan *SubscriptionPlan, endUnix int64) int64 {
+	return calcNextResetTime(base.UTC(), plan, endUnix)
+}
+
+func adminRecognizedRemainingValue(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64) (adminSubscriptionValue, error) {
+	planDurationSeconds, err := adminSubscriptionPlanDurationSeconds(sub, plan)
+	if err != nil {
+		return adminSubscriptionValue{}, err
+	}
+	remainingSeconds := sub.EndTime - snapshotAt
+	if remainingSeconds < 0 {
+		remainingSeconds = 0
+	}
+	timeValue := plan.PriceAmount * float64(remainingSeconds) / float64(planDurationSeconds)
+	tokenValue, tokenAvailable, err := adminSubscriptionTokenValue(sub, plan, snapshotAt, planDurationSeconds)
+	if err != nil {
+		return adminSubscriptionValue{}, err
+	}
+	result := adminSubscriptionValue{TimeBasedValue: timeValue, TokenBasedValue: tokenValue, TokenBasedValueAvailable: tokenAvailable, RemainingSeconds: remainingSeconds}
+	if !tokenAvailable {
+		result.RecognizedRemainingValue = timeValue
+		result.ValuationBasis = adminPaidSubscriptionValuationTimeOnly
+		return result, nil
+	}
+	result.RecognizedRemainingValue = math.Min(timeValue, tokenValue)
+	if NormalizeResetPeriod(plan.QuotaResetPeriod) == SubscriptionResetNever {
+		result.ValuationBasis = adminPaidSubscriptionValuationNeverReset
+	} else {
+		result.ValuationBasis = adminPaidSubscriptionValuationTokenAndTime
+	}
+	return result, nil
+}
+
+type adminPaidSubscriptionRow struct {
+	Subscription      UserSubscription
+	Plan              SubscriptionPlan
+	User              User
+	Source            dto.AdminAnalyticsSource
+	SourceAttribution string
+	Value             adminSubscriptionValue
+	Excluded          bool
+	ExcludedReason    string
+	ExcludedAt        int64
+	ExcludedBy        int
+	Order             *SubscriptionOrder
+}
+
+type adminOrderLookupKey struct {
+	UserID int
+	PlanID int
+}
+
+func adminIsNonSalesGiftSubscription(sub UserSubscription) bool {
+	return adminIsNonSalesGiftValue(sub.GrantReason) || adminIsNonSalesGiftValue(sub.Source)
+}
+
+func adminIsNonSalesGiftValue(value string) bool {
+	switch strings.TrimSpace(value) {
+	case SubscriptionGrantMonthlyInviteEntitlement, "invite_trial", "trial_code":
+		return true
+	default:
+		return false
+	}
+}
+
+func adminPaidSourceAttribution(sub UserSubscription) string {
+	if adminIsNonSalesGiftSubscription(sub) {
+		return adminPaidSubscriptionSourceAttributionMixedOrUnknown
+	}
+	return adminPaidSubscriptionSourceAttributionSnapshot
+}
+
+func loadAdminPaidSubscriptionValueRows(query AdminAnalyticsQuery, filterSubscriptionID bool) ([]adminPaidSubscriptionRow, error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	var subs []UserSubscription
+	db := applyAdminActiveSubscriptionScope(DB.Model(&UserSubscription{}), query.SnapshotAt)
+	if len(query.PlanIDs) > 0 {
+		db = db.Where("plan_id IN ?", query.PlanIDs)
+	}
+	if len(query.UserIDs) > 0 {
+		db = db.Where("user_id IN ?", query.UserIDs)
+	}
+	if len(query.GrantReasons) > 0 {
+		db = db.Where("grant_reason IN ?", query.GrantReasons)
+	}
+	if filterSubscriptionID && query.SubscriptionID > 0 {
+		db = db.Where("id = ?", query.SubscriptionID)
+	}
+	if err := db.Find(&subs).Error; err != nil {
+		return nil, err
+	}
+	return adminBuildPaidRowsFromSubscriptions(subs, query)
+}
+
+func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAnalyticsQuery) ([]adminPaidSubscriptionRow, error) {
+	userIDs := make([]int, 0, len(subs))
+	planIDs := make([]int, 0, len(subs))
+	for i := range subs {
+		userIDs = append(userIDs, subs[i].UserId)
+		planIDs = append(planIDs, subs[i].PlanId)
+	}
+	users, err := adminUsersByID(userIDs)
+	if err != nil {
+		return nil, err
+	}
+	plans, err := adminPlansByID(planIDs)
+	if err != nil {
+		return nil, err
+	}
+	excludedUsers := setting.GetSubscriptionAnalyticsExcludedUsers()
+	orders, err := adminBestSubscriptionOrders(userIDs, planIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]adminPaidSubscriptionRow, 0, len(subs))
+	for i := range subs {
+		sub := subs[i]
+		if adminIsNonSalesGiftSubscription(sub) {
+			continue
+		}
+		user, ok := users[sub.UserId]
+		if !ok {
+			continue
+		}
+		if !adminPaidUserMatchesQuery(user, query) {
+			continue
+		}
+		plan, ok := plans[sub.PlanId]
+		if !ok || plan.PriceAmount <= 0 {
+			continue
+		}
+		if !adminPaidPlanMatchesQuery(plan, query) {
+			continue
+		}
+		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
+		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
+			continue
+		}
+		value, err := adminRecognizedRemainingValue(sub, plan, query.SnapshotAt)
+		if err != nil {
+			return nil, err
+		}
+		excluded := excludedUsers[sub.UserId]
+		rows = append(rows, adminPaidSubscriptionRow{
+			Subscription:      sub,
+			Plan:              plan,
+			User:              user,
+			Source:            source,
+			SourceAttribution: adminPaidSourceAttribution(sub),
+			Value:             value,
+			Excluded:          excluded.UserID > 0,
+			ExcludedReason:    excluded.Reason,
+			ExcludedAt:        excluded.ExcludedAt,
+			ExcludedBy:        excluded.ExcludedBy,
+			Order:             orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
+		})
+	}
+	return rows, nil
+}
+
+func adminPaidUserMatchesQuery(user User, query AdminAnalyticsQuery) bool {
+	if len(query.UserStatuses) > 0 && !adminIntInSet(user.Status, query.UserStatuses) {
+		return false
+	}
+	if query.RegisteredStartTimestamp > 0 && user.CreatedAt < query.RegisteredStartTimestamp {
+		return false
+	}
+	if query.RegisteredEndTimestamp > 0 && user.CreatedAt > query.RegisteredEndTimestamp {
+		return false
+	}
+	if query.InviterID > 0 && user.InviterId != query.InviterID {
+		return false
+	}
+	if query.InviteeID > 0 && user.Id != query.InviteeID {
+		return false
+	}
+	if query.Username != "" && user.Username != query.Username {
+		return false
+	}
+	return true
+}
+
+func adminPaidPlanMatchesQuery(plan SubscriptionPlan, query AdminAnalyticsQuery) bool {
+	if len(query.BusinessCodes) > 0 && !adminStringInSet(subscriptionTierKey(&plan), query.BusinessCodes) {
+		return false
+	}
+	if query.Trial != nil && plan.IsTrial != *query.Trial && plan.InviteTrial != *query.Trial {
+		return false
+	}
+	if query.RewardEligible != nil && plan.RewardEligible != *query.RewardEligible {
+		return false
+	}
+	return true
+}
+
+func adminBestSubscriptionOrders(userIDs []int, planIDs []int) (map[adminOrderLookupKey]*SubscriptionOrder, error) {
+	result := map[adminOrderLookupKey]*SubscriptionOrder{}
+	uniqueUserIDs := adminUniquePositiveInts(userIDs)
+	uniquePlanIDs := adminUniquePositiveInts(planIDs)
+	if len(uniqueUserIDs) == 0 || len(uniquePlanIDs) == 0 {
+		return result, nil
+	}
+	var orders []SubscriptionOrder
+	if err := DB.Where("user_id IN ? AND plan_id IN ?", uniqueUserIDs, uniquePlanIDs).
+		Order("complete_time desc, id desc").
+		Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	for i := range orders {
+		order := orders[i]
+		key := adminOrderLookupKey{UserID: order.UserId, PlanID: order.PlanId}
+		if _, ok := result[key]; ok {
+			continue
+		}
+		result[key] = &orders[i]
+	}
+	return result, nil
+}
+
+func adminShouldShowExcludedRow(excluded bool, mode dto.AdminAnalyticsExcludedMode) bool {
+	switch mode {
+	case dto.AdminAnalyticsExcludedModeIncludeExcluded:
+		return true
+	case dto.AdminAnalyticsExcludedModeExcludedOnly:
+		return excluded
+	default:
+		return !excluded
+	}
+}
+
+func adminIncludeInMain(excluded bool, mode dto.AdminAnalyticsExcludedMode) bool {
+	return !excluded && mode != dto.AdminAnalyticsExcludedModeExcludedOnly
+}
+
+type adminPaidSubscriptionValueBuild struct {
+	Summary       dto.AdminPaidSubscriptionValueSummary
+	Users         []dto.AdminPaidSubscriptionValueUser
+	Subscriptions []dto.AdminPaidSubscriptionValueSubscription
+	Plans         []dto.AdminPaidSubscriptionValuePlanGroup
+	Sources       []dto.AdminPaidSubscriptionValueSourceGroup
+}
+
+func buildAdminPaidSubscriptionValueData(query AdminAnalyticsQuery) (adminPaidSubscriptionValueBuild, error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	rows, err := loadAdminPaidSubscriptionValueRows(query, false)
+	if err != nil {
+		return adminPaidSubscriptionValueBuild{}, err
+	}
+	return adminBuildPaidSubscriptionValueDataFromRows(query, rows, true)
+}
+
+func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows []adminPaidSubscriptionRow, applySubscriptionIDToList bool) (adminPaidSubscriptionValueBuild, error) {
+	recognized := adminMoneyAccumulator{}
+	token := adminMoneyAccumulator{}
+	timeBased := adminMoneyAccumulator{}
+	excluded := adminMoneyAccumulator{}
+	mainUserIDs := map[int]struct{}{}
+	activePaidSubscriptionCount := 0
+	tokenUnavailableCount := 0
+
+	userGroups := map[int]*adminPaidUserGroup{}
+	planGroups := map[int]*adminPaidPlanGroup{}
+	sourceGroups := map[adminPaidSourceKey]*adminPaidSourceGroup{}
+	subscriptionItems := make([]dto.AdminPaidSubscriptionValueSubscription, 0, len(rows))
+
+	for i := range rows {
+		row := rows[i]
+		currency := row.Plan.Currency
+		if row.Excluded {
+			excluded.add(currency, row.Value.RecognizedRemainingValue)
+		}
+		main := adminIncludeInMain(row.Excluded, query.ExcludedMode)
+		if main {
+			recognized.add(currency, row.Value.RecognizedRemainingValue)
+			timeBased.add(currency, row.Value.TimeBasedValue)
+			if row.Value.TokenBasedValueAvailable {
+				token.add(currency, row.Value.TokenBasedValue)
+			} else {
+				tokenUnavailableCount++
+			}
+			activePaidSubscriptionCount++
+			mainUserIDs[row.User.Id] = struct{}{}
+		}
+		adminAccumulatePaidUserGroup(userGroups, row, main)
+		adminAccumulatePaidPlanGroup(planGroups, row, main)
+		adminAccumulatePaidSourceGroup(sourceGroups, row, main)
+		if adminShouldShowExcludedRow(row.Excluded, query.ExcludedMode) && (!applySubscriptionIDToList || query.SubscriptionID <= 0 || row.Subscription.Id == query.SubscriptionID) {
+			subscriptionItems = append(subscriptionItems, adminPaidSubscriptionItem(row))
+		}
+	}
+
+	users := adminPaidUserItems(userGroups, query)
+	plans := adminPaidPlanItems(planGroups, query)
+	sources := adminPaidSourceItems(sourceGroups, query)
+	adminSortPaidSubscriptionUsers(users, query)
+	adminSortPaidSubscriptionPlans(plans, query)
+	adminSortPaidSubscriptionSources(sources, query)
+	adminSortPaidSubscriptionItems(subscriptionItems, query)
+
+	return adminPaidSubscriptionValueBuild{
+		Summary: dto.AdminPaidSubscriptionValueSummary{
+			RecognizedRemainingValueByCurrency: recognized.breakdownWithPreferredCurrency(query.Currency),
+			TokenBasedValueByCurrency:          token.breakdownWithPreferredCurrency(query.Currency),
+			TimeBasedValueByCurrency:           timeBased.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedRemainingValueByCurrency:   excluded.breakdownWithPreferredCurrency(query.Currency),
+			ActivePaidSubscriptionCount:        activePaidSubscriptionCount,
+			ActivePaidUserCount:                len(mainUserIDs),
+			TokenValueUnavailableCount:         tokenUnavailableCount,
+		},
+		Users:         users,
+		Subscriptions: subscriptionItems,
+		Plans:         plans,
+		Sources:       sources,
+	}, nil
+}
+
+type adminPaidUserGroup struct {
+	User            User
+	Excluded        bool
+	ExcludedReason  string
+	ExcludedAt      int64
+	ExcludedBy      int
+	MainCount       int
+	WouldHaveCount  int
+	Recognized      adminMoneyAccumulator
+	Token           adminMoneyAccumulator
+	TimeBased       adminMoneyAccumulator
+	WouldHave       adminMoneyAccumulator
+	EarliestEndTime int64
+}
+
+func adminAccumulatePaidUserGroup(groups map[int]*adminPaidUserGroup, row adminPaidSubscriptionRow, main bool) {
+	group := groups[row.User.Id]
+	if group == nil {
+		group = &adminPaidUserGroup{User: row.User, Excluded: row.Excluded, ExcludedReason: row.ExcludedReason, ExcludedAt: row.ExcludedAt, ExcludedBy: row.ExcludedBy, Recognized: adminMoneyAccumulator{}, Token: adminMoneyAccumulator{}, TimeBased: adminMoneyAccumulator{}, WouldHave: adminMoneyAccumulator{}}
+		groups[row.User.Id] = group
+	}
+	if row.Excluded {
+		group.WouldHave.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		group.WouldHaveCount++
+	} else if main {
+		group.Recognized.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		if row.Value.TokenBasedValueAvailable {
+			group.Token.add(row.Plan.Currency, row.Value.TokenBasedValue)
+		}
+		group.TimeBased.add(row.Plan.Currency, row.Value.TimeBasedValue)
+		group.MainCount++
+	}
+	if group.EarliestEndTime == 0 || row.Subscription.EndTime < group.EarliestEndTime {
+		group.EarliestEndTime = row.Subscription.EndTime
+	}
+}
+
+func adminPaidUserItems(groups map[int]*adminPaidUserGroup, query AdminAnalyticsQuery) []dto.AdminPaidSubscriptionValueUser {
+	items := make([]dto.AdminPaidSubscriptionValueUser, 0, len(groups))
+	for _, group := range groups {
+		if !adminShouldShowExcludedRow(group.Excluded, query.ExcludedMode) {
+			continue
+		}
+		if group.Excluded && group.WouldHaveCount == 0 {
+			continue
+		}
+		if !group.Excluded && group.MainCount == 0 {
+			continue
+		}
+		userID := group.User.Id
+		items = append(items, dto.AdminPaidSubscriptionValueUser{
+			UserID:                             group.User.Id,
+			Username:                           group.User.Username,
+			DisplayName:                        group.User.DisplayName,
+			ActivePaidPlanCount:                group.MainCount,
+			RecognizedRemainingValueByCurrency: group.Recognized.breakdownWithPreferredCurrency(query.Currency),
+			TokenBasedValueByCurrency:          group.Token.breakdownWithPreferredCurrency(query.Currency),
+			TimeBasedValueByCurrency:           group.TimeBased.breakdownWithPreferredCurrency(query.Currency),
+			EarliestEndTime:                    group.EarliestEndTime,
+			Excluded:                           group.Excluded,
+			ExcludedReason:                     group.ExcludedReason,
+			ExcludedAt:                         group.ExcludedAt,
+			ExcludedBy:                         group.ExcludedBy,
+			WouldHaveRemainingValueByCurrency:  group.WouldHave.breakdownWithPreferredCurrency(query.Currency),
+			Drilldown:                          &dto.AdminAnalyticsDrilldownTarget{Kind: "paid_subscription_value_user", UserID: &userID, Tab: "paid-subscription-value"},
+		})
+	}
+	return items
+}
+
+type adminPaidPlanGroup struct {
+	Plan              SubscriptionPlan
+	MainUserIDs       map[int]struct{}
+	MainCount         int
+	ExcludedCount     int
+	Recognized        adminMoneyAccumulator
+	Token             adminMoneyAccumulator
+	TimeBased         adminMoneyAccumulator
+	ExcludedValue     adminMoneyAccumulator
+	TokenUsageSum     float64
+	TokenUsageSamples int
+}
+
+func adminAccumulatePaidPlanGroup(groups map[int]*adminPaidPlanGroup, row adminPaidSubscriptionRow, main bool) {
+	group := groups[row.Plan.Id]
+	if group == nil {
+		group = &adminPaidPlanGroup{Plan: row.Plan, MainUserIDs: map[int]struct{}{}, Recognized: adminMoneyAccumulator{}, Token: adminMoneyAccumulator{}, TimeBased: adminMoneyAccumulator{}, ExcludedValue: adminMoneyAccumulator{}}
+		groups[row.Plan.Id] = group
+	}
+	if row.Excluded {
+		group.ExcludedValue.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		group.ExcludedCount++
+	} else if main {
+		group.Recognized.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		if row.Value.TokenBasedValueAvailable {
+			group.Token.add(row.Plan.Currency, row.Value.TokenBasedValue)
+		}
+		group.TimeBased.add(row.Plan.Currency, row.Value.TimeBasedValue)
+		group.MainCount++
+		group.MainUserIDs[row.User.Id] = struct{}{}
+		if row.Subscription.TokenLimit > 0 {
+			group.TokenUsageSum += float64(row.Subscription.TokenUsed) / float64(row.Subscription.TokenLimit)
+			group.TokenUsageSamples++
+		}
+	}
+}
+
+func adminPaidPlanItems(groups map[int]*adminPaidPlanGroup, query AdminAnalyticsQuery) []dto.AdminPaidSubscriptionValuePlanGroup {
+	items := make([]dto.AdminPaidSubscriptionValuePlanGroup, 0, len(groups))
+	for _, group := range groups {
+		if group.MainCount == 0 && group.ExcludedCount == 0 {
+			continue
+		}
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeIncludedOnly && group.MainCount == 0 {
+			continue
+		}
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeExcludedOnly && group.ExcludedCount == 0 {
+			continue
+		}
+		var average *float64
+		if group.TokenUsageSamples > 0 {
+			value := group.TokenUsageSum / float64(group.TokenUsageSamples)
+			average = &value
+		}
+		items = append(items, dto.AdminPaidSubscriptionValuePlanGroup{
+			PlanID:                             group.Plan.Id,
+			PlanName:                           group.Plan.Title,
+			PlanBusinessCode:                   subscriptionTierKey(&group.Plan),
+			ActiveUserCount:                    len(group.MainUserIDs),
+			ActiveSubscriptionCount:            group.MainCount,
+			RecognizedRemainingValueByCurrency: group.Recognized.breakdownWithPreferredCurrency(query.Currency),
+			TokenBasedValueByCurrency:          group.Token.breakdownWithPreferredCurrency(query.Currency),
+			TimeBasedValueByCurrency:           group.TimeBased.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedRemainingValueByCurrency:   group.ExcludedValue.breakdownWithPreferredCurrency(query.Currency),
+			AverageTokenUsageRatio:             average,
+		})
+	}
+	return items
+}
+
+type adminPaidSourceKey struct {
+	Source      dto.AdminAnalyticsSource
+	GrantReason string
+}
+
+type adminPaidSourceGroup struct {
+	Key           adminPaidSourceKey
+	MainUserIDs   map[int]struct{}
+	MainCount     int
+	ExcludedCount int
+	Recognized    adminMoneyAccumulator
+	ExcludedValue adminMoneyAccumulator
+	Attribution   string
+}
+
+func adminAccumulatePaidSourceGroup(groups map[adminPaidSourceKey]*adminPaidSourceGroup, row adminPaidSubscriptionRow, main bool) {
+	key := adminPaidSourceKey{Source: row.Source, GrantReason: row.Subscription.GrantReason}
+	group := groups[key]
+	if group == nil {
+		group = &adminPaidSourceGroup{Key: key, MainUserIDs: map[int]struct{}{}, Recognized: adminMoneyAccumulator{}, ExcludedValue: adminMoneyAccumulator{}, Attribution: row.SourceAttribution}
+		groups[key] = group
+	}
+	if row.Excluded {
+		group.ExcludedValue.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		group.ExcludedCount++
+	} else if main {
+		group.Recognized.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		group.MainCount++
+		group.MainUserIDs[row.User.Id] = struct{}{}
+	}
+}
+
+func adminPaidSourceItems(groups map[adminPaidSourceKey]*adminPaidSourceGroup, query AdminAnalyticsQuery) []dto.AdminPaidSubscriptionValueSourceGroup {
+	items := make([]dto.AdminPaidSubscriptionValueSourceGroup, 0, len(groups))
+	for _, group := range groups {
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeIncludedOnly && group.MainCount == 0 {
+			continue
+		}
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeExcludedOnly && group.ExcludedCount == 0 {
+			continue
+		}
+		items = append(items, dto.AdminPaidSubscriptionValueSourceGroup{
+			Source:                             group.Key.Source,
+			GrantReason:                        group.Key.GrantReason,
+			UserCount:                          len(group.MainUserIDs),
+			SubscriptionCount:                  group.MainCount,
+			RecognizedRemainingValueByCurrency: group.Recognized.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedRemainingValueByCurrency:   group.ExcludedValue.breakdownWithPreferredCurrency(query.Currency),
+			SourceAttribution:                  group.Attribution,
+		})
+	}
+	return items
+}
+
+func adminPaidSubscriptionItem(row adminPaidSubscriptionRow) dto.AdminPaidSubscriptionValueSubscription {
+	planID := row.Plan.Id
+	userID := row.User.Id
+	subscriptionID := row.Subscription.Id
+	item := dto.AdminPaidSubscriptionValueSubscription{
+		SubscriptionID:           row.Subscription.Id,
+		UserID:                   row.User.Id,
+		Username:                 row.User.Username,
+		PlanID:                   row.Plan.Id,
+		PlanName:                 row.Plan.Title,
+		Source:                   row.Source,
+		GrantReason:              row.Subscription.GrantReason,
+		PlanPrice:                dto.AdminAnalyticsMoneyAmount{Amount: row.Plan.PriceAmount, Currency: row.Plan.Currency},
+		StartTime:                row.Subscription.StartTime,
+		EndTime:                  row.Subscription.EndTime,
+		RemainingSeconds:         row.Value.RemainingSeconds,
+		TokenLimit:               row.Subscription.TokenLimit,
+		TokenUsed:                row.Subscription.TokenUsed,
+		NextResetTime:            row.Subscription.NextResetTime,
+		TimeBasedValue:           dto.AdminAnalyticsMoneyAmount{Amount: row.Value.TimeBasedValue, Currency: row.Plan.Currency},
+		RecognizedRemainingValue: dto.AdminAnalyticsMoneyAmount{Amount: row.Value.RecognizedRemainingValue, Currency: row.Plan.Currency},
+		ValuationBasis:           row.Value.ValuationBasis,
+		SourceAttribution:        row.SourceAttribution,
+		Excluded:                 row.Excluded,
+		ExcludedReason:           row.ExcludedReason,
+		Drilldown:                &dto.AdminAnalyticsDrilldownTarget{Kind: "paid_subscription_value_subscription", UserID: &userID, PlanID: &planID, SubscriptionID: &subscriptionID, Tab: "paid-subscription-value"},
+	}
+	if row.Value.TokenBasedValueAvailable {
+		item.TokenBasedValue = &dto.AdminAnalyticsMoneyAmount{Amount: row.Value.TokenBasedValue, Currency: row.Plan.Currency}
+	}
+	if row.Order != nil {
+		orderID := row.Order.Id
+		item.PossibleOrderID = &orderID
+		item.PaymentProvider = row.Order.PaymentProvider
+		item.PaymentMethod = row.Order.PaymentMethod
+		item.OrderRecordedAmount = &dto.AdminAnalyticsMoneyAmount{Amount: row.Order.Money, Currency: row.Plan.Currency}
+	}
+	return item
+}
+
+func GetAdminPaidSubscriptionValueSummary(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminPaidSubscriptionValueData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary}}, nil
+}
+
+func GetAdminPaidSubscriptionValueUsers(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminPaidSubscriptionValueData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Users, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Users: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueUser]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func GetAdminPaidSubscriptionValueSubscriptions(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	rows, err := loadAdminPaidSubscriptionValueRows(query, false)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	data, err := adminBuildPaidSubscriptionValueDataFromRows(query, rows, true)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Subscriptions, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Subscriptions: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSubscription]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func GetAdminPaidSubscriptionValuePlanBreakdown(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminPaidSubscriptionValueData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Plans, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Plans: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValuePlanGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func GetAdminPaidSubscriptionValueSourceBreakdown(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminPaidSubscriptionValueData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Sources, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Sources: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSourceGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func adminAmountInBreakdown(amounts []dto.AdminAnalyticsMoneyBreakdown, currency string) float64 {
+	currency = strings.TrimSpace(currency)
+	for _, amount := range amounts {
+		if amount.Currency == currency {
+			return amount.Amount
+		}
+	}
+	return 0
+}
+
+func adminMoneyAmountForCurrency(amount dto.AdminAnalyticsMoneyAmount, currency string) float64 {
+	if strings.TrimSpace(amount.Currency) != strings.TrimSpace(currency) {
+		return 0
+	}
+	return amount.Amount
+}
+
+func adminOptionalMoneyAmountForCurrency(amount *dto.AdminAnalyticsMoneyAmount, currency string) float64 {
+	if amount == nil {
+		return 0
+	}
+	return adminMoneyAmountForCurrency(*amount, currency)
+}
+
+func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_remaining_value":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+		case "active_paid_plan_count":
+			cmp = left.ActivePaidPlanCount - right.ActivePaidPlanCount
+		case "earliest_end_time":
+			cmp = adminCompareInt64(left.EarliestEndTime, right.EarliestEndTime)
+		default:
+			cmp = left.UserID - right.UserID
+		}
+		if cmp == 0 {
+			cmp = left.UserID - right.UserID
+			return cmp < 0
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := adminComparePaidSubscriptionItem(left, right, query)
+		if cmp == 0 {
+			cmp = left.SubscriptionID - right.SubscriptionID
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminComparePaidSubscriptionItem(left dto.AdminPaidSubscriptionValueSubscription, right dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) int {
+	switch query.SortBy {
+	case "recognized_remaining_value":
+		return adminCompareFloat(adminMoneyAmountForCurrency(left.RecognizedRemainingValue, query.Currency), adminMoneyAmountForCurrency(right.RecognizedRemainingValue, query.Currency))
+	case "end_time":
+		return adminCompareInt64(left.EndTime, right.EndTime)
+	case "start_time":
+		return adminCompareInt64(left.StartTime, right.StartTime)
+	case "plan_price":
+		return adminCompareFloat(adminMoneyAmountForCurrency(left.PlanPrice, query.Currency), adminMoneyAmountForCurrency(right.PlanPrice, query.Currency))
+	default:
+		return left.SubscriptionID - right.SubscriptionID
+	}
+}
+
+func adminSortPaidSubscriptionPlans(items []dto.AdminPaidSubscriptionValuePlanGroup, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_remaining_value":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+		case "subscription_count":
+			cmp = left.ActiveSubscriptionCount - right.ActiveSubscriptionCount
+		case "user_count":
+			cmp = left.ActiveUserCount - right.ActiveUserCount
+		default:
+			cmp = left.PlanID - right.PlanID
+		}
+		if cmp == 0 {
+			cmp = left.PlanID - right.PlanID
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminSortPaidSubscriptionSources(items []dto.AdminPaidSubscriptionValueSourceGroup, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_remaining_value":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+		case "subscription_count":
+			cmp = left.SubscriptionCount - right.SubscriptionCount
+		case "user_count":
+			cmp = left.UserCount - right.UserCount
+		case "grant_reason":
+			cmp = strings.Compare(left.GrantReason, right.GrantReason)
+		default:
+			cmp = strings.Compare(string(left.Source), string(right.Source))
+		}
+		if cmp == 0 {
+			cmp = strings.Compare(left.GrantReason, right.GrantReason)
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminCompareFloat(left float64, right float64) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
+}
+
+func adminCompareInt64(left int64, right int64) int {
+	if left < right {
+		return -1
+	}
+	if left > right {
+		return 1
+	}
+	return 0
+}
+
+type adminInvitationPaidRow struct {
+	Subscription        UserSubscription
+	Plan                SubscriptionPlan
+	Invitee             User
+	Inviter             User
+	Source              dto.AdminAnalyticsSource
+	SourceAttribution   string
+	RecognizedUnits     float64
+	RecognizedAmount    float64
+	ExcludedAuditAmount float64
+	UnitBasis           string
+	Active              bool
+	ActiveValue         *adminSubscriptionValue
+	Excluded            bool
+	ExcludedReason      string
+	ExcludedAt          int64
+	ExcludedBy          int
+	Order               *SubscriptionOrder
+}
+
+type adminInvitationRelationshipRow struct {
+	Invitee        User
+	Inviter        User
+	Excluded       bool
+	ExcludedReason string
+	ExcludedAt     int64
+	ExcludedBy     int
+}
+
+func adminInvitationRelationshipRequiresPaidMatch(query AdminAnalyticsQuery) bool {
+	return len(query.PlanIDs) > 0 || len(query.Sources) > 0 || len(query.GrantReasons) > 0 || len(query.BusinessCodes) > 0 || query.SubscriptionID > 0
+}
+
+func loadAdminInvitationPaidInviteeIDs(query AdminAnalyticsQuery) ([]int, error) {
+	if !adminInvitationRelationshipRequiresPaidMatch(query) {
+		return nil, nil
+	}
+	rows, err := loadAdminInvitationPaidRows(query, true)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int]struct{}{}
+	ids := make([]int, 0, len(rows))
+	for i := range rows {
+		id := rows[i].Invitee.Id
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func loadAdminInvitationRelationshipRows(query AdminAnalyticsQuery) ([]adminInvitationRelationshipRow, error) {
+	var invitees []User
+	if err := DB.Where("inviter_id > ?", 0).Find(&invitees).Error; err != nil {
+		return nil, err
+	}
+	excludedUsers := setting.GetSubscriptionAnalyticsExcludedUsers()
+	paidInviteeIDs, err := loadAdminInvitationPaidInviteeIDs(query)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]User, 0, len(invitees))
+	for i := range invitees {
+		invitee := invitees[i]
+		if invitee.CreatedAt > query.SnapshotAt {
+			continue
+		}
+		if !adminPaidUserMatchesQuery(invitee, query) {
+			continue
+		}
+		if adminInvitationRelationshipRequiresPaidMatch(query) && !adminIntInSet(invitee.Id, paidInviteeIDs) {
+			continue
+		}
+		filtered = append(filtered, invitee)
+	}
+	if len(filtered) == 0 {
+		return []adminInvitationRelationshipRow{}, nil
+	}
+	inviterIDs := make([]int, 0, len(filtered))
+	for i := range filtered {
+		if filtered[i].InviterId > 0 {
+			inviterIDs = append(inviterIDs, filtered[i].InviterId)
+		}
+	}
+	inviters, err := adminUsersByID(inviterIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]adminInvitationRelationshipRow, 0, len(filtered))
+	for i := range filtered {
+		invitee := filtered[i]
+		if query.InviterID > 0 && invitee.InviterId != query.InviterID {
+			continue
+		}
+		if query.InviteeID > 0 && invitee.Id != query.InviteeID {
+			continue
+		}
+		inviter, ok := inviters[invitee.InviterId]
+		if !ok {
+			continue
+		}
+		excluded := excludedUsers[invitee.Id]
+		rows = append(rows, adminInvitationRelationshipRow{
+			Invitee:        invitee,
+			Inviter:        inviter,
+			Excluded:       excluded.UserID > 0,
+			ExcludedReason: excluded.Reason,
+			ExcludedAt:     excluded.ExcludedAt,
+			ExcludedBy:     excluded.ExcludedBy,
+		})
+	}
+	return rows, nil
+}
+
+type adminInvitationPaidUnitSegment struct {
+	Units      float64
+	AcquiredAt int64
+}
+
+func adminInferInvitationPaidUnits(sub UserSubscription, plan SubscriptionPlan, query AdminAnalyticsQuery) (float64, string) {
+	segments, basis := adminInferInvitationPaidUnitSegments(sub, plan)
+	units := 0.0
+	for _, segment := range segments {
+		if segment.AcquiredAt > query.SnapshotAt {
+			continue
+		}
+		if query.TimeRangeExplicit && (segment.AcquiredAt < query.StartTimestamp || segment.AcquiredAt > query.EndTimestamp) {
+			continue
+		}
+		units += segment.Units
+	}
+	return units, basis
+}
+
+func adminInferExcludedInvitationPaidAuditUnits(sub UserSubscription, plan SubscriptionPlan, query AdminAnalyticsQuery) float64 {
+	if sub.StartTime > query.SnapshotAt {
+		return 0
+	}
+	segments, _ := adminInferInvitationPaidUnitSegments(sub, plan)
+	units := 0.0
+	for _, segment := range segments {
+		if query.TimeRangeExplicit && (segment.AcquiredAt < query.StartTimestamp || segment.AcquiredAt > query.EndTimestamp) {
+			continue
+		}
+		units += segment.Units
+	}
+	return units
+}
+
+func adminInferInvitationPaidUnitSegments(sub UserSubscription, plan SubscriptionPlan) ([]adminInvitationPaidUnitSegment, string) {
+	if sub.StartTime <= 0 || sub.EndTime <= sub.StartTime {
+		return []adminInvitationPaidUnitSegment{{Units: 1, AcquiredAt: sub.StartTime}}, adminInvitationPaidUnitSnapshotMinimum
+	}
+	segments := []adminInvitationPaidUnitSegment{}
+	basis := adminInvitationPaidUnitPeriodAligned
+	cursor := sub.StartTime
+	for guard := 0; cursor < sub.EndTime && guard < 10000; guard++ {
+		next, err := calcPlanEndTime(time.Unix(cursor, 0).UTC(), &plan)
+		if err != nil || next <= cursor {
+			return []adminInvitationPaidUnitSegment{{Units: 1, AcquiredAt: sub.StartTime}}, adminInvitationPaidUnitSnapshotMinimum
+		}
+		if next <= sub.EndTime {
+			segments = append(segments, adminInvitationPaidUnitSegment{Units: 1, AcquiredAt: cursor})
+			cursor = next
+			continue
+		}
+		cycleSeconds := next - cursor
+		remainingSeconds := sub.EndTime - cursor
+		if cycleSeconds <= 0 || remainingSeconds <= 0 {
+			break
+		}
+		segments = append(segments, adminInvitationPaidUnitSegment{Units: float64(remainingSeconds) / float64(cycleSeconds), AcquiredAt: cursor})
+		basis = adminInvitationPaidUnitPeriodFraction
+		cursor = sub.EndTime
+	}
+	if len(segments) == 0 {
+		return []adminInvitationPaidUnitSegment{{Units: 1, AcquiredAt: sub.StartTime}}, adminInvitationPaidUnitSnapshotMinimum
+	}
+	if cursor < sub.EndTime {
+		return []adminInvitationPaidUnitSegment{{Units: 1, AcquiredAt: sub.StartTime}}, adminInvitationPaidUnitSnapshotMinimum
+	}
+	return segments, basis
+}
+
+func loadAdminInvitationPaidRows(query AdminAnalyticsQuery, filterSubscriptionID bool) ([]adminInvitationPaidRow, error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	var subs []UserSubscription
+	db := DB.Model(&UserSubscription{})
+	if query.TimeRangeExplicit && query.EndTimestamp > 0 {
+		db = db.Where("start_time <= ?", query.EndTimestamp)
+	}
+	if len(query.PlanIDs) > 0 {
+		db = db.Where("plan_id IN ?", query.PlanIDs)
+	}
+	if len(query.UserIDs) > 0 {
+		db = db.Where("user_id IN ?", query.UserIDs)
+	}
+	if len(query.GrantReasons) > 0 {
+		db = db.Where("grant_reason IN ?", query.GrantReasons)
+	}
+	if filterSubscriptionID && query.SubscriptionID > 0 {
+		db = db.Where("id = ?", query.SubscriptionID)
+	}
+	if err := db.Find(&subs).Error; err != nil {
+		return nil, err
+	}
+	userIDs := make([]int, 0, len(subs))
+	planIDs := make([]int, 0, len(subs))
+	for i := range subs {
+		userIDs = append(userIDs, subs[i].UserId)
+		planIDs = append(planIDs, subs[i].PlanId)
+	}
+	invitees, err := adminUsersByID(userIDs)
+	if err != nil {
+		return nil, err
+	}
+	inviterIDs := make([]int, 0, len(invitees))
+	for _, invitee := range invitees {
+		if invitee.InviterId > 0 {
+			inviterIDs = append(inviterIDs, invitee.InviterId)
+		}
+	}
+	inviters, err := adminUsersByID(inviterIDs)
+	if err != nil {
+		return nil, err
+	}
+	plans, err := adminPlansByID(planIDs)
+	if err != nil {
+		return nil, err
+	}
+	excludedUsers := setting.GetSubscriptionAnalyticsExcludedUsers()
+	orders, err := adminBestSubscriptionOrders(userIDs, planIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]adminInvitationPaidRow, 0, len(subs))
+	for i := range subs {
+		sub := subs[i]
+		if adminIsNonSalesGiftSubscription(sub) {
+			continue
+		}
+		invitee, ok := invitees[sub.UserId]
+		if !ok || invitee.InviterId <= 0 {
+			continue
+		}
+		if !adminPaidUserMatchesQuery(invitee, query) {
+			continue
+		}
+		if query.InviterID > 0 && invitee.InviterId != query.InviterID {
+			continue
+		}
+		if query.InviteeID > 0 && invitee.Id != query.InviteeID {
+			continue
+		}
+		inviter, ok := inviters[invitee.InviterId]
+		if !ok {
+			continue
+		}
+		plan, ok := plans[sub.PlanId]
+		if !ok || plan.PriceAmount <= 0 {
+			continue
+		}
+		if !adminPaidPlanMatchesQuery(plan, query) {
+			continue
+		}
+		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
+		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
+			continue
+		}
+		excluded := excludedUsers[invitee.Id]
+		units, unitBasis := adminInferInvitationPaidUnits(sub, plan, query)
+		excludedAuditAmount := 0.0
+		if excluded.UserID > 0 {
+			excludedAuditAmount = plan.PriceAmount * adminInferExcludedInvitationPaidAuditUnits(sub, plan, query)
+		}
+		active := sub.Status == "active" && sub.StartTime <= query.SnapshotAt && sub.EndTime > query.SnapshotAt
+		var activeValue *adminSubscriptionValue
+		if active {
+			value, err := adminRecognizedRemainingValue(sub, plan, query.SnapshotAt)
+			if err != nil {
+				return nil, err
+			}
+			activeValue = &value
+		}
+		rows = append(rows, adminInvitationPaidRow{
+			Subscription:        sub,
+			Plan:                plan,
+			Invitee:             invitee,
+			Inviter:             inviter,
+			Source:              source,
+			SourceAttribution:   adminPaidSourceAttribution(sub),
+			RecognizedUnits:     units,
+			RecognizedAmount:    plan.PriceAmount * units,
+			ExcludedAuditAmount: excludedAuditAmount,
+			UnitBasis:           unitBasis,
+			Active:              active,
+			ActiveValue:         activeValue,
+			Excluded:            excluded.UserID > 0,
+			ExcludedReason:      excluded.Reason,
+			ExcludedAt:          excluded.ExcludedAt,
+			ExcludedBy:          excluded.ExcludedBy,
+			Order:               orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
+		})
+	}
+	return rows, nil
+}
+
+type adminInvitationPaidBuild struct {
+	Summary       dto.AdminInvitationPaidSubscriptionsSummary
+	Inviters      []dto.AdminInvitationPaidInviter
+	Invitees      []dto.AdminInvitationPaidInvitee
+	Subscriptions []dto.AdminInvitationPaidSubscriptionRecord
+}
+
+func buildAdminInvitationPaidSubscriptionsData(query AdminAnalyticsQuery) (adminInvitationPaidBuild, error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	rows, err := loadAdminInvitationPaidRows(query, false)
+	if err != nil {
+		return adminInvitationPaidBuild{}, err
+	}
+	relationships, err := loadAdminInvitationRelationshipRows(query)
+	if err != nil {
+		return adminInvitationPaidBuild{}, err
+	}
+	return adminBuildInvitationPaidDataFromRows(query, rows, relationships, true)
+}
+
+func adminBuildInvitationPaidDataFromRows(query AdminAnalyticsQuery, rows []adminInvitationPaidRow, relationships []adminInvitationRelationshipRow, applySubscriptionIDToList bool) (adminInvitationPaidBuild, error) {
+	recognized := adminMoneyAccumulator{}
+	activeAmount := adminMoneyAccumulator{}
+	activeRemaining := adminMoneyAccumulator{}
+	excludedPaid := adminMoneyAccumulator{}
+	excludedActiveRemaining := adminMoneyAccumulator{}
+	mainInviters := map[int]struct{}{}
+	mainInvitees := map[int]struct{}{}
+	paidInvitees := map[int]struct{}{}
+	activePaidInvitees := map[int]struct{}{}
+
+	inviterGroups := map[int]*adminInvitationInviterGroup{}
+	inviteeGroups := map[int]*adminInvitationInviteeGroup{}
+	subscriptionItems := make([]dto.AdminInvitationPaidSubscriptionRecord, 0, len(rows))
+
+	for i := range relationships {
+		relationship := relationships[i]
+		if !adminShouldShowExcludedRow(relationship.Excluded, query.ExcludedMode) {
+			continue
+		}
+		adminAccumulateInvitationRelationship(inviterGroups, relationship)
+		main := adminIncludeInMain(relationship.Excluded, query.ExcludedMode)
+		if main {
+			mainInviters[relationship.Inviter.Id] = struct{}{}
+			mainInvitees[relationship.Invitee.Id] = struct{}{}
+		}
+	}
+
+	for i := range rows {
+		row := rows[i]
+		if row.RecognizedUnits <= 0 && !row.Active {
+			continue
+		}
+		currency := row.Plan.Currency
+		if row.Excluded {
+			excludedPaid.add(currency, row.ExcludedAuditAmount)
+			if row.ActiveValue != nil {
+				excludedActiveRemaining.add(currency, row.ActiveValue.RecognizedRemainingValue)
+			}
+		}
+		main := adminIncludeInMain(row.Excluded, query.ExcludedMode)
+		if main {
+			recognized.add(currency, row.RecognizedAmount)
+			if row.RecognizedUnits > 0 {
+				paidInvitees[row.Invitee.Id] = struct{}{}
+			}
+			if row.Active {
+				activeAmount.add(currency, row.Plan.PriceAmount)
+				activePaidInvitees[row.Invitee.Id] = struct{}{}
+				if row.ActiveValue != nil {
+					activeRemaining.add(currency, row.ActiveValue.RecognizedRemainingValue)
+				}
+			}
+		}
+		adminAccumulateInvitationInviter(inviterGroups, row, main)
+		adminAccumulateInvitationInvitee(inviteeGroups, row, main)
+		if adminShouldShowExcludedRow(row.Excluded, query.ExcludedMode) && (!query.ActiveOnly || row.Active) && (!applySubscriptionIDToList || query.SubscriptionID <= 0 || row.Subscription.Id == query.SubscriptionID) {
+			subscriptionItems = append(subscriptionItems, adminInvitationSubscriptionItem(row))
+		}
+	}
+
+	inviters := adminInvitationInviterItems(inviterGroups, query)
+	invitees := adminInvitationInviteeItems(inviteeGroups, query)
+	adminSortInvitationInviters(inviters, query)
+	adminSortInvitationInvitees(invitees, query)
+	adminSortInvitationSubscriptions(subscriptionItems, query)
+
+	return adminInvitationPaidBuild{
+		Summary: dto.AdminInvitationPaidSubscriptionsSummary{
+			RecognizedInvitationPaidAmountByCurrency: recognized.breakdownWithPreferredCurrency(query.Currency),
+			ActiveInvitationPaidAmountByCurrency:     activeAmount.breakdownWithPreferredCurrency(query.Currency),
+			ActiveInvitationRemainingValueByCurrency: activeRemaining.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedInvitationPaidAmountByCurrency:   excludedPaid.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedActiveRemainingValueByCurrency:   excludedActiveRemaining.breakdownWithPreferredCurrency(query.Currency),
+			InviterCount:                             len(mainInviters),
+			InviteeCount:                             len(mainInvitees),
+			PaidInviteeCount:                         len(paidInvitees),
+			ActivePaidInviteeCount:                   len(activePaidInvitees),
+		},
+		Inviters:      inviters,
+		Invitees:      invitees,
+		Subscriptions: subscriptionItems,
+	}, nil
+}
+
+type adminInvitationInviterGroup struct {
+	Inviter                      User
+	InviteeIDs                   map[int]struct{}
+	PaidInviteeIDs               map[int]struct{}
+	ActivePaidInviteeIDs         map[int]struct{}
+	ExcludedActivePaidInviteeIDs map[int]struct{}
+	Recognized                   adminMoneyAccumulator
+	ActiveAmount                 adminMoneyAccumulator
+	ActiveRemaining              adminMoneyAccumulator
+	ExcludedPaid                 adminMoneyAccumulator
+	ExcludedActiveRemaining      adminMoneyAccumulator
+	LatestPaidTime               int64
+	HasMain                      bool
+	HasExcluded                  bool
+}
+
+func adminAccumulateInvitationRelationship(groups map[int]*adminInvitationInviterGroup, row adminInvitationRelationshipRow) {
+	group := groups[row.Inviter.Id]
+	if group == nil {
+		group = &adminInvitationInviterGroup{Inviter: row.Inviter, InviteeIDs: map[int]struct{}{}, PaidInviteeIDs: map[int]struct{}{}, ActivePaidInviteeIDs: map[int]struct{}{}, ExcludedActivePaidInviteeIDs: map[int]struct{}{}, Recognized: adminMoneyAccumulator{}, ActiveAmount: adminMoneyAccumulator{}, ActiveRemaining: adminMoneyAccumulator{}, ExcludedPaid: adminMoneyAccumulator{}, ExcludedActiveRemaining: adminMoneyAccumulator{}}
+		groups[row.Inviter.Id] = group
+	}
+	if row.Excluded {
+		group.HasExcluded = true
+		return
+	}
+	group.HasMain = true
+	group.InviteeIDs[row.Invitee.Id] = struct{}{}
+}
+
+func adminAccumulateInvitationInviter(groups map[int]*adminInvitationInviterGroup, row adminInvitationPaidRow, main bool) {
+	group := groups[row.Inviter.Id]
+	if group == nil {
+		group = &adminInvitationInviterGroup{Inviter: row.Inviter, InviteeIDs: map[int]struct{}{}, PaidInviteeIDs: map[int]struct{}{}, ActivePaidInviteeIDs: map[int]struct{}{}, ExcludedActivePaidInviteeIDs: map[int]struct{}{}, Recognized: adminMoneyAccumulator{}, ActiveAmount: adminMoneyAccumulator{}, ActiveRemaining: adminMoneyAccumulator{}, ExcludedPaid: adminMoneyAccumulator{}, ExcludedActiveRemaining: adminMoneyAccumulator{}}
+		groups[row.Inviter.Id] = group
+	}
+	if row.Excluded {
+		group.HasExcluded = true
+		group.ExcludedPaid.add(row.Plan.Currency, row.ExcludedAuditAmount)
+		if row.ActiveValue != nil {
+			group.ExcludedActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
+		}
+		if row.Active {
+			group.ExcludedActivePaidInviteeIDs[row.Invitee.Id] = struct{}{}
+		}
+	} else if main {
+		group.HasMain = true
+		group.InviteeIDs[row.Invitee.Id] = struct{}{}
+		if row.RecognizedUnits > 0 {
+			group.PaidInviteeIDs[row.Invitee.Id] = struct{}{}
+			if row.Subscription.StartTime > group.LatestPaidTime {
+				group.LatestPaidTime = row.Subscription.StartTime
+			}
+		}
+		group.Recognized.add(row.Plan.Currency, row.RecognizedAmount)
+		if row.Active {
+			group.ActiveAmount.add(row.Plan.Currency, row.Plan.PriceAmount)
+			group.ActivePaidInviteeIDs[row.Invitee.Id] = struct{}{}
+			if row.ActiveValue != nil {
+				group.ActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
+			}
+		}
+	}
+}
+
+func adminInvitationInviterItems(groups map[int]*adminInvitationInviterGroup, query AdminAnalyticsQuery) []dto.AdminInvitationPaidInviter {
+	items := make([]dto.AdminInvitationPaidInviter, 0, len(groups))
+	for _, group := range groups {
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeIncludedOnly && !group.HasMain {
+			continue
+		}
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeExcludedOnly && !group.HasExcluded {
+			continue
+		}
+		activeCount := len(group.ActivePaidInviteeIDs)
+		if query.ExcludedMode != dto.AdminAnalyticsExcludedModeIncludedOnly && len(group.ExcludedActivePaidInviteeIDs) > 0 {
+			activeCount += len(group.ExcludedActivePaidInviteeIDs)
+		}
+		if query.ActiveOnly && activeCount == 0 {
+			continue
+		}
+		inviterID := group.Inviter.Id
+		items = append(items, dto.AdminInvitationPaidInviter{
+			InviterUserID:                            group.Inviter.Id,
+			InviterUsername:                          group.Inviter.Username,
+			InviteeCount:                             len(group.InviteeIDs),
+			PaidInviteeCount:                         len(group.PaidInviteeIDs),
+			ActivePaidInviteeCount:                   activeCount,
+			RecognizedInvitationPaidAmountByCurrency: group.Recognized.breakdownWithPreferredCurrency(query.Currency),
+			ActiveInvitationPaidAmountByCurrency:     group.ActiveAmount.breakdownWithPreferredCurrency(query.Currency),
+			ActiveInvitationRemainingValueByCurrency: group.ActiveRemaining.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedInvitationPaidAmountByCurrency:   group.ExcludedPaid.breakdownWithPreferredCurrency(query.Currency),
+			ExcludedActiveRemainingValueByCurrency:   group.ExcludedActiveRemaining.breakdownWithPreferredCurrency(query.Currency),
+			LatestPaidSubscriptionTime:               group.LatestPaidTime,
+			Drilldown:                                &dto.AdminAnalyticsDrilldownTarget{Kind: "invitation_paid_inviter", InviterID: &inviterID, Tab: "invitation-paid-subscriptions"},
+		})
+	}
+	return items
+}
+
+type adminInvitationInviteeGroup struct {
+	Invitee             User
+	Excluded            bool
+	ExcludedReason      string
+	ExcludedAt          int64
+	ExcludedBy          int
+	SnapshotCount       int
+	RecognizedUnits     float64
+	ActiveCount         int
+	ExcludedActiveCount int
+	Recognized          adminMoneyAccumulator
+	ActiveRemaining     adminMoneyAccumulator
+	ActiveAmount        adminMoneyAccumulator
+	WouldHavePaid       adminMoneyAccumulator
+	WouldHaveActive     adminMoneyAccumulator
+	HasMain             bool
+	HasExcluded         bool
+}
+
+func adminAccumulateInvitationInvitee(groups map[int]*adminInvitationInviteeGroup, row adminInvitationPaidRow, main bool) {
+	group := groups[row.Invitee.Id]
+	if group == nil {
+		group = &adminInvitationInviteeGroup{Invitee: row.Invitee, Excluded: row.Excluded, ExcludedReason: row.ExcludedReason, ExcludedAt: row.ExcludedAt, ExcludedBy: row.ExcludedBy, Recognized: adminMoneyAccumulator{}, ActiveRemaining: adminMoneyAccumulator{}, ActiveAmount: adminMoneyAccumulator{}, WouldHavePaid: adminMoneyAccumulator{}, WouldHaveActive: adminMoneyAccumulator{}}
+		groups[row.Invitee.Id] = group
+	}
+	if row.Excluded {
+		group.HasExcluded = true
+		group.WouldHavePaid.add(row.Plan.Currency, row.ExcludedAuditAmount)
+		if row.ActiveValue != nil {
+			group.WouldHaveActive.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
+		}
+		if row.Active {
+			group.ExcludedActiveCount++
+		}
+	} else if main {
+		group.HasMain = true
+		group.SnapshotCount++
+		group.RecognizedUnits += row.RecognizedUnits
+		group.Recognized.add(row.Plan.Currency, row.RecognizedAmount)
+		if row.Active {
+			group.ActiveCount++
+			group.ActiveAmount.add(row.Plan.Currency, row.Plan.PriceAmount)
+			if row.ActiveValue != nil {
+				group.ActiveRemaining.add(row.Plan.Currency, row.ActiveValue.RecognizedRemainingValue)
+			}
+		}
+	}
+}
+
+func adminInvitationInviteeItems(groups map[int]*adminInvitationInviteeGroup, query AdminAnalyticsQuery) []dto.AdminInvitationPaidInvitee {
+	items := make([]dto.AdminInvitationPaidInvitee, 0, len(groups))
+	for _, group := range groups {
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeIncludedOnly && !group.HasMain {
+			continue
+		}
+		if query.ExcludedMode == dto.AdminAnalyticsExcludedModeExcludedOnly && !group.HasExcluded {
+			continue
+		}
+		activeCount := group.ActiveCount
+		if query.ExcludedMode != dto.AdminAnalyticsExcludedModeIncludedOnly {
+			activeCount += group.ExcludedActiveCount
+		}
+		if query.ActiveOnly && activeCount == 0 {
+			continue
+		}
+		inviteeID := group.Invitee.Id
+		inviterID := group.Invitee.InviterId
+		items = append(items, dto.AdminInvitationPaidInvitee{
+			InviteeUserID:                           group.Invitee.Id,
+			InviteeUsername:                         group.Invitee.Username,
+			InviterUserID:                           group.Invitee.InviterId,
+			RegisteredAt:                            group.Invitee.CreatedAt,
+			PaidSubscriptionSnapshotCount:           group.SnapshotCount,
+			RecognizedPaidUnits:                     group.RecognizedUnits,
+			ActivePaidSubscriptionCount:             activeCount,
+			RecognizedPaidAmountByCurrency:          group.Recognized.breakdownWithPreferredCurrency(query.Currency),
+			ActiveRemainingValueByCurrency:          group.ActiveRemaining.breakdownWithPreferredCurrency(query.Currency),
+			ActivePaidAmountByCurrency:              group.ActiveAmount.breakdownWithPreferredCurrency(query.Currency),
+			Excluded:                                group.Excluded,
+			ExcludedReason:                          group.ExcludedReason,
+			ExcludedAt:                              group.ExcludedAt,
+			ExcludedBy:                              group.ExcludedBy,
+			WouldHavePaidAmountByCurrency:           group.WouldHavePaid.breakdownWithPreferredCurrency(query.Currency),
+			WouldHaveActiveRemainingValueByCurrency: group.WouldHaveActive.breakdownWithPreferredCurrency(query.Currency),
+			Drilldown:                               &dto.AdminAnalyticsDrilldownTarget{Kind: "invitation_paid_invitee", InviterID: &inviterID, InviteeID: &inviteeID, Tab: "invitation-paid-subscriptions"},
+		})
+	}
+	return items
+}
+
+func adminInvitationSubscriptionItem(row adminInvitationPaidRow) dto.AdminInvitationPaidSubscriptionRecord {
+	planID := row.Plan.Id
+	inviteeID := row.Invitee.Id
+	inviterID := row.Inviter.Id
+	subscriptionID := row.Subscription.Id
+	item := dto.AdminInvitationPaidSubscriptionRecord{
+		SubscriptionID:       row.Subscription.Id,
+		InviteeUserID:        row.Invitee.Id,
+		InviterUserID:        row.Inviter.Id,
+		PlanID:               row.Plan.Id,
+		PlanName:             row.Plan.Title,
+		PlanPrice:            dto.AdminAnalyticsMoneyAmount{Amount: row.Plan.PriceAmount, Currency: row.Plan.Currency},
+		RecognizedPaidUnits:  row.RecognizedUnits,
+		RecognizedPaidAmount: dto.AdminAnalyticsMoneyAmount{Amount: row.RecognizedAmount, Currency: row.Plan.Currency},
+		UnitInferenceBasis:   row.UnitBasis,
+		Source:               row.Source,
+		GrantReason:          row.Subscription.GrantReason,
+		SourceAttribution:    row.SourceAttribution,
+		StartTime:            row.Subscription.StartTime,
+		EndTime:              row.Subscription.EndTime,
+		Status:               row.Subscription.Status,
+		Excluded:             row.Excluded,
+		ExcludedReason:       row.ExcludedReason,
+		Drilldown:            &dto.AdminAnalyticsDrilldownTarget{Kind: "invitation_paid_invitee", UserID: &inviteeID, PlanID: &planID, SubscriptionID: &subscriptionID, InviteeID: &inviteeID, InviterID: &inviterID, Tab: "invitation-paid-subscriptions"},
+	}
+	if row.ActiveValue != nil {
+		item.RecognizedRemainingValue = &dto.AdminAnalyticsMoneyAmount{Amount: row.ActiveValue.RecognizedRemainingValue, Currency: row.Plan.Currency}
+	}
+	if row.Order != nil {
+		orderID := row.Order.Id
+		item.PossibleOrderID = &orderID
+		item.PaymentProvider = row.Order.PaymentProvider
+		item.PaymentMethod = row.Order.PaymentMethod
+		item.OrderRecordedAmount = &dto.AdminAnalyticsMoneyAmount{Amount: row.Order.Money, Currency: row.Plan.Currency}
+		item.OrderStatus = row.Order.Status
+		item.CompleteTime = row.Order.CompleteTime
+	}
+	return item
+}
+
+func GetAdminInvitationPaidSubscriptionsSummary(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminInvitationPaidSubscriptionsData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminInvitationPaidSubscriptionsResponse{Summary: data.Summary}}, nil
+}
+
+func GetAdminInvitationPaidSubscriptionsInviters(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminInvitationPaidSubscriptionsData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Inviters, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminInvitationPaidSubscriptionsResponse{Summary: data.Summary, Inviters: dto.AdminAnalyticsList[dto.AdminInvitationPaidInviter]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func GetAdminInvitationPaidSubscriptionsInvitees(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	data, err := buildAdminInvitationPaidSubscriptionsData(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Invitees, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminInvitationPaidSubscriptionsResponse{Summary: data.Summary, Invitees: dto.AdminAnalyticsList[dto.AdminInvitationPaidInvitee]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func GetAdminInvitationPaidSubscriptionsSubscriptions(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse], error) {
+	query = normalizeAdminPaidSubscriptionAnalyticsQuery(query)
+	rows, err := loadAdminInvitationPaidRows(query, false)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	relationships, err := loadAdminInvitationRelationshipRows(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	data, err := adminBuildInvitationPaidDataFromRows(query, rows, relationships, true)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{}, err
+	}
+	paged, page := paginateAdminAnalyticsList(data.Subscriptions, query.Limit, query.Offset)
+	return dto.AdminAnalyticsPanelResponse[dto.AdminInvitationPaidSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminInvitationPaidSubscriptionsResponse{Summary: data.Summary, Subscriptions: dto.AdminAnalyticsList[dto.AdminInvitationPaidSubscriptionRecord]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+}
+
+func adminSortInvitationInviters(items []dto.AdminInvitationPaidInviter, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_invitation_paid_amount":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedInvitationPaidAmountByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedInvitationPaidAmountByCurrency, query.Currency))
+		case "active_invitation_paid_amount":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.ActiveInvitationPaidAmountByCurrency, query.Currency), adminAmountInBreakdown(right.ActiveInvitationPaidAmountByCurrency, query.Currency))
+		case "active_invitation_remaining_value":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.ActiveInvitationRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.ActiveInvitationRemainingValueByCurrency, query.Currency))
+		case "paid_invitee_count":
+			cmp = left.PaidInviteeCount - right.PaidInviteeCount
+		case "active_paid_invitee_count":
+			cmp = left.ActivePaidInviteeCount - right.ActivePaidInviteeCount
+		default:
+			cmp = left.InviterUserID - right.InviterUserID
+		}
+		if cmp == 0 {
+			cmp = left.InviterUserID - right.InviterUserID
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminSortInvitationInvitees(items []dto.AdminInvitationPaidInvitee, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_paid_amount":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedPaidAmountByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedPaidAmountByCurrency, query.Currency))
+		case "active_remaining_value":
+			cmp = adminCompareFloat(adminAmountInBreakdown(left.ActiveRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.ActiveRemainingValueByCurrency, query.Currency))
+		case "paid_subscription_snapshot_count":
+			cmp = left.PaidSubscriptionSnapshotCount - right.PaidSubscriptionSnapshotCount
+		case "registered_at":
+			cmp = adminCompareInt64(left.RegisteredAt, right.RegisteredAt)
+		default:
+			cmp = left.InviteeUserID - right.InviteeUserID
+		}
+		if cmp == 0 {
+			cmp = left.InviteeUserID - right.InviteeUserID
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminSortInvitationSubscriptions(items []dto.AdminInvitationPaidSubscriptionRecord, query AdminAnalyticsQuery) {
+	desc := adminSortDesc(query.SortOrder)
+	sort.SliceStable(items, func(i, j int) bool {
+		left := items[i]
+		right := items[j]
+		cmp := 0
+		switch query.SortBy {
+		case "recognized_paid_amount":
+			cmp = adminCompareFloat(adminMoneyAmountForCurrency(left.RecognizedPaidAmount, query.Currency), adminMoneyAmountForCurrency(right.RecognizedPaidAmount, query.Currency))
+		case "recognized_remaining_value":
+			cmp = adminCompareFloat(adminOptionalMoneyAmountForCurrency(left.RecognizedRemainingValue, query.Currency), adminOptionalMoneyAmountForCurrency(right.RecognizedRemainingValue, query.Currency))
+		case "start_time":
+			cmp = adminCompareInt64(left.StartTime, right.StartTime)
+		case "end_time":
+			cmp = adminCompareInt64(left.EndTime, right.EndTime)
+		case "plan_price":
+			cmp = adminCompareFloat(adminMoneyAmountForCurrency(left.PlanPrice, query.Currency), adminMoneyAmountForCurrency(right.PlanPrice, query.Currency))
+		default:
+			cmp = left.SubscriptionID - right.SubscriptionID
+		}
+		if cmp == 0 {
+			cmp = left.SubscriptionID - right.SubscriptionID
+		}
+		if desc {
+			return cmp > 0
+		}
+		return cmp < 0
+	})
+}
+
+func adminOptionalMoneyAmount(amount *dto.AdminAnalyticsMoneyAmount) float64 {
+	if amount == nil {
+		return 0
+	}
+	return amount.Amount
+}

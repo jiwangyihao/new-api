@@ -258,29 +258,44 @@ func normalizeRedemptionCreateType(redemptionType string) string {
 	return model.RedemptionTypeWallet
 }
 
-func validateRedemptionSubscriptionPlan(planId int) error {
+func validateRedemptionSubscriptionPlan(planId int) (*model.SubscriptionPlan, error) {
 	if planId <= 0 {
-		return errors.New("套餐不存在")
+		return nil, errors.New("套餐不存在")
 	}
 	plan, err := model.GetSubscriptionPlanById(planId)
 	if err != nil {
-		return errors.New("套餐不存在")
+		return nil, errors.New("套餐不存在")
 	}
 	if strings.TrimSpace(plan.Title) == "" {
-		return errors.New("套餐不存在")
+		return nil, errors.New("套餐不存在")
 	}
-	return nil
+	return plan, nil
+}
+
+func redemptionSubscriptionPlanSnapshot(plan *model.SubscriptionPlan) (int64, string, error) {
+	amountCents, currency, ok := model.SubscriptionPlanAmountSnapshot(plan)
+	if !ok {
+		return 0, "", errors.New("套餐价格无效")
+	}
+	return amountCents, currency, nil
 }
 
 func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey func() string) ([]model.Redemption, error) {
 	redemptionType := normalizeRedemptionCreateType(redemption.Type)
 	quota := 0
 	planId := 0
+	var amountCents int64
+	currency := ""
 	if redemptionType == model.RedemptionTypeSubscription {
-		if err := validateRedemptionSubscriptionPlan(redemption.PlanId); err != nil {
+		plan, err := validateRedemptionSubscriptionPlan(redemption.PlanId)
+		if err != nil {
 			return nil, err
 		}
 		planId = redemption.PlanId
+		amountCents, currency, err = redemptionSubscriptionPlanSnapshot(plan)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		var err error
 		quota, err = validateRedemptionWalletCents(redemption.Quota)
@@ -299,6 +314,8 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 			Quota:       quota,
 			Type:        redemptionType,
 			PlanId:      planId,
+			AmountCents: amountCents,
+			Currency:    currency,
 			BatchId:     batchId,
 			ExpiredTime: redemption.ExpiredTime,
 		})
@@ -307,14 +324,29 @@ func buildRedemptionsForCreate(userId int, redemption model.Redemption, nextKey 
 }
 
 func applyRedemptionUpdate(cleanRedemption *model.Redemption, redemption model.Redemption) error {
+	if cleanRedemption == nil {
+		return errors.New("兑换码不存在")
+	}
 	redemptionType := normalizeRedemptionCreateType(redemption.Type)
 	quota := 0
 	planId := 0
+	var amountCents int64
+	currency := ""
 	if redemptionType == model.RedemptionTypeSubscription {
-		if err := validateRedemptionSubscriptionPlan(redemption.PlanId); err != nil {
-			return err
-		}
 		planId = redemption.PlanId
+		if cleanRedemption.Type == model.RedemptionTypeSubscription && cleanRedemption.PlanId == planId {
+			amountCents = cleanRedemption.AmountCents
+			currency = cleanRedemption.Currency
+		} else {
+			plan, err := validateRedemptionSubscriptionPlan(planId)
+			if err != nil {
+				return err
+			}
+			amountCents, currency, err = redemptionSubscriptionPlanSnapshot(plan)
+			if err != nil {
+				return err
+			}
+		}
 	} else {
 		var err error
 		quota, err = validateRedemptionWalletCents(redemption.Quota)
@@ -322,10 +354,15 @@ func applyRedemptionUpdate(cleanRedemption *model.Redemption, redemption model.R
 			return err
 		}
 	}
+	if cleanRedemption.Status == common.RedemptionCodeStatusUsed && (cleanRedemption.Type != redemptionType || cleanRedemption.PlanId != planId || cleanRedemption.AmountCents != amountCents || cleanRedemption.Currency != currency) {
+		return errors.New("已使用订阅兑换码不可修改套餐快照")
+	}
 	cleanRedemption.Name = redemption.Name
 	cleanRedemption.Quota = quota
 	cleanRedemption.Type = redemptionType
 	cleanRedemption.PlanId = planId
+	cleanRedemption.AmountCents = amountCents
+	cleanRedemption.Currency = currency
 	cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	return nil
 }

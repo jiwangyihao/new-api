@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,13 +12,29 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"github.com/thanhpk/randstr"
 )
 
 type SubscriptionCreemPayRequest struct {
 	PlanId int `json:"plan_id"`
+}
+
+type CreemSubscriptionCheckoutResult struct {
+	URL         string
+	AmountCents int64
+	Currency    string
+}
+
+type creemSubscriptionCheckoutFunc func(referenceId string, product *CreemProduct, email string, username string) (CreemSubscriptionCheckoutResult, error)
+
+var createCreemSubscriptionCheckout creemSubscriptionCheckoutFunc = defaultCreemSubscriptionCheckout
+
+func SetCreemSubscriptionCheckoutForTest(t stripeTestHandle, fake func(referenceId string, product *CreemProduct, email string, username string) (CreemSubscriptionCheckoutResult, error)) {
+	t.Helper()
+	old := createCreemSubscriptionCheckout
+	createCreemSubscriptionCheckout = creemSubscriptionCheckoutFunc(fake)
+	t.Cleanup(func() { createCreemSubscriptionCheckout = old })
 }
 
 func SubscriptionRequestCreemPay(c *gin.Context) {
@@ -74,11 +91,32 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	reference := "sub-creem-ref-" + randstr.String(6)
 	referenceId := "sub_ref_" + common.Sha1([]byte(reference+time.Now().String()+user.Username))
 
-	// create pending order first
+	currency := normalizeProviderSnapshotCurrency(plan.Currency)
+	if currency == "" {
+		currency = "CNY"
+	}
+	product := &CreemProduct{
+		ProductId: plan.CreemProductId,
+		Name:      plan.Title,
+		Price:     plan.PriceAmount,
+		Currency:  currency,
+		Quota:     0,
+	}
+	checkout, err := createCreemSubscriptionCheckout(referenceId, product, user.Email, user.Username)
+	if err != nil {
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅支付链接创建失败 trade_no=%s product_id=%s error=%q", referenceId, product.ProductId, err.Error()))
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
+		return
+	}
+	amountCents, snapshotCurrency := normalizeProviderCheckoutSnapshot(checkout.AmountCents, checkout.Currency)
+
+	// Create pending order after checkout returns the immutable subscription price snapshot.
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
 		Money:           plan.PriceAmount,
+		AmountCents:     amountCents,
+		Currency:        snapshotCurrency,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodCreem,
 		PaymentProvider: model.PaymentProviderCreem,
@@ -89,37 +127,24 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
-
-	// Reuse Creem checkout generator by building a lightweight product reference.
-	currency := "USD"
-	switch operation_setting.GetGeneralSetting().QuotaDisplayType {
-	case operation_setting.QuotaDisplayTypeCNY:
-		currency = "CNY"
-	case operation_setting.QuotaDisplayTypeUSD:
-		currency = "USD"
-	default:
-		currency = "USD"
-	}
-	product := &CreemProduct{
-		ProductId: plan.CreemProductId,
-		Name:      plan.Title,
-		Price:     plan.PriceAmount,
-		Currency:  currency,
-		Quota:     0,
-	}
-
-	checkoutUrl, err := genCreemLink(c.Request.Context(), referenceId, product, user.Email, user.Username)
-	if err != nil {
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅支付链接创建失败 trade_no=%s product_id=%s error=%q", referenceId, product.ProductId, err.Error()))
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
-			"checkout_url": checkoutUrl,
+			"checkout_url": checkout.URL,
 			"order_id":     referenceId,
 		},
 	})
+
+}
+
+func defaultCreemSubscriptionCheckout(referenceId string, product *CreemProduct, email string, username string) (CreemSubscriptionCheckoutResult, error) {
+	checkoutURL, err := genCreemLink(context.Background(), referenceId, product, email, username)
+	if err != nil {
+		return CreemSubscriptionCheckoutResult{}, err
+	}
+	amountCents, ok := decimalMoneyValueToCents(product.Price)
+	if !ok {
+		return CreemSubscriptionCheckoutResult{URL: checkoutURL}, nil
+	}
+	return CreemSubscriptionCheckoutResult{URL: checkoutURL, AmountCents: amountCents, Currency: normalizeProviderSnapshotCurrency(product.Currency)}, nil
 }

@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { formatQuota, formatTimestamp } from '@/lib/format'
-import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -31,6 +30,7 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { LongText } from '@/components/long-text'
 import { StatusBadge, dotColorMap } from '@/components/status-badge'
+import { formatAccountBalanceForPlanPurchase } from '@/features/subscriptions/lib'
 import { USER_STATUSES, USER_ROLES, isUserDeleted } from '../constants'
 import { type User } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -65,6 +65,7 @@ export function getInvitationDisplayState(
     | 'aff_count'
     | 'direct_invite_count'
     | 'qualified_paid_invite_count'
+    | 'invitation_reward_mode'
     | 'invitation_reward_status'
     | 'invitation_reward_plan_title'
     | 'reward_plan_title'
@@ -78,10 +79,13 @@ export function getInvitationDisplayState(
       ? user.reward_plan_title || user.invitation_reward_plan_title || 'Granted'
       : 'Not granted'
 
+  const rewardMode = user.invitation_reward_mode ?? 'subscription'
+
   return {
     directInviteCount,
     qualifiedPaidInviteCount,
     rewardText,
+    rewardMode,
     inviterId: user.inviter_id || 0,
   }
 }
@@ -349,6 +353,20 @@ export function useUsersColumns(): ColumnDef<User>[] {
                 <p className='text-xs'>{t('Monthly invitation reward plan')}</p>
               </TooltipContent>
             </Tooltip>
+            <span className='text-muted-foreground/30'>·</span>
+            <StatusBadge
+              label={t(
+                invitationState.rewardMode === 'commission'
+                  ? 'Commission'
+                  : 'Reward package'
+              )}
+              variant={
+                invitationState.rewardMode === 'commission'
+                  ? 'success'
+                  : 'neutral'
+              }
+              copyable={false}
+            />
             {invitationState.inviterId > 0 && (
               <>
                 <span className='text-muted-foreground/30'>·</span>

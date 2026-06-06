@@ -22,6 +22,7 @@ import { PricingSection } from '../general/pricing-section'
 import { QuotaSettingsSection } from '../general/quota-settings-section'
 import { PaymentSettingsSection } from '../integrations/payment-settings-section'
 import { RatioSettingsCard } from '../models/ratio-settings-card'
+import { SubscriptionAnalyticsStatisticsSection } from './statistics-section'
 import type { BillingSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -165,6 +166,18 @@ const BILLING_SECTIONS = [
           WaffoPancakeCurrency: settings.WaffoPancakeCurrency ?? 'USD',
           WaffoPancakeUnitPrice: settings.WaffoPancakeUnitPrice ?? 1,
           WaffoPancakeMinTopUp: settings.WaffoPancakeMinTopUp ?? 1,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'statistics',
+    titleKey: 'systemSettings.billing.statistics.title',
+    descriptionKey: 'systemSettings.billing.statistics.description',
+    build: (settings: BillingSettings) => (
+      <SubscriptionAnalyticsStatisticsSection
+        defaultValues={{
+          excludedUsers: settings['subscription_analytics.excluded_users'],
         }}
       />
     ),

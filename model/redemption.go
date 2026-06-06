@@ -26,9 +26,10 @@ type RedemptionListOptions struct {
 }
 
 type RedemptionResult struct {
-	Type  string            `json:"type"`
-	Quota int               `json:"quota"`
-	Plan  *SubscriptionPlan `json:"plan,omitempty"`
+	Type         string            `json:"type"`
+	Quota        int               `json:"quota"`
+	Plan         *SubscriptionPlan `json:"plan,omitempty"`
+	RedemptionId int               `json:"redemption_id"`
 }
 
 type Redemption struct {
@@ -40,6 +41,8 @@ type Redemption struct {
 	Quota        int               `json:"quota" gorm:"default:100"`
 	Type         string            `json:"type" gorm:"type:varchar(32);not null;default:'wallet';index"`
 	PlanId       int               `json:"plan_id" gorm:"type:int;not null;default:0;index"`
+	AmountCents  int64             `json:"amount_cents" gorm:"type:bigint;not null;default:0"`
+	Currency     string            `json:"currency" gorm:"type:varchar(8);not null;default:''"`
 	BatchId      string            `json:"batch_id" gorm:"type:varchar(36);index"`
 	Plan         *SubscriptionPlan `json:"plan,omitempty" gorm:"-"`
 	CreatedTime  int64             `json:"created_time" gorm:"bigint"`
@@ -204,7 +207,7 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 	}
 	common.RandomSleep()
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
+		err := tx.Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
 		}
@@ -216,13 +219,31 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 		}
 
 		redemptionType := normalizeRedemptionType(redemption.Type)
+		redeemedTime := common.GetTimestamp()
+		claim := tx.Model(&Redemption{}).
+			Where("id = ? AND status = ?", redemption.Id, common.RedemptionCodeStatusEnabled).
+			Updates(map[string]any{"status": common.RedemptionCodeStatusUsed, "used_user_id": userId, "redeemed_time": redeemedTime})
+		if claim.Error != nil {
+			return claim.Error
+		}
+		if claim.RowsAffected == 0 {
+			return errors.New("该兑换码已被使用")
+		}
+		redemption.Status = common.RedemptionCodeStatusUsed
+		redemption.UsedUserId = userId
+		redemption.RedeemedTime = redeemedTime
 		result.Type = redemptionType
+		result.RedemptionId = redemption.Id
 		if redemptionType == RedemptionTypeSubscription {
 			plan, err := getSubscriptionPlanByIdTx(tx, redemption.PlanId)
 			if err != nil {
 				return err
 			}
-			if _, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "redemption"); err != nil {
+			creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, userId, plan, "redemption")
+			if err != nil {
+				return err
+			}
+			if err := createInvitationRewardEventForSubscriptionRedemptionTx(tx, redemption, userId, plan, creation); err != nil {
 				return err
 			}
 			result.Plan = plan
@@ -232,11 +253,7 @@ func Redeem(key string, userId int) (*RedemptionResult, error) {
 			}
 			result.Quota = redemption.Quota
 		}
-
-		redemption.RedeemedTime = common.GetTimestamp()
-		redemption.Status = common.RedemptionCodeStatusUsed
-		redemption.UsedUserId = userId
-		return tx.Save(redemption).Error
+		return nil
 	})
 	if err != nil {
 		common.SysError("redemption failed: " + err.Error())
@@ -270,7 +287,7 @@ func (redemption *Redemption) SelectUpdate() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
 	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "redeemed_time", "expired_time", "batch_id").Updates(redemption).Error
+	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "amount_cents", "currency", "redeemed_time", "expired_time", "batch_id").Updates(redemption).Error
 	return err
 }
 

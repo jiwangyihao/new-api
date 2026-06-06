@@ -281,6 +281,11 @@ func migrateDB() error {
 		&TrialCode{},
 		&TrialRedemption{},
 		&InvitationMonthlyEntitlement{},
+		&InvitationCommissionAccount{},
+		&InvitationRewardEvent{},
+		&InvitationCommissionRecord{},
+		&InvitationCommissionLedger{},
+		&InvitationCommissionWithdrawal{},
 		&CustomOAuthProvider{},
 		&UserOAuthBinding{},
 		&OAuthProviderLock{},
@@ -304,6 +309,9 @@ func migrateDB() error {
 		}
 	}
 	if err := migrateLegacyTrialPlanTitle(); err != nil {
+		return err
+	}
+	if err := backfillLegacyInvitationRewardEventsAfterMigration(); err != nil {
 		return err
 	}
 	return nil
@@ -342,6 +350,11 @@ func migrateDBFast() error {
 		{&TrialCode{}, "TrialCode"},
 		{&TrialRedemption{}, "TrialRedemption"},
 		{&InvitationMonthlyEntitlement{}, "InvitationMonthlyEntitlement"},
+		{&InvitationCommissionAccount{}, "InvitationCommissionAccount"},
+		{&InvitationRewardEvent{}, "InvitationRewardEvent"},
+		{&InvitationCommissionRecord{}, "InvitationCommissionRecord"},
+		{&InvitationCommissionLedger{}, "InvitationCommissionLedger"},
+		{&InvitationCommissionWithdrawal{}, "InvitationCommissionWithdrawal"},
 		{&CustomOAuthProvider{}, "CustomOAuthProvider"},
 		{&UserOAuthBinding{}, "UserOAuthBinding"},
 		{&OAuthProviderLock{}, "OAuthProviderLock"},
@@ -387,7 +400,21 @@ func migrateDBFast() error {
 	if err := migrateLegacyTrialPlanTitle(); err != nil {
 		return err
 	}
+	if err := backfillLegacyInvitationRewardEventsAfterMigration(); err != nil {
+		return err
+	}
 	common.SysLog("database migrated")
+	return nil
+}
+
+func backfillLegacyInvitationRewardEventsAfterMigration() error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		return BackfillLegacyInvitationRewardEventsTx(tx, common.GetTimestamp())
+	})
+	if err != nil {
+		common.SysError("failed to backfill legacy invitation reward events: " + err.Error())
+		return err
+	}
 	return nil
 }
 

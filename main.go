@@ -155,6 +155,9 @@ func main() {
 	// Invitation entitlement refresh task (daily Asia/Shanghai midnight cache refresh)
 	service.StartInvitationEntitlementRefreshTask()
 
+	// Invitation reward event retry task (compensates failed post-payment dispatch)
+	service.StartInvitationRewardEventRetryTask()
+
 	// Wire task polling adaptor factory (breaks service -> relay import cycle)
 	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
 		a := relay.GetTaskAdaptor(platform)

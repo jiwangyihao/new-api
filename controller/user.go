@@ -22,6 +22,21 @@ import (
 	"gorm.io/gorm"
 )
 
+var handleInvitationRewardForSubscriptionRedemption = defaultInvitationRewardRedemptionHandler
+
+func defaultInvitationRewardRedemptionHandler(redemptionId int) error {
+	if redemptionId <= 0 {
+		return nil
+	}
+	return service.HandleInvitationRewardForSubscriptionRedemption(redemptionId)
+}
+
+func SetInvitationRewardRedemptionHandlerForTest(t testCleanup, handler func(redemptionId int) error) {
+	previous := handleInvitationRewardForSubscriptionRedemption
+	handleInvitationRewardForSubscriptionRedemption = handler
+	t.Cleanup(func() { handleInvitationRewardForSubscriptionRedemption = previous })
+}
+
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
@@ -261,6 +276,9 @@ func GetAllUsers(c *gin.Context) {
 		return
 	}
 
+	for i := range users {
+		users[i].InvitationRewardMode = users[i].NormalizedInvitationRewardMode()
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 
@@ -277,6 +295,9 @@ func SearchUsers(c *gin.Context) {
 		return
 	}
 
+	for i := range users {
+		users[i].InvitationRewardMode = users[i].NormalizedInvitationRewardMode()
+	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(users)
 	common.ApiSuccess(c, pageInfo)
@@ -299,6 +320,7 @@ func GetUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
+	user.InvitationRewardMode = user.NormalizedInvitationRewardMode()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -410,31 +432,32 @@ func GetSelf(c *gin.Context) {
 
 	// 构建响应数据，包含用户信息和权限
 	responseData := map[string]interface{}{
-		"id":                    user.Id,
-		"username":              user.Username,
-		"display_name":          user.DisplayName,
-		"role":                  user.Role,
-		"status":                user.Status,
-		"email":                 user.Email,
-		"github_id":             user.GitHubId,
-		"discord_id":            user.DiscordId,
-		"oidc_id":               user.OidcId,
-		"wechat_id":             user.WeChatId,
-		"telegram_id":           user.TelegramId,
-		"quota":                 user.Quota,
-		"used_quota":            user.UsedQuota,
-		"request_count":         user.RequestCount,
-		"aff_code":              user.AffCode,
-		"aff_count":             user.AffCount,
-		"aff_quota":             user.AffQuota,
-		"aff_history_quota":     user.AffHistoryQuota,
-		"inviter_id":            user.InviterId,
-		"linux_do_id":           user.LinuxDOId,
-		"setting":               user.Setting,
-		"rankings_display_name": userSetting.RankingsDisplayName,
-		"stripe_customer":       user.StripeCustomer,
-		"sidebar_modules":       userSetting.SidebarModules, // 正确提取sidebar_modules字段
-		"permissions":           permissions,                // 新增权限字段
+		"id":                     user.Id,
+		"username":               user.Username,
+		"display_name":           user.DisplayName,
+		"role":                   user.Role,
+		"status":                 user.Status,
+		"email":                  user.Email,
+		"github_id":              user.GitHubId,
+		"discord_id":             user.DiscordId,
+		"oidc_id":                user.OidcId,
+		"wechat_id":              user.WeChatId,
+		"telegram_id":            user.TelegramId,
+		"quota":                  user.Quota,
+		"used_quota":             user.UsedQuota,
+		"request_count":          user.RequestCount,
+		"aff_code":               user.AffCode,
+		"aff_count":              user.AffCount,
+		"aff_quota":              user.AffQuota,
+		"aff_history_quota":      user.AffHistoryQuota,
+		"inviter_id":             user.InviterId,
+		"invitation_reward_mode": user.NormalizedInvitationRewardMode(),
+		"linux_do_id":            user.LinuxDOId,
+		"setting":                user.Setting,
+		"rankings_display_name":  userSetting.RankingsDisplayName,
+		"stripe_customer":        user.StripeCustomer,
+		"sidebar_modules":        userSetting.SidebarModules, // 正确提取sidebar_modules字段
+		"permissions":            permissions,                // 新增权限字段
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -505,26 +528,28 @@ func generateDefaultSidebarConfig(userRole int) string {
 	if userRole == common.RoleAdminUser {
 		// 管理员可以访问管理员区域，但不能访问系统设置
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":      true,
-			"channel":      true,
-			"models":       true,
-			"redemption":   true,
-			"trial_code":   true,
-			"subscription": true,
-			"user":         true,
-			"setting":      false, // 管理员不能访问系统设置
+			"enabled":               true,
+			"channel":               true,
+			"models":                true,
+			"redemption":            true,
+			"trial_code":            true,
+			"subscription":          true,
+			"user":                  true,
+			"invitation_commission": true,
+			"setting":               false, // 管理员不能访问系统设置
 		}
 	} else if userRole == common.RoleRootUser {
 		// 超级管理员可以访问所有功能
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":      true,
-			"channel":      true,
-			"models":       true,
-			"redemption":   true,
-			"trial_code":   true,
-			"subscription": true,
-			"user":         true,
-			"setting":      true,
+			"enabled":               true,
+			"channel":               true,
+			"models":                true,
+			"redemption":            true,
+			"trial_code":            true,
+			"subscription":          true,
+			"user":                  true,
+			"invitation_commission": true,
+			"setting":               true,
 		}
 	}
 	// 普通用户不包含admin区域
@@ -583,6 +608,12 @@ func UpdateUser(c *gin.Context) {
 	}
 	if myRole <= updatedUser.Role && myRole != common.RoleRootUser {
 		common.ApiErrorI18n(c, i18n.MsgUserCannotCreateHigherLevel)
+		return
+	}
+	if strings.TrimSpace(updatedUser.InvitationRewardMode) == "" {
+		updatedUser.InvitationRewardMode = originUser.NormalizedInvitationRewardMode()
+	} else if updatedUser.InvitationRewardMode != model.InvitationRewardModeSubscription && updatedUser.InvitationRewardMode != model.InvitationRewardModeCommission {
+		common.ApiError(c, errors.New("invalid invitation reward mode"))
 		return
 	}
 	if updatedUser.Password == "$I_LOVE_U" {
@@ -1163,6 +1194,11 @@ func TopUp(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if redemption.Type == model.RedemptionTypeSubscription && redemption.RedemptionId > 0 {
+		if err := handleInvitationRewardForSubscriptionRedemption(redemption.RedemptionId); err != nil {
+			common.SysError("failed to handle invitation reward for redemption: " + err.Error())
+		}
 	}
 	response := gin.H{
 		"type":  redemption.Type,

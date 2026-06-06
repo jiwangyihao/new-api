@@ -17,16 +17,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useLocation } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { useLayout } from '@/context/layout-provider'
 import {
   filterNavGroupsByRole,
+  isAdminCommissionNavVisible,
+  resolvePendingCommissionWithdrawalsBadge,
+  shouldFetchAdminTasksSummary,
   useSidebarConfig,
 } from '@/hooks/use-sidebar-config'
 import { useSidebarData } from '@/hooks/use-sidebar-data'
 import { Sidebar, SidebarContent, SidebarRail } from '@/components/ui/sidebar'
+import { getAdminTasksSummary } from '@/features/invitation-commission/api'
 import { getNavGroupsForPath } from '../lib/workspace-registry'
 import { NavGroup } from './nav-group'
 
@@ -51,10 +56,49 @@ export function AppSidebar() {
   // Filter sidebar navigation items based on backend configuration
   const configFilteredNavGroups = useSidebarConfig(allNavGroups)
 
-  const currentNavGroups = useMemo(
+  const roleFilteredNavGroups = useMemo(
     () => filterNavGroupsByRole(configFilteredNavGroups, userRole),
     [configFilteredNavGroups, userRole]
   )
+
+  const adminTasksSummaryQuery = useQuery({
+    queryKey: ['admin', 'tasks', 'summary'],
+    queryFn: () =>
+      resolvePendingCommissionWithdrawalsBadge(
+        getAdminTasksSummary,
+        () => undefined
+      ),
+    enabled: shouldFetchAdminTasksSummary(userRole, roleFilteredNavGroups),
+  })
+
+  const pendingCommissionWithdrawals = Number(adminTasksSummaryQuery.data ?? 0)
+
+  const currentNavGroups = useMemo(() => {
+    const badge =
+      pendingCommissionWithdrawals > 0
+        ? String(pendingCommissionWithdrawals)
+        : undefined
+    if (!badge) return roleFilteredNavGroups
+    if (!isAdminCommissionNavVisible(roleFilteredNavGroups)) {
+      return roleFilteredNavGroups
+    }
+
+    return roleFilteredNavGroups.map((group) => {
+      if (group.id !== 'admin') return group
+      return {
+        ...group,
+        items: group.items.map((item) => {
+          if (
+            'url' in item &&
+            item.url === '/invitation-commission/withdrawals'
+          ) {
+            return { ...item, badge }
+          }
+          return item
+        }),
+      }
+    })
+  }, [pendingCommissionWithdrawals, roleFilteredNavGroups])
 
   return (
     <Sidebar collapsible={collapsible} variant={variant}>

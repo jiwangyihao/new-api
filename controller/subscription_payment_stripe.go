@@ -13,11 +13,34 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stripe/stripe-go/v81"
 	"github.com/stripe/stripe-go/v81/checkout/session"
+	stripeprice "github.com/stripe/stripe-go/v81/price"
 	"github.com/thanhpk/randstr"
 )
 
+type stripeTestHandle interface {
+	Helper()
+	Cleanup(func())
+}
+
 type SubscriptionStripePayRequest struct {
 	PlanId int `json:"plan_id"`
+}
+
+type StripeSubscriptionCheckoutResult struct {
+	URL         string
+	AmountCents int64
+	Currency    string
+}
+
+type stripeSubscriptionCheckoutFunc func(referenceId string, customerId string, email string, priceId string) (StripeSubscriptionCheckoutResult, error)
+
+var createStripeSubscriptionCheckout stripeSubscriptionCheckoutFunc = defaultStripeSubscriptionCheckout
+
+func SetStripeSubscriptionCheckoutForTest(t stripeTestHandle, fake func(referenceId string, customerId string, email string, priceId string) (StripeSubscriptionCheckoutResult, error)) {
+	t.Helper()
+	old := createStripeSubscriptionCheckout
+	createStripeSubscriptionCheckout = stripeSubscriptionCheckoutFunc(fake)
+	t.Cleanup(func() { createStripeSubscriptionCheckout = old })
 }
 
 func SubscriptionRequestStripePay(c *gin.Context) {
@@ -68,17 +91,20 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	reference := fmt.Sprintf("sub-stripe-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "sub_ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeSubscriptionLink(referenceId, user.StripeCustomer, user.Email, plan.StripePriceId)
+	checkout, err := createStripeSubscriptionCheckout(referenceId, user.StripeCustomer, user.Email, plan.StripePriceId)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 订阅支付链接创建失败 trade_no=%s plan_id=%d error=%q", referenceId, plan.Id, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}
+	amountCents, currency := normalizeProviderCheckoutSnapshot(checkout.AmountCents, checkout.Currency)
 
 	order := &model.SubscriptionOrder{
 		UserId:          userId,
 		PlanId:          plan.Id,
 		Money:           plan.PriceAmount,
+		AmountCents:     amountCents,
+		Currency:        currency,
 		TradeNo:         referenceId,
 		PaymentMethod:   model.PaymentMethodStripe,
 		PaymentProvider: model.PaymentProviderStripe,
@@ -93,12 +119,12 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "success",
 		"data": gin.H{
-			"pay_link": payLink,
+			"pay_link": checkout.URL,
 		},
 	})
 }
 
-func genStripeSubscriptionLink(referenceId string, customerId string, email string, priceId string) (string, error) {
+func defaultStripeSubscriptionCheckout(referenceId string, customerId string, email string, priceId string) (StripeSubscriptionCheckoutResult, error) {
 	stripe.Key = setting.StripeApiSecret
 
 	params := &stripe.CheckoutSessionParams{
@@ -123,7 +149,32 @@ func genStripeSubscriptionLink(referenceId string, customerId string, email stri
 		params.Customer = stripe.String(customerId)
 	}
 
+	amountCents, currency := stripeSubscriptionPriceSnapshot(priceId)
 	result, err := session.New(params)
+	if err != nil {
+		return StripeSubscriptionCheckoutResult{}, err
+	}
+	return StripeSubscriptionCheckoutResult{URL: result.URL, AmountCents: amountCents, Currency: currency}, nil
+}
+
+func stripeSubscriptionPriceSnapshot(priceId string) (int64, string) {
+	priceId = strings.TrimSpace(priceId)
+	if priceId == "" {
+		return 0, ""
+	}
+	stripePrice, err := stripeprice.Get(priceId, nil)
+	if err != nil || stripePrice == nil || stripePrice.UnitAmount <= 0 {
+		return 0, ""
+	}
+	currency := normalizeProviderSnapshotCurrency(string(stripePrice.Currency))
+	if currency == "" {
+		return 0, ""
+	}
+	return stripePrice.UnitAmount, currency
+}
+
+func genStripeSubscriptionLink(referenceId string, customerId string, email string, priceId string) (string, error) {
+	result, err := defaultStripeSubscriptionCheckout(referenceId, customerId, email, priceId)
 	if err != nil {
 		return "", err
 	}

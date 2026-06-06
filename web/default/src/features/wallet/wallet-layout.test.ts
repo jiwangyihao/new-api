@@ -100,6 +100,27 @@ function readUsePaymentSource(): string {
   return readFileSync('src/features/wallet/hooks/use-payment.ts', 'utf8')
 }
 
+function readInvitationCommissionHookSource(): string {
+  return readFileSync(
+    'src/features/wallet/hooks/use-invitation-commission.ts',
+    'utf8'
+  )
+}
+
+function readCommissionTransferDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/commission-transfer-dialog.tsx',
+    'utf8'
+  )
+}
+
+function readCommissionWithdrawalDialogSource(): string {
+  return readFileSync(
+    'src/features/wallet/components/dialogs/commission-withdrawal-dialog.tsx',
+    'utf8'
+  )
+}
+
 describe('wallet Kyren payment flow', () => {
   test('submits Kyren payment with local top-up product id', async () => {
     const calls: Array<{ product_id: string }> = []
@@ -127,10 +148,17 @@ describe('wallet page layout', () => {
   test('places subscription plans before add-funds redemption card', () => {
     const source = readWalletSource()
     const gridIndex = source.indexOf('xl:grid-cols-')
-    const subscriptionIndex = source.indexOf('<SubscriptionPlansCard', gridIndex)
+    const subscriptionIndex = source.indexOf(
+      '<SubscriptionPlansCard',
+      gridIndex
+    )
     const addFundsIndex = source.indexOf("id='wallet-add-funds'", gridIndex)
 
-    assert.notEqual(gridIndex, -1, 'wallet page should render a responsive grid')
+    assert.notEqual(
+      gridIndex,
+      -1,
+      'wallet page should render a responsive grid'
+    )
     assert.notEqual(
       subscriptionIndex,
       -1,
@@ -236,10 +264,7 @@ describe('wallet page layout', () => {
       /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
     )
     assert.match(paymentHandler, /processKyrenTopUpProductPayment/)
-    assert.doesNotMatch(
-      kyrenHandler,
-      /setConfirmDialogOpen|setCreemDialogOpen/
-    )
+    assert.doesNotMatch(kyrenHandler, /setConfirmDialogOpen|setCreemDialogOpen/)
   })
 
   test('affiliate reward transfer accepts CNY amount and submits account balance cents', () => {
@@ -301,5 +326,108 @@ describe('wallet page layout', () => {
     assert.doesNotMatch(source, /cents > 0/)
     assert.match(source, /corresponding account balance/)
     assert.doesNotMatch(source, /corresponding quota/)
+  })
+
+  test('commission transfer copy is immediate and withdrawal copy is manual', () => {
+    const card = readAffiliateRewardsSource()
+    const transferDialog = readCommissionTransferDialogSource()
+    const withdrawalDialog = readCommissionWithdrawalDialogSource()
+
+    assert.match(card, /Transfer to balance/)
+    assert.match(card, /Request manual cashback/)
+    assert.match(card, /This is not an automatic payout\./)
+    assert.doesNotMatch(transferDialog, /review/i)
+    assert.doesNotMatch(transferDialog, /approval/i)
+    assert.match(withdrawalDialog, /manual/i)
+  })
+
+  test('commission wallet keeps referral link and uses side-effect-free summary stats', () => {
+    const card = readAffiliateRewardsSource()
+    const hook = readInvitationCommissionHookSource()
+
+    assert.match(card, /Copy referral link/)
+    assert.match(card, /direct_invite_count/)
+    assert.match(card, /qualified_paid_invite_count/)
+    assert.match(
+      hook,
+      /\['wallet', 'invitation-commission', 'summary', userId\]/
+    )
+    assert.match(
+      hook,
+      /\['wallet', 'invitation-commission', 'records', userId, params\]/
+    )
+    assert.match(
+      hook,
+      /queryKey:\s*\[[\s\S]*'wallet',[\s\S]*'invitation-commission',[\s\S]*'withdrawals',[\s\S]*userId,[\s\S]*params[\s\S]*\]/
+    )
+    assert.match(hook, /enabled:\s*Boolean\(userId\)/)
+    assert.match(hook, /useInvitationCommissionSummary/)
+    assert.match(hook, /useTransferInvitationCommission/)
+    assert.match(hook, /useRequestInvitationCommissionWithdrawal/)
+  })
+
+  test('commission wallet renders recent records and manual cashback requests', () => {
+    const card = readAffiliateRewardsSource()
+
+    assert.match(
+      card,
+      /useInvitationCommissionRecords\(\{\s*page: 1,\s*page_size: 3/s
+    )
+    assert.match(
+      card,
+      /useInvitationCommissionWithdrawals\(\{\s*page: 1,\s*page_size: 3/s
+    )
+    assert.match(card, /Recent commission records/)
+    assert.match(card, /recentCommissionRecords\.map/)
+    assert.match(card, /Recent manual cashback requests/)
+    assert.match(card, /recentCommissionWithdrawals\.map/)
+    assert.match(card, /withdrawal\.contact\.value/)
+    assert.match(card, /No commission records yet/)
+    assert.match(card, /No manual cashback requests yet/)
+  })
+
+  test('commission mutations refresh private wallet data and auth balance', () => {
+    const hook = readInvitationCommissionHookSource()
+    const api = readFileSync('src/features/wallet/api.ts', 'utf8')
+
+    assert.match(api, /return unwrapWalletPayload\(res\.data\)/)
+    assert.match(
+      hook,
+      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'summary', userId\]/
+    )
+    assert.match(
+      hook,
+      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'records', userId\]/
+    )
+    assert.match(
+      hook,
+      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'withdrawals', userId\]/
+    )
+    assert.match(hook, /auth\.setUser|setUser\(/)
+    assert.match(api, /unwrapWalletPayload/)
+    assert.match(api, /if \(!payload\.success\)/)
+    assert.match(
+      api,
+      /throw new Error\(payload\.message \|\| 'Request failed'\)/
+    )
+    assert.match(hook, /user_quota/)
+  })
+
+  test('commission transfer success refreshes wallet user balance', () => {
+    const wallet = readWalletSource()
+    const card = readAffiliateRewardsSource()
+
+    assert.match(wallet, /onCommissionTransferSuccess=\{fetchUser\}/)
+    assert.match(
+      card,
+      /onCommissionTransferSuccess\?: \(\) => Promise<void> \| void/
+    )
+    assert.match(card, /await props\.onCommissionTransferSuccess\?\.\(\)/)
+  })
+
+  test('subscription mode with historical commission account keeps commission actions visible', () => {
+    const card = readAffiliateRewardsSource()
+    assert.match(card, /has_commission_account/)
+    assert.match(card, /Historical commission balance can still be handled/)
   })
 })

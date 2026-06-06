@@ -31,6 +31,7 @@ export const userFormSchema = z.object({
   role: z.number().optional(),
   quota_cny: z.string().optional(),
   remark: z.string().optional(),
+  invitation_reward_mode: z.enum(['subscription', 'commission']).optional(),
 })
 
 export type UserFormValues = z.infer<typeof userFormSchema>
@@ -47,6 +48,7 @@ export const USER_FORM_DEFAULT_VALUES: UserFormValues = {
   role: 1, // Default to common user
   quota_cny: '0.00',
   remark: '',
+  invitation_reward_mode: 'subscription',
 }
 
 // ============================================================================
@@ -65,7 +67,9 @@ export function transformFormDataToPayload(
     display_name: data.display_name || data.username,
   }
 
-  if (userId === undefined || data.password) payload.password = data.password || ''
+  if (userId === undefined || data.password) {
+    payload.password = data.password || ''
+  }
 
   // For create: only send required fields
   if (userId === undefined) {
@@ -74,6 +78,8 @@ export function transformFormDataToPayload(
     // For update: quota is adjusted atomically via /api/user/manage, not sent here
     payload.remark = data.remark || undefined
     payload.id = userId
+    payload.invitation_reward_mode =
+      data.invitation_reward_mode || 'subscription'
   }
 
   return payload
@@ -93,5 +99,6 @@ export function transformUserToFormDefaults(
     role: user.role ?? 1,
     quota_cny: accountBalanceCentsToCnyAmount(user.quota).toFixed(2),
     remark: user.remark || '',
+    invitation_reward_mode: user.invitation_reward_mode ?? 'subscription',
   }
 }

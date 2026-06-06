@@ -165,10 +165,17 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	amountCents, currency, ok := model.SubscriptionPlanAmountSnapshot(plan)
+	if !ok || currency != kyrenCurrencyCNY {
+		common.ApiError(c, errors.New("Kyren 订阅金额快照无效"))
+		return
+	}
 	order := &model.SubscriptionOrder{
 		UserId:              userID,
 		PlanId:              plan.Id,
 		Money:               plan.PriceAmount,
+		AmountCents:         amountCents,
+		Currency:            currency,
 		TradeNo:             tradeNo,
 		PaymentMethod:       model.PaymentMethodKyren,
 		PaymentProvider:     model.PaymentProviderKyren,
@@ -313,6 +320,7 @@ func validateKyrenRemoteProduct(ctx context.Context, client kyrenAPI, productID 
 }
 
 var errKyrenPermanentFulfillmentFailure = errors.New("permanent Kyren fulfillment failure")
+var errKyrenSubscriptionOrderClaimed = errors.New("kyren subscription order is already being processed")
 
 func isKyrenRetryableFulfillmentError(err error) bool {
 	if err == nil {
@@ -338,7 +346,7 @@ func handleKyrenSubscriptionPaid(tradeNo string, event kyrenWebhookEvent, provid
 		return model.ErrPaymentMethodMismatch
 	}
 	if order.Status == common.TopUpStatusSuccess {
-		return nil
+		return completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo, providerPayload, model.PaymentProviderKyren, model.PaymentMethodKyren)
 	}
 	snapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
 	if err != nil {

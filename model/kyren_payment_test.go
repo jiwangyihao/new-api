@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestKyrenPaymentSnapshotRoundTrip(t *testing.T) {
@@ -35,6 +36,9 @@ func TestKyrenSubscriptionEntitlementSnapshotRoundTrip(t *testing.T) {
 		QuotaResetPeriod:        SubscriptionResetMonthly,
 		MaxPurchasePerUser:      2,
 		BusinessCode:            &businessCode,
+		IsTrial:                 true,
+		InviteTrial:             true,
+		RewardEligible:          true,
 		CustomSeconds:           0,
 		QuotaResetCustomSeconds: 0,
 	}
@@ -58,6 +62,9 @@ func TestKyrenSubscriptionEntitlementSnapshotRoundTrip(t *testing.T) {
 	assert.Equal(t, plan.QuotaResetCustomSeconds, got.QuotaResetCustomSeconds)
 	assert.Equal(t, plan.MaxPurchasePerUser, got.MaxPurchasePerUser)
 	assert.Equal(t, businessCode, got.BusinessCode)
+	assert.Equal(t, plan.IsTrial, got.IsTrial)
+	assert.Equal(t, plan.InviteTrial, got.InviteTrial)
+	assert.Equal(t, plan.RewardEligible, got.RewardEligible)
 }
 
 func TestKyrenPaymentConstants(t *testing.T) {
@@ -70,13 +77,47 @@ func TestKyrenTerminalStatusUpdateOnlyClaimsPendingOrder(t *testing.T) {
 	require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: "kyren-claim-pending", Status: common.TopUpStatusPending, PaymentProvider: PaymentProviderKyren}).Error)
 	require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: "kyren-claim-success", Status: common.TopUpStatusSuccess, PaymentProvider: PaymentProviderKyren}).Error)
 
-	claimed, err := ClaimPendingKyrenSubscriptionOrder("kyren-claim-pending")
+	claimed, _, err := ClaimPendingKyrenSubscriptionOrder("kyren-claim-pending")
 	require.NoError(t, err)
 	assert.True(t, claimed)
 
-	claimed, err = ClaimPendingKyrenSubscriptionOrder("kyren-claim-success")
+	claimed, _, err = ClaimPendingKyrenSubscriptionOrder("kyren-claim-success")
 	require.NoError(t, err)
 	assert.False(t, claimed)
+}
+
+func TestRestoreClaimedKyrenSubscriptionOrderDoesNotOverwriteNewLease(t *testing.T) {
+	truncateTables(t)
+	tradeNo := "kyren-claim-lease-owner"
+	recentLease := common.GetTimestamp()
+	recoveredLease := recentLease + 10
+	require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: tradeNo, Status: common.TopUpStatusFailed, PaymentProvider: PaymentProviderKyren, CompleteTime: recoveredLease}).Error)
+
+	require.NoError(t, RestoreClaimedKyrenSubscriptionOrder(tradeNo, recentLease))
+
+	order := GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusFailed, order.Status)
+	assert.Equal(t, recoveredLease, order.CompleteTime)
+}
+
+func TestMarkClaimedKyrenSubscriptionOrderSuccessRequiresLeaseOwner(t *testing.T) {
+	truncateTables(t)
+	tradeNo := "kyren-success-lease-owner"
+	oldLease := common.GetTimestamp() - 600
+	newLease := common.GetTimestamp()
+	require.NoError(t, DB.Create(&SubscriptionOrder{TradeNo: tradeNo, Status: common.TopUpStatusFailed, PaymentProvider: PaymentProviderKyren, CompleteTime: newLease}).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		order := &SubscriptionOrder{TradeNo: tradeNo, PaymentProvider: PaymentProviderKyren, Status: common.TopUpStatusFailed, CompleteTime: common.GetTimestamp(), ProviderPayload: "{}"}
+		return MarkClaimedKyrenSubscriptionOrderSuccessTx(tx, order, oldLease)
+	})
+
+	require.ErrorIs(t, err, ErrKyrenSubscriptionOrderLeaseMismatch)
+	order := GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusFailed, order.Status)
+	assert.Equal(t, newLease, order.CompleteTime)
 }
 
 func TestKyrenTerminalStatusUpdateOnlyClaimsPendingTopUp(t *testing.T) {

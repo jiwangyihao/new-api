@@ -22,10 +22,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { Pencil } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import {
-  accountBalanceCnyToCents,
-  formatAccountBalanceForPlanPurchase,
-} from '@/features/subscriptions/lib'
 import { Button } from '@/components/ui/button'
 import {
   Form,
@@ -56,6 +52,10 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import { createUser, updateUser, getUser } from '../api'
 import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
@@ -85,7 +85,6 @@ export function UsersMutateDrawer({
   const { triggerRefresh } = useUsers()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
-
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userFormSchema),
@@ -320,7 +319,56 @@ export function UsersMutateDrawer({
                           </Button>
                         </div>
                         <FormDescription>
-                          {formatAccountBalanceForPlanPurchase(currentBalanceCents)}
+                          {formatAccountBalanceForPlanPurchase(
+                            currentBalanceCents
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='invitation_reward_mode'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Invitation reward mode')}</FormLabel>
+                        <Select
+                          items={[
+                            {
+                              value: 'subscription',
+                              label: t('Reward package'),
+                            },
+                            { value: 'commission', label: t('Commission') },
+                          ]}
+                          onValueChange={(value) =>
+                            value !== null && field.onChange(value)
+                          }
+                          value={field.value || 'subscription'}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue
+                                placeholder={t('Select invitation reward mode')}
+                              />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              <SelectItem value='subscription'>
+                                {t('Reward package')}
+                              </SelectItem>
+                              <SelectItem value='commission'>
+                                {t('Commission')}
+                              </SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          {t(
+                            'Commission is only available for invited special users enabled by administrators.'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>

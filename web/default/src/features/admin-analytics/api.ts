@@ -14,12 +14,21 @@ import type {
   AdminUsageConsumptionSummaryResponse,
   AdminUsageTimeseriesResponse,
   ApiResponse,
+  InvitationPaidSubscriptionsResponse,
+  PaidSubscriptionValueResponse,
 } from './types'
 
-function adminAnalyticsUrl(
+export interface AdminAnalyticsApiParamOptions {
+  includeTimeRange?: boolean
+  includeSubscriptionID?: boolean
+  includeUsage?: boolean
+  includeSort?: boolean
+}
+
+export function adminAnalyticsUrl(
   path: string,
   filters: AdminAnalyticsCanonicalFilters,
-  options: { includeUsage?: boolean; includeSort?: boolean } = {}
+  options: AdminAnalyticsApiParamOptions = {}
 ): string {
   const params = buildAdminAnalyticsApiParams(filters, options)
   return `/api/admin-analytics/${path}?${params.toString()}`
@@ -28,7 +37,7 @@ function adminAnalyticsUrl(
 async function getAdminAnalytics<T>(
   path: string,
   filters: AdminAnalyticsCanonicalFilters,
-  options: { includeUsage?: boolean; includeSort?: boolean } = {}
+  options: AdminAnalyticsApiParamOptions = {}
 ): Promise<ApiResponse<AdminAnalyticsPanelResponse<T>>> {
   const res = await api.get<ApiResponse<AdminAnalyticsPanelResponse<T>>>(
     adminAnalyticsUrl(path, filters, options)
@@ -89,4 +98,58 @@ export const adminAnalyticsApi = {
     getAdminAnalytics<AdminAnalyticsRisksResponse>('risks', filters, {
       includeSort: true,
     }),
+  paidSubscriptionValueSummary: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<PaidSubscriptionValueResponse>(
+      'paid-subscription-value/summary',
+      filters
+    ),
+  paidSubscriptionValueUsers: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<PaidSubscriptionValueResponse>(
+      'paid-subscription-value/users',
+      filters,
+      { includeSort: true }
+    ),
+  paidSubscriptionValueSubscriptions: (
+    filters: AdminAnalyticsCanonicalFilters
+  ) =>
+    getAdminAnalytics<PaidSubscriptionValueResponse>(
+      'paid-subscription-value/subscriptions',
+      filters,
+      { includeSubscriptionID: true, includeSort: true }
+    ),
+  paidSubscriptionValuePlans: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<PaidSubscriptionValueResponse>(
+      'paid-subscription-value/breakdown/plans',
+      filters,
+      { includeSort: true }
+    ),
+  paidSubscriptionValueSources: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<PaidSubscriptionValueResponse>(
+      'paid-subscription-value/breakdown/sources',
+      filters,
+      { includeSort: true }
+    ),
+  invitationPaidSummary: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<InvitationPaidSubscriptionsResponse>(
+      'invitation-paid-subscriptions/summary',
+      filters
+    ),
+  invitationPaidInviters: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<InvitationPaidSubscriptionsResponse>(
+      'invitation-paid-subscriptions/inviters',
+      filters,
+      { includeSort: true }
+    ),
+  invitationPaidInvitees: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<InvitationPaidSubscriptionsResponse>(
+      'invitation-paid-subscriptions/invitees',
+      filters,
+      { includeSort: true }
+    ),
+  invitationPaidSubscriptions: (filters: AdminAnalyticsCanonicalFilters) =>
+    getAdminAnalytics<InvitationPaidSubscriptionsResponse>(
+      'invitation-paid-subscriptions/subscriptions',
+      filters,
+      { includeSubscriptionID: true, includeSort: true }
+    ),
 }

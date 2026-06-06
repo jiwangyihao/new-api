@@ -1,10 +1,14 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
+import { ROLE } from '@/lib/roles'
 import type { NavGroup } from '@/components/layout/types'
 import {
   filterNavGroupsByRole,
   filterSidebarNavGroupsForConfig,
   getDefaultSidebarModulesForTest,
+  resolvePendingCommissionWithdrawalsBadgeForTest,
+  shouldFetchAdminTasksSummaryForTest,
 } from './use-sidebar-config'
 
 const navGroups: NavGroup[] = [
@@ -226,9 +230,14 @@ describe('sidebar config defaults', () => {
       },
     }
 
-    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, userConfig, {
-      admin: false,
-    })
+    const filtered = filterSidebarNavGroupsForConfig(
+      groups,
+      defaults,
+      userConfig,
+      {
+        admin: false,
+      }
+    )
 
     assert.equal(filtered.length, 0)
   })
@@ -339,5 +348,118 @@ describe('sidebar config defaults', () => {
     )
 
     assert.equal(filtered.length, 0)
+  })
+
+  test('maps invitation commission withdrawals to admin invitation_commission module', () => {
+    const defaults = getDefaultSidebarModulesForTest()
+    const groups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Manual cashback requests',
+            url: '/invitation-commission/withdrawals',
+          },
+        ],
+      },
+    ]
+
+    const filtered = filterSidebarNavGroupsForConfig(groups, defaults, null)
+
+    assert.equal(defaults.admin?.invitation_commission, true)
+    assert.equal(
+      filtered[0]?.items[0]?.url,
+      '/invitation-commission/withdrawals'
+    )
+    assert.equal(
+      filterSidebarNavGroupsForConfig(
+        groups,
+        {
+          ...defaults,
+          admin: { enabled: true, invitation_commission: false },
+        },
+        null
+      ).length,
+      0
+    )
+  })
+
+  test('admin task summary query is enabled only for visible admin commission entry', () => {
+    const adminGroups: NavGroup[] = [
+      {
+        id: 'admin',
+        title: 'Admin',
+        items: [
+          {
+            title: 'Manual cashback requests',
+            url: '/invitation-commission/withdrawals',
+          },
+        ],
+      },
+    ]
+
+    assert.equal(
+      shouldFetchAdminTasksSummaryForTest(undefined, adminGroups),
+      false
+    )
+    assert.equal(
+      shouldFetchAdminTasksSummaryForTest(ROLE.USER, adminGroups),
+      false
+    )
+    assert.equal(
+      shouldFetchAdminTasksSummaryForTest(
+        ROLE.ADMIN,
+        filterSidebarNavGroupsForConfig(
+          adminGroups,
+          {
+            admin: { enabled: true, invitation_commission: false },
+          },
+          null
+        )
+      ),
+      false
+    )
+    assert.equal(
+      shouldFetchAdminTasksSummaryForTest(ROLE.ADMIN, adminGroups),
+      true
+    )
+    assert.equal(
+      shouldFetchAdminTasksSummaryForTest(ROLE.SUPER_ADMIN, adminGroups),
+      true
+    )
+  })
+
+  test('admin task summary failure hides badge without toast', async () => {
+    let toastCalled = false
+    const result = await resolvePendingCommissionWithdrawalsBadgeForTest(
+      async () => {
+        throw new Error('network')
+      },
+      () => {
+        toastCalled = true
+      }
+    )
+
+    assert.equal(result, undefined)
+    assert.equal(toastCalled, false)
+  })
+
+  test('sidebar registers manual cashback route and quiet task summary API', () => {
+    const sidebarData = readFileSync('src/hooks/use-sidebar-data.ts', 'utf8')
+    const appSidebar = readFileSync(
+      'src/components/layout/components/app-sidebar.tsx',
+      'utf8'
+    )
+    const adminApi = readFileSync(
+      'src/features/invitation-commission/api.ts',
+      'utf8'
+    )
+
+    assert.match(sidebarData, /Manual cashback requests/)
+    assert.match(appSidebar, /pendingCommissionWithdrawals > 0/)
+    assert.match(appSidebar, /shouldFetchAdminTasksSummary/)
+    assert.match(adminApi, /skipErrorHandler/)
+    assert.match(adminApi, /skipBusinessError/)
   })
 })

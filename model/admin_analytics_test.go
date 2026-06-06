@@ -101,6 +101,26 @@ func TestAdminAnalyticsNormalizesSubscriptionSourceAcrossDomains(t *testing.T) {
 	require.Equal(t, dto.AdminAnalyticsSourceUnknown, normalizeAdminSubscriptionSource("", "mystery"))
 }
 
+func TestAdminPaidSubscriptionAnalyticsQueryNormalizationPreservesSnapshotAndAllHistoryRange(t *testing.T) {
+	snapshot := normalizeAdminPaidSubscriptionAnalyticsQuery(AdminAnalyticsQuery{RangeMode: AdminAnalyticsRangeModeSnapshot, SnapshotAt: 0})
+	require.Equal(t, int64(0), snapshot.StartTimestamp)
+	require.Equal(t, int64(0), snapshot.EndTimestamp)
+	require.Equal(t, int64(0), snapshot.SnapshotAt)
+	require.Equal(t, dto.AdminAnalyticsGranularityDay, snapshot.Granularity)
+	require.Equal(t, AdminAnalyticsDefaultLimit, snapshot.Limit)
+	require.Equal(t, dto.AdminAnalyticsSortDesc, snapshot.SortOrder)
+
+	allHistory := normalizeAdminPaidSubscriptionAnalyticsQuery(AdminAnalyticsQuery{RangeMode: AdminAnalyticsRangeModeAllHistory, SnapshotAt: 123})
+	require.Equal(t, int64(0), allHistory.StartTimestamp)
+	require.Equal(t, int64(123), allHistory.EndTimestamp)
+	require.Equal(t, int64(123), allHistory.SnapshotAt)
+
+	explicitRange := normalizeAdminPaidSubscriptionAnalyticsQuery(AdminAnalyticsQuery{RangeMode: AdminAnalyticsRangeModeAllHistory, SnapshotAt: 123, StartTimestamp: 10, EndTimestamp: 20, TimeRangeExplicit: true})
+	require.Equal(t, int64(10), explicitRange.StartTimestamp)
+	require.Equal(t, int64(20), explicitRange.EndTimestamp)
+	require.Equal(t, int64(123), explicitRange.SnapshotAt)
+}
+
 func TestAdminAnalyticsActiveSubscriptionFiltersUserStatusAndBusinessCode(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	now := time.Now().Unix()

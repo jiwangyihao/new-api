@@ -63,6 +63,90 @@ export type WaffoPancakePaymentResponse = ApiResponse<
   | string
 >
 
+export interface PageParams {
+  page: number
+  page_size: number
+}
+
+export interface PageEnvelope<T> {
+  items: T[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface InvitationCommissionContact {
+  type: 'wechat' | 'telegram' | 'email' | 'other'
+  value: string
+}
+
+export interface InvitationCommissionSummary {
+  reward_mode: 'subscription' | 'commission'
+  has_commission_account: boolean
+  can_transfer: boolean
+  can_request_withdrawal: boolean
+  direct_invite_count: number
+  qualified_paid_invite_count: number
+  account: {
+    available_cents: number
+    pending_cents: number
+    withdrawn_cents: number
+    transferred_cents: number
+  }
+  setting: {
+    enabled: boolean
+    minimum_withdraw_cents: number
+    minimum_transfer_cents: number
+    rate_bps: number
+  }
+}
+
+export interface InvitationCommissionRecord {
+  id: number
+  event_id: number
+  invitee_id: number
+  source_type: string
+  source_id: number
+  source_trade_no: string
+  source_amount_cents: number
+  source_currency: string
+  commission_rate_bps: number
+  commission_cents: number
+  status: 'available' | 'skipped' | 'cancelled'
+  reason: string
+  created_at: number
+  available_at: number
+  cancelled_at: number
+}
+
+export interface InvitationCommissionTransferResult {
+  available_cents: number
+  transferred_cents: number
+  user_quota: number
+}
+
+export interface InvitationCommissionWithdrawalPayload {
+  amount_cents: number
+  contact: InvitationCommissionContact
+  remark?: string
+}
+
+export interface InvitationCommissionWithdrawal {
+  id: number
+  amount_cents: number
+  status: 'pending' | 'completed' | 'rejected'
+  method: 'manual'
+  contact: InvitationCommissionContact
+  user_remark: string
+  admin_remark: string
+  reviewer_id: number
+  completed_by: number
+  completed_at: number
+  reviewed_at: number
+  created_at: number
+  updated_at: number
+}
+
 /**
  * Creem product configuration
  */

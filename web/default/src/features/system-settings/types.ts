@@ -185,6 +185,14 @@ export type ModelSettings = {
   'model_deployment.ionet.enabled': boolean
 }
 
+export interface SubscriptionAnalyticsExcludedUser {
+  user_id: number
+  username?: string
+  reason?: string
+  excluded_at?: number
+  excluded_by?: number
+}
+
 export type BillingSettings = {
   QuotaForNewUser: number
   PreConsumedQuota: number
@@ -266,6 +274,7 @@ export type BillingSettings = {
   'checkin_setting.enabled': boolean
   'checkin_setting.min_quota': number
   'checkin_setting.max_quota': number
+  'subscription_analytics.excluded_users': SubscriptionAnalyticsExcludedUser[]
 }
 
 export type OperationsSettings = {

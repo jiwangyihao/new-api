@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -21,7 +22,8 @@ func setupSubscriptionBalancePurchaseTestDB(t *testing.T) {
 	model.InvalidateSubscriptionPlanCache(9502)
 	model.InvalidateSubscriptionPlanCache(9512)
 	model.InvalidateSubscriptionPlanCache(9522)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.Log{}, &model.TopUp{}, &model.InvitationMonthlyEntitlement{}))
+	model.InvalidateSubscriptionPlanCache(9552)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.Log{}, &model.TopUp{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
 }
 
 func performBalancePayRequest(t *testing.T, userID int, body string) *httptest.ResponseRecorder {
@@ -80,6 +82,117 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 	var log model.Log
 	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeTopup).First(&log).Error)
 	assert.Contains(t, log.Content, "账户余额购买订阅套餐：Basic")
+}
+
+func TestSubscriptionBalancePurchaseStoresCNYAmountSnapshot(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9551
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance-snapshot", Status: common.UserStatusEnabled, Quota: 6000}).Error)
+	code := "balance_snapshot"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9552, Title: "Balance Snapshot", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9552,"idempotency_key":"snapshot"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 9552).First(&order).Error)
+	assert.Equal(t, int64(4000), order.AmountCents)
+	assert.Equal(t, "CNY", order.Currency)
+}
+
+func TestSubscriptionBalancePurchaseInvokesInvitationRewardHandlerAndCreatesEvent(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	inviterID := 9571
+	inviteeID := 9572
+	planID := 9573
+	model.InvalidateSubscriptionPlanCache(planID)
+	t.Cleanup(func() { model.InvalidateSubscriptionPlanCache(planID) })
+	inviter := model.User{Id: inviterID, Username: "balance-handler-inviter", Status: common.UserStatusEnabled, AffCode: "balance-handler-inviter", InvitationRewardMode: model.InvitationRewardModeSubscription}
+	invitee := model.User{Id: inviteeID, Username: "balance-handler-invitee", Status: common.UserStatusEnabled, AffCode: "balance-handler-invitee", InviterId: inviterID, Quota: 10000}
+	require.NoError(t, model.DB.Create(&inviter).Error)
+	require.NoError(t, model.DB.Create(&invitee).Error)
+	code := "balance_handler_event"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Balance Handler Event", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}).Error)
+
+	receivedOrderIDs := make([]int, 0, 1)
+	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {
+		receivedOrderIDs = append(receivedOrderIDs, orderId)
+		var order model.SubscriptionOrder
+		require.NoError(t, model.DB.First(&order, orderId).Error)
+		assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+		var event model.InvitationRewardEvent
+		require.NoError(t, model.DB.Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).First(&event).Error)
+		assert.Equal(t, order.Id, event.SourceOrderId)
+		assert.Equal(t, order.AmountCents, event.SourceAmountCents)
+		assert.Equal(t, order.Currency, event.SourceCurrency)
+		return nil
+	})
+
+	recorder := performBalancePayRequest(t, inviteeID, `{"plan_id":9573,"idempotency_key":"balance-handler-event"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
+	require.Len(t, receivedOrderIDs, 1)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", inviteeID, planID).First(&order).Error)
+	assert.Equal(t, []int{order.Id}, receivedOrderIDs)
+	var event model.InvitationRewardEvent
+	require.NoError(t, model.DB.Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).First(&event).Error)
+	assert.Equal(t, inviterID, event.InviterId)
+	assert.Equal(t, inviteeID, event.InviteeId)
+	assert.Equal(t, order.Id, event.SourceOrderId)
+	assert.Equal(t, int64(4000), event.SourceAmountCents)
+	assert.Equal(t, "CNY", event.SourceCurrency)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(1), eventCount)
+}
+
+func TestSubscriptionBalancePurchaseReturnsSuccessWhenInvitationRewardHandlerFails(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	inviteeID := 9574
+	planID := 9575
+	model.InvalidateSubscriptionPlanCache(planID)
+	t.Cleanup(func() { model.InvalidateSubscriptionPlanCache(planID) })
+	require.NoError(t, model.DB.Create(&model.User{Id: inviteeID, Username: "balance-handler-fail", Status: common.UserStatusEnabled, Quota: 10000}).Error)
+	code := "balance_handler_failure"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Balance Handler Failure", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}).Error)
+	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {
+		return errors.New("temporary reward handler failure")
+	})
+
+	recorder := performBalancePayRequest(t, inviteeID, `{"plan_id":9575,"idempotency_key":"balance-handler-failure"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, inviteeID).Error)
+	assert.Equal(t, 6000, user.Quota)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, planID).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+}
+
+func TestSubscriptionBalancePurchaseRejectsFractionalCentPrice(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9553
+	planID := 9554
+	model.InvalidateSubscriptionPlanCache(planID)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance-fractional-cent", Status: common.UserStatusEnabled, Quota: 10000}).Error)
+	code := "balance_fractional_cent"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Fractional Cent", PriceAmount: 10.005, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9554,"idempotency_key":"fractional-cent-price"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), `"message":"success"`)
+	assert.Contains(t, recorder.Body.String(), `"success":false`)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, 10000, user.Quota)
+	var orderCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, planID).Count(&orderCount).Error)
+	assert.Equal(t, int64(0), orderCount)
 }
 
 func TestSubscriptionBalancePayAllowsDecimalPlanPrice(t *testing.T) {
@@ -251,7 +364,7 @@ func TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck(t *testing.T) {
 	created := false
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var err error
-		created, err = createBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", 4000, &order)
+		created, _, err = createBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", 4000, &order)
 		return err
 	})
 

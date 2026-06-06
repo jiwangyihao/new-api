@@ -104,6 +104,7 @@ const defaultBillingSettings: BillingSettings = {
   'checkin_setting.enabled': false,
   'checkin_setting.min_quota': 1000,
   'checkin_setting.max_quota': 10000,
+  'subscription_analytics.excluded_users': [],
 }
 
 export function BillingSettings() {

@@ -21,6 +21,9 @@ type SubscriptionEntitlementSnapshot struct {
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds"`
 	MaxPurchasePerUser      int    `json:"max_purchase_per_user"`
 	BusinessCode            string `json:"business_code"`
+	IsTrial                 bool   `json:"is_trial"`
+	InviteTrial             bool   `json:"invite_trial"`
+	RewardEligible          bool   `json:"reward_eligible"`
 }
 
 func NewSubscriptionEntitlementSnapshotFromPlan(plan *SubscriptionPlan) SubscriptionEntitlementSnapshot {
@@ -44,6 +47,9 @@ func NewSubscriptionEntitlementSnapshotFromPlan(plan *SubscriptionPlan) Subscrip
 		QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
 		MaxPurchasePerUser:      plan.MaxPurchasePerUser,
 		BusinessCode:            businessCode,
+		IsTrial:                 plan.IsTrial,
+		InviteTrial:             plan.InviteTrial,
+		RewardEligible:          plan.RewardEligible,
 	}
 }
 

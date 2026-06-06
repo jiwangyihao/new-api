@@ -146,7 +146,7 @@ func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T
 	plan := insertSubscriptionPlanForPaymentGuardTest(t, 301)
 	insertSubscriptionOrderForPaymentGuardTest(t, "sub-guard-order", 202, plan.Id, PaymentProviderStripe)
 
-	err := CompleteSubscriptionOrder("sub-guard-order", `{"provider":"epay"}`, PaymentProviderEpay, "alipay")
+	_, err := CompleteSubscriptionOrder("sub-guard-order", `{"provider":"epay"}`, PaymentProviderEpay, "alipay")
 	require.ErrorIs(t, err, ErrPaymentMethodMismatch)
 
 	order := GetSubscriptionOrderByTradeNo("sub-guard-order")
@@ -156,6 +156,53 @@ func TestCompleteSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T
 
 	topUp := GetTopUpByTradeNo("sub-guard-order")
 	assert.Nil(t, topUp)
+}
+
+func TestCompleteSubscriptionOrder_RejectsInvalidStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+	}{
+		{name: "failed", status: common.TopUpStatusFailed},
+		{name: "expired", status: common.TopUpStatusExpired},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			require.NoError(t, DB.AutoMigrate(&InvitationRewardEvent{}))
+			require.NoError(t, DB.Exec("DELETE FROM invitation_reward_events").Error)
+			userID := 260
+			planID := 360
+			tradeNo := "sub-invalid-status-" + tc.name
+			insertUserForPaymentGuardTest(t, userID, 0)
+			plan := insertSubscriptionPlanForPaymentGuardTest(t, planID)
+			order := &SubscriptionOrder{
+				UserId:          userID,
+				PlanId:          plan.Id,
+				Money:           9.99,
+				AmountCents:     999,
+				Currency:        "CNY",
+				TradeNo:         tradeNo,
+				PaymentMethod:   PaymentMethodStripe,
+				PaymentProvider: PaymentProviderStripe,
+				Status:          tc.status,
+				CreateTime:      time.Now().Unix(),
+			}
+			require.NoError(t, order.Insert())
+
+			_, err := CompleteSubscriptionOrder(tradeNo, `{"amount_total":"999","currency":"CNY"}`, PaymentProviderStripe, PaymentMethodStripe)
+
+			require.ErrorIs(t, err, ErrSubscriptionOrderStatusInvalid)
+			orderAfter := GetSubscriptionOrderByTradeNo(tradeNo)
+			require.NotNil(t, orderAfter)
+			assert.Equal(t, tc.status, orderAfter.Status)
+			assert.Zero(t, countUserSubscriptionsForPaymentGuardTest(t, userID))
+			var eventCount int64
+			require.NoError(t, DB.Model(&InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+			assert.Equal(t, int64(0), eventCount)
+			topUp := GetTopUpByTradeNo(tradeNo)
+			assert.Nil(t, topUp)
+		})
+	}
 }
 
 func TestCompleteSubscriptionOrderRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
@@ -179,7 +226,7 @@ func TestCompleteSubscriptionOrderRejectsRenewalWhenPurchaseLimitReached(t *test
 	require.NoError(t, DB.Create(existing).Error)
 	insertSubscriptionOrderForPaymentGuardTest(t, "sub-extend-order", 404, plan.Id, PaymentProviderStripe)
 
-	err := CompleteSubscriptionOrder("sub-extend-order", `{"provider":"stripe"}`, PaymentProviderStripe, "stripe")
+	_, err := CompleteSubscriptionOrder("sub-extend-order", `{"provider":"stripe"}`, PaymentProviderStripe, "stripe")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "已达到该套餐购买上限")
 

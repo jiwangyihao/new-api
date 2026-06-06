@@ -6,6 +6,7 @@ import {
 } from '../constants'
 import type {
   AdminAnalyticsCanonicalFilters,
+  AdminAnalyticsExcludedMode,
   AdminAnalyticsGranularity,
   AdminAnalyticsSearch,
   AdminAnalyticsSortOrder,
@@ -20,9 +21,11 @@ const tabs = new Set<string>([
   'overview',
   'plans',
   'quota',
+  'paid-subscription-value',
   'users',
   'conversion',
   'invitations',
+  'invitation-paid-subscriptions',
   'usage',
   'risks',
 ])
@@ -69,6 +72,50 @@ const usageMetrics = new Set<string>([
   'active_api_keys',
 ])
 const planAttributions = new Set<string>(['current', 'event_time'])
+const excludedModes = new Set<string>([
+  'included_only',
+  'include_excluded',
+  'excluded_only',
+])
+
+const paidSubscriptionAnalyticsTabs = new Set<AdminAnalyticsTab>([
+  'paid-subscription-value',
+  'invitation-paid-subscriptions',
+])
+
+export function switchAdminAnalyticsTab(
+  filters: AdminAnalyticsCanonicalFilters,
+  tab: AdminAnalyticsTab
+): AdminAnalyticsCanonicalFilters {
+  if (filters.tab === tab) return filters
+  const {
+    snapshot_at: _snapshotAt,
+    subscription_id: _subscriptionID,
+    inviter_id: _inviterID,
+    invitee_id: _inviteeID,
+    currency: _currency,
+    ...rest
+  } = filters
+  if (paidSubscriptionAnalyticsTabs.has(tab)) {
+    return {
+      ...rest,
+      tab,
+      time_range_explicit: false,
+      offset: 0,
+      sort_by: undefined,
+      ...(filters.currency !== undefined ? { currency: filters.currency } : {}),
+    }
+  }
+  return {
+    ...rest,
+    tab,
+    excluded_mode: 'included_only',
+    active_only: false,
+    time_range_explicit: true,
+    offset: 0,
+    sort_by: undefined,
+  }
+}
 
 const looseSearchSchema = z.object({}).catchall(z.unknown())
 
@@ -150,12 +197,40 @@ function parseLimit(value: unknown): number {
   return Math.min(parsed, ADMIN_ANALYTICS_MAX_LIMIT)
 }
 
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  const raw = firstString(value)?.trim().toLowerCase()
+  if (raw === undefined) return fallback
+  if (raw === 'true' || raw === '1') return true
+  if (raw === 'false' || raw === '0') return false
+  return fallback
+}
+
+function parsePositiveInteger(value: unknown): number | undefined {
+  const parsed = parseInteger(value)
+  return parsed !== undefined && parsed > 0 ? parsed : undefined
+}
+
+function parseOptionalString(value: unknown): string | undefined {
+  const raw = firstString(value)?.trim()
+  return raw === undefined || raw === '' ? undefined : raw
+}
+
+function shouldIncludeTimeRange(
+  filters: AdminAnalyticsCanonicalFilters,
+  includeTimeRange: boolean
+): boolean {
+  if (includeTimeRange !== true) return false
+  if (!paidSubscriptionAnalyticsTabs.has(filters.tab)) return true
+  return filters.time_range_explicit
+}
+
 export function buildAdminAnalyticsCanonicalFilters(
   search: unknown,
   currentSeconds = nowSeconds()
 ): AdminAnalyticsCanonicalFilters {
   const parsed = looseSearchSchema.safeParse(search)
   const raw = parsed.success ? parsed.data : {}
+  const tab = parseEnum<AdminAnalyticsTab>(raw.tab, tabs, 'overview')
   const endTimestamp = parseInteger(raw.end_timestamp) ?? currentSeconds
   const startTimestamp =
     parseInteger(raw.start_timestamp) ??
@@ -165,10 +240,13 @@ export function buildAdminAnalyticsCanonicalFilters(
     usageMetrics,
     'total_tokens'
   )
+  const snapshotAt = parseInteger(raw.snapshot_at)
+  const currency = parseOptionalString(raw.currency)
   return {
-    tab: parseEnum<AdminAnalyticsTab>(raw.tab, tabs, 'overview'),
+    tab,
     start_timestamp: startTimestamp,
     end_timestamp: endTimestamp,
+    ...(snapshotAt !== undefined ? { snapshot_at: snapshotAt } : {}),
     granularity: parseEnum<AdminAnalyticsGranularity>(
       raw.granularity,
       granularities,
@@ -188,6 +266,26 @@ export function buildAdminAnalyticsCanonicalFilters(
     log_statuses: parseAllowedArray<string>(raw.log_statuses, logStatuses),
     grant_reasons: parseAllowedArray<string>(raw.grant_reasons, sources),
     business_codes: normalizeArray(raw.business_codes),
+    ...(currency !== undefined ? { currency } : {}),
+    excluded_mode: parseEnum<AdminAnalyticsExcludedMode>(
+      raw.excluded_mode,
+      excludedModes,
+      'included_only'
+    ),
+    active_only: parseBoolean(raw.active_only, false),
+    time_range_explicit: parseBoolean(
+      raw.time_range_explicit,
+      !paidSubscriptionAnalyticsTabs.has(tab)
+    ),
+    ...(parsePositiveInteger(raw.inviter_id) !== undefined
+      ? { inviter_id: parsePositiveInteger(raw.inviter_id) }
+      : {}),
+    ...(parsePositiveInteger(raw.invitee_id) !== undefined
+      ? { invitee_id: parsePositiveInteger(raw.invitee_id) }
+      : {}),
+    ...(parsePositiveInteger(raw.subscription_id) !== undefined
+      ? { subscription_id: parsePositiveInteger(raw.subscription_id) }
+      : {}),
     group_by: parseEnum<AdminUsageGroupBy>(raw.group_by, usageGroupBy, 'user'),
     metric,
     plan_attribution: parseEnum<AdminPlanAttribution>(
@@ -217,15 +315,41 @@ function appendArray(
 
 export function buildAdminAnalyticsApiParams(
   filters: AdminAnalyticsCanonicalFilters,
-  options: { includeUsage?: boolean; includeSort?: boolean } = {}
+  options: {
+    includeTimeRange?: boolean
+    includeSubscriptionID?: boolean
+    includeUsage?: boolean
+    includeSort?: boolean
+  } = {}
 ): URLSearchParams {
   const params = new URLSearchParams()
-  params.append('start_timestamp', String(filters.start_timestamp))
-  params.append('end_timestamp', String(filters.end_timestamp))
+  const includeTimeRange = options.includeTimeRange ?? true
+  if (shouldIncludeTimeRange(filters, includeTimeRange)) {
+    params.append('start_timestamp', String(filters.start_timestamp))
+    params.append('end_timestamp', String(filters.end_timestamp))
+  }
   params.append('granularity', filters.granularity)
   params.append('limit', String(filters.limit))
   params.append('offset', String(filters.offset))
   params.append('sort_order', filters.sort_order)
+  if (filters.snapshot_at !== undefined) {
+    params.append('snapshot_at', String(filters.snapshot_at))
+  }
+  if (filters.currency !== undefined) params.append('currency', filters.currency)
+  params.append('excluded_mode', filters.excluded_mode)
+  params.append('active_only', String(filters.active_only))
+  if (filters.inviter_id !== undefined) {
+    params.append('inviter_id', String(filters.inviter_id))
+  }
+  if (filters.invitee_id !== undefined) {
+    params.append('invitee_id', String(filters.invitee_id))
+  }
+  if (
+    options.includeSubscriptionID === true &&
+    filters.subscription_id !== undefined
+  ) {
+    params.append('subscription_id', String(filters.subscription_id))
+  }
   appendArray(params, 'plan_ids', filters.plan_ids)
   appendArray(params, 'user_ids', filters.user_ids)
   appendArray(params, 'token_ids', filters.token_ids)

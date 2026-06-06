@@ -17,6 +17,27 @@ import (
 
 const UserNameMaxLength = 20
 
+const (
+	InvitationRewardModeSubscription = "subscription"
+	InvitationRewardModeCommission   = "commission"
+)
+
+func NormalizeInvitationRewardMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case InvitationRewardModeCommission:
+		return InvitationRewardModeCommission
+	default:
+		return InvitationRewardModeSubscription
+	}
+}
+
+func (user *User) NormalizedInvitationRewardMode() string {
+	if user == nil {
+		return InvitationRewardModeSubscription
+	}
+	return NormalizeInvitationRewardMode(user.InvitationRewardMode)
+}
+
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
@@ -44,6 +65,7 @@ type User struct {
 	AffQuota                          int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
 	AffHistoryQuota                   int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
 	InviterId                         int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	InvitationRewardMode              string         `json:"invitation_reward_mode" gorm:"type:varchar(32);default:'subscription'"`
 	DeletedAt                         gorm.DeletedAt `gorm:"index"`
 	LinuxDOId                         string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
 	Setting                           string         `json:"setting" gorm:"type:text;column:setting"`
@@ -143,28 +165,30 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 	if userRole == common.RoleAdminUser {
 		// 管理员可以访问管理员区域，但不能访问系统设置
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":      true,
-			"channel":      true,
-			"models":       true,
-			"redemption":   true,
-			"trial_code":   true,
-			"trial_abuse":  true,
-			"subscription": true,
-			"user":         true,
-			"setting":      false, // 管理员不能访问系统设置
+			"enabled":               true,
+			"channel":               true,
+			"models":                true,
+			"redemption":            true,
+			"trial_code":            true,
+			"trial_abuse":           true,
+			"subscription":          true,
+			"user":                  true,
+			"invitation_commission": true,
+			"setting":               false, // 管理员不能访问系统设置
 		}
 	} else if userRole == common.RoleRootUser {
 		// 超级管理员可以访问所有功能
 		defaultConfig["admin"] = map[string]interface{}{
-			"enabled":      true,
-			"channel":      true,
-			"models":       true,
-			"redemption":   true,
-			"trial_code":   true,
-			"subscription": true,
-			"trial_abuse":  true,
-			"user":         true,
-			"setting":      true,
+			"enabled":               true,
+			"channel":               true,
+			"models":                true,
+			"redemption":            true,
+			"trial_code":            true,
+			"subscription":          true,
+			"trial_abuse":           true,
+			"user":                  true,
+			"invitation_commission": true,
+			"setting":               true,
 		}
 	}
 	// 普通用户不包含admin区域
@@ -349,6 +373,7 @@ func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
 		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
 		Where("subscription_plans.reward_eligible = ?", true).
 		Where("subscription_plans.is_trial = ?", false).
+		Where("subscription_plans.invite_trial = ?", false).
 		Where("(user_subscriptions.grant_reason = '' OR user_subscriptions.grant_reason <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
 		Where("(user_subscriptions.source = '' OR user_subscriptions.source <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
 		Group("users.inviter_id").
@@ -698,6 +723,7 @@ func (user *User) Update(updatePassword bool) error {
 	}
 	newUser := *user
 	DB.First(&user, user.Id)
+	newUser.InvitationRewardMode = user.InvitationRewardMode
 	if err = DB.Model(user).Updates(newUser).Error; err != nil {
 		return err
 	}
@@ -717,9 +743,10 @@ func (user *User) Edit(updatePassword bool) error {
 
 	newUser := *user
 	updates := map[string]interface{}{
-		"username":     newUser.Username,
-		"display_name": newUser.DisplayName,
-		"remark":       newUser.Remark,
+		"username":               newUser.Username,
+		"display_name":           newUser.DisplayName,
+		"remark":                 newUser.Remark,
+		"invitation_reward_mode": newUser.NormalizedInvitationRewardMode(),
 	}
 	if updatePassword {
 		updates["password"] = newUser.Password

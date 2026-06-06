@@ -69,7 +69,21 @@ func withKyrenCheckoutFakeControllerClient(t *testing.T, fake kyrenAPI) {
 func setupKyrenPaymentControllerTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.TopUp{}, &model.Log{}, &model.Option{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.SubscriptionPlan{},
+		&model.SubscriptionOrder{},
+		&model.UserSubscription{},
+		&model.TopUp{},
+		&model.Log{},
+		&model.Option{},
+		&model.InvitationMonthlyEntitlement{},
+		&model.InvitationRewardEvent{},
+		&model.InvitationCommissionRecord{},
+		&model.InvitationCommissionAccount{},
+		&model.InvitationCommissionLedger{},
+		&model.InvitationCommissionWithdrawal{},
+	))
 
 	originalAPIKey := setting.KyrenApiKey
 	originalWebhookSecret := setting.KyrenWebhookSecret
@@ -268,6 +282,86 @@ func TestKyrenWebhookCompletesSubscriptionOrder(t *testing.T) {
 	assert.Equal(t, model.PaymentProviderKyren, topUp.PaymentProvider)
 }
 
+func TestKyrenWebhookSkipsInvitationRewardEventForTrialSubscriptionPlan(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6103
+	inviteeID := 6104
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-trial-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-trial-inviter"}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6105, "prod_sub_trial", 1000, 2)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{"is_trial": true, "reward_eligible": true}).Error)
+	plan.IsTrial = true
+	tradeNo := "kyren-sub-trial-skip-event"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(0), eventCount)
+}
+
+func TestKyrenWebhookSkipsInvitationRewardEventForInviteTrialSnapshot(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6106
+	inviteeID := 6107
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-invite-trial-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-invite-trial-inviter"}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6108, "prod_sub_invite_trial_snapshot", 1000, 2)
+	plan.InviteTrial = true
+	tradeNo := "kyren-sub-invite-trial-snapshot"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, plan.Id).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(0), eventCount)
+}
+
+func TestKyrenWebhookRecordsInvitationRewardEventForRewardIneligibleSnapshot(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6111
+	inviteeID := 6112
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-ineligible-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-ineligible-inviter", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6113, "prod_sub_reward_ineligible_snapshot", 1000, 2)
+	plan.RewardEligible = false
+	tradeNo := "kyren-sub-reward-ineligible-snapshot"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{"is_trial": true, "reward_eligible": true}).Error)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	var event model.InvitationRewardEvent
+	require.NoError(t, model.DB.Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).First(&event).Error)
+	assert.Equal(t, inviterID, event.InviterId)
+	assert.Equal(t, inviteeID, event.InviteeId)
+	assert.Equal(t, int64(4000), event.SourceAmountCents)
+	assert.Equal(t, kyrenCurrencyCNY, event.SourceCurrency)
+}
+
 func TestKyrenWebhookReturnsRetryableStatusWhenSubscriptionFulfillmentFails(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
 	userID := 6109
@@ -285,6 +379,115 @@ func TestKyrenWebhookReturnsRetryableStatusWhenSubscriptionFulfillmentFails(t *t
 	require.NotNil(t, order)
 	assert.Equal(t, common.TopUpStatusPending, order.Status)
 }
+
+func TestKyrenWebhookRetriesInvitationRewardHandlerForSuccessfulSubscriptionOrder(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6121
+	inviteeID := 6122
+	inviter := model.User{Id: inviterID, Username: "kyren-retry-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-retry-inviter", InvitationRewardMode: model.InvitationRewardModeSubscription}
+	require.NoError(t, model.DB.Create(&inviter).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6123, "prod_sub_handler_retry", 1000, 1)
+	tradeNo := "kyren-sub-handler-retry"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, "prod_sub_handler_retry", "40.00", kyrenCurrencyCNY)
+
+	calledOrderIDs := make([]int, 0, 2)
+	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {
+		calledOrderIDs = append(calledOrderIDs, orderId)
+		if len(calledOrderIDs) == 1 {
+			return errors.New("injected Kyren invitation reward handler failure")
+		}
+		return nil
+	})
+
+	first := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusInternalServerError, first.Code, first.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	assert.Equal(t, []int{order.Id}, calledOrderIDs)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(1), eventCount)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, plan.Id).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+
+	second := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	assert.Equal(t, []int{order.Id, order.Id}, calledOrderIDs)
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(1), eventCount)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, plan.Id).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+}
+
+func TestKyrenWebhookReturnsRetryableStatusWhileSubscriptionOrderClaimed(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6131
+	inviteeID := 6132
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-claimed-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-claimed-inviter", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6133, "prod_sub_claimed_retry", 1000, 1)
+	tradeNo := "kyren-sub-claimed-retry"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	claimed, _, err := model.ClaimPendingKyrenSubscriptionOrder(tradeNo)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusFailed, order.Status)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, plan.Id).Count(&subCount).Error)
+	assert.Equal(t, int64(0), subCount)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(0), eventCount)
+	var recordCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationCommissionRecord{}).Where("source_id = ?", order.Id).Count(&recordCount).Error)
+	assert.Equal(t, int64(0), recordCount)
+}
+
+func TestKyrenWebhookRecoversStaleClaimedSubscriptionOrder(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 6141
+	inviteeID := 6142
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-stale-claim-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-stale-claim-inviter", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 6143, "prod_sub_stale_claim", 1000, 1)
+	tradeNo := "kyren-sub-stale-claim"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, inviteeID, &plan)
+	claimed, _, err := model.ClaimPendingKyrenSubscriptionOrder(tradeNo)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("trade_no = ?", tradeNo).Update("complete_time", common.GetTimestamp()-600).Error)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	var subCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", inviteeID, plan.Id).Count(&subCount).Error)
+	assert.Equal(t, int64(1), subCount)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+	assert.Equal(t, int64(1), eventCount)
+}
+
 func TestKyrenWebhookReturnsRetryableStatusWhenSubscriptionLookupFails(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
 	userID := 6113
@@ -477,6 +680,100 @@ func TestKyrenWebhookRejectsAmountCurrencyOrProductMismatch(t *testing.T) {
 			var subCount int64
 			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&subCount).Error)
 			assert.Equal(t, int64(0), subCount)
+		})
+	}
+}
+
+func TestKyrenSubscriptionOrderStoresEmptySnapshotWhenCurrencyUnsupported(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 9561
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 9562, "prod_kyren_snapshot", 1000, 1)
+
+	tradeNo := "kyren-sub-empty-snapshot"
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{
+		UserId: userID, PlanId: plan.Id, Money: 40, TradeNo: tradeNo,
+		PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+		KyrenSnapshot:       kyrenPaymentSnapshotJSON(t, plan.KyrenProductId, "40.00", "USD"),
+		EntitlementSnapshot: kyrenEntitlementSnapshotJSON(t, &plan),
+	}).Error)
+
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", "USD")
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&order).Error)
+	assert.Equal(t, int64(0), order.AmountCents)
+	assert.Equal(t, "", order.Currency)
+}
+
+func TestKyrenSubscriptionOrderStoresCNYAmountSnapshot(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 9568
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 9570, "prod_kyren_cny_snapshot", 1000, 1)
+	tradeNo := "kyren-sub-cny-snapshot"
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{
+		UserId: userID, PlanId: plan.Id, Money: 40, TradeNo: tradeNo,
+		PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+		KyrenSnapshot:       kyrenPaymentSnapshotJSON(t, plan.KyrenProductId, "40.00", "CNY"),
+		EntitlementSnapshot: kyrenEntitlementSnapshotJSON(t, &plan),
+	}).Error)
+
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", "CNY")
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&order).Error)
+	assert.Equal(t, int64(4000), order.AmountCents)
+	assert.Equal(t, "CNY", order.Currency)
+}
+
+func TestKyrenSubscriptionCompletionRejectsProductAmountCurrencyMismatch(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	inviterID := 9571
+	inviteeID := 9572
+	require.NoError(t, model.DB.Create(&model.User{Id: inviterID, Username: "kyren-mismatch-inviter", Status: common.UserStatusEnabled, AffCode: "kyren-mismatch-inviter", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	seedKyrenPaymentUser(t, inviteeID)
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviteeID).Update("inviter_id", inviterID).Error)
+	plan := seedKyrenPaymentPlan(t, 9573, "prod_kyren_mismatch_snapshot", 1000, 1)
+	for _, tc := range []struct {
+		name      string
+		productID string
+		amount    string
+		currency  string
+	}{
+		{name: "product", productID: "prod_kyren_other_snapshot", amount: "40.00", currency: "CNY"},
+		{name: "amount", productID: plan.KyrenProductId, amount: "41.00", currency: "CNY"},
+		{name: "currency", productID: plan.KyrenProductId, amount: "40.00", currency: "USD"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tradeNo := "kyren-sub-snapshot-mismatch-" + tc.name
+			require.NoError(t, model.DB.Create(&model.SubscriptionOrder{
+				UserId: inviteeID, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY", TradeNo: tradeNo,
+				PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+				Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+				KyrenSnapshot:       kyrenPaymentSnapshotJSON(t, plan.KyrenProductId, "40.00", "CNY"),
+				EntitlementSnapshot: kyrenEntitlementSnapshotJSON(t, &plan),
+			}).Error)
+
+			payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, tc.productID, tc.amount, tc.currency)
+			recorder := performSignedKyrenWebhook(t, payload)
+
+			require.Equal(t, http.StatusOK, recorder.Code)
+			var order model.SubscriptionOrder
+			require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&order).Error)
+			assert.Equal(t, common.TopUpStatusPending, order.Status)
+			var events int64
+			require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&events).Error)
+			assert.Equal(t, int64(0), events)
+			var records int64
+			require.NoError(t, model.DB.Model(&model.InvitationCommissionRecord{}).Where("source_id = ?", order.Id).Count(&records).Error)
+			assert.Equal(t, int64(0), records)
 		})
 	}
 }

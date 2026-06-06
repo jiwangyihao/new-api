@@ -324,6 +324,107 @@ func TestMonthlyInvitationEntitlementDoesNotRequireConfiguredRewardPlanCode(t *t
 	assert.NotZero(t, status.RewardSubscriptionId)
 }
 
+func TestGetInvitationEntitlementStatusSkipsCommissionInviterWithoutUpsert(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9301, Username: "commission-inviter", Status: common.UserStatusEnabled, AffCode: "aff-commission-inviter", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9302, Username: "commission-child-a", Status: common.UserStatusEnabled, AffCode: "aff-commission-child-a", InviterId: 9301}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9303, Username: "commission-child-b", Status: common.UserStatusEnabled, AffCode: "aff-commission-child-b", InviterId: 9301}).Error)
+	plan := seedInvitationRewardPlan(t, 9304, "commission_paid", true)
+	seedActiveInviteeSubscription(t, 9302, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+	seedActiveInviteeSubscription(t, 9303, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+
+	status, err := GetInvitationEntitlementStatus(9301, at)
+
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.False(t, status.Entitled)
+	assert.Equal(t, 2, status.DirectInviteCount)
+	assert.Equal(t, 2, status.QualifiedActiveCount)
+	assert.Zero(t, status.RewardSubscriptionId)
+	var entitlementCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", 9301).Count(&entitlementCount).Error)
+	assert.Equal(t, int64(0), entitlementCount)
+	var rewardSubCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND grant_reason = ?", 9301, model.SubscriptionGrantMonthlyInviteEntitlement).Count(&rewardSubCount).Error)
+	assert.Equal(t, int64(0), rewardSubCount)
+}
+
+func TestInvitationEntitlementKeepsExistingActiveSubscriptionCriteria(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}, &model.InvitationRewardEvent{}))
+	t.Cleanup(func() {
+		if model.DB.Migrator().HasTable("invitation_reward_events") {
+			model.DB.Exec("DELETE FROM invitation_reward_events")
+		}
+	})
+	at := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	seedInvitationRewardUsers(t, 9311, 9312, 9313, 9314)
+	paidPlan := seedInvitationRewardPlan(t, 9315, "current_paid", true)
+	seedActiveInviteeSubscription(t, 9312, paidPlan.Id, at, "redemption", "redemption")
+	seedActiveInviteeSubscription(t, 9313, paidPlan.Id, at, "admin", "admin")
+	require.NoError(t, model.DB.Create(&model.InvitationRewardEvent{InviterId: 9311, InviteeId: 9314, SourceType: model.InvitationRewardEventSourceSubscriptionOrder, SourceId: 9316, EventStartTime: at.Add(-time.Hour).Unix(), EventEndTime: at.Add(24 * time.Hour).Unix(), Status: model.InvitationRewardEventStatusActive}).Error)
+
+	status, err := EnsureMonthlyInvitationEntitlement(9311, at)
+
+	require.NoError(t, err)
+	assert.True(t, status.Entitled)
+	assert.Equal(t, 2, status.QualifiedActiveCount)
+	assert.Equal(t, paidPlan.Id, status.RewardPlanId)
+}
+
+func TestInvitationEntitlementExcludesInviteTrialPlansFromQualifiedActiveCount(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9371, Username: "invite-trial-boundary-inviter", Status: common.UserStatusEnabled, AffCode: "aff-invite-trial-boundary-inviter"}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9372, Username: "invite-trial-boundary-child-a", Status: common.UserStatusEnabled, AffCode: "aff-invite-trial-boundary-child-a", InviterId: 9371}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9373, Username: "invite-trial-boundary-child-b", Status: common.UserStatusEnabled, AffCode: "aff-invite-trial-boundary-child-b", InviterId: 9371}).Error)
+	plan := seedInvitationRewardPlan(t, 9374, "invite_trial_paid_boundary", true)
+	require.NoError(t, model.DB.Model(plan).Updates(map[string]interface{}{
+		"invite_trial": true,
+		"is_trial":     false,
+	}).Error)
+	seedActiveInviteeSubscription(t, 9372, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+	seedActiveInviteeSubscription(t, 9373, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+
+	status, err := GetInvitationEntitlementStatus(9371, at)
+
+	require.NoError(t, err)
+	require.NotNil(t, status)
+	assert.Equal(t, 2, status.DirectInviteCount)
+	assert.Equal(t, 0, status.QualifiedActiveCount)
+	assert.False(t, status.Entitled)
+	assert.Zero(t, status.RewardSubscriptionId)
+	var entitlementCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", 9371).Count(&entitlementCount).Error)
+	assert.Equal(t, int64(0), entitlementCount)
+	var rewardSubCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND grant_reason = ?", 9371, model.SubscriptionGrantMonthlyInviteEntitlement).Count(&rewardSubCount).Error)
+	assert.Equal(t, int64(0), rewardSubCount)
+}
+
+func TestRunMonthlyInvitationEntitlementSweepSkipsCommissionInviters(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}))
+	at := time.Date(2026, 6, 4, 12, 0, 0, 0, time.UTC)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9321, Username: "sweep-commission", Status: common.UserStatusEnabled, AffCode: "aff-sweep-commission", InvitationRewardMode: model.InvitationRewardModeCommission}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9322, Username: "sweep-child-a", Status: common.UserStatusEnabled, AffCode: "aff-sweep-child-a", InviterId: 9321}).Error)
+	require.NoError(t, model.DB.Create(&model.User{Id: 9323, Username: "sweep-child-b", Status: common.UserStatusEnabled, AffCode: "aff-sweep-child-b", InviterId: 9321}).Error)
+	plan := seedInvitationRewardPlan(t, 9324, "sweep_paid", true)
+	seedActiveInviteeSubscription(t, 9322, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+	seedActiveInviteeSubscription(t, 9323, plan.Id, at, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder)
+
+	processed, err := RunMonthlyInvitationEntitlementSweep(at, 10)
+
+	require.NoError(t, err)
+	assert.Equal(t, 0, processed)
+	var entitlementCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", 9321).Count(&entitlementCount).Error)
+	assert.Equal(t, int64(0), entitlementCount)
+}
+
 func seedPaidInviteeSubscriptionWithEnd(t *testing.T, userId int, planId int, at time.Time, end int64) {
 	t.Helper()
 	start := at.Add(-24 * time.Hour).Unix()

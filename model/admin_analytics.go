@@ -15,6 +15,14 @@ const (
 	AdminAnalyticsMaxLimit     = 100
 )
 
+type AdminAnalyticsRangeMode string
+
+const (
+	AdminAnalyticsRangeModeDefault    AdminAnalyticsRangeMode = ""
+	AdminAnalyticsRangeModeSnapshot   AdminAnalyticsRangeMode = "snapshot"
+	AdminAnalyticsRangeModeAllHistory AdminAnalyticsRangeMode = "all_history"
+)
+
 type AdminAnalyticsQuery struct {
 	StartTimestamp             int64
 	EndTimestamp               int64
@@ -40,6 +48,13 @@ type AdminAnalyticsQuery struct {
 	RewardEligible             *bool
 	HasInviter                 *bool
 	InviterID                  int
+	SubscriptionID             int
+	InviteeID                  int
+	Currency                   string
+	ExcludedMode               dto.AdminAnalyticsExcludedMode
+	ActiveOnly                 bool
+	TimeRangeExplicit          bool
+	RangeMode                  AdminAnalyticsRangeMode
 	Username                   string
 	RegisteredStartTimestamp   int64
 	RegisteredEndTimestamp     int64
@@ -76,6 +91,33 @@ func normalizeAdminAnalyticsQuery(query AdminAnalyticsQuery) AdminAnalyticsQuery
 	return query
 }
 
+func normalizeAdminPaidSubscriptionAnalyticsQuery(query AdminAnalyticsQuery) AdminAnalyticsQuery {
+	if query.RangeMode == AdminAnalyticsRangeModeDefault {
+		return normalizeAdminAnalyticsQuery(query)
+	}
+	if query.RangeMode == AdminAnalyticsRangeModeSnapshot || !query.TimeRangeExplicit {
+		query.StartTimestamp = 0
+		query.EndTimestamp = query.SnapshotAt
+	}
+	if query.Granularity == "" {
+		query.Granularity = dto.AdminAnalyticsGranularityDay
+	}
+	if query.Limit <= 0 {
+		query.Limit = AdminAnalyticsDefaultLimit
+	} else if query.Limit > AdminAnalyticsMaxLimit {
+		query.Limit = AdminAnalyticsMaxLimit
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	if query.SortOrder == "" {
+		query.SortOrder = dto.AdminAnalyticsSortDesc
+	}
+	if query.ExcludedMode == "" {
+		query.ExcludedMode = dto.AdminAnalyticsExcludedModeIncludedOnly
+	}
+	return query
+}
 func adminAnalyticsRangeMeta(query AdminAnalyticsQuery) dto.AdminAnalyticsRangeMeta {
 	return dto.AdminAnalyticsRangeMeta{StartTimestamp: query.StartTimestamp, EndTimestamp: query.EndTimestamp, SnapshotAt: query.SnapshotAt}
 }

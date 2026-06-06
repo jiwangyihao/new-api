@@ -29,6 +29,24 @@ const (
 	AdminAnalyticsSourceUnknown                  AdminAnalyticsSource = "unknown"
 )
 
+type AdminAnalyticsExcludedMode string
+
+const (
+	AdminAnalyticsExcludedModeIncludedOnly    AdminAnalyticsExcludedMode = "included_only"
+	AdminAnalyticsExcludedModeIncludeExcluded AdminAnalyticsExcludedMode = "include_excluded"
+	AdminAnalyticsExcludedModeExcludedOnly    AdminAnalyticsExcludedMode = "excluded_only"
+)
+
+type AdminAnalyticsMoneyAmount struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+type AdminAnalyticsMoneyBreakdown struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
 type AdminUsageGroupBy string
 
 const (
@@ -398,6 +416,175 @@ type AdminAnalyticsInvitationTrendPoint struct {
 	RewardSubscriptionCount int   `json:"reward_subscription_count"`
 }
 
+type AdminPaidSubscriptionValueResponse struct {
+	Summary       AdminPaidSubscriptionValueSummary                          `json:"summary"`
+	Users         AdminAnalyticsList[AdminPaidSubscriptionValueUser]         `json:"users"`
+	Subscriptions AdminAnalyticsList[AdminPaidSubscriptionValueSubscription] `json:"subscriptions"`
+	Plans         AdminAnalyticsList[AdminPaidSubscriptionValuePlanGroup]    `json:"plans"`
+	Sources       AdminAnalyticsList[AdminPaidSubscriptionValueSourceGroup]  `json:"sources"`
+}
+
+type AdminPaidSubscriptionValueSummary struct {
+	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
+	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
+	ActivePaidSubscriptionCount        int                            `json:"active_paid_subscription_count"`
+	ActivePaidUserCount                int                            `json:"active_paid_user_count"`
+	TokenValueUnavailableCount         int                            `json:"token_value_unavailable_count"`
+}
+
+type AdminPaidSubscriptionValuePlanGroup struct {
+	PlanID                             int                            `json:"plan_id"`
+	PlanName                           string                         `json:"plan_name"`
+	PlanBusinessCode                   string                         `json:"plan_business_code"`
+	ActiveUserCount                    int                            `json:"active_user_count"`
+	ActiveSubscriptionCount            int                            `json:"active_subscription_count"`
+	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
+	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
+	AverageTokenUsageRatio             *float64                       `json:"average_token_usage_ratio"`
+}
+
+type AdminPaidSubscriptionValueSourceGroup struct {
+	Source                             AdminAnalyticsSource           `json:"source"`
+	GrantReason                        string                         `json:"grant_reason"`
+	UserCount                          int                            `json:"user_count"`
+	SubscriptionCount                  int                            `json:"subscription_count"`
+	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
+	SourceAttribution                  string                         `json:"source_attribution"`
+}
+
+type AdminPaidSubscriptionValueUser struct {
+	UserID                             int                            `json:"user_id"`
+	Username                           string                         `json:"username"`
+	DisplayName                        string                         `json:"display_name"`
+	ActivePaidPlanCount                int                            `json:"active_paid_plan_count"`
+	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
+	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	EarliestEndTime                    int64                          `json:"earliest_end_time"`
+	Excluded                           bool                           `json:"excluded"`
+	ExcludedReason                     string                         `json:"excluded_reason"`
+	ExcludedAt                         int64                          `json:"excluded_at"`
+	ExcludedBy                         int                            `json:"excluded_by"`
+	WouldHaveRemainingValueByCurrency  []AdminAnalyticsMoneyBreakdown `json:"would_have_remaining_value_by_currency"`
+	Drilldown                          *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+}
+
+type AdminPaidSubscriptionValueSubscription struct {
+	SubscriptionID           int                            `json:"subscription_id"`
+	UserID                   int                            `json:"user_id"`
+	Username                 string                         `json:"username"`
+	PlanID                   int                            `json:"plan_id"`
+	PlanName                 string                         `json:"plan_name"`
+	Source                   AdminAnalyticsSource           `json:"source"`
+	GrantReason              string                         `json:"grant_reason"`
+	PlanPrice                AdminAnalyticsMoneyAmount      `json:"plan_price"`
+	StartTime                int64                          `json:"start_time"`
+	EndTime                  int64                          `json:"end_time"`
+	RemainingSeconds         int64                          `json:"remaining_seconds"`
+	TokenLimit               int64                          `json:"token_limit"`
+	TokenUsed                int64                          `json:"token_used"`
+	NextResetTime            int64                          `json:"next_reset_time"`
+	TokenBasedValue          *AdminAnalyticsMoneyAmount     `json:"token_based_value"`
+	TimeBasedValue           AdminAnalyticsMoneyAmount      `json:"time_based_value"`
+	RecognizedRemainingValue AdminAnalyticsMoneyAmount      `json:"recognized_remaining_value"`
+	ValuationBasis           string                         `json:"valuation_basis"`
+	SourceAttribution        string                         `json:"source_attribution"`
+	Excluded                 bool                           `json:"excluded"`
+	ExcludedReason           string                         `json:"excluded_reason"`
+	Drilldown                *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+	PossibleOrderID          *int                           `json:"possible_order_id"`
+	PaymentProvider          string                         `json:"payment_provider"`
+	PaymentMethod            string                         `json:"payment_method"`
+	OrderRecordedAmount      *AdminAnalyticsMoneyAmount     `json:"order_recorded_amount"`
+}
+
+type AdminInvitationPaidSubscriptionsResponse struct {
+	Summary       AdminInvitationPaidSubscriptionsSummary                   `json:"summary"`
+	Inviters      AdminAnalyticsList[AdminInvitationPaidInviter]            `json:"inviters"`
+	Invitees      AdminAnalyticsList[AdminInvitationPaidInvitee]            `json:"invitees"`
+	Subscriptions AdminAnalyticsList[AdminInvitationPaidSubscriptionRecord] `json:"subscriptions"`
+}
+
+type AdminInvitationPaidSubscriptionsSummary struct {
+	RecognizedInvitationPaidAmountByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_invitation_paid_amount_by_currency"`
+	ActiveInvitationPaidAmountByCurrency     []AdminAnalyticsMoneyBreakdown `json:"active_invitation_paid_amount_by_currency"`
+	ActiveInvitationRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"active_invitation_remaining_value_by_currency"`
+	ExcludedInvitationPaidAmountByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_invitation_paid_amount_by_currency"`
+	ExcludedActiveRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_active_remaining_value_by_currency"`
+	InviterCount                             int                            `json:"inviter_count"`
+	InviteeCount                             int                            `json:"invitee_count"`
+	PaidInviteeCount                         int                            `json:"paid_invitee_count"`
+	ActivePaidInviteeCount                   int                            `json:"active_paid_invitee_count"`
+}
+
+type AdminInvitationPaidInviter struct {
+	InviterUserID                            int                            `json:"inviter_user_id"`
+	InviterUsername                          string                         `json:"inviter_username"`
+	InviteeCount                             int                            `json:"invitee_count"`
+	PaidInviteeCount                         int                            `json:"paid_invitee_count"`
+	ActivePaidInviteeCount                   int                            `json:"active_paid_invitee_count"`
+	RecognizedInvitationPaidAmountByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_invitation_paid_amount_by_currency"`
+	ActiveInvitationPaidAmountByCurrency     []AdminAnalyticsMoneyBreakdown `json:"active_invitation_paid_amount_by_currency"`
+	ActiveInvitationRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"active_invitation_remaining_value_by_currency"`
+	ExcludedInvitationPaidAmountByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_invitation_paid_amount_by_currency"`
+	ExcludedActiveRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_active_remaining_value_by_currency"`
+	LatestPaidSubscriptionTime               int64                          `json:"latest_paid_subscription_time"`
+	Drilldown                                *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+}
+
+type AdminInvitationPaidInvitee struct {
+	InviteeUserID                           int                            `json:"invitee_user_id"`
+	InviteeUsername                         string                         `json:"invitee_username"`
+	InviterUserID                           int                            `json:"inviter_user_id"`
+	RegisteredAt                            int64                          `json:"registered_at"`
+	PaidSubscriptionSnapshotCount           int                            `json:"paid_subscription_snapshot_count"`
+	RecognizedPaidUnits                     float64                        `json:"recognized_paid_units"`
+	ActivePaidSubscriptionCount             int                            `json:"active_paid_subscription_count"`
+	RecognizedPaidAmountByCurrency          []AdminAnalyticsMoneyBreakdown `json:"recognized_paid_amount_by_currency"`
+	ActiveRemainingValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"active_remaining_value_by_currency"`
+	ActivePaidAmountByCurrency              []AdminAnalyticsMoneyBreakdown `json:"active_paid_amount_by_currency"`
+	Excluded                                bool                           `json:"excluded"`
+	ExcludedReason                          string                         `json:"excluded_reason"`
+	ExcludedAt                              int64                          `json:"excluded_at"`
+	ExcludedBy                              int                            `json:"excluded_by"`
+	WouldHavePaidAmountByCurrency           []AdminAnalyticsMoneyBreakdown `json:"would_have_paid_amount_by_currency"`
+	WouldHaveActiveRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"would_have_active_remaining_value_by_currency"`
+	Drilldown                               *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+}
+
+type AdminInvitationPaidSubscriptionRecord struct {
+	SubscriptionID           int                            `json:"subscription_id"`
+	InviteeUserID            int                            `json:"invitee_user_id"`
+	InviterUserID            int                            `json:"inviter_user_id"`
+	PlanID                   int                            `json:"plan_id"`
+	PlanName                 string                         `json:"plan_name"`
+	PlanPrice                AdminAnalyticsMoneyAmount      `json:"plan_price"`
+	RecognizedPaidUnits      float64                        `json:"recognized_paid_units"`
+	RecognizedPaidAmount     AdminAnalyticsMoneyAmount      `json:"recognized_paid_amount"`
+	UnitInferenceBasis       string                         `json:"unit_inference_basis"`
+	Source                   AdminAnalyticsSource           `json:"source"`
+	GrantReason              string                         `json:"grant_reason"`
+	SourceAttribution        string                         `json:"source_attribution"`
+	StartTime                int64                          `json:"start_time"`
+	EndTime                  int64                          `json:"end_time"`
+	Status                   string                         `json:"status"`
+	RecognizedRemainingValue *AdminAnalyticsMoneyAmount     `json:"recognized_remaining_value"`
+	Excluded                 bool                           `json:"excluded"`
+	ExcludedReason           string                         `json:"excluded_reason"`
+	PossibleOrderID          *int                           `json:"possible_order_id"`
+	PaymentProvider          string                         `json:"payment_provider"`
+	PaymentMethod            string                         `json:"payment_method"`
+	OrderRecordedAmount      *AdminAnalyticsMoneyAmount     `json:"order_recorded_amount"`
+	OrderStatus              string                         `json:"order_status"`
+	CompleteTime             int64                          `json:"complete_time"`
+	Drilldown                *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+}
+
 type AdminUsageMetrics struct {
 	RequestCount     int     `json:"request_count"`
 	SuccessCount     int     `json:"success_count"`
@@ -480,6 +667,8 @@ type AdminAnalyticsDrilldownTarget struct {
 	Username       string `json:"username,omitempty"`
 	UserStatus     string `json:"user_status,omitempty"`
 	PlanID         *int   `json:"plan_id,omitempty"`
+	SubscriptionID *int   `json:"subscription_id,omitempty"`
+	InviteeID      *int   `json:"invitee_id,omitempty"`
 	InviterID      *int   `json:"inviter_id,omitempty"`
 	TokenID        *int   `json:"token_id,omitempty"`
 	Model          string `json:"model,omitempty"`

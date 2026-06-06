@@ -41,7 +41,23 @@ import type {
   WaffoPaymentResponse,
   WaffoPancakePaymentRequest,
   WaffoPancakePaymentResponse,
+  PageParams,
+  PageEnvelope,
+  InvitationCommissionSummary,
+  InvitationCommissionRecord,
+  InvitationCommissionTransferResult,
+  InvitationCommissionWithdrawalPayload,
+  InvitationCommissionWithdrawal,
 } from './types'
+
+type ApiPayloadResponse<T> = ApiResponse<T> & { data: T }
+
+function unwrapWalletPayload<T>(payload: ApiPayloadResponse<T>): T {
+  if (!payload.success) {
+    throw new Error(payload.message || 'Request failed')
+  }
+  return payload.data
+}
 
 // ============================================================================
 // Wallet API Functions
@@ -204,6 +220,49 @@ export async function transferAffiliateQuota(
 ): Promise<AffiliateTransferResponse> {
   const res = await api.post('/api/user/aff_transfer', request)
   return res.data
+}
+
+export async function getInvitationCommissionSummary(): Promise<InvitationCommissionSummary> {
+  const res = await api.get<ApiPayloadResponse<InvitationCommissionSummary>>(
+    '/api/user/invitation-commission/summary'
+  )
+  return unwrapWalletPayload(res.data)
+}
+
+export async function getInvitationCommissionRecords(
+  params: PageParams
+): Promise<PageEnvelope<InvitationCommissionRecord>> {
+  const res = await api.get<
+    ApiPayloadResponse<PageEnvelope<InvitationCommissionRecord>>
+  >('/api/user/invitation-commission/records', { params })
+  return unwrapWalletPayload(res.data)
+}
+
+export async function transferInvitationCommission(
+  amount_cents: number
+): Promise<InvitationCommissionTransferResult> {
+  const res = await api.post<
+    ApiPayloadResponse<InvitationCommissionTransferResult>
+  >('/api/user/invitation-commission/transfer', { amount_cents })
+  return unwrapWalletPayload(res.data)
+}
+
+export async function requestInvitationCommissionWithdrawal(
+  payload: InvitationCommissionWithdrawalPayload
+): Promise<InvitationCommissionWithdrawal> {
+  const res = await api.post<
+    ApiPayloadResponse<InvitationCommissionWithdrawal>
+  >('/api/user/invitation-commission/withdrawals', payload)
+  return unwrapWalletPayload(res.data)
+}
+
+export async function getInvitationCommissionWithdrawals(
+  params: PageParams
+): Promise<PageEnvelope<InvitationCommissionWithdrawal>> {
+  const res = await api.get<
+    ApiPayloadResponse<PageEnvelope<InvitationCommissionWithdrawal>>
+  >('/api/user/invitation-commission/withdrawals', { params })
+  return unwrapWalletPayload(res.data)
 }
 
 /**

@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   buildAdminAnalyticsApiParams,
   buildAdminAnalyticsCanonicalFilters,
+  switchAdminAnalyticsTab,
 } from './filters'
 
 const deprecatedUserDimensionParam = 'user_' + 'groups'
@@ -14,6 +15,189 @@ test('empty search defaults to overview and recent 30 days', () => {
   assert.equal(filters.granularity, 'day')
   assert.equal(filters.end_timestamp, 1_000_000)
   assert.equal(filters.start_timestamp, 1_000_000 - 30 * 24 * 60 * 60)
+})
+
+test('new paid subscription analytics tabs are accepted', () => {
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ tab: 'paid-subscription-value' }).tab,
+    'paid-subscription-value'
+  )
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ tab: 'invitation-paid-subscriptions' })
+      .tab,
+    'invitation-paid-subscriptions'
+  )
+})
+
+test('excluded mode accepts only the three supported states', () => {
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ excluded_mode: 'included_only' })
+      .excluded_mode,
+    'included_only'
+  )
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ excluded_mode: 'include_excluded' })
+      .excluded_mode,
+    'include_excluded'
+  )
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ excluded_mode: 'excluded_only' })
+      .excluded_mode,
+    'excluded_only'
+  )
+  assert.equal(
+    buildAdminAnalyticsCanonicalFilters({ excluded_mode: 'all' }).excluded_mode,
+    'included_only'
+  )
+})
+
+test('canonical filters preserve paid subscription analytics fields', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'invitation-paid-subscriptions',
+    snapshot_at: '0',
+    currency: 'CNY',
+    excluded_mode: 'include_excluded',
+    active_only: 'true',
+    time_range_explicit: 'true',
+    inviter_id: '7',
+    invitee_id: '8',
+    subscription_id: '9',
+  })
+
+  assert.equal(filters.snapshot_at, 0)
+  assert.equal(filters.currency, 'CNY')
+  assert.equal(filters.excluded_mode, 'include_excluded')
+  assert.equal(filters.active_only, true)
+  assert.equal(filters.time_range_explicit, true)
+  assert.equal(filters.inviter_id, 7)
+  assert.equal(filters.invitee_id, 8)
+  assert.equal(filters.subscription_id, 9)
+})
+
+test('paid subscription analytics params keep snapshot zero and shared filters', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'invitation-paid-subscriptions',
+    snapshot_at: '0',
+    currency: 'USD',
+    excluded_mode: 'excluded_only',
+    active_only: 'true',
+    inviter_id: '7',
+    invitee_id: '8',
+    subscription_id: '9',
+    user_ids: ['3', '1'],
+    plan_ids: ['4', '2'],
+  })
+  const params = buildAdminAnalyticsApiParams(filters, {
+    includeSubscriptionID: true,
+  })
+
+  assert.equal(params.get('snapshot_at'), '0')
+  assert.equal(params.get('currency'), 'USD')
+  assert.equal(params.get('excluded_mode'), 'excluded_only')
+  assert.equal(params.get('active_only'), 'true')
+  assert.equal(params.get('inviter_id'), '7')
+  assert.equal(params.get('invitee_id'), '8')
+  assert.equal(params.get('subscription_id'), '9')
+  assert.deepEqual(params.getAll('user_ids'), ['1', '3'])
+  assert.deepEqual(params.getAll('plan_ids'), ['2', '4'])
+})
+
+test('subscription id is serialized only when descriptor opts in', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+    snapshot_at: 123,
+    subscription_id: 9,
+  })
+
+  assert.equal(buildAdminAnalyticsApiParams(filters).has('subscription_id'), false)
+  assert.equal(
+    buildAdminAnalyticsApiParams(filters, { includeSubscriptionID: true }).get(
+      'subscription_id'
+    ),
+    '9'
+  )
+})
+
+test('new paid subscription analytics tabs do not send default range until explicit', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters(
+    { tab: 'paid-subscription-value' },
+    1_000_000
+  )
+
+  assert.equal(filters.start_timestamp, 1_000_000 - 30 * 24 * 60 * 60)
+  assert.equal(filters.end_timestamp, 1_000_000)
+  assert.equal(filters.time_range_explicit, false)
+
+  const params = buildAdminAnalyticsApiParams(filters)
+  assert.equal(params.has('start_timestamp'), false)
+  assert.equal(params.has('end_timestamp'), false)
+
+  const explicit = buildAdminAnalyticsCanonicalFilters(
+    { tab: 'paid-subscription-value', time_range_explicit: 'true' },
+    1_000_000
+  )
+  const explicitParams = buildAdminAnalyticsApiParams(explicit)
+  assert.equal(
+    explicitParams.get('start_timestamp'),
+    String(1_000_000 - 30 * 24 * 60 * 60)
+  )
+  assert.equal(explicitParams.get('end_timestamp'), '1000000')
+})
+test('switching between paid subscription analytics tabs clears stale implicit time range', () => {
+  const legacyFilters = buildAdminAnalyticsCanonicalFilters(
+    { tab: 'overview' },
+    1_000_000
+  )
+
+  const paidFilters = switchAdminAnalyticsTab(
+    legacyFilters,
+    'paid-subscription-value'
+  )
+  const paidParams = buildAdminAnalyticsApiParams(paidFilters)
+
+  assert.equal(paidFilters.tab, 'paid-subscription-value')
+  assert.equal(paidFilters.time_range_explicit, false)
+  assert.equal(paidFilters.snapshot_at, undefined)
+  assert.equal(paidParams.has('start_timestamp'), false)
+  assert.equal(paidParams.has('end_timestamp'), false)
+
+  const explicitPaidFilters = buildAdminAnalyticsCanonicalFilters(
+    {
+      tab: 'paid-subscription-value',
+      snapshot_at: 123,
+      time_range_explicit: 'true',
+      start_timestamp: 10,
+      end_timestamp: 20,
+      subscription_id: 9,
+      inviter_id: 7,
+      invitee_id: 8,
+    },
+    1_000_000
+  )
+
+  const inviteFilters = switchAdminAnalyticsTab(
+    explicitPaidFilters,
+    'invitation-paid-subscriptions'
+  )
+  const inviteParams = buildAdminAnalyticsApiParams(inviteFilters)
+
+  assert.equal(inviteFilters.tab, 'invitation-paid-subscriptions')
+  assert.equal(inviteFilters.snapshot_at, undefined)
+  assert.equal(inviteFilters.subscription_id, undefined)
+  assert.equal(inviteFilters.inviter_id, undefined)
+  assert.equal(inviteFilters.invitee_id, undefined)
+  assert.equal(inviteFilters.time_range_explicit, false)
+  assert.equal(inviteParams.has('start_timestamp'), false)
+  assert.equal(inviteParams.has('end_timestamp'), false)
+})
+
+
+test('legacy tabs still send their default recent range', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({ tab: 'overview' }, 1_000_000)
+  const params = buildAdminAnalyticsApiParams(filters)
+
+  assert.equal(params.get('start_timestamp'), String(1_000_000 - 30 * 24 * 60 * 60))
+  assert.equal(params.get('end_timestamp'), '1000000')
 })
 
 test('deprecated analytics params are ignored while repeated params are deduped and sorted', () => {

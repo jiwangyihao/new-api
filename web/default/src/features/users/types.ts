@@ -30,6 +30,8 @@ export type UserStatus = z.infer<typeof userStatusSchema>
 export const userRoleSchema = z.number()
 export type UserRole = z.infer<typeof userRoleSchema>
 
+export type InvitationRewardMode = 'subscription' | 'commission'
+
 export const userSchema = z.object({
   id: z.number(),
   username: z.string(),
@@ -49,6 +51,7 @@ export const userSchema = z.object({
   aff_history_quota: z.number().optional(),
   direct_invite_count: z.number().optional(),
   qualified_paid_invite_count: z.number().optional(),
+  invitation_reward_mode: z.enum(['subscription', 'commission']).optional(),
   invitation_reward_status: z.string().optional(),
   invitation_reward_plan_title: z.string().optional(),
   reward_plan_id: z.number().optional(),
@@ -69,7 +72,7 @@ export const userSchema = z.object({
   created_at: z.number().optional(),
   updated_at: z.number().optional(),
   last_login_at: z.number().optional(),
-  DeletedAt: z.any().nullable().optional(),
+  DeletedAt: z.unknown().nullable().optional(),
   remark: z.string().optional(),
 })
 export type User = z.infer<typeof userSchema>
@@ -175,6 +178,7 @@ export interface UserFormData {
   role?: number // Only used when creating user
   quota?: number // Only used when updating user
   remark?: string // Only used when updating user
+  invitation_reward_mode?: InvitationRewardMode // Only used when updating user
 }
 
 export type ManageUserAction =

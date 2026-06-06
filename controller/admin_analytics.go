@@ -74,6 +74,68 @@ var (
 		"qualified_active": "qualified_active",
 		"reward_month":     "reward_month",
 	}
+	adminPaidSubscriptionValueUserSortBy = map[string]string{
+		"recognized_remaining_value": "recognized_remaining_value",
+		"active_paid_plan_count":     "active_paid_plan_count",
+		"earliest_end_time":          "earliest_end_time",
+		"user_id":                    "user_id",
+	}
+	adminPaidSubscriptionValueSubscriptionSortBy = map[string]string{
+		"recognized_remaining_value": "recognized_remaining_value",
+		"end_time":                   "end_time",
+		"start_time":                 "start_time",
+		"plan_price":                 "plan_price",
+		"subscription_id":            "subscription_id",
+	}
+	adminPaidSubscriptionValuePlanSortBy = map[string]string{
+		"recognized_remaining_value": "recognized_remaining_value",
+		"subscription_count":         "subscription_count",
+		"user_count":                 "user_count",
+		"plan_id":                    "plan_id",
+	}
+	adminPaidSubscriptionValueSourceSortBy = map[string]string{
+		"recognized_remaining_value": "recognized_remaining_value",
+		"subscription_count":         "subscription_count",
+		"user_count":                 "user_count",
+		"source":                     "source",
+		"grant_reason":               "grant_reason",
+	}
+	adminInvitationPaidInviterSortBy = map[string]string{
+		"recognized_invitation_paid_amount": "recognized_invitation_paid_amount",
+		"active_invitation_paid_amount":     "active_invitation_paid_amount",
+		"active_invitation_remaining_value": "active_invitation_remaining_value",
+		"paid_invitee_count":                "paid_invitee_count",
+		"active_paid_invitee_count":         "active_paid_invitee_count",
+		"inviter_user_id":                   "inviter_user_id",
+	}
+	adminInvitationPaidInviteeSortBy = map[string]string{
+		"recognized_paid_amount":             "recognized_paid_amount",
+		"active_remaining_value":             "active_remaining_value",
+		"paid_subscription_snapshot_count":   "paid_subscription_snapshot_count",
+		"registered_at":                      "registered_at",
+		"invitee_user_id":                    "invitee_user_id",
+	}
+	adminInvitationPaidSubscriptionSortBy = map[string]string{
+		"recognized_paid_amount":     "recognized_paid_amount",
+		"recognized_remaining_value": "recognized_remaining_value",
+		"start_time":                 "start_time",
+		"end_time":                   "end_time",
+		"plan_price":                 "plan_price",
+		"subscription_id":            "subscription_id",
+	}
+	adminPaidSubscriptionValueMoneySortBy = map[string]struct{}{
+		"recognized_remaining_value": {},
+		"plan_price":                 {},
+	}
+	adminInvitationPaidMoneySortBy = map[string]struct{}{
+		"recognized_invitation_paid_amount": {},
+		"active_invitation_paid_amount":     {},
+		"active_invitation_remaining_value": {},
+		"recognized_paid_amount":            {},
+		"active_remaining_value":            {},
+		"recognized_remaining_value":        {},
+		"plan_price":                        {},
+	}
 )
 
 func GetAdminAnalyticsOverview(c *gin.Context) {
@@ -157,6 +219,132 @@ func GetAdminAnalyticsInvitationRewards(c *gin.Context) {
 		query = normalized
 	}
 	data, err := model.GetAdminAnalyticsInvitationRewards(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminPaidSubscriptionValueSummary(c *gin.Context) {
+	query, ok := parseAdminPaidSubscriptionValueQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminAnalyticsNoSortBy, adminPaidSubscriptionValueMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminPaidSubscriptionValueSummary(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminPaidSubscriptionValueUsers(c *gin.Context) {
+	query, ok := parseAdminPaidSubscriptionValueQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminPaidSubscriptionValueUserSortBy, adminPaidSubscriptionValueMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminPaidSubscriptionValueUsers(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminPaidSubscriptionValueSubscriptions(c *gin.Context) {
+	query, ok := parseAdminPaidSubscriptionValueQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminPaidSubscriptionValueSubscriptionSortBy, adminPaidSubscriptionValueMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminPaidSubscriptionValueSubscriptions(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminPaidSubscriptionValuePlanBreakdown(c *gin.Context) {
+	query, ok := parseAdminPaidSubscriptionValueQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminPaidSubscriptionValuePlanSortBy, adminPaidSubscriptionValueMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminPaidSubscriptionValuePlanBreakdown(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminPaidSubscriptionValueSourceBreakdown(c *gin.Context) {
+	query, ok := parseAdminPaidSubscriptionValueQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminPaidSubscriptionValueSourceSortBy, adminPaidSubscriptionValueMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminPaidSubscriptionValueSourceBreakdown(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminInvitationPaidSubscriptionsSummary(c *gin.Context) {
+	query, ok := parseAdminInvitationPaidSubscriptionsQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminAnalyticsNoSortBy, adminInvitationPaidMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminInvitationPaidSubscriptionsSummary(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminInvitationPaidSubscriptionsInviters(c *gin.Context) {
+	query, ok := parseAdminInvitationPaidSubscriptionsQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminInvitationPaidInviterSortBy, adminInvitationPaidMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminInvitationPaidSubscriptionsInviters(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminInvitationPaidSubscriptionsInvitees(c *gin.Context) {
+	query, ok := parseAdminInvitationPaidSubscriptionsQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminInvitationPaidInviteeSortBy, adminInvitationPaidMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminInvitationPaidSubscriptionsInvitees(query)
+	writeAdminAnalyticsResponse(c, data, err)
+}
+
+func GetAdminInvitationPaidSubscriptionsSubscriptions(c *gin.Context) {
+	query, ok := parseAdminInvitationPaidSubscriptionsQueryOrAbort(c)
+	if !ok {
+		return
+	}
+	if normalized, ok := normalizeAdminAnalyticsMoneySortByOrAbort(c, query, adminInvitationPaidSubscriptionSortBy, adminInvitationPaidMoneySortBy); !ok {
+		return
+	} else {
+		query = normalized
+	}
+	data, err := model.GetAdminInvitationPaidSubscriptionsSubscriptions(query)
 	writeAdminAnalyticsResponse(c, data, err)
 }
 
@@ -280,6 +468,171 @@ func parseAdminAnalyticsQueryOrAbort(c *gin.Context) (model.AdminAnalyticsQuery,
 	return query, true
 }
 
+func parseAdminPaidSubscriptionValueQueryOrAbort(c *gin.Context) (model.AdminAnalyticsQuery, bool) {
+	query, err := parseAdminPaidSubscriptionValueQuery(c)
+	if err != nil {
+		writeAdminAnalyticsBadRequest(c, err.Error())
+		return model.AdminAnalyticsQuery{}, false
+	}
+	return query, true
+}
+
+func parseAdminInvitationPaidSubscriptionsQueryOrAbort(c *gin.Context) (model.AdminAnalyticsQuery, bool) {
+	query, err := parseAdminInvitationPaidSubscriptionsQuery(c)
+	if err != nil {
+		writeAdminAnalyticsBadRequest(c, err.Error())
+		return model.AdminAnalyticsQuery{}, false
+	}
+	return query, true
+}
+
+func parseAdminPaidSubscriptionValueQuery(c *gin.Context) (model.AdminAnalyticsQuery, error) {
+	snapshotAt, err := parseAdminAnalyticsSnapshotAt(c)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	query, err := parseAdminPaidSubscriptionSharedQuery(c)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	query.StartTimestamp = 0
+	query.EndTimestamp = snapshotAt
+	query.SnapshotAt = snapshotAt
+	query.RangeMode = model.AdminAnalyticsRangeModeSnapshot
+	query.TimeRangeExplicit = false
+	return query, nil
+}
+
+func parseAdminInvitationPaidSubscriptionsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error) {
+	snapshotAt, err := parseAdminAnalyticsSnapshotAt(c)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	query, err := parseAdminPaidSubscriptionSharedQuery(c)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	startRaw, hasStart := c.GetQuery("start_timestamp")
+	endRaw, hasEnd := c.GetQuery("end_timestamp")
+	query.SnapshotAt = snapshotAt
+	query.RangeMode = model.AdminAnalyticsRangeModeAllHistory
+	if !hasStart && !hasEnd {
+		query.StartTimestamp = 0
+		query.EndTimestamp = snapshotAt
+		query.TimeRangeExplicit = false
+		return query, nil
+	}
+	if hasStart != hasEnd {
+		return model.AdminAnalyticsQuery{}, errors.New("start_timestamp and end_timestamp must be provided together")
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(startRaw), 10, 64)
+	if err != nil || start < 0 {
+		return model.AdminAnalyticsQuery{}, errors.New("invalid start_timestamp")
+	}
+	end, err := strconv.ParseInt(strings.TrimSpace(endRaw), 10, 64)
+	if err != nil || end < 0 {
+		return model.AdminAnalyticsQuery{}, errors.New("invalid end_timestamp")
+	}
+	if start > end {
+		return model.AdminAnalyticsQuery{}, errors.New("invalid time range")
+	}
+	if end-start > adminAnalyticsMaxRangeSeconds {
+		return model.AdminAnalyticsQuery{}, errors.New("time range exceeds 365 days")
+	}
+	query.StartTimestamp = start
+	query.EndTimestamp = end
+	query.TimeRangeExplicit = true
+	return query, nil
+}
+
+func parseAdminPaidSubscriptionSharedQuery(c *gin.Context) (model.AdminAnalyticsQuery, error) {
+	limit, err := parseAdminAnalyticsLimit(c, "limit", model.AdminAnalyticsDefaultLimit)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	offset := 0
+	if raw := strings.TrimSpace(c.Query("offset")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed < 0 {
+			return model.AdminAnalyticsQuery{}, errors.New("invalid offset")
+		}
+		offset = parsed
+	}
+	sortOrder := dto.AdminAnalyticsSortOrder(c.DefaultQuery("sort_order", string(dto.AdminAnalyticsSortDesc)))
+	if sortOrder != dto.AdminAnalyticsSortAsc && sortOrder != dto.AdminAnalyticsSortDesc {
+		return model.AdminAnalyticsQuery{}, errors.New("invalid sort_order")
+	}
+	planIDs, err := parseAdminAnalyticsIntList(c, "plan_ids")
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	userIDs, err := parseAdminAnalyticsIntList(c, "user_ids")
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	sources, err := parseAdminAnalyticsSources(c)
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	grantReasons, err := parseAdminAnalyticsEnumList(c, "grant_reasons", adminAnalyticsSourceValues())
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	subscriptionID, err := parseAdminAnalyticsOptionalPositiveInt(c, "subscription_id")
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	inviterID, err := parseAdminAnalyticsOptionalPositiveInt(c, "inviter_id")
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	inviteeID, err := parseAdminAnalyticsOptionalPositiveInt(c, "invitee_id")
+	if err != nil {
+		return model.AdminAnalyticsQuery{}, err
+	}
+	activeOnly := false
+	if raw := strings.TrimSpace(c.Query("active_only")); raw != "" {
+		parsed, err := strconv.ParseBool(raw)
+		if err != nil {
+			return model.AdminAnalyticsQuery{}, errors.New("invalid active_only")
+		}
+		activeOnly = parsed
+	}
+	excludedMode := dto.AdminAnalyticsExcludedMode(c.DefaultQuery("excluded_mode", string(dto.AdminAnalyticsExcludedModeIncludedOnly)))
+	switch excludedMode {
+	case dto.AdminAnalyticsExcludedModeIncludedOnly, dto.AdminAnalyticsExcludedModeIncludeExcluded, dto.AdminAnalyticsExcludedModeExcludedOnly:
+	default:
+		return model.AdminAnalyticsQuery{}, errors.New("invalid excluded_mode")
+	}
+	return model.AdminAnalyticsQuery{Granularity: dto.AdminAnalyticsGranularityDay, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, Sources: sources, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), InviterID: inviterID, SubscriptionID: subscriptionID, InviteeID: inviteeID, Currency: strings.TrimSpace(c.Query("currency")), ExcludedMode: excludedMode, ActiveOnly: activeOnly}, nil
+}
+
+func parseAdminAnalyticsSnapshotAt(c *gin.Context) (int64, error) {
+	raw, ok := c.GetQuery("snapshot_at")
+	if !ok {
+		return time.Now().Unix(), nil
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || parsed < 0 {
+		return 0, errors.New("invalid snapshot_at")
+	}
+	return parsed, nil
+}
+
+func normalizeAdminAnalyticsMoneySortByOrAbort(c *gin.Context, query model.AdminAnalyticsQuery, allowed map[string]string, moneySorts map[string]struct{}) (model.AdminAnalyticsQuery, bool) {
+	originalSortBy := query.SortBy
+	query, ok := normalizeAdminAnalyticsSortByOrAbort(c, query, allowed)
+	if !ok || query.SortBy == "" {
+		return query, ok
+	}
+	_, normalizedMoneySort := moneySorts[query.SortBy]
+	_, originalMoneySort := moneySorts[originalSortBy]
+	if (normalizedMoneySort || originalMoneySort) && strings.TrimSpace(query.Currency) == "" {
+		writeAdminAnalyticsBadRequest(c, "currency is required for money sort")
+		return model.AdminAnalyticsQuery{}, false
+	}
+	return query, true
+}
 func parseAdminUsageAnalyticsQueryOrAbort(c *gin.Context, endpoint string) (model.AdminAnalyticsUsageQuery, bool) {
 	query, err := parseAdminUsageAnalyticsQuery(c, endpoint)
 	if err != nil {
@@ -400,7 +753,7 @@ func parseAdminAnalyticsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error)
 	if end < snapshotAt {
 		snapshotAt = end
 	}
-	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
+	return model.AdminAnalyticsQuery{StartTimestamp: start, EndTimestamp: end, SnapshotAt: snapshotAt, Granularity: granularity, Limit: limit, Offset: offset, SortBy: c.Query("sort_by"), SortOrder: sortOrder, PlanIDs: planIDs, UserIDs: userIDs, TokenIDs: tokenIDs, ChannelIDs: channelIDs, Sources: sources, Statuses: parseAdminAnalyticsStringList(c, "statuses"), SubscriptionStatuses: subscriptionStatuses, UserStatuses: userStatuses, LogStatuses: logStatuses, GrantReasons: grantReasons, BusinessCodes: parseAdminAnalyticsStringList(c, "business_codes"), ResetStatuses: resetStatuses, Trial: trial, RewardEligible: rewardEligible, HasInviter: hasInviter, InviterID: inviterID, TimeRangeExplicit: c.Query("start_timestamp") != "" || c.Query("end_timestamp") != "", RangeMode: model.AdminAnalyticsRangeModeDefault, Username: strings.TrimSpace(c.Query("username")), RegisteredStartTimestamp: registeredStart, RegisteredEndTimestamp: registeredEnd, SubscriptionStartTimestamp: subscriptionStart, SubscriptionEndTimestamp: subscriptionEnd, NextResetStartTimestamp: nextResetStart, NextResetEndTimestamp: nextResetEnd}, nil
 }
 
 func parseAdminUsageAnalyticsQuery(c *gin.Context, endpoint string) (model.AdminAnalyticsUsageQuery, error) {

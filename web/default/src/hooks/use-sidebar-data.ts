@@ -36,6 +36,7 @@ import {
   CreditCard,
   ListTodo,
   Settings,
+  HandCoins,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { WORKSPACE_IDS } from '@/components/layout/lib/workspace-registry'
@@ -142,6 +143,11 @@ export function useSidebarData(): SidebarData {
             title: t('Users'),
             url: '/users',
             icon: Users,
+          },
+          {
+            title: t('Manual cashback requests'),
+            url: '/invitation-commission/withdrawals',
+            icon: HandCoins,
           },
           {
             title: t('adminAnalytics.title'),

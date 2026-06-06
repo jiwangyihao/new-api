@@ -2,7 +2,9 @@ package controller
 
 import (
 	"fmt"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -131,6 +133,13 @@ func UpdateOption(c *gin.Context) {
 		option.Value = common.Interface2String(option.Value.(int))
 	default:
 		option.Value = fmt.Sprintf("%v", option.Value)
+	}
+	if err := validateInvitationCommissionOptionBeforePersist(option.Key, option.Value.(string)); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 	if strings.HasPrefix(option.Key, "Kyren") {
 		normalized, persist, err := validateKyrenOptionBeforePersist(option.Key, option.Value.(string))
@@ -381,4 +390,51 @@ func UpdateOption(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func validateInvitationCommissionOptionBeforePersist(key string, value string) error {
+	if !strings.HasPrefix(key, "invitation_commission_setting.") {
+		return nil
+	}
+	setting := *operation_setting.GetInvitationCommissionSetting()
+	switch key {
+	case "invitation_commission_setting.rate_bps":
+		rate, err := parseInvitationCommissionIntOption(value)
+		if err != nil {
+			return err
+		}
+		setting.RateBps = int(rate)
+	case "invitation_commission_setting.minimum_withdraw_cents":
+		minimum, err := parseInvitationCommissionIntOption(value)
+		if err != nil {
+			return err
+		}
+		setting.MinimumWithdrawCents = minimum
+	case "invitation_commission_setting.minimum_transfer_cents":
+		minimum, err := parseInvitationCommissionIntOption(value)
+		if err != nil {
+			return err
+		}
+		setting.MinimumTransferCents = minimum
+	default:
+		return nil
+	}
+	return operation_setting.ValidateInvitationCommissionSetting(setting)
+}
+
+func parseInvitationCommissionIntOption(value string) (int64, error) {
+	trimmed := strings.TrimSpace(value)
+	parsed, err := strconv.ParseInt(trimmed, 10, 64)
+	if err == nil {
+		return parsed, nil
+	}
+	floatValue, floatErr := strconv.ParseFloat(trimmed, 64)
+	if floatErr != nil || math.IsNaN(floatValue) || math.IsInf(floatValue, 0) || floatValue > float64(math.MaxInt64) || floatValue < float64(math.MinInt64) {
+		return 0, err
+	}
+	truncated := int64(floatValue)
+	if floatValue != float64(truncated) {
+		return 0, err
+	}
+	return truncated, nil
 }

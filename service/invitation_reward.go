@@ -67,6 +67,7 @@ func eligibleInvitationRewardSubscriptionScope(tx *gorm.DB, now int64) *gorm.DB 
 		Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
 		Where("subscription_plans.reward_eligible = ?", true).
 		Where("subscription_plans.is_trial = ?", false).
+		Where("subscription_plans.invite_trial = ?", false).
 		Where("(user_subscriptions.grant_reason = '' OR user_subscriptions.grant_reason <> ?)", model.SubscriptionGrantMonthlyInviteEntitlement).
 		Where("(user_subscriptions.source = '' OR user_subscriptions.source <> ?)", model.SubscriptionGrantMonthlyInviteEntitlement)
 }
@@ -111,6 +112,14 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 		status.DirectInviteCount = directCount
 		status.QualifiedActiveCount = qualifiedCount
 		status.RewardMonth = rewardMonth
+		var inviter model.User
+		modeErr := tx.Select("id", "invitation_reward_mode").Where("id = ?", inviterId).First(&inviter).Error
+		if modeErr != nil && !errors.Is(modeErr, gorm.ErrRecordNotFound) {
+			return modeErr
+		}
+		if modeErr == nil && inviter.NormalizedInvitationRewardMode() == model.InvitationRewardModeCommission {
+			return nil
+		}
 		candidates, err := listInvitationRewardCandidatesTx(tx, inviterId, at.Unix())
 		if err != nil {
 			return err
@@ -145,7 +154,7 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 		if entitlementMissing {
 			entitlement = model.InvitationMonthlyEntitlement{InviterId: inviterId, RewardMonth: rewardMonth}
 		}
-		sub, err := upsertInvitationRewardSubscriptionTx(tx, inviterId, &candidates[0].Plan, status.EntitlementEndTime, entitlement.RewardSubscriptionId)
+		sub, err := upsertInvitationRewardSubscriptionTx(tx, inviterId, &candidates[0].Plan, status.EntitlementEndTime, entitlement.RewardSubscriptionId, at.Unix())
 		if err != nil {
 			return err
 		}
@@ -177,7 +186,11 @@ func RunMonthlyInvitationEntitlementSweep(at time.Time, limit int) (int, error) 
 	if at.IsZero() {
 		at = time.Now()
 	}
-	query := model.DB.Model(&model.User{}).Where("inviter_id > 0").Distinct("inviter_id").Order("inviter_id asc")
+	query := model.DB.Table("users AS invitees").
+		Joins("JOIN users AS inviters ON inviters.id = invitees.inviter_id").
+		Where("invitees.inviter_id > 0").
+		Where("COALESCE(TRIM(inviters.invitation_reward_mode), '') <> ?", model.InvitationRewardModeCommission).
+		Distinct("invitees.inviter_id").Order("invitees.inviter_id asc")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
@@ -380,14 +393,16 @@ func compareSubscriptionPlanTier(left model.SubscriptionPlan, right model.Subscr
 	return 0
 }
 
-func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan, endTime int64, rewardSubscriptionId int) (*model.UserSubscription, error) {
+func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan, endTime int64, rewardSubscriptionId int, now int64) (*model.UserSubscription, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
 	}
 	if plan == nil || plan.Id == 0 {
 		return nil, errors.New("invalid plan")
 	}
-	now := common.GetTimestamp()
+	if now <= 0 {
+		now = common.GetTimestamp()
+	}
 	nextReset := calcInvitationRewardNextResetTime(now, plan, endTime)
 	fields := map[string]interface{}{
 		"plan_id":              plan.Id,

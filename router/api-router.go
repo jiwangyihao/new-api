@@ -117,6 +117,11 @@ func SetApiRouter(router *gin.Engine) {
 				//selfRoute.POST("/waffo-pancake/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPancakePay)
 				selfRoute.POST("/aff_transfer", controller.TransferAffQuota)
 				selfRoute.PUT("/setting", controller.UpdateUserSetting)
+				selfRoute.GET("/invitation-commission/summary", controller.GetInvitationCommissionSummary)
+				selfRoute.GET("/invitation-commission/records", controller.GetInvitationCommissionRecords)
+				selfRoute.POST("/invitation-commission/transfer", middleware.CriticalRateLimit(), controller.TransferInvitationCommission)
+				selfRoute.GET("/invitation-commission/withdrawals", controller.GetInvitationCommissionWithdrawals)
+				selfRoute.POST("/invitation-commission/withdrawals", middleware.CriticalRateLimit(), controller.CreateInvitationCommissionWithdrawal)
 
 				// 2FA routes
 				selfRoute.GET("/2fa/status", controller.Get2FAStatus)
@@ -155,6 +160,20 @@ func SetApiRouter(router *gin.Engine) {
 				adminRoute.GET("/2fa/stats", controller.Admin2FAStats)
 				adminRoute.DELETE("/:id/2fa", controller.AdminDisable2FA)
 			}
+		}
+
+		adminCommissionRoute := apiRouter.Group("/admin/invitation-commission")
+		adminCommissionRoute.Use(middleware.AdminAuth())
+		{
+			adminCommissionRoute.GET("/withdrawals", controller.AdminListInvitationCommissionWithdrawals)
+			adminCommissionRoute.POST("/withdrawals/:id/complete", middleware.CriticalRateLimit(), controller.AdminCompleteInvitationCommissionWithdrawal)
+			adminCommissionRoute.POST("/withdrawals/:id/reject", middleware.CriticalRateLimit(), controller.AdminRejectInvitationCommissionWithdrawal)
+		}
+
+		adminTasksRoute := apiRouter.Group("/admin/tasks")
+		adminTasksRoute.Use(middleware.AdminAuth())
+		{
+			adminTasksRoute.GET("/summary", controller.GetAdminTasksSummary)
 		}
 
 		// Public subscription plan listing for the default homepage.
@@ -212,6 +231,15 @@ func SetApiRouter(router *gin.Engine) {
 			adminAnalyticsRoute.GET("/drilldown/users", controller.GetAdminAnalyticsDrilldownUsers)
 			adminAnalyticsRoute.GET("/drilldown/subscriptions", controller.GetAdminAnalyticsDrilldownSubscriptions)
 			adminAnalyticsRoute.GET("/drilldown/invitations", controller.GetAdminAnalyticsDrilldownInvitations)
+			adminAnalyticsRoute.GET("/paid-subscription-value/summary", controller.GetAdminPaidSubscriptionValueSummary)
+			adminAnalyticsRoute.GET("/paid-subscription-value/users", controller.GetAdminPaidSubscriptionValueUsers)
+			adminAnalyticsRoute.GET("/paid-subscription-value/subscriptions", controller.GetAdminPaidSubscriptionValueSubscriptions)
+			adminAnalyticsRoute.GET("/paid-subscription-value/breakdown/plans", controller.GetAdminPaidSubscriptionValuePlanBreakdown)
+			adminAnalyticsRoute.GET("/paid-subscription-value/breakdown/sources", controller.GetAdminPaidSubscriptionValueSourceBreakdown)
+			adminAnalyticsRoute.GET("/invitation-paid-subscriptions/summary", controller.GetAdminInvitationPaidSubscriptionsSummary)
+			adminAnalyticsRoute.GET("/invitation-paid-subscriptions/inviters", controller.GetAdminInvitationPaidSubscriptionsInviters)
+			adminAnalyticsRoute.GET("/invitation-paid-subscriptions/invitees", controller.GetAdminInvitationPaidSubscriptionsInvitees)
+			adminAnalyticsRoute.GET("/invitation-paid-subscriptions/subscriptions", controller.GetAdminInvitationPaidSubscriptionsSubscriptions)
 		}
 
 		adminOpsRoute := apiRouter.Group("/admin-ops")

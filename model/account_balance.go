@@ -19,6 +19,13 @@ func AccountBalanceCentsFromCNY(amount decimal.Decimal) (int, error) {
 	return int(cents.IntPart()), nil
 }
 
+func AccountBalanceIntFromCents(amountCents int64) (int, error) {
+	if amountCents <= 0 || amountCents > int64(math.MaxInt) {
+		return 0, errors.New("invalid amount")
+	}
+	return int(amountCents), nil
+}
+
 func AccountBalanceCNYFromCents(cents int) decimal.Decimal {
 	return decimal.NewFromInt(int64(cents)).Div(decimal.NewFromInt(100))
 }

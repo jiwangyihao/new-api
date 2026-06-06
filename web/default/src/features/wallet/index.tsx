@@ -200,7 +200,6 @@ export function Wallet(props: WalletProps) {
     }
   }
 
-
   // Handle Creem product selection
   const handleCreemProductSelect = (product: CreemProduct) => {
     setSelectedCreemProduct(product)
@@ -233,7 +232,6 @@ export function Wallet(props: WalletProps) {
       setSelectedKyrenTopUpProduct(null)
     }
   }
-
 
   const handleWaffoMethodSelect = async (_method: unknown, index: number) => {
     const loadingKey = `waffo-${index}`
@@ -325,6 +323,7 @@ export function Wallet(props: WalletProps) {
               affiliateLink={affiliateLink}
               entitlement={entitlement}
               loading={affiliateLoading}
+              onCommissionTransferSuccess={fetchUser}
             />
           </div>
         </SectionPageLayout.Content>
@@ -341,7 +340,6 @@ export function Wallet(props: WalletProps) {
         processing={processing || pancakeProcessing}
         discountRate={getDiscountRate()}
       />
-
 
       <BillingHistoryDialog
         open={billingDialogOpen}

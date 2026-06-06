@@ -30,16 +30,21 @@ export type AdminUsageMetric =
   | 'active_users'
   | 'active_api_keys'
 export type AdminPlanAttribution = 'current' | 'event_time'
+export type AdminAnalyticsExcludedMode =
+  | 'included_only'
+  | 'include_excluded'
+  | 'excluded_only'
 export type AdminAnalyticsTab =
   | 'overview'
   | 'plans'
   | 'quota'
+  | 'paid-subscription-value'
   | 'users'
   | 'conversion'
   | 'invitations'
+  | 'invitation-paid-subscriptions'
   | 'usage'
   | 'risks'
-
 export interface ApiResponse<T = unknown> {
   success: boolean
   message?: string
@@ -50,6 +55,7 @@ export interface AdminAnalyticsSearch {
   tab: AdminAnalyticsTab
   start_timestamp: number
   end_timestamp: number
+  snapshot_at?: number
   granularity: AdminAnalyticsGranularity
   user_ids: number[]
   token_ids: number[]
@@ -62,6 +68,13 @@ export interface AdminAnalyticsSearch {
   log_statuses: string[]
   grant_reasons: string[]
   business_codes: string[]
+  currency?: string
+  excluded_mode: AdminAnalyticsExcludedMode
+  active_only: boolean
+  time_range_explicit: boolean
+  inviter_id?: number
+  invitee_id?: number
+  subscription_id?: number
   group_by: AdminUsageGroupBy
   metric: AdminUsageMetric
   plan_attribution: AdminPlanAttribution
@@ -114,6 +127,8 @@ export interface AdminAnalyticsDrilldownTarget {
   user_status?: string
   plan_id?: number
   inviter_id?: number
+  invitee_id?: number
+  subscription_id?: number
   token_id?: number
   model?: string
   channel_id?: number
@@ -121,6 +136,16 @@ export interface AdminAnalyticsDrilldownTarget {
   start_timestamp?: number
   end_timestamp?: number
   tab?: string
+}
+
+export interface MoneyAmount {
+  amount: number
+  currency: string
+}
+
+export interface MoneyBreakdown {
+  amount: number
+  currency: string
 }
 
 export interface AdminAnalyticsOverviewUsers {
@@ -393,6 +418,176 @@ export interface AdminAnalyticsInvitationRewardStatus {
   inviter_count: number
   subscription_count: number
 }
+
+export interface PaidSubscriptionValueSummary {
+  recognized_remaining_value_by_currency: MoneyBreakdown[]
+  token_based_value_by_currency: MoneyBreakdown[]
+  time_based_value_by_currency: MoneyBreakdown[]
+  excluded_remaining_value_by_currency: MoneyBreakdown[]
+  active_paid_subscription_count: number
+  active_paid_user_count: number
+  token_value_unavailable_count: number
+}
+
+export interface PaidSubscriptionValuePlanGroup {
+  plan_id: number
+  plan_name: string
+  plan_business_code: string
+  active_user_count: number
+  active_subscription_count: number
+  recognized_remaining_value_by_currency: MoneyBreakdown[]
+  token_based_value_by_currency: MoneyBreakdown[]
+  time_based_value_by_currency: MoneyBreakdown[]
+  excluded_remaining_value_by_currency: MoneyBreakdown[]
+  average_token_usage_ratio: number | null
+}
+
+export interface PaidSubscriptionValueSourceGroup {
+  source: AdminAnalyticsSource
+  grant_reason: string
+  user_count: number
+  subscription_count: number
+  recognized_remaining_value_by_currency: MoneyBreakdown[]
+  excluded_remaining_value_by_currency: MoneyBreakdown[]
+  source_attribution: string
+}
+
+export interface PaidSubscriptionValueUser {
+  user_id: number
+  username: string
+  display_name: string
+  active_paid_plan_count: number
+  recognized_remaining_value_by_currency: MoneyBreakdown[]
+  token_based_value_by_currency: MoneyBreakdown[]
+  time_based_value_by_currency: MoneyBreakdown[]
+  earliest_end_time: number
+  excluded: boolean
+  excluded_reason: string
+  excluded_at: number
+  excluded_by: number
+  would_have_remaining_value_by_currency: MoneyBreakdown[]
+  drilldown?: AdminAnalyticsDrilldownTarget
+}
+
+export interface PaidSubscriptionValueSubscription {
+  subscription_id: number
+  user_id: number
+  username: string
+  plan_id: number
+  plan_name: string
+  source: AdminAnalyticsSource
+  grant_reason: string
+  plan_price: MoneyAmount
+  start_time: number
+  end_time: number
+  remaining_seconds: number
+  token_limit: number
+  token_used: number
+  next_reset_time: number
+  token_based_value: MoneyAmount | null
+  time_based_value: MoneyAmount
+  recognized_remaining_value: MoneyAmount
+  valuation_basis: string
+  source_attribution: string
+  excluded: boolean
+  excluded_reason: string
+  drilldown?: AdminAnalyticsDrilldownTarget
+  possible_order_id?: number | null
+  payment_provider?: string
+  payment_method?: string
+  order_recorded_amount?: MoneyAmount | null
+}
+
+export interface PaidSubscriptionValueResponse {
+  summary: PaidSubscriptionValueSummary
+  users: AdminAnalyticsList<PaidSubscriptionValueUser>
+  subscriptions: AdminAnalyticsList<PaidSubscriptionValueSubscription>
+  plans: AdminAnalyticsList<PaidSubscriptionValuePlanGroup>
+  sources: AdminAnalyticsList<PaidSubscriptionValueSourceGroup>
+}
+
+export interface InvitationPaidSubscriptionsSummary {
+  recognized_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  active_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  active_invitation_remaining_value_by_currency: MoneyBreakdown[]
+  excluded_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  excluded_active_remaining_value_by_currency: MoneyBreakdown[]
+  inviter_count: number
+  invitee_count: number
+  paid_invitee_count: number
+  active_paid_invitee_count: number
+}
+
+export interface InvitationPaidInviter {
+  inviter_user_id: number
+  inviter_username: string
+  invitee_count: number
+  paid_invitee_count: number
+  active_paid_invitee_count: number
+  recognized_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  active_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  active_invitation_remaining_value_by_currency: MoneyBreakdown[]
+  excluded_invitation_paid_amount_by_currency: MoneyBreakdown[]
+  excluded_active_remaining_value_by_currency: MoneyBreakdown[]
+  latest_paid_subscription_time: number
+  drilldown?: AdminAnalyticsDrilldownTarget
+}
+
+export interface InvitationPaidInvitee {
+  invitee_user_id: number
+  invitee_username: string
+  inviter_user_id: number
+  registered_at: number
+  paid_subscription_snapshot_count: number
+  recognized_paid_units: number
+  active_paid_subscription_count: number
+  recognized_paid_amount_by_currency: MoneyBreakdown[]
+  active_remaining_value_by_currency: MoneyBreakdown[]
+  active_paid_amount_by_currency: MoneyBreakdown[]
+  excluded: boolean
+  excluded_reason: string
+  excluded_at: number
+  excluded_by: number
+  would_have_paid_amount_by_currency: MoneyBreakdown[]
+  would_have_active_remaining_value_by_currency: MoneyBreakdown[]
+  drilldown?: AdminAnalyticsDrilldownTarget
+}
+
+export interface InvitationPaidSubscriptionRecord {
+  subscription_id: number
+  invitee_user_id: number
+  inviter_user_id: number
+  plan_id: number
+  plan_name: string
+  plan_price: MoneyAmount
+  recognized_paid_units: number
+  recognized_paid_amount: MoneyAmount
+  unit_inference_basis: string
+  source: AdminAnalyticsSource
+  grant_reason: string
+  source_attribution: string
+  start_time: number
+  end_time: number
+  status: string
+  recognized_remaining_value: MoneyAmount | null
+  excluded: boolean
+  excluded_reason: string
+  possible_order_id?: number | null
+  payment_provider?: string
+  payment_method?: string
+  order_recorded_amount?: MoneyAmount | null
+  order_status?: string
+  complete_time?: number
+  drilldown?: AdminAnalyticsDrilldownTarget
+}
+
+export interface InvitationPaidSubscriptionsResponse {
+  summary: InvitationPaidSubscriptionsSummary
+  inviters: AdminAnalyticsList<InvitationPaidInviter>
+  invitees: AdminAnalyticsList<InvitationPaidInvitee>
+  subscriptions: AdminAnalyticsList<InvitationPaidSubscriptionRecord>
+}
+
 
 export interface AdminAnalyticsInvitationTrendPoint {
   timestamp: number

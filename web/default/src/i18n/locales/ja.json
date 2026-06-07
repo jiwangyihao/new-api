@@ -2745,6 +2745,7 @@
     "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.": "Waffoダッシュボードから APIキー、マーチャントID、RSAキーペアを取得し、コールバックURLを設定してください。",
     "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook": "Waffo ダッシュボードでマーチャント、ストア、プロダクト、署名用キーを取得してください。Webhook URL: <ServerAddress>/api/waffo-pancake/webhook",
     "Ocean Breeze": "オーシャンブリーズ",
+    "Offline cashback has been paid": "オフラインキャッシュバックは支払い済みです",
     "Official": "公式",
     "Official Repository": "公式リポジトリ",
     "Official Sync": "公式同期",

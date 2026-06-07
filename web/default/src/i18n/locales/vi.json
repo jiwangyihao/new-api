@@ -2745,6 +2745,7 @@
     "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.": "Lấy API key, mã thương gia và cặp khóa RSA từ bảng điều khiển Waffo, đồng thời cấu hình URL callback.",
     "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook": "Lấy merchant, store, product và khóa ký từ bảng điều khiển Waffo. Webhook: <ServerAddress>/api/waffo-pancake/webhook",
     "Ocean Breeze": "Gió biển",
+    "Offline cashback has been paid": "Đã chi hoàn tiền ngoại tuyến",
     "Official": "Chính thức",
     "Official Repository": "Kho lưu trữ chính thức",
     "Official Sync": "Official sync",

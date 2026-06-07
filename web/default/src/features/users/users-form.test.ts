@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import {
+  shouldShowInvitationCommissionEstimateForUser,
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from './lib/user-form'
@@ -87,4 +88,45 @@ test('user drawer and columns expose invitation reward mode controls', () => {
   assert.match(columns, /invitation_reward_mode/)
   assert.match(columns, /subscription/)
   assert.match(columns, /commission/)
+})
+
+test('user drawer shows historical commission estimate before switching sparse users', () => {
+  const drawer = readFileSync(
+    'src/features/users/components/users-mutate-drawer.tsx',
+    'utf8'
+  )
+
+  assert.match(drawer, /invitation_commission_estimated_cents/)
+  assert.match(drawer, /Estimated historical commission/)
+  assert.match(drawer, /Historical commissionable sales/)
+})
+
+test('commission estimate panel is only eligible for users not yet in commission mode', () => {
+  assert.equal(
+    shouldShowInvitationCommissionEstimateForUser({
+      invitation_reward_mode: 'subscription',
+      invitation_commission_estimated_cents: 20293,
+      invitation_commission_estimated_source_amount_cents: 202930,
+      invitation_commission_estimated_event_count: 28,
+    }),
+    true
+  )
+  assert.equal(
+    shouldShowInvitationCommissionEstimateForUser({
+      invitation_reward_mode: 'commission',
+      invitation_commission_estimated_cents: 20293,
+      invitation_commission_estimated_source_amount_cents: 202930,
+      invitation_commission_estimated_event_count: 28,
+    }),
+    false
+  )
+})
+
+test('user drawer reuses translated invitation reward mode placeholder', () => {
+  const drawer = readFileSync(
+    'src/features/users/components/users-mutate-drawer.tsx',
+    'utf8'
+  )
+
+  assert.doesNotMatch(drawer, /Select invitation reward mode/)
 })

@@ -53,3 +53,33 @@ test('invitation display uses relationship counts instead of legacy quota reward
   assert.equal(state.rewardText, '一瓶盖可乐')
   assert.equal(state.inviterId, 206)
 })
+
+test('invitation display exposes commission account and switch estimate separately', () => {
+  const commissionState = getInvitationDisplayState({
+    direct_invite_count: 2,
+    qualified_paid_invite_count: 2,
+    invitation_reward_mode: 'commission',
+    invitation_commission_available_cents: 10800,
+    invitation_commission_earned_cents: 12800,
+  })
+
+  assert.equal(commissionState.rewardMode, 'commission')
+  assert.equal(commissionState.showCommissionSummary, true)
+  assert.equal(commissionState.commissionAvailableCents, 10800)
+  assert.equal(commissionState.commissionEarnedCents, 12800)
+  assert.equal(commissionState.showCommissionEstimate, false)
+
+  const prospectState = getInvitationDisplayState({
+    direct_invite_count: 28,
+    qualified_paid_invite_count: 28,
+    invitation_reward_mode: 'subscription',
+    invitation_commission_estimated_cents: 20293,
+    invitation_commission_estimated_event_count: 28,
+  })
+
+  assert.equal(prospectState.rewardMode, 'subscription')
+  assert.equal(prospectState.showCommissionSummary, false)
+  assert.equal(prospectState.showCommissionEstimate, true)
+  assert.equal(prospectState.commissionEstimatedCents, 20293)
+  assert.equal(prospectState.commissionEstimatedEventCount, 28)
+})

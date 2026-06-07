@@ -70,6 +70,14 @@ export function getInvitationDisplayState(
     | 'invitation_reward_plan_title'
     | 'reward_plan_title'
     | 'inviter_id'
+    | 'invitation_commission_available_cents'
+    | 'invitation_commission_pending_cents'
+    | 'invitation_commission_withdrawn_cents'
+    | 'invitation_commission_transferred_cents'
+    | 'invitation_commission_earned_cents'
+    | 'invitation_commission_estimated_cents'
+    | 'invitation_commission_estimated_source_amount_cents'
+    | 'invitation_commission_estimated_event_count'
   >
 ) {
   const directInviteCount = user.direct_invite_count ?? user.aff_count ?? 0
@@ -80,6 +88,34 @@ export function getInvitationDisplayState(
       : 'Not granted'
 
   const rewardMode = user.invitation_reward_mode ?? 'subscription'
+  const commissionAvailableCents =
+    user.invitation_commission_available_cents ?? 0
+  const commissionPendingCents = user.invitation_commission_pending_cents ?? 0
+  const commissionWithdrawnCents =
+    user.invitation_commission_withdrawn_cents ?? 0
+  const commissionTransferredCents =
+    user.invitation_commission_transferred_cents ?? 0
+  const fallbackCommissionEarnedCents =
+    commissionAvailableCents +
+    commissionPendingCents +
+    commissionWithdrawnCents +
+    commissionTransferredCents
+  const commissionEarnedCents =
+    user.invitation_commission_earned_cents ?? fallbackCommissionEarnedCents
+  const commissionEstimatedCents =
+    user.invitation_commission_estimated_cents ?? 0
+  const commissionEstimatedSourceAmountCents =
+    user.invitation_commission_estimated_source_amount_cents ?? 0
+  const commissionEstimatedEventCount =
+    user.invitation_commission_estimated_event_count ?? 0
+  const showCommissionSummary =
+    rewardMode === 'commission' &&
+    (commissionEarnedCents > 0 ||
+      commissionAvailableCents > 0 ||
+      commissionPendingCents > 0)
+  const showCommissionEstimate =
+    rewardMode !== 'commission' &&
+    (commissionEstimatedCents > 0 || commissionEstimatedEventCount > 0)
 
   return {
     directInviteCount,
@@ -87,6 +123,14 @@ export function getInvitationDisplayState(
     rewardText,
     rewardMode,
     inviterId: user.inviter_id || 0,
+    commissionAvailableCents,
+    commissionEarnedCents,
+    commissionPendingCents,
+    commissionEstimatedCents,
+    commissionEstimatedSourceAmountCents,
+    commissionEstimatedEventCount,
+    showCommissionSummary,
+    showCommissionEstimate,
   }
 }
 
@@ -308,89 +352,146 @@ export function useUsersColumns(): ColumnDef<User>[] {
         const invitationState = getInvitationDisplayState(row.original)
 
         return (
-          <div className='flex items-center gap-1.5 text-xs font-medium'>
-            <span
-              className={cn(
-                'size-1.5 shrink-0 rounded-full',
-                dotColorMap.neutral
+          <div className='flex max-w-[420px] flex-col gap-1 text-xs font-medium'>
+            <div className='flex flex-wrap items-center gap-1.5'>
+              <span
+                className={cn(
+                  'size-1.5 shrink-0 rounded-full',
+                  dotColorMap.neutral
+                )}
+                aria-hidden='true'
+              />
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className='text-muted-foreground cursor-help' />
+                  }
+                >
+                  {t('Direct invites')}: {invitationState.directInviteCount}
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className='text-xs'>
+                    {t('Number of directly invited users')}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              <span className='text-muted-foreground/30'>·</span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className='text-muted-foreground cursor-help' />
+                  }
+                >
+                  {t('Qualified paid invites')}:{' '}
+                  {invitationState.qualifiedPaidInviteCount}
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className='text-xs'>
+                    {t('Direct invitees with active paid subscriptions')}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              <span className='text-muted-foreground/30'>·</span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <span className='text-muted-foreground cursor-help' />
+                  }
+                >
+                  {t('Reward plan')}: {t(invitationState.rewardText)}
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p className='text-xs'>
+                    {t('Monthly invitation reward plan')}
+                  </p>
+                </TooltipContent>
+              </Tooltip>
+              <span className='text-muted-foreground/30'>·</span>
+              <StatusBadge
+                label={t(
+                  invitationState.rewardMode === 'commission'
+                    ? 'Commission'
+                    : 'Reward package'
+                )}
+                variant={
+                  invitationState.rewardMode === 'commission'
+                    ? 'success'
+                    : 'neutral'
+                }
+                copyable={false}
+              />
+              {invitationState.inviterId > 0 && (
+                <>
+                  <span className='text-muted-foreground/30'>·</span>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <span className='text-muted-foreground cursor-help' />
+                      }
+                    >
+                      {t('Inviter')}: {invitationState.inviterId}
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p className='text-xs'>
+                        {t('Invited by user ID')} {invitationState.inviterId}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                </>
               )}
-              aria-hidden='true'
-            />
-            <Tooltip>
-              <TooltipTrigger
-                render={<span className='text-muted-foreground cursor-help' />}
-              >
-                {t('Direct invites')}: {invitationState.directInviteCount}
-              </TooltipTrigger>
-              <TooltipContent>
-                <p className='text-xs'>
-                  {t('Number of directly invited users')}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-            <span className='text-muted-foreground/30'>·</span>
-            <Tooltip>
-              <TooltipTrigger
-                render={<span className='text-muted-foreground cursor-help' />}
-              >
-                {t('Qualified paid invites')}:{' '}
-                {invitationState.qualifiedPaidInviteCount}
-              </TooltipTrigger>
-              <TooltipContent>
-                <p className='text-xs'>
-                  {t('Direct invitees with active paid subscriptions')}
-                </p>
-              </TooltipContent>
-            </Tooltip>
-            <span className='text-muted-foreground/30'>·</span>
-            <Tooltip>
-              <TooltipTrigger
-                render={<span className='text-muted-foreground cursor-help' />}
-              >
-                {t('Reward plan')}: {t(invitationState.rewardText)}
-              </TooltipTrigger>
-              <TooltipContent>
-                <p className='text-xs'>{t('Monthly invitation reward plan')}</p>
-              </TooltipContent>
-            </Tooltip>
-            <span className='text-muted-foreground/30'>·</span>
-            <StatusBadge
-              label={t(
-                invitationState.rewardMode === 'commission'
-                  ? 'Commission'
-                  : 'Reward package'
+              {invitationState.inviterId === 0 && (
+                <>
+                  <span className='text-muted-foreground/30'>·</span>
+                  <span className='text-muted-foreground'>
+                    {t('No Inviter')}
+                  </span>
+                </>
               )}
-              variant={
-                invitationState.rewardMode === 'commission'
-                  ? 'success'
-                  : 'neutral'
-              }
-              copyable={false}
-            />
-            {invitationState.inviterId > 0 && (
-              <>
-                <span className='text-muted-foreground/30'>·</span>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className='text-muted-foreground cursor-help' />
-                    }
-                  >
-                    {t('Inviter')}: {invitationState.inviterId}
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p className='text-xs'>
-                      {t('Invited by user ID')} {invitationState.inviterId}
-                    </p>
-                  </TooltipContent>
-                </Tooltip>
-              </>
+            </div>
+            {invitationState.showCommissionSummary && (
+              <div className='text-muted-foreground truncate font-normal'>
+                {t('Available commission balance')}:{' '}
+                {formatAccountBalanceForPlanPurchase(
+                  invitationState.commissionAvailableCents
+                )}{' '}
+                <span className='text-muted-foreground/30'>·</span>{' '}
+                {t('Total commission earned')}:{' '}
+                {formatAccountBalanceForPlanPurchase(
+                  invitationState.commissionEarnedCents
+                )}
+              </div>
             )}
-            {invitationState.inviterId === 0 && (
-              <>
-                <span className='text-muted-foreground/30'>·</span>
-                <span className='text-muted-foreground'>{t('No Inviter')}</span>
-              </>
+            {invitationState.showCommissionEstimate && (
+              <Tooltip>
+                <TooltipTrigger render={<div className='w-fit cursor-help' />}>
+                  <StatusBadge variant='info' copyable={false}>
+                    {t('Estimated historical commission')}:{' '}
+                    {formatAccountBalanceForPlanPurchase(
+                      invitationState.commissionEstimatedCents
+                    )}
+                  </StatusBadge>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className='space-y-1 text-xs'>
+                    <div>
+                      {t('Estimated historical commission')}:{' '}
+                      {formatAccountBalanceForPlanPurchase(
+                        invitationState.commissionEstimatedCents
+                      )}
+                    </div>
+                    <div>
+                      {t('Historical commissionable sales')}:{' '}
+                      {formatAccountBalanceForPlanPurchase(
+                        invitationState.commissionEstimatedSourceAmountCents
+                      )}
+                    </div>
+                    <div>
+                      {t('Commission event count')}:{' '}
+                      {invitationState.commissionEstimatedEventCount.toLocaleString()}
+                    </div>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
         )

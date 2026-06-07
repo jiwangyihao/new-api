@@ -320,6 +320,10 @@ func GetUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
+	if err := model.FillUserInvitationSummariesForUsers([]*model.User{user}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	user.InvitationRewardMode = user.NormalizedInvitationRewardMode()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

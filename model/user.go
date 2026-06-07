@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -41,53 +42,61 @@ func (user *User) NormalizedInvitationRewardMode() string {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
-	Id                                int            `json:"id"`
-	Username                          string         `json:"username" gorm:"unique;index" validate:"max=20"`
-	Password                          string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
-	OriginalPassword                  string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
-	DisplayName                       string         `json:"display_name" gorm:"index" validate:"max=20"`
-	Role                              int            `json:"role" gorm:"type:int;default:1"`   // admin, common
-	Status                            int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
-	Email                             string         `json:"email" gorm:"index" validate:"max=50"`
-	GitHubId                          string         `json:"github_id" gorm:"column:github_id;index"`
-	DiscordId                         string         `json:"discord_id" gorm:"column:discord_id;index"`
-	OidcId                            string         `json:"oidc_id" gorm:"column:oidc_id;index"`
-	WeChatId                          string         `json:"wechat_id" gorm:"column:wechat_id;index"`
-	TelegramId                        string         `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode                  string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
-	AccessToken                       *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	Quota                             int            `json:"quota" gorm:"type:int;default:0"`
-	UsedQuota                         int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
-	RequestCount                      int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
-	Group                             string         `json:"-" gorm:"type:varchar(64);default:''"`
-	AffCode                           string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
-	AffCount                          int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
-	AffQuota                          int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
-	AffHistoryQuota                   int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
-	InviterId                         int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
-	InvitationRewardMode              string         `json:"invitation_reward_mode" gorm:"type:varchar(32);default:'subscription'"`
-	DeletedAt                         gorm.DeletedAt `gorm:"index"`
-	LinuxDOId                         string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
-	Setting                           string         `json:"setting" gorm:"type:text;column:setting"`
-	Remark                            string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
-	StripeCustomer                    string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
-	CreatedAt                         int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
-	LastLoginAt                       int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
-	DirectInviteCount                 int            `json:"direct_invite_count" gorm:"-:all"`
-	QualifiedPaidInviteCount          int            `json:"qualified_paid_invite_count" gorm:"-:all"`
-	InvitationRewardStatus            string         `json:"invitation_reward_status" gorm:"-:all"`
-	InvitationRewardPlanTitle         string         `json:"invitation_reward_plan_title" gorm:"-:all"`
-	RewardPlanId                      int            `json:"reward_plan_id" gorm:"-:all"`
-	RewardPlanTitle                   string         `json:"reward_plan_title" gorm:"-:all"`
-	RewardPlanBusinessCode            string         `json:"reward_plan_business_code" gorm:"-:all"`
-	RewardTierRank                    int            `json:"reward_tier_rank" gorm:"-:all"`
-	RewardTierQualifiedCount          int            `json:"reward_tier_qualified_count" gorm:"-:all"`
-	DowngradeRewardPlanId             int            `json:"downgrade_reward_plan_id" gorm:"-:all"`
-	DowngradeRewardPlanTitle          string         `json:"downgrade_reward_plan_title" gorm:"-:all"`
-	DowngradeRewardPlanBusinessCode   string         `json:"downgrade_reward_plan_business_code" gorm:"-:all"`
-	DowngradeRewardTierRank           int            `json:"downgrade_reward_tier_rank" gorm:"-:all"`
-	DowngradeRewardTierQualifiedCount int            `json:"downgrade_reward_tier_qualified_count" gorm:"-:all"`
-	DowngradeEntitlementEndTime       int64          `json:"downgrade_entitlement_end_time" gorm:"-:all"`
+	Id                                             int            `json:"id"`
+	Username                                       string         `json:"username" gorm:"unique;index" validate:"max=20"`
+	Password                                       string         `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	OriginalPassword                               string         `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
+	DisplayName                                    string         `json:"display_name" gorm:"index" validate:"max=20"`
+	Role                                           int            `json:"role" gorm:"type:int;default:1"`   // admin, common
+	Status                                         int            `json:"status" gorm:"type:int;default:1"` // enabled, disabled
+	Email                                          string         `json:"email" gorm:"index" validate:"max=50"`
+	GitHubId                                       string         `json:"github_id" gorm:"column:github_id;index"`
+	DiscordId                                      string         `json:"discord_id" gorm:"column:discord_id;index"`
+	OidcId                                         string         `json:"oidc_id" gorm:"column:oidc_id;index"`
+	WeChatId                                       string         `json:"wechat_id" gorm:"column:wechat_id;index"`
+	TelegramId                                     string         `json:"telegram_id" gorm:"column:telegram_id;index"`
+	VerificationCode                               string         `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
+	AccessToken                                    *string        `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	Quota                                          int            `json:"quota" gorm:"type:int;default:0"`
+	UsedQuota                                      int            `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
+	RequestCount                                   int            `json:"request_count" gorm:"type:int;default:0;"`               // request number
+	Group                                          string         `json:"-" gorm:"type:varchar(64);default:''"`
+	AffCode                                        string         `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCount                                       int            `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
+	AffQuota                                       int            `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
+	AffHistoryQuota                                int            `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
+	InviterId                                      int            `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	InvitationRewardMode                           string         `json:"invitation_reward_mode" gorm:"type:varchar(32);default:'subscription'"`
+	DeletedAt                                      gorm.DeletedAt `gorm:"index"`
+	LinuxDOId                                      string         `json:"linux_do_id" gorm:"column:linux_do_id;index"`
+	Setting                                        string         `json:"setting" gorm:"type:text;column:setting"`
+	Remark                                         string         `json:"remark,omitempty" gorm:"type:varchar(255)" validate:"max=255"`
+	StripeCustomer                                 string         `json:"stripe_customer" gorm:"type:varchar(64);column:stripe_customer;index"`
+	CreatedAt                                      int64          `json:"created_at" gorm:"autoCreateTime;column:created_at"`
+	LastLoginAt                                    int64          `json:"last_login_at" gorm:"default:0;column:last_login_at"`
+	DirectInviteCount                              int            `json:"direct_invite_count" gorm:"-:all"`
+	QualifiedPaidInviteCount                       int            `json:"qualified_paid_invite_count" gorm:"-:all"`
+	InvitationRewardStatus                         string         `json:"invitation_reward_status" gorm:"-:all"`
+	InvitationCommissionAvailableCents             int64          `json:"invitation_commission_available_cents" gorm:"-:all"`
+	InvitationCommissionPendingCents               int64          `json:"invitation_commission_pending_cents" gorm:"-:all"`
+	InvitationCommissionWithdrawnCents             int64          `json:"invitation_commission_withdrawn_cents" gorm:"-:all"`
+	InvitationCommissionTransferredCents           int64          `json:"invitation_commission_transferred_cents" gorm:"-:all"`
+	InvitationCommissionEarnedCents                int64          `json:"invitation_commission_earned_cents" gorm:"-:all"`
+	InvitationCommissionEstimatedCents             int64          `json:"invitation_commission_estimated_cents" gorm:"-:all"`
+	InvitationCommissionEstimatedSourceAmountCents int64          `json:"invitation_commission_estimated_source_amount_cents" gorm:"-:all"`
+	InvitationCommissionEstimatedEventCount        int            `json:"invitation_commission_estimated_event_count" gorm:"-:all"`
+	InvitationRewardPlanTitle                      string         `json:"invitation_reward_plan_title" gorm:"-:all"`
+	RewardPlanId                                   int            `json:"reward_plan_id" gorm:"-:all"`
+	RewardPlanTitle                                string         `json:"reward_plan_title" gorm:"-:all"`
+	RewardPlanBusinessCode                         string         `json:"reward_plan_business_code" gorm:"-:all"`
+	RewardTierRank                                 int            `json:"reward_tier_rank" gorm:"-:all"`
+	RewardTierQualifiedCount                       int            `json:"reward_tier_qualified_count" gorm:"-:all"`
+	DowngradeRewardPlanId                          int            `json:"downgrade_reward_plan_id" gorm:"-:all"`
+	DowngradeRewardPlanTitle                       string         `json:"downgrade_reward_plan_title" gorm:"-:all"`
+	DowngradeRewardPlanBusinessCode                string         `json:"downgrade_reward_plan_business_code" gorm:"-:all"`
+	DowngradeRewardTierRank                        int            `json:"downgrade_reward_tier_rank" gorm:"-:all"`
+	DowngradeRewardTierQualifiedCount              int            `json:"downgrade_reward_tier_qualified_count" gorm:"-:all"`
+	DowngradeEntitlementEndTime                    int64          `json:"downgrade_entitlement_end_time" gorm:"-:all"`
 }
 
 func (user *User) ToBaseUser() *UserBase {
@@ -332,6 +341,10 @@ func SearchUsers(keyword string, _ string, startIdx int, num int) ([]*User, int6
 	return users, total, nil
 }
 
+func FillUserInvitationSummariesForUsers(users []*User) error {
+	return fillUserInvitationSummariesTx(DB, users)
+}
+
 func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
 	if len(users) == 0 {
 		return nil
@@ -405,12 +418,102 @@ func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
 	for _, row := range rewardRows {
 		rewards[row.InviterId] = row
 	}
+	type commissionAccountRow struct {
+		UserId           int
+		AvailableCents   int64
+		PendingCents     int64
+		WithdrawnCents   int64
+		TransferredCents int64
+	}
+	commissionAccounts := make(map[int]commissionAccountRow)
+	if tx.Migrator().HasTable(&InvitationCommissionAccount{}) {
+		var commissionAccountRows []commissionAccountRow
+		if err := tx.Model(&InvitationCommissionAccount{}).
+			Select("user_id, available_cents, pending_cents, withdrawn_cents, transferred_cents").
+			Where("user_id IN ?", userIds).
+			Scan(&commissionAccountRows).Error; err != nil {
+			return err
+		}
+		commissionAccounts = make(map[int]commissionAccountRow, len(commissionAccountRows))
+		for _, row := range commissionAccountRows {
+			commissionAccounts[row.UserId] = row
+		}
+	}
+
+	type commissionEstimateRow struct {
+		EstimatedSourceAmountCents int64
+		EstimatedCents             int64
+		EstimatedEventCount        int
+	}
+	type commissionEstimateEventRow struct {
+		InviterId         int
+		SourceAmountCents int64
+	}
+	commissionSetting := operation_setting.GetInvitationCommissionSetting()
+	commissionRateBps := 0
+	if commissionSetting.Enabled && commissionSetting.RateBps > 0 {
+		commissionRateBps = commissionSetting.RateBps
+	}
+	commissionEstimates := make(map[int]commissionEstimateRow)
+	if commissionRateBps > 0 && tx.Migrator().HasTable(&InvitationRewardEvent{}) && tx.Migrator().HasTable(&InvitationCommissionRecord{}) {
+		var commissionEstimateEventRows []commissionEstimateEventRow
+		if err := tx.Table("invitation_reward_events").
+			Select("invitation_reward_events.inviter_id, invitation_reward_events.source_amount_cents").
+			Joins("JOIN user_subscriptions ON user_subscriptions.id = invitation_reward_events.source_subscription_id").
+			Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
+			Joins("LEFT JOIN invitation_commission_records ON invitation_commission_records.source_type = invitation_reward_events.source_type AND invitation_commission_records.source_id = invitation_reward_events.source_id").
+			Where("invitation_reward_events.inviter_id IN ?", userIds).
+			Where("invitation_reward_events.status = ?", InvitationRewardEventStatusActive).
+			Where("invitation_reward_events.source_amount_cents > 0").
+			Where("UPPER(TRIM(invitation_reward_events.source_currency)) = ?", "CNY").
+			Where("invitation_commission_records.id IS NULL").
+			Where("user_subscriptions.status = ?", "active").
+			Where("user_subscriptions.start_time <= ? AND user_subscriptions.end_time > ?", now, now).
+			Where("subscription_plans.reward_eligible = ?", true).
+			Where("subscription_plans.is_trial = ?", false).
+			Where("subscription_plans.invite_trial = ?", false).
+			Where("(user_subscriptions.grant_reason IS NULL OR TRIM(user_subscriptions.grant_reason) <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
+			Where("(user_subscriptions.source IS NULL OR TRIM(user_subscriptions.source) <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
+			Where("(subscription_plans.business_code IS NULL OR TRIM(subscription_plans.business_code) <> ?)", SubscriptionGrantMonthlyInviteEntitlement).
+			Scan(&commissionEstimateEventRows).Error; err != nil {
+			return err
+		}
+		commissionEstimates = make(map[int]commissionEstimateRow, len(commissionEstimateEventRows))
+		for _, row := range commissionEstimateEventRows {
+			estimate := commissionEstimates[row.InviterId]
+			estimate.EstimatedSourceAmountCents += row.SourceAmountCents
+			estimate.EstimatedCents += row.SourceAmountCents * int64(commissionRateBps) / 10000
+			estimate.EstimatedEventCount++
+			commissionEstimates[row.InviterId] = estimate
+		}
+	}
+
 	for _, user := range users {
 		if user == nil {
 			continue
 		}
+		user.InvitationCommissionAvailableCents = 0
+		user.InvitationCommissionPendingCents = 0
+		user.InvitationCommissionWithdrawnCents = 0
+		user.InvitationCommissionTransferredCents = 0
+		user.InvitationCommissionEarnedCents = 0
+		user.InvitationCommissionEstimatedCents = 0
+		user.InvitationCommissionEstimatedSourceAmountCents = 0
+		user.InvitationCommissionEstimatedEventCount = 0
 		user.DirectInviteCount = directCounts[user.Id]
 		user.QualifiedPaidInviteCount = qualifiedCounts[user.Id]
+		if account, ok := commissionAccounts[user.Id]; ok {
+			user.InvitationCommissionAvailableCents = account.AvailableCents
+			user.InvitationCommissionPendingCents = account.PendingCents
+			user.InvitationCommissionWithdrawnCents = account.WithdrawnCents
+			user.InvitationCommissionTransferredCents = account.TransferredCents
+			user.InvitationCommissionEarnedCents = account.AvailableCents + account.PendingCents + account.WithdrawnCents + account.TransferredCents
+		}
+		if estimate, ok := commissionEstimates[user.Id]; ok {
+			user.InvitationCommissionEstimatedSourceAmountCents = estimate.EstimatedSourceAmountCents
+			user.InvitationCommissionEstimatedEventCount = estimate.EstimatedEventCount
+			user.InvitationCommissionEstimatedCents = estimate.EstimatedCents
+		}
 		if reward, ok := rewards[user.Id]; ok {
 			user.InvitationRewardStatus = reward.Status
 			user.InvitationRewardPlanTitle = reward.RewardPlanTitle

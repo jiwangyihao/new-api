@@ -2745,6 +2745,7 @@
     "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.": "请在 Waffo 后台获取 API 密钥、商户 ID 以及 RSA 密钥对，并配置回调地址。",
     "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook": "请在 Waffo 后台获取商户、店铺、商品与签名密钥。Webhook 地址：<ServerAddress>/api/waffo-pancake/webhook",
     "Ocean Breeze": "海风",
+    "Offline cashback has been paid": "已线下返现",
     "Official": "官方",
     "Official Repository": "官方仓库",
     "Official Sync": "官方同步",

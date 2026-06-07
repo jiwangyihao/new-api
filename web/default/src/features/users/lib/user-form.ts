@@ -37,6 +37,26 @@ export const userFormSchema = z.object({
 export type UserFormValues = z.infer<typeof userFormSchema>
 type UserFormDefaultsInput = Pick<User, 'quota'> & Partial<Omit<User, 'quota'>>
 
+type InvitationCommissionEstimateInput = Pick<
+  User,
+  | 'invitation_reward_mode'
+  | 'invitation_commission_estimated_cents'
+  | 'invitation_commission_estimated_source_amount_cents'
+  | 'invitation_commission_estimated_event_count'
+>
+
+export function shouldShowInvitationCommissionEstimateForUser(
+  user?: Partial<InvitationCommissionEstimateInput>
+): boolean {
+  if (!user || user.invitation_reward_mode === 'commission') {
+    return false
+  }
+  return (
+    (user.invitation_commission_estimated_cents ?? 0) > 0 ||
+    (user.invitation_commission_estimated_source_amount_cents ?? 0) > 0 ||
+    (user.invitation_commission_estimated_event_count ?? 0) > 0
+  )
+}
 // ============================================================================
 // Form Defaults
 // ============================================================================

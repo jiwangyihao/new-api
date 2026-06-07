@@ -59,6 +59,7 @@ import {
 import { createUser, updateUser, getUser } from '../api'
 import { BINDING_FIELDS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
+  shouldShowInvitationCommissionEstimateForUser,
   userFormSchema,
   type UserFormValues,
   USER_FORM_DEFAULT_VALUES,
@@ -85,6 +86,7 @@ export function UsersMutateDrawer({
   const { triggerRefresh } = useUsers()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
+  const [freshUser, setFreshUser] = useState<User | undefined>()
 
   const form = useForm<UserFormValues>({
     resolver: zodResolver(userFormSchema),
@@ -94,14 +96,17 @@ export function UsersMutateDrawer({
   // Load existing data when updating
   useEffect(() => {
     if (open && isUpdate && currentRow) {
+      setFreshUser(undefined)
       // For update, fetch fresh data
       getUser(currentRow.id).then((result) => {
         if (result.success && result.data) {
+          setFreshUser(result.data)
           form.reset(transformUserToFormDefaults(result.data))
         }
       })
     } else if (open && !isUpdate) {
       // For create, reset to defaults
+      setFreshUser(undefined)
       form.reset(USER_FORM_DEFAULT_VALUES)
     }
   }, [open, isUpdate, currentRow, form])
@@ -112,6 +117,17 @@ export function UsersMutateDrawer({
     ? parsedCurrentBalanceAmount
     : 0
   const currentBalanceCents = accountBalanceCnyToCents(currentBalanceAmount)
+  const commissionEstimateUser = freshUser ?? currentRow
+  const commissionEstimatedCents =
+    commissionEstimateUser?.invitation_commission_estimated_cents ?? 0
+  const commissionEstimatedSourceAmountCents =
+    commissionEstimateUser?.invitation_commission_estimated_source_amount_cents ??
+    0
+  const commissionEstimatedEventCount =
+    commissionEstimateUser?.invitation_commission_estimated_event_count ?? 0
+  const showCommissionEstimate =
+    isUpdate &&
+    shouldShowInvitationCommissionEstimateForUser(commissionEstimateUser)
 
   const onSubmit = async (data: UserFormValues) => {
     setIsSubmitting(true)
@@ -127,6 +143,7 @@ export function UsersMutateDrawer({
             ? t(SUCCESS_MESSAGES.USER_UPDATED)
             : t(SUCCESS_MESSAGES.USER_CREATED)
         )
+        setFreshUser(undefined)
         onOpenChange(false)
         triggerRefresh()
       } else {
@@ -148,6 +165,7 @@ export function UsersMutateDrawer({
     if (!currentRow) return
     const result = await getUser(currentRow.id)
     if (result.success && result.data) {
+      setFreshUser(result.data)
       form.reset(transformUserToFormDefaults(result.data))
     }
     triggerRefresh()
@@ -161,6 +179,7 @@ export function UsersMutateDrawer({
           onOpenChange(v)
           if (!v) {
             form.reset()
+            setFreshUser(undefined)
           }
         }}
       >
@@ -350,7 +369,7 @@ export function UsersMutateDrawer({
                           <FormControl>
                             <SelectTrigger>
                               <SelectValue
-                                placeholder={t('Select invitation reward mode')}
+                                placeholder={t('Invitation reward mode')}
                               />
                             </SelectTrigger>
                           </FormControl>
@@ -370,6 +389,28 @@ export function UsersMutateDrawer({
                             'Commission is only available for invited special users enabled by administrators.'
                           )}
                         </FormDescription>
+                        {showCommissionEstimate && (
+                          <div className='bg-muted/40 mt-3 space-y-2 rounded-md border p-3 text-xs'>
+                            <div className='font-medium'>
+                              {t('Estimated historical commission')}:{' '}
+                              {formatAccountBalanceForPlanPurchase(
+                                commissionEstimatedCents
+                              )}
+                            </div>
+                            <div className='text-muted-foreground grid gap-1 sm:grid-cols-2'>
+                              <div>
+                                {t('Historical commissionable sales')}:{' '}
+                                {formatAccountBalanceForPlanPurchase(
+                                  commissionEstimatedSourceAmountCents
+                                )}
+                              </div>
+                              <div>
+                                {t('Commission event count')}:{' '}
+                                {commissionEstimatedEventCount.toLocaleString()}
+                              </div>
+                            </div>
+                          </div>
+                        )}
                         <FormMessage />
                       </FormItem>
                     )}

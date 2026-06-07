@@ -28,6 +28,7 @@ export {
   userFormSchema,
   type UserFormValues,
   USER_FORM_DEFAULT_VALUES,
+  shouldShowInvitationCommissionEstimateForUser,
   transformFormDataToPayload,
   transformUserToFormDefaults,
 } from './user-form'

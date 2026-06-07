@@ -45,6 +45,60 @@ func TestUserUpdatePreservesInvitationRewardMode(t *testing.T) {
 	assert.Equal(t, "self", user.DisplayName)
 }
 
+func TestUserInvitationSummariesIncludeSparseCommissionStats(t *testing.T) {
+	resetInvitationCommissionModelTables(t)
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &InvitationRewardEvent{}, &InvitationCommissionRecord{}, &InvitationCommissionAccount{}, &InvitationMonthlyEntitlement{}))
+	now := common.GetTimestamp()
+	plan := seedInvitationCommissionPlan(t, 9121, "sparse_commission_plan", 80, "CNY")
+
+	commissionUser := invitationCommissionTestUser(9122, "commission-stats")
+	commissionUser.InvitationRewardMode = InvitationRewardModeCommission
+	require.NoError(t, DB.Create(&commissionUser).Error)
+	require.NoError(t, DB.Create(&InvitationCommissionAccount{UserId: commissionUser.Id, AvailableCents: 1200, PendingCents: 300, WithdrawnCents: 400, TransferredCents: 500, CreatedAt: now, UpdatedAt: now}).Error)
+	commissionInvitee := invitationCommissionTestUser(9123, "commission-stats-child")
+	commissionInvitee.InviterId = commissionUser.Id
+	require.NoError(t, DB.Create(&commissionInvitee).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 9124, UserId: commissionInvitee.Id, PlanId: plan.Id, Status: "active", StartTime: now - 3600, EndTime: now + 86400, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{Id: 9125, InviterId: commissionUser.Id, InviteeId: commissionInvitee.Id, SourceType: InvitationRewardEventSourceLegacySubscription, SourceId: 9124, SourceSubscriptionId: 9124, SourceAmountCents: 8000, SourceCurrency: "CNY", EventStartTime: now - 3600, EventEndTime: now + 86400, Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now}).Error)
+	require.NoError(t, DB.Create(&InvitationCommissionRecord{Id: 9126, EventId: 9125, InviterId: commissionUser.Id, InviteeId: commissionInvitee.Id, SourceType: InvitationCommissionSourceLegacySubscription, SourceId: 9124, SourceAmountCents: 8000, SourceCurrency: "CNY", CommissionRateBps: 1000, CommissionCents: 800, Status: InvitationCommissionStatusAvailable, CreatedAt: now, AvailableAt: now}).Error)
+
+	prospectUser := invitationCommissionTestUser(9127, "commission-prospect")
+	prospectUser.InvitationRewardMode = InvitationRewardModeSubscription
+	require.NoError(t, DB.Create(&prospectUser).Error)
+	prospectInvitee := invitationCommissionTestUser(9128, "commission-prospect-child")
+	prospectInvitee.InviterId = prospectUser.Id
+	require.NoError(t, DB.Create(&prospectInvitee).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 9129, UserId: prospectInvitee.Id, PlanId: plan.Id, Status: "active", StartTime: now - 3600, EndTime: now + 86400, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+	require.NoError(t, DB.Create(&InvitationRewardEvent{Id: 9130, InviterId: prospectUser.Id, InviteeId: prospectInvitee.Id, SourceType: InvitationRewardEventSourceLegacySubscription, SourceId: 9129, SourceSubscriptionId: 9129, SourceAmountCents: 8000, SourceCurrency: "CNY", EventStartTime: now - 3600, EventEndTime: now + 86400, Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now}).Error)
+	for i := 0; i < 10; i++ {
+		subscriptionId := 9131 + i
+		eventId := 9141 + i
+		require.NoError(t, DB.Create(&UserSubscription{Id: subscriptionId, UserId: prospectInvitee.Id, PlanId: plan.Id, Status: "active", StartTime: now - 3600, EndTime: now + 86400, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+		require.NoError(t, DB.Create(&InvitationRewardEvent{Id: eventId, InviterId: prospectUser.Id, InviteeId: prospectInvitee.Id, SourceType: InvitationRewardEventSourceLegacySubscription, SourceId: subscriptionId, SourceSubscriptionId: subscriptionId, SourceAmountCents: 1, SourceCurrency: "CNY", EventStartTime: now - 3600, EventEndTime: now + 86400, Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now}).Error)
+	}
+
+	users, _, err := GetAllUsers(&common.PageInfo{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	byID := make(map[int]*User, len(users))
+	for _, user := range users {
+		byID[user.Id] = user
+	}
+
+	require.Contains(t, byID, commissionUser.Id)
+	assert.Equal(t, int64(1200), byID[commissionUser.Id].InvitationCommissionAvailableCents)
+	assert.Equal(t, int64(300), byID[commissionUser.Id].InvitationCommissionPendingCents)
+	assert.Equal(t, int64(400), byID[commissionUser.Id].InvitationCommissionWithdrawnCents)
+	assert.Equal(t, int64(500), byID[commissionUser.Id].InvitationCommissionTransferredCents)
+	assert.Equal(t, int64(2400), byID[commissionUser.Id].InvitationCommissionEarnedCents)
+	assert.Equal(t, int64(0), byID[commissionUser.Id].InvitationCommissionEstimatedCents)
+
+	require.Contains(t, byID, prospectUser.Id)
+	assert.Equal(t, int64(0), byID[prospectUser.Id].InvitationCommissionAvailableCents)
+	assert.Equal(t, 11, byID[prospectUser.Id].InvitationCommissionEstimatedEventCount)
+	assert.Equal(t, int64(8010), byID[prospectUser.Id].InvitationCommissionEstimatedSourceAmountCents)
+	assert.Equal(t, int64(800), byID[prospectUser.Id].InvitationCommissionEstimatedCents)
+}
+
 func TestInvitationCommissionModelsAutoMigrateAndSourceUniqueness(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.AutoMigrate(

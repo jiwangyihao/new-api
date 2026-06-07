@@ -183,6 +183,10 @@ export function AdminInvitationCommissionWithdrawals() {
   ) {
     setActionTarget(withdrawal)
     setActionType(type)
+    if (type === 'complete') {
+      setAdminRemark(t('Offline cashback has been paid'))
+      return
+    }
     setAdminRemark('')
   }
 
@@ -190,6 +194,10 @@ export function AdminInvitationCommissionWithdrawals() {
     setActionTarget(null)
     setActionType(null)
     setAdminRemark('')
+  }
+
+  function handleActionDialogOpenChange(open: boolean) {
+    if (!open) closeActionDialog()
   }
 
   function submitAction() {
@@ -399,7 +407,10 @@ export function AdminInvitationCommissionWithdrawals() {
         </Card>
       </SectionPageLayout.Content>
 
-      <Dialog open={Boolean(actionTarget)} onOpenChange={closeActionDialog}>
+      <Dialog
+        open={Boolean(actionTarget)}
+        onOpenChange={handleActionDialogOpenChange}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>

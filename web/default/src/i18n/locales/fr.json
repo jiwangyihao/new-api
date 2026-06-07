@@ -2745,6 +2745,7 @@
     "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.": "Obtenez la clé API, l'ID du commerçant et la paire de clés RSA depuis le tableau de bord Waffo, et configurez l'URL de rappel.",
     "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook": "Obtenez l'ID marchand, le magasin, le produit et les clés de signature dans le tableau de bord Waffo. URL du Webhook : <ServerAddress>/api/waffo-pancake/webhook",
     "Ocean Breeze": "Brise océane",
+    "Offline cashback has been paid": "Le remboursement hors ligne a été payé",
     "Official": "Officiel",
     "Official Repository": "Dépôt officiel",
     "Official Sync": "Synchronisation Officielle",

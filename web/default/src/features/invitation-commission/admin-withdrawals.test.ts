@@ -81,6 +81,9 @@ test('admin withdrawals page uses fixed route guard and refreshes withdrawals pl
   assert.doesNotMatch(page, /\.remark\b/)
   assert.match(api, /\/api\/admin\/invitation-commission\/withdrawals/)
   assert.match(api, /\/api\/admin\/tasks\/summary/)
+  assert.match(page, /function handleActionDialogOpenChange\(open: boolean\)/)
+  assert.match(page, /if \(!open\) closeActionDialog\(\)/)
+  assert.match(page, /setAdminRemark\(t\('Offline cashback has been paid'\)\)/)
 })
 
 test('admin withdrawals route guard allows only administrators', () => {

@@ -2745,6 +2745,7 @@
     "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.": "Obtain the API key, merchant ID, and RSA key pair from the Waffo dashboard, and configure the callback URL.",
     "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook": "Obtain the merchant, store, product and signing keys from your Waffo dashboard. Webhook URL: <ServerAddress>/api/waffo-pancake/webhook",
     "Ocean Breeze": "Ocean Breeze",
+    "Offline cashback has been paid": "Offline cashback has been paid",
     "Official": "Official",
     "Official Repository": "Official Repository",
     "Official Sync": "Official Sync",

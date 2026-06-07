@@ -31,14 +31,14 @@ test('legacy analytics filters keep conservative list defaults', () => {
   )
 })
 
-test('paid subscription analytics filters default to explicit all rows', () => {
+test('paid subscription analytics filters default to first paged list', () => {
   const filters = buildAdminAnalyticsCanonicalFilters({
     tab: 'paid-subscription-value',
   })
 
-  assert.equal(filters.limit, 0)
-  assert.equal(filters.top_n, 0)
-  assert.equal(buildAdminAnalyticsApiParams(filters).get('limit'), '0')
+  assert.equal(filters.limit, 20)
+  assert.equal(filters.top_n, 20)
+  assert.equal(buildAdminAnalyticsApiParams(filters).get('limit'), '20')
 })
 
 test('new paid subscription analytics tabs are accepted', () => {
@@ -125,6 +125,30 @@ test('paid subscription analytics params keep snapshot zero and shared filters',
   assert.equal(params.get('subscription_id'), '9')
   assert.deepEqual(params.getAll('user_ids'), ['1', '3'])
   assert.deepEqual(params.getAll('plan_ids'), ['2', '4'])
+})
+
+test('money sort is not serialized without a selected currency', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+    sort_by: 'recognized_remaining_value',
+  })
+  assert.equal(filters.sort_by, undefined)
+  assert.equal(
+    buildAdminAnalyticsApiParams(filters, { includeSort: true }).has('sort_by'),
+    false
+  )
+
+  const withCurrency = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+    sort_by: 'recognized_remaining_value',
+    currency: 'CNY',
+  })
+  assert.equal(
+    buildAdminAnalyticsApiParams(withCurrency, { includeSort: true }).get(
+      'sort_by'
+    ),
+    'recognized_remaining_value'
+  )
 })
 
 test('subscription id is serialized only when descriptor opts in', () => {
@@ -241,8 +265,8 @@ test('switching tabs resets list limits for the target tab family', () => {
     legacyFilters,
     'paid-subscription-value'
   )
-  assert.equal(paidFilters.limit, 0)
-  assert.equal(paidFilters.top_n, 0)
+  assert.equal(paidFilters.limit, 20)
+  assert.equal(paidFilters.top_n, 20)
 
   const nextLegacyFilters = switchAdminAnalyticsTab(paidFilters, 'overview')
   assert.equal(nextLegacyFilters.limit, 20)

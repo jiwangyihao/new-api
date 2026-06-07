@@ -18,6 +18,13 @@ test('paid analytics exposes visible row controls instead of relying on hidden l
   assert.match(indexSource, /enableAdminAnalyticsPagedRows/)
 })
 
+test('paid analytics exposes visible sort controls', () => {
+  assert.match(indexSource, /PaidAnalyticsSortControls/)
+  assert.match(indexSource, /adminAnalytics\.sort\.field/)
+  assert.match(indexSource, /recognized_remaining_value/)
+  assert.match(indexSource, /sort_order/)
+})
+
 test('paid analytics links directly to subscription statistics exclusions', () => {
   assert.match(indexSource, /to='\/system-settings\/billing\/\$section'/)
   assert.match(indexSource, /params=\{\{ section: 'statistics' \}\}/)

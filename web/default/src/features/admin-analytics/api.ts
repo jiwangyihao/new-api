@@ -45,6 +45,16 @@ async function getAdminAnalytics<T>(
   return res.data
 }
 
+export async function fetchAdminAnalyticsPath(
+  path: string,
+  params: URLSearchParams
+): Promise<ApiResponse<AdminAnalyticsPanelResponse<unknown>>> {
+  const res = await api.get<ApiResponse<AdminAnalyticsPanelResponse<unknown>>>(
+    `/api/admin-analytics/${path}?${params.toString()}`
+  )
+  return res.data
+}
+
 export const adminAnalyticsApi = {
   overview: (filters: AdminAnalyticsCanonicalFilters) =>
     getAdminAnalytics<AdminAnalyticsOverviewResponse>('overview', filters),

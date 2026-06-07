@@ -1,5 +1,4 @@
-import { adminAnalyticsApi } from '../api'
-import { buildAdminAnalyticsApiParams } from './filters'
+import { fetchAdminAnalyticsPath } from '../api'
 import { ADMIN_ANALYTICS_TABS } from '../constants'
 import type {
   AdminAnalyticsCanonicalFilters,
@@ -7,6 +6,7 @@ import type {
   AdminAnalyticsTab,
   ApiResponse,
 } from '../types'
+import { buildAdminAnalyticsApiParams } from './filters'
 
 export interface AdminAnalyticsRequestDescriptor {
   id: string
@@ -35,12 +35,85 @@ const singleEndpointByTab: Record<
   risks: 'risks',
 }
 
+const sortableSingleEndpoints = new Set([
+  'plan-distribution',
+  'quota-distribution',
+  'invitation-rewards',
+  'risks',
+])
+
 type DescriptorOptions = {
   enabled?: boolean
   includeTimeRange?: boolean
   includeSubscriptionID?: boolean
   includeUsage?: boolean
   includeSort?: boolean
+  sortBy?: string | null
+}
+
+const paidSubscriptionSortByByDescriptor: Record<
+  string,
+  ReadonlySet<string>
+> = {
+  'paid-subscription-value/users': new Set([
+    'recognized_remaining_value',
+    'active_paid_plan_count',
+    'earliest_end_time',
+    'user_id',
+  ]),
+  'paid-subscription-value/subscriptions': new Set([
+    'recognized_remaining_value',
+    'end_time',
+    'start_time',
+    'plan_price',
+    'subscription_id',
+  ]),
+  'paid-subscription-value/breakdown/plans': new Set([
+    'recognized_remaining_value',
+    'subscription_count',
+    'user_count',
+    'plan_id',
+  ]),
+  'paid-subscription-value/breakdown/sources': new Set([
+    'recognized_remaining_value',
+    'subscription_count',
+    'user_count',
+    'source',
+    'grant_reason',
+  ]),
+  'invitation-paid-subscriptions/inviters': new Set([
+    'recognized_invitation_paid_amount',
+    'active_invitation_paid_amount',
+    'active_invitation_remaining_value',
+    'paid_invitee_count',
+    'active_paid_invitee_count',
+    'inviter_user_id',
+  ]),
+  'invitation-paid-subscriptions/invitees': new Set([
+    'recognized_paid_amount',
+    'active_remaining_value',
+    'paid_subscription_snapshot_count',
+    'registered_at',
+    'invitee_user_id',
+  ]),
+  'invitation-paid-subscriptions/subscriptions': new Set([
+    'recognized_paid_amount',
+    'recognized_remaining_value',
+    'start_time',
+    'end_time',
+    'plan_price',
+    'subscription_id',
+  ]),
+}
+
+function sortByForDescriptor(
+  descriptorID: string,
+  sortBy: string | undefined
+): string | null {
+  if (sortBy === undefined) return null
+  const allowed = paidSubscriptionSortByByDescriptor[descriptorID]
+  if (allowed === undefined) return sortBy
+  return allowed.has(sortBy) ? sortBy : null
 }
 
 function descriptor(
@@ -60,13 +133,21 @@ function descriptor(
     includeSubscriptionID,
     includeUsage,
     includeSort,
-    buildParams: (nextFilters) =>
-      buildAdminAnalyticsApiParams(nextFilters, {
-        includeTimeRange,
-        includeSubscriptionID,
-        includeUsage,
-        includeSort,
-      }),
+    buildParams: (nextFilters) => {
+      const sortBy =
+        options.sortBy === undefined ? nextFilters.sort_by : options.sortBy
+      return buildAdminAnalyticsApiParams(
+        sortBy === null
+          ? { ...nextFilters, sort_by: undefined }
+          : { ...nextFilters, sort_by: sortBy },
+        {
+          includeTimeRange,
+          includeSubscriptionID,
+          includeUsage,
+          includeSort: includeSort && sortBy !== null,
+        }
+      )
+    },
   }
 }
 
@@ -77,6 +158,21 @@ export function adminAnalyticsTabLabelKey(tab: AdminAnalyticsTab): string {
   )
 }
 
+const adminAnalyticsDescriptorIDs = new Set([
+  ...Object.values(singleEndpointByTab),
+  'usage-consumption/summary',
+  'usage-consumption/timeseries',
+  'usage-consumption/breakdown',
+  'paid-subscription-value/summary',
+  'paid-subscription-value/users',
+  'paid-subscription-value/subscriptions',
+  'paid-subscription-value/breakdown/plans',
+  'paid-subscription-value/breakdown/sources',
+  'invitation-paid-subscriptions/summary',
+  'invitation-paid-subscriptions/inviters',
+  'invitation-paid-subscriptions/invitees',
+  'invitation-paid-subscriptions/subscriptions',
+])
 export function buildAdminAnalyticsRequestDescriptors(
   filters: AdminAnalyticsCanonicalFilters
 ): AdminAnalyticsRequestDescriptor[] {
@@ -97,48 +193,61 @@ export function buildAdminAnalyticsRequestDescriptors(
   }
   if (filters.tab === 'paid-subscription-value') {
     const hasSnapshot = filters.snapshot_at !== undefined
+    const sortFor = (id: string) => sortByForDescriptor(id, filters.sort_by)
     return [
       descriptor(filters, 'paid-subscription-value/summary'),
       descriptor(filters, 'paid-subscription-value/users', {
         enabled: hasSnapshot,
         includeSort: true,
+        sortBy: sortFor('paid-subscription-value/users'),
       }),
       descriptor(filters, 'paid-subscription-value/subscriptions', {
         enabled: hasSnapshot,
         includeSubscriptionID: true,
         includeSort: true,
+        sortBy: sortFor('paid-subscription-value/subscriptions'),
       }),
       descriptor(filters, 'paid-subscription-value/breakdown/plans', {
         enabled: hasSnapshot,
         includeSort: true,
+        sortBy: sortFor('paid-subscription-value/breakdown/plans'),
       }),
       descriptor(filters, 'paid-subscription-value/breakdown/sources', {
         enabled: hasSnapshot,
         includeSort: true,
+        sortBy: sortFor('paid-subscription-value/breakdown/sources'),
       }),
     ]
   }
   if (filters.tab === 'invitation-paid-subscriptions') {
     const hasSnapshot = filters.snapshot_at !== undefined
+    const sortFor = (id: string) => sortByForDescriptor(id, filters.sort_by)
     return [
       descriptor(filters, 'invitation-paid-subscriptions/summary'),
       descriptor(filters, 'invitation-paid-subscriptions/inviters', {
         enabled: hasSnapshot,
         includeSort: true,
+        sortBy: sortFor('invitation-paid-subscriptions/inviters'),
       }),
       descriptor(filters, 'invitation-paid-subscriptions/invitees', {
         enabled: hasSnapshot,
         includeSort: true,
+        sortBy: sortFor('invitation-paid-subscriptions/invitees'),
       }),
       descriptor(filters, 'invitation-paid-subscriptions/subscriptions', {
         enabled: hasSnapshot,
         includeSubscriptionID: true,
         includeSort: true,
+        sortBy: sortFor('invitation-paid-subscriptions/subscriptions'),
       }),
     ]
   }
   const endpoint = singleEndpointByTab[filters.tab]
-  return [descriptor(filters, endpoint, { includeSort: endpoint !== 'overview' })]
+  return [
+    descriptor(filters, endpoint, {
+      includeSort: sortableSingleEndpoints.has(endpoint),
+    }),
+  ]
 }
 
 type UnknownPanelResponse = ApiResponse<AdminAnalyticsPanelResponse<unknown>>
@@ -147,70 +256,10 @@ export async function fetchAdminAnalyticsDescriptor(
   descriptor: AdminAnalyticsRequestDescriptor,
   filters: AdminAnalyticsCanonicalFilters
 ): Promise<UnknownPanelResponse> {
-  switch (descriptor.id) {
-    case 'overview':
-      return adminAnalyticsApi.overview(filters) as Promise<UnknownPanelResponse>
-    case 'plan-distribution':
-      return adminAnalyticsApi.plans(filters) as Promise<UnknownPanelResponse>
-    case 'quota-distribution':
-      return adminAnalyticsApi.quota(filters) as Promise<UnknownPanelResponse>
-    case 'user-lifecycle':
-      return adminAnalyticsApi.users(filters) as Promise<UnknownPanelResponse>
-    case 'subscription-conversion':
-      return adminAnalyticsApi.conversion(filters) as Promise<UnknownPanelResponse>
-    case 'invitation-rewards':
-      return adminAnalyticsApi.invitations(filters) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/summary':
-      return adminAnalyticsApi.usageSummary(filters) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/timeseries':
-      return adminAnalyticsApi.usageTimeseries(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'usage-consumption/breakdown':
-      return adminAnalyticsApi.usageBreakdown(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'risks':
-      return adminAnalyticsApi.risks(filters) as Promise<UnknownPanelResponse>
-    case 'paid-subscription-value/summary':
-      return adminAnalyticsApi.paidSubscriptionValueSummary(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'paid-subscription-value/users':
-      return adminAnalyticsApi.paidSubscriptionValueUsers(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'paid-subscription-value/subscriptions':
-      return adminAnalyticsApi.paidSubscriptionValueSubscriptions(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'paid-subscription-value/breakdown/plans':
-      return adminAnalyticsApi.paidSubscriptionValuePlans(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'paid-subscription-value/breakdown/sources':
-      return adminAnalyticsApi.paidSubscriptionValueSources(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'invitation-paid-subscriptions/summary':
-      return adminAnalyticsApi.invitationPaidSummary(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'invitation-paid-subscriptions/inviters':
-      return adminAnalyticsApi.invitationPaidInviters(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'invitation-paid-subscriptions/invitees':
-      return adminAnalyticsApi.invitationPaidInvitees(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    case 'invitation-paid-subscriptions/subscriptions':
-      return adminAnalyticsApi.invitationPaidSubscriptions(
-        filters
-      ) as Promise<UnknownPanelResponse>
-    default:
-      throw new Error(`Unknown admin analytics descriptor: ${descriptor.id}`)
+  if (!adminAnalyticsDescriptorIDs.has(descriptor.id)) {
+    throw new Error(`Unknown admin analytics descriptor: ${descriptor.id}`)
   }
+  return fetchAdminAnalyticsPath(descriptor.id, descriptor.buildParams(filters))
 }
 
 export function warningReasons(

@@ -44,7 +44,6 @@ test('admin analytics tab labels come from tab descriptors', () => {
   )
 })
 
-
 test('paid subscription value descriptors negotiate snapshot before details', () => {
   const firstLoad = buildAdminAnalyticsCanonicalFilters({
     tab: 'paid-subscription-value',
@@ -71,7 +70,8 @@ test('paid subscription value descriptors negotiate snapshot before details', ()
     snapshot_at: 123,
     subscription_id: 9,
   })
-  const snapshotDescriptors = buildAdminAnalyticsRequestDescriptors(withSnapshot)
+  const snapshotDescriptors =
+    buildAdminAnalyticsRequestDescriptors(withSnapshot)
   assert.equal(snapshotDescriptors[0].enabled, true)
   assert.equal(snapshotDescriptors[1].enabled, true)
   assert.equal(snapshotDescriptors[2].enabled, true)
@@ -105,7 +105,8 @@ test('invitation paid descriptors enable detail endpoints only after snapshot', 
     snapshot_at: 123,
     time_range_explicit: true,
   })
-  const snapshotDescriptors = buildAdminAnalyticsRequestDescriptors(withSnapshot)
+  const snapshotDescriptors =
+    buildAdminAnalyticsRequestDescriptors(withSnapshot)
   assert.equal(snapshotDescriptors[0].enabled, true)
   assert.equal(snapshotDescriptors[1].enabled, true)
   assert.equal(snapshotDescriptors[2].enabled, true)
@@ -129,6 +130,7 @@ test('descriptor options participate in request parameter construction', () => {
     snapshot_at: 123,
     subscription_id: 9,
     sort_by: 'recognized_remaining_value',
+    currency: 'CNY',
   })
   const descriptor = buildAdminAnalyticsRequestDescriptors(filters).find(
     (item) => item.id === 'paid-subscription-value/subscriptions'
@@ -138,6 +140,52 @@ test('descriptor options participate in request parameter construction', () => {
   const params = descriptor.buildParams(filters)
   assert.equal(params.get('subscription_id'), '9')
   assert.equal(params.get('sort_by'), 'recognized_remaining_value')
+})
+
+test('paid descriptors only serialize sort fields accepted by each endpoint', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'paid-subscription-value',
+    snapshot_at: 123,
+    sort_by: 'user_id',
+  })
+  const descriptors = buildAdminAnalyticsRequestDescriptors(filters)
+  const users = descriptors.find(
+    (item) => item.id === 'paid-subscription-value/users'
+  )
+  const plans = descriptors.find(
+    (item) => item.id === 'paid-subscription-value/breakdown/plans'
+  )
+
+  assert.ok(users)
+  assert.ok(plans)
+  assert.equal(users.buildParams(filters).get('sort_by'), 'user_id')
+  assert.equal(plans.buildParams(filters).has('sort_by'), false)
+})
+
+test('single endpoint descriptors only serialize sort fields where backend accepts them', () => {
+  const usersFilters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'users',
+    sort_by: 'user_id',
+  })
+  const users = buildAdminAnalyticsRequestDescriptors(usersFilters)[0]
+  assert.equal(users.id, 'user-lifecycle')
+  assert.equal(users.buildParams(usersFilters).has('sort_by'), false)
+
+  const conversionFilters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'conversion',
+    sort_by: 'user_id',
+  })
+  const conversion = buildAdminAnalyticsRequestDescriptors(conversionFilters)[0]
+  assert.equal(conversion.id, 'subscription-conversion')
+  assert.equal(conversion.buildParams(conversionFilters).has('sort_by'), false)
+
+  const plansFilters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'plans',
+    sort_by: 'user_count',
+  })
+  const plans = buildAdminAnalyticsRequestDescriptors(plansFilters)[0]
+  assert.equal(plans.id, 'plan-distribution')
+  assert.equal(plans.buildParams(plansFilters).get('sort_by'), 'user_count')
 })
 
 test('invitation paid aggregate descriptors do not serialize subscription id', () => {

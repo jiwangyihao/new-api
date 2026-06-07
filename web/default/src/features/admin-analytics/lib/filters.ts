@@ -78,6 +78,15 @@ const excludedModes = new Set<string>([
   'excluded_only',
 ])
 
+const adminAnalyticsMoneySorts = new Set<string>([
+  'recognized_remaining_value',
+  'plan_price',
+  'recognized_invitation_paid_amount',
+  'active_invitation_paid_amount',
+  'active_invitation_remaining_value',
+  'recognized_paid_amount',
+  'active_remaining_value',
+])
 const adminAnalyticsNoLimit = 0
 
 const paidSubscriptionAnalyticsTabs = new Set<AdminAnalyticsTab>([
@@ -105,8 +114,8 @@ export function switchAdminAnalyticsTab(
       time_range_explicit: false,
       offset: 0,
       sort_by: undefined,
-      limit: adminAnalyticsNoLimit,
-      top_n: adminAnalyticsNoLimit,
+      limit: ADMIN_ANALYTICS_DEFAULT_LIMIT,
+      top_n: ADMIN_ANALYTICS_DEFAULT_LIMIT,
       ...(filters.currency !== undefined ? { currency: filters.currency } : {}),
     }
   }
@@ -224,7 +233,7 @@ export function enableAdminAnalyticsAllRows(
 
 export function enableAdminAnalyticsPagedRows(
   filters: AdminAnalyticsCanonicalFilters,
-  pageSize = ADMIN_ANALYTICS_MAX_LIMIT
+  pageSize = ADMIN_ANALYTICS_DEFAULT_LIMIT
 ): AdminAnalyticsCanonicalFilters {
   const limit = clampAdminAnalyticsLimit(pageSize)
   return {
@@ -279,12 +288,14 @@ export function buildAdminAnalyticsCanonicalFilters(
   )
   const snapshotAt = parseInteger(raw.snapshot_at)
   const currency = parseOptionalString(raw.currency)
-  const limit = paidSubscriptionAnalyticsTabs.has(tab)
-    ? (parseInteger(raw.limit) ?? adminAnalyticsNoLimit)
-    : parseLimit(raw.limit)
-  const topN = paidSubscriptionAnalyticsTabs.has(tab)
-    ? (parseInteger(raw.top_n) ?? adminAnalyticsNoLimit)
-    : parseLimit(raw.top_n)
+  const rawSortBy = firstString(raw.sort_by)?.trim() || undefined
+  const sortBy =
+    rawSortBy !== undefined &&
+    !(currency === undefined && adminAnalyticsMoneySorts.has(rawSortBy))
+      ? rawSortBy
+      : undefined
+  const limit = parseLimit(raw.limit)
+  const topN = parseLimit(raw.top_n)
   return {
     tab,
     start_timestamp: startTimestamp,
@@ -339,7 +350,7 @@ export function buildAdminAnalyticsCanonicalFilters(
     top_n: clampAdminAnalyticsLimit(topN),
     limit: clampAdminAnalyticsLimit(limit),
     offset: Math.max(parseInteger(raw.offset) ?? 0, 0),
-    sort_by: firstString(raw.sort_by)?.trim() || undefined,
+    sort_by: sortBy,
     sort_order: parseEnum<AdminAnalyticsSortOrder>(
       raw.sort_order,
       sortOrders,
@@ -347,7 +358,6 @@ export function buildAdminAnalyticsCanonicalFilters(
     ),
   }
 }
-
 function appendArray(
   params: URLSearchParams,
   key: string,
@@ -411,7 +421,14 @@ export function buildAdminAnalyticsApiParams(
     params.append('plan_attribution', filters.plan_attribution)
     params.append('top_n', String(filters.top_n))
   }
-  if (options.includeSort === true && filters.sort_by !== undefined) {
+  if (
+    options.includeSort === true &&
+    filters.sort_by !== undefined &&
+    !(
+      filters.currency === undefined &&
+      adminAnalyticsMoneySorts.has(filters.sort_by)
+    )
+  ) {
     params.append('sort_by', filters.sort_by)
   }
   return params

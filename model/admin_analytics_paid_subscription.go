@@ -143,7 +143,7 @@ func adminCurrentTokenCycleSeconds(sub UserSubscription, plan SubscriptionPlan, 
 }
 
 func adminTokenCycleBounds(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, planDurationSeconds int64, period string) (int64, int64) {
-	if period == SubscriptionResetCustom && plan.QuotaResetCustomSeconds > 0 && sub.LastResetTime > 0 && sub.NextResetTime-sub.LastResetTime == plan.QuotaResetCustomSeconds && sub.LastResetTime <= snapshotAt && snapshotAt < sub.NextResetTime {
+	if adminStoredResetWindowMatchesPeriod(sub, plan, snapshotAt, period) {
 		return sub.LastResetTime, sub.NextResetTime
 	}
 	snapshot := time.Unix(snapshotAt, 0).UTC()
@@ -179,6 +179,25 @@ func adminTokenCycleBounds(sub UserSubscription, plan SubscriptionPlan, snapshot
 	return sub.StartTime, sub.StartTime + planDurationSeconds
 }
 
+func adminStoredResetWindowMatchesPeriod(sub UserSubscription, plan SubscriptionPlan, snapshotAt int64, period string) bool {
+	if sub.LastResetTime <= 0 || sub.NextResetTime <= sub.LastResetTime || sub.LastResetTime > snapshotAt || snapshotAt >= sub.NextResetTime {
+		return false
+	}
+	window := sub.NextResetTime - sub.LastResetTime
+	switch period {
+	case SubscriptionResetDaily:
+		return window == 86400
+	case SubscriptionResetWeekly:
+		return window == 7*86400
+	case SubscriptionResetMonthly:
+		return true
+	case SubscriptionResetCustom:
+		return plan.QuotaResetCustomSeconds > 0 && window == plan.QuotaResetCustomSeconds
+	default:
+		return false
+	}
+}
+
 func adminTokenCycleValue(period string, price float64, cycleSeconds int64, planDurationSeconds int64) float64 {
 	if planDurationSeconds <= 0 || cycleSeconds <= 0 {
 		return 0
@@ -203,7 +222,7 @@ func adminFutureTokenCyclesValue(sub UserSubscription, plan SubscriptionPlan, sn
 
 	value := 0.0
 	for cursor := nextReset; cursor < sub.EndTime; {
-		cycleEnd := adminNextResetAfter(time.Unix(cursor, 0).UTC(), &plan, 0)
+		cycleEnd := adminNextTokenCycleEnd(cursor, plan, period, planDurationSeconds)
 		if cycleEnd <= cursor {
 			cycleEnd = sub.EndTime
 		}
@@ -216,10 +235,59 @@ func adminFutureTokenCyclesValue(sub UserSubscription, plan SubscriptionPlan, sn
 		if cycleSeconds <= 0 || segmentSeconds <= 0 {
 			break
 		}
-		value += adminTokenCycleValue(period, plan.PriceAmount, cycleSeconds, planDurationSeconds) * float64(segmentSeconds) / float64(cycleSeconds)
+		if segmentEnd < cycleEnd {
+			value += plan.PriceAmount * float64(segmentSeconds) / float64(planDurationSeconds)
+		} else {
+			value += adminTokenCycleValue(period, plan.PriceAmount, cycleSeconds, planDurationSeconds)
+		}
 		cursor = segmentEnd
 	}
 	return value
+}
+
+func adminNextTokenCycleEnd(cursor int64, plan SubscriptionPlan, period string, planDurationSeconds int64) int64 {
+	if cursor <= 0 {
+		return 0
+	}
+	base := time.Unix(cursor, 0).UTC()
+	switch period {
+	case SubscriptionResetDaily:
+		return base.AddDate(0, 0, 1).Unix()
+	case SubscriptionResetWeekly:
+		return base.AddDate(0, 0, 7).Unix()
+	case SubscriptionResetMonthly:
+		return adminNextMonthlyTokenCycleEnd(cursor, plan)
+	case SubscriptionResetCustom:
+		if plan.QuotaResetCustomSeconds > 0 {
+			return cursor + plan.QuotaResetCustomSeconds
+		}
+	}
+	if planDurationSeconds > 0 {
+		return cursor + planDurationSeconds
+	}
+	return 0
+}
+
+func adminNextMonthlyTokenCycleEnd(cursor int64, plan SubscriptionPlan) int64 {
+	baseLocal := time.Unix(cursor, 0).In(time.Local)
+	if adminIsMonthResetBoundary(baseLocal) {
+		if next := calcNextResetTime(baseLocal, &plan, 0); next > cursor {
+			return next
+		}
+		return 0
+	}
+	baseUTC := time.Unix(cursor, 0).UTC()
+	if adminIsMonthResetBoundary(baseUTC) {
+		return baseUTC.AddDate(0, 1, 0).Unix()
+	}
+	if next := calcNextResetTime(baseLocal, &plan, 0); next > cursor {
+		return next
+	}
+	return 0
+}
+
+func adminIsMonthResetBoundary(value time.Time) bool {
+	return value.Day() == 1 && value.Hour() == 0 && value.Minute() == 0 && value.Second() == 0 && value.Nanosecond() == 0
 }
 
 func adminNextResetAfter(base time.Time, plan *SubscriptionPlan, endUnix int64) int64 {

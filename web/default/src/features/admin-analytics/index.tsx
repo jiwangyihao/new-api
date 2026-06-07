@@ -341,13 +341,20 @@ function AdminAnalyticsFilterBar(props: {
                   id='admin-analytics-currency'
                   value={props.value.currency ?? ''}
                   placeholder='CNY'
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    const nextCurrency =
+                      event.target.value.trim().toUpperCase() || undefined
                     props.onApply({
                       ...props.value,
-                      currency:
-                        event.target.value.trim().toUpperCase() || undefined,
+                      currency: nextCurrency,
+                      sort_by:
+                        nextCurrency === undefined &&
+                        props.value.sort_by !== undefined &&
+                        paidAnalyticsMoneySortFields.has(props.value.sort_by)
+                          ? undefined
+                          : props.value.sort_by,
                     })
-                  }
+                  }}
                 />
               </div>
               <div className='grid gap-2'>
@@ -394,6 +401,10 @@ function AdminAnalyticsFilterBar(props: {
                 value={props.value}
                 onApply={props.onApply}
               />
+              <PaidAnalyticsSortControls
+                value={props.value}
+                onApply={props.onApply}
+              />
             </>
           ) : (
             <div className='grid gap-2'>
@@ -417,6 +428,113 @@ function AdminAnalyticsFilterBar(props: {
         <ActiveFilterSummary value={props.value} onApply={props.onApply} />
       </CardContent>
     </Card>
+  )
+}
+
+const paidAnalyticsMoneySortFields = new Set([
+  'recognized_remaining_value',
+  'plan_price',
+  'recognized_invitation_paid_amount',
+  'active_invitation_paid_amount',
+  'active_invitation_remaining_value',
+  'recognized_paid_amount',
+  'active_remaining_value',
+])
+
+const paidValueSortOptions = [
+  'recognized_remaining_value',
+  'active_paid_plan_count',
+  'earliest_end_time',
+  'user_id',
+  'end_time',
+  'start_time',
+  'plan_price',
+  'subscription_id',
+  'subscription_count',
+  'user_count',
+  'source',
+  'grant_reason',
+] as const
+
+const invitationPaidSortOptions = [
+  'recognized_invitation_paid_amount',
+  'active_invitation_paid_amount',
+  'active_invitation_remaining_value',
+  'paid_invitee_count',
+  'active_paid_invitee_count',
+  'inviter_user_id',
+  'recognized_paid_amount',
+  'active_remaining_value',
+  'paid_subscription_snapshot_count',
+  'registered_at',
+  'invitee_user_id',
+  'recognized_remaining_value',
+  'start_time',
+  'end_time',
+  'plan_price',
+  'subscription_id',
+] as const
+
+function PaidAnalyticsSortControls(props: {
+  value: AdminAnalyticsCanonicalFilters
+  onApply: (next: AdminAnalyticsCanonicalFilters) => void
+}): JSX.Element {
+  const { t } = useTranslation()
+  const options =
+    props.value.tab === 'invitation-paid-subscriptions'
+      ? invitationPaidSortOptions
+      : paidValueSortOptions
+
+  return (
+    <div className='grid gap-2 lg:col-span-2'>
+      <Label>{t('adminAnalytics.sort.field')}</Label>
+      <div className='flex flex-wrap items-center gap-2'>
+        <NativeSelect
+          value={props.value.sort_by ?? ''}
+          onChange={(event) => {
+            const sortBy = event.target.value || undefined
+            props.onApply({
+              ...props.value,
+              sort_by: sortBy,
+              currency:
+                sortBy !== undefined &&
+                paidAnalyticsMoneySortFields.has(sortBy) &&
+                props.value.currency === undefined
+                  ? 'CNY'
+                  : props.value.currency,
+              offset: 0,
+            })
+          }}
+        >
+          <NativeSelectOption value=''>
+            {t('adminAnalytics.sort.default')}
+          </NativeSelectOption>
+          {options.map((option) => (
+            <NativeSelectOption key={option} value={option}>
+              {t(`adminAnalytics.sort.${option}`)}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+        <NativeSelect
+          value={props.value.sort_order}
+          onChange={(event) =>
+            props.onApply({
+              ...props.value,
+              sort_order: event.target
+                .value as AdminAnalyticsCanonicalFilters['sort_order'],
+              offset: 0,
+            })
+          }
+        >
+          <NativeSelectOption value='desc'>
+            {t('adminAnalytics.sort.desc')}
+          </NativeSelectOption>
+          <NativeSelectOption value='asc'>
+            {t('adminAnalytics.sort.asc')}
+          </NativeSelectOption>
+        </NativeSelect>
+      </div>
+    </div>
   )
 }
 

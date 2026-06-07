@@ -103,15 +103,32 @@ func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 	require.InDelta(t, 44, value.TimeBasedValue, 0.0001)
 	require.True(t, value.TokenBasedValueAvailable)
 	require.Greater(t, value.TokenBasedValue, value.TimeBasedValue)
-	require.InDelta(t, 75.8710, value.TokenBasedValue, 0.0001)
+	require.InDelta(t, 76, value.TokenBasedValue, 0.0001)
 
 	res, err := GetAdminPaidSubscriptionValueSummary(adminPaidTestQuery(snapshot))
 	require.NoError(t, err)
 	adminPaidRequireAmount(t, res.Data.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY, 44)
 	adminPaidRequireAmount(t, res.Data.Summary.TimeBasedValueByCurrency, adminPaidTestCurrencyCNY, 44)
-	adminPaidRequireAmount(t, res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY, 75.8710)
+	adminPaidRequireAmount(t, res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY, 76)
 }
 
+func TestPaidSubscriptionValueMonthlyTokenValueUsesPlanPriceAndProratesTailByTime(t *testing.T) {
+	snapshot := time.Date(2026, 6, 6, 16, 36, 1, 0, time.UTC).Unix()
+	plan := adminPaidTestPlan(1, 40, adminPaidTestCurrencyCNY)
+	plan.DurationUnit = SubscriptionDurationMonth
+	plan.DurationValue = 1
+	plan.QuotaResetPeriod = SubscriptionResetMonthly
+	sub := UserSubscription{Id: 1, UserId: 1, PlanId: 1, Status: "active", StartTime: snapshot, EndTime: time.Date(2026, 7, 6, 16, 36, 1, 0, time.UTC).Unix(), TokenLimit: 1000000000, TokenUsed: 5472434, GrantReason: "redemption", Source: "redemption", LastResetTime: snapshot, NextResetTime: time.Date(2026, 6, 30, 16, 0, 0, 0, time.UTC).Unix()}
+
+	value, err := adminRecognizedRemainingValue(sub, plan, snapshot)
+	require.NoError(t, err)
+	require.True(t, value.TokenBasedValueAvailable)
+	currentCycleValue := 40 * float64(1000000000-5472434) / 1000000000
+	tailTimeValue := 40 * float64(sub.EndTime-sub.NextResetTime) / float64(30*86400)
+	require.InDelta(t, currentCycleValue+tailTimeValue, value.TokenBasedValue, 0.0001)
+	require.InDelta(t, 40, value.TimeBasedValue, 0.0001)
+	require.InDelta(t, 40, value.RecognizedRemainingValue, 0.0001)
+}
 func TestPaidSubscriptionValueTimeOnlyWhenTokenUnavailable(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()
@@ -142,8 +159,8 @@ func TestPaidSubscriptionValueTokenOveruseCurrentCycleIsZero(t *testing.T) {
 	value, err := adminRecognizedRemainingValue(sub, plan, snapshot)
 	require.NoError(t, err)
 	require.True(t, value.TokenBasedValueAvailable)
-	require.InDelta(t, 43.8710, value.TokenBasedValue, 0.0001)
-	require.InDelta(t, 43.8710, value.RecognizedRemainingValue, 0.0001)
+	require.InDelta(t, 44, value.TokenBasedValue, 0.0001)
+	require.InDelta(t, 44, value.RecognizedRemainingValue, 0.0001)
 }
 
 func TestPaidSubscriptionValueNeverResetDoesNotAddFutureCycles(t *testing.T) {
@@ -238,6 +255,22 @@ func TestPaidSubscriptionValueUsesCalendarResetBoundariesForFutureTokens(t *test
 		require.True(t, value.TokenBasedValueAvailable)
 		require.InDelta(t, 760, value.TokenBasedValue, 0.0001)
 	})
+}
+
+func TestPaidSubscriptionValueMonthlyFutureCycleUsesLocalResetCadence(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("Asia/Shanghai", 8*3600)
+	defer func() { time.Local = originalLocal }()
+
+	plan := adminPaidTestPlan(1, 310, adminPaidTestCurrencyCNY)
+	plan.DurationUnit = SubscriptionDurationMonth
+	plan.DurationValue = 1
+	plan.QuotaResetPeriod = SubscriptionResetMonthly
+	cursor := time.Date(2026, 1, 31, 16, 0, 0, 0, time.UTC).Unix()
+
+	cycleEnd := adminNextTokenCycleEnd(cursor, plan, SubscriptionResetMonthly, 31*86400)
+
+	require.Equal(t, time.Date(2026, 2, 28, 16, 0, 0, 0, time.UTC).Unix(), cycleEnd)
 }
 
 func TestPaidSubscriptionValueDailyWeeklyCustomResetProratesCycleValue(t *testing.T) {

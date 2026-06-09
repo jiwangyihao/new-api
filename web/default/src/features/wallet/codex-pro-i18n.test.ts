@@ -1,26 +1,25 @@
-import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
-
-import { STATIC_I18N_KEYS } from '@/i18n/static-keys'
 import en from '@/i18n/locales/en.json'
 import fr from '@/i18n/locales/fr.json'
 import ja from '@/i18n/locales/ja.json'
 import ru from '@/i18n/locales/ru.json'
 import vi from '@/i18n/locales/vi.json'
 import zh from '@/i18n/locales/zh.json'
+import { STATIC_I18N_KEYS } from '@/i18n/static-keys'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import {
+  CODEX_PRO_MODE_OPTIONS,
+  CODEX_PRO_MODE_TITLE_KEY,
+} from '@/features/subscriptions/components/codex-pro-mode-control'
 
 type Expect<T extends true> = T
 
 type StaticI18nKey = (typeof STATIC_I18N_KEYS)[number]
 
 const requiredCodexProKeys = [
-  'Codex Pro',
-  'All',
-  'Flexible',
-  'Off',
-  'All eligible GPT-family Responses requests try Codex Pro without requiring the intent header.',
-  'Only requests with X-NewAPI-Codex-Pro-Intent: codex-pro try Codex Pro in flexible mode.',
-  'Codex Pro is disabled; eligible requests stay on the normal group.',
+  CODEX_PRO_MODE_TITLE_KEY,
+  ...CODEX_PRO_MODE_OPTIONS.map((option) => option.labelKey),
+  ...CODEX_PRO_MODE_OPTIONS.map((option) => option.descriptionKey),
   'Only eligible GPT-family requests can try Codex Pro.',
   'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.',
   'Fallback requests are billed at the normal rate.',

@@ -16,7 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
 import { formatNumber } from '@/lib/format'
 import { computeTimeRange } from '@/lib/time'
@@ -32,13 +34,42 @@ import type {
   QuotaDataItem,
   DashboardFilters,
 } from '@/features/dashboard/types'
+import {
+  getSelfSubscriptionFull,
+  updateCodexProMode,
+} from '@/features/subscriptions/api'
+import {
+  canUseCodexProModeControl,
+  CodexProModeControl,
+  getCodexProModeFailureRollback,
+  normalizeCodexProMode,
+  normalizeCodexProUnavailableReason,
+} from '@/features/subscriptions/components/codex-pro-mode-control'
+import type {
+  CodexProMode,
+  SelfSubscriptionData,
+} from '@/features/subscriptions/types'
 
 interface LogStatCardsProps {
   filters?: DashboardFilters
   onDataUpdate?: (data: QuotaDataItem[], loading: boolean) => void
 }
 
+function normalizeSelfSubscriptionData(
+  data: SelfSubscriptionData
+): SelfSubscriptionData {
+  return {
+    ...data,
+    codex_pro_mode: normalizeCodexProMode(data.codex_pro_mode),
+    codex_pro_eligible: data.codex_pro_eligible === true,
+    codex_pro_unavailable_reason: normalizeCodexProUnavailableReason(
+      data.codex_pro_unavailable_reason
+    ),
+  }
+}
+
 export function LogStatCards(props: LogStatCardsProps) {
+  const { t } = useTranslation()
   const statCardsConfig = useModelStatCardsConfig()
   const user = useAuthStore((state) => state.auth.user)
   const isAdmin = !!(user?.role && user.role >= 10)
@@ -48,10 +79,95 @@ export function LogStatCards(props: LogStatCardsProps) {
   } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  const [selfSubscriptionData, setSelfSubscriptionData] =
+    useState<SelfSubscriptionData | null>(null)
+  const [loadingSelfSubscription, setLoadingSelfSubscription] = useState(true)
+  const [savingCodexProMode, setSavingCodexProMode] = useState(false)
 
   const [timeRangeMinutes, setTimeRangeMinutes] = useState(0)
 
   const { filters, onDataUpdate } = props
+
+  const fetchSelfSubscription = useCallback(async () => {
+    setLoadingSelfSubscription(true)
+
+    try {
+      const res = await getSelfSubscriptionFull()
+      if (res.success && res.data) {
+        setSelfSubscriptionData(normalizeSelfSubscriptionData(res.data))
+      } else {
+        setSelfSubscriptionData(null)
+      }
+    } catch {
+      setSelfSubscriptionData(null)
+    } finally {
+      setLoadingSelfSubscription(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    void fetchSelfSubscription()
+  }, [fetchSelfSubscription])
+
+  const handleCodexProModeChange = async (requestedMode: CodexProMode) => {
+    if (
+      !selfSubscriptionData ||
+      savingCodexProMode ||
+      !canUseCodexProModeControl(selfSubscriptionData)
+    ) {
+      return
+    }
+
+    const previousMode = selfSubscriptionData.codex_pro_mode
+    if (previousMode === requestedMode) return
+
+    setSavingCodexProMode(true)
+    setSelfSubscriptionData({
+      ...selfSubscriptionData,
+      codex_pro_mode: requestedMode,
+    })
+
+    try {
+      const res = await updateCodexProMode({ mode: requestedMode })
+      const updated = res.data
+      if (res.success && updated) {
+        setSelfSubscriptionData((current) => {
+          if (!current) return current
+          return normalizeSelfSubscriptionData({
+            ...current,
+            codex_pro_mode: updated.codex_pro_mode,
+            codex_pro_eligible: updated.codex_pro_eligible,
+            codex_pro_unavailable_reason: updated.codex_pro_unavailable_reason,
+          })
+        })
+        toast.success(t('Setting saved'))
+        void fetchSelfSubscription()
+        return
+      }
+
+      const rollback = getCodexProModeFailureRollback({
+        previousMode,
+        requestedMode,
+      })
+      setSelfSubscriptionData((current) => {
+        if (!current) return current
+        return { ...current, codex_pro_mode: rollback.mode }
+      })
+      toast.error(res.message || t(rollback.messageKey))
+    } catch {
+      const rollback = getCodexProModeFailureRollback({
+        previousMode,
+        requestedMode,
+      })
+      setSelfSubscriptionData((current) => {
+        if (!current) return current
+        return { ...current, codex_pro_mode: rollback.mode }
+      })
+      toast.error(t(rollback.messageKey))
+    } finally {
+      setSavingCodexProMode(false)
+    }
+  }
 
   useEffect(() => {
     const abortController = new AbortController()
@@ -150,6 +266,15 @@ export function LogStatCards(props: LogStatCardsProps) {
           )
         })}
       </div>
+      {selfSubscriptionData && (
+        <div className='border-t p-3 sm:p-4'>
+          <CodexProModeControl
+            data={selfSubscriptionData}
+            saving={savingCodexProMode || loadingSelfSubscription}
+            onModeChange={handleCodexProModeChange}
+          />
+        </div>
+      )}
     </div>
   )
 }

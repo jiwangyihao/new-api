@@ -32,18 +32,17 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   StatusBadge,
   dotColorMap,
   textColorMap,
 } from '@/components/status-badge'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   getPublicPlans,
   getSelfSubscriptionFull,
   resetSubscriptionQuota,
   setActiveSubscription,
-  updateCodexProMode,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
@@ -53,8 +52,6 @@ import {
   formatTokenLimit,
 } from '@/features/subscriptions/lib'
 import type {
-  CodexProMode,
-  CodexProUnavailableReason,
   PlanRecord,
   SelfSubscriptionData,
   UserSubscriptionRecord,
@@ -63,102 +60,6 @@ import { getSubscriptionDisplayLabel } from '../lib/subscription-display'
 import type { PaymentMethod, TopupInfo } from '../types'
 
 type TranslationFn = (key: string, options?: Record<string, unknown>) => string
-
-export const CODEX_PRO_MODE_TITLE_KEY = 'Codex Pro'
-
-export const CODEX_PRO_MODE_OPTIONS: Array<{
-  value: CodexProMode
-  labelKey: string
-  descriptionKey: string
-}> = [
-  {
-    value: 'all',
-    labelKey: 'All',
-    descriptionKey:
-      'All eligible GPT-family Responses requests try Codex Pro without requiring the intent header.',
-  },
-  {
-    value: 'flexible',
-    labelKey: 'Flexible',
-    descriptionKey:
-      'Only requests with X-NewAPI-Codex-Pro-Intent: codex-pro try Codex Pro in flexible mode.',
-  },
-  {
-    value: 'off',
-    labelKey: 'Off',
-    descriptionKey: 'Codex Pro is disabled; eligible requests stay on the normal group.',
-  },
-]
-
-export function canUseCodexProModeControl<T extends {
-  codex_pro_eligible?: boolean
-}>(data: T): boolean {
-  return data.codex_pro_eligible === true
-}
-
-function normalizeCodexProUnavailableReason(
-  reason: string | undefined
-): CodexProUnavailableReason {
-  switch (reason) {
-    case '':
-    case 'wallet_only':
-    case 'trial_subscription':
-    case 'reward_subscription':
-    case 'no_paid_subscription':
-      return reason
-    default:
-      return 'no_paid_subscription'
-  }
-}
-
-export function getCodexProUnavailableMessageKey(
-  reason: CodexProUnavailableReason
-): string
-export function getCodexProUnavailableMessageKey(reason: string): string
-export function getCodexProUnavailableMessageKey(reason: string): string {
-  switch (reason) {
-    case 'wallet_only':
-      return 'Your current billing preference will not create a subscription billing session.'
-    case 'trial_subscription':
-      return 'Trial subscriptions do not support Codex Pro.'
-    case 'reward_subscription':
-      return 'Invitation reward subscriptions do not support Codex Pro.'
-    case 'no_paid_subscription':
-    default:
-      return 'Please purchase an eligible paid subscription first.'
-  }
-}
-
-export function getCodexProModeFailureRollback(input: {
-  previousMode: CodexProMode
-  requestedMode: CodexProMode
-}): { mode: CodexProMode; messageKey: string } {
-  return {
-    mode:
-      input.previousMode === input.requestedMode
-        ? input.requestedMode
-        : input.previousMode,
-    messageKey: 'Request failed',
-  }
-}
-
-function normalizeCodexProMode(mode: string | undefined): CodexProMode {
-  if (mode === 'all' || mode === 'off') return mode
-  return 'flexible'
-}
-
-function normalizeSelfSubscriptionData(
-  data: SelfSubscriptionData
-): SelfSubscriptionData {
-  return {
-    ...data,
-    codex_pro_mode: normalizeCodexProMode(data.codex_pro_mode),
-    codex_pro_eligible: data.codex_pro_eligible === true,
-    codex_pro_unavailable_reason: normalizeCodexProUnavailableReason(
-      data.codex_pro_unavailable_reason
-    ),
-  }
-}
 
 interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
@@ -183,7 +84,9 @@ function getRawSubscriptionSource(
   record: UserSubscriptionRecord | null | undefined
 ): string {
   const subscription = record?.subscription
-  return subscription?.grant_reason?.trim() || subscription?.source?.trim() || ''
+  return (
+    subscription?.grant_reason?.trim() || subscription?.source?.trim() || ''
+  )
 }
 
 function isPaidLikeSubscription(
@@ -209,7 +112,11 @@ export function getSubscriptionSourceLabel(
   if (sourceLabel === 'invitation_reward') return t('Invitation reward')
   if (sourceLabel === 'trial') return t('Trial')
   const source = getRawSubscriptionSource(record)
-  if (source === 'order' || source === 'redemption' || isPaidLikeSubscription(record)) {
+  if (
+    source === 'order' ||
+    source === 'redemption' ||
+    isPaidLikeSubscription(record)
+  ) {
     return t('Paid plan')
   }
   if (source === 'monthly_invite_entitlement') return t('Invitation reward')
@@ -239,7 +146,6 @@ function formatUsedTokenCount(value: number, t: TranslationFn): string {
   return formatTokenLimit(value, t)
 }
 
-
 export function SubscriptionPlansCard({
   topupInfo,
   onAvailabilityChange,
@@ -262,12 +168,12 @@ export function SubscriptionPlansCard({
   >(null)
   const [pendingActiveSubscriptionId, setPendingActiveSubscriptionId] =
     useState<number | null>(null)
-  const [resetTarget, setResetTarget] =
-    useState<UserSubscriptionRecord | null>(null)
+  const [resetTarget, setResetTarget] = useState<UserSubscriptionRecord | null>(
+    null
+  )
   const [resettingQuotaId, setResettingQuotaId] = useState<number | null>(null)
   const [selfSubscriptionData, setSelfSubscriptionData] =
     useState<SelfSubscriptionData | null>(null)
-  const [savingCodexProMode, setSavingCodexProMode] = useState(false)
 
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
@@ -295,14 +201,14 @@ export function SubscriptionPlansCard({
     try {
       const res = await getSelfSubscriptionFull()
       if (res.success && res.data) {
-        const normalizedData = normalizeSelfSubscriptionData(res.data)
-        setSelfSubscriptionData(normalizedData)
-        setActiveSubscriptions(normalizedData.subscriptions || [])
-        setAllSubscriptions(normalizedData.all_subscriptions || [])
+        const data = res.data
+        setSelfSubscriptionData(data)
+        setActiveSubscriptions(data.subscriptions || [])
+        setAllSubscriptions(data.all_subscriptions || [])
         const activeId = Number(
-          normalizedData.active_subscription_id ||
-            normalizedData.summary?.active_subscription_id ||
-            normalizedData.summary?.subscription_id ||
+          data.active_subscription_id ||
+            data.summary?.active_subscription_id ||
+            data.summary?.subscription_id ||
             0
         )
         setActiveSubscriptionId(activeId > 0 ? activeId : null)
@@ -333,9 +239,13 @@ export function SubscriptionPlansCard({
   const handleSetActiveSubscription = async (subscriptionId: number) => {
     setPendingActiveSubscriptionId(subscriptionId)
     try {
-      const res = await setActiveSubscription({ subscription_id: subscriptionId })
+      const res = await setActiveSubscription({
+        subscription_id: subscriptionId,
+      })
       if (res.success) {
-        const activeId = Number(res.data?.active_subscription_id || subscriptionId)
+        const activeId = Number(
+          res.data?.active_subscription_id || subscriptionId
+        )
         setActiveSubscriptionId(activeId)
         toast.success(t('Active subscription updated'))
         await fetchSelfSubscription()
@@ -346,69 +256,6 @@ export function SubscriptionPlansCard({
       toast.error(t('Request failed'))
     } finally {
       setPendingActiveSubscriptionId(null)
-    }
-  }
-
-  const handleCodexProModeChange = async (requestedMode: CodexProMode) => {
-    if (!selfSubscriptionData || savingCodexProMode) return
-    if (!canUseCodexProModeControl(selfSubscriptionData)) return
-    const previousMode = selfSubscriptionData.codex_pro_mode
-    if (requestedMode === previousMode) return
-
-    setSavingCodexProMode(true)
-    setSelfSubscriptionData({
-      ...selfSubscriptionData,
-      codex_pro_mode: requestedMode,
-    })
-    try {
-      const res = await updateCodexProMode({ mode: requestedMode })
-      if (res.success && res.data) {
-        const updatedCodexProMode = res.data.codex_pro_mode
-        const updatedCodexProEligible = res.data.codex_pro_eligible
-        const updatedCodexProUnavailableReason =
-          res.data.codex_pro_unavailable_reason
-        setSelfSubscriptionData((current) => {
-          if (!current) return current
-          return {
-            ...current,
-            codex_pro_mode: normalizeCodexProMode(updatedCodexProMode),
-            codex_pro_eligible: updatedCodexProEligible === true,
-            codex_pro_unavailable_reason: normalizeCodexProUnavailableReason(
-              updatedCodexProUnavailableReason
-            ),
-          }
-        })
-        toast.success(t('Setting saved'))
-        await fetchSelfSubscription()
-        return
-      }
-      const rollback = getCodexProModeFailureRollback({
-        previousMode,
-        requestedMode,
-      })
-      setSelfSubscriptionData((current) => {
-        if (!current) return current
-        return {
-          ...current,
-          codex_pro_mode: rollback.mode,
-        }
-      })
-      toast.error(res.message || t(rollback.messageKey))
-    } catch {
-      const rollback = getCodexProModeFailureRollback({
-        previousMode,
-        requestedMode,
-      })
-      setSelfSubscriptionData((current) => {
-        if (!current) return current
-        return {
-          ...current,
-          codex_pro_mode: rollback.mode,
-        }
-      })
-      toast.error(t(rollback.messageKey))
-    } finally {
-      setSavingCodexProMode(false)
     }
   }
 
@@ -432,29 +279,22 @@ export function SubscriptionPlansCard({
     }
   }
 
-
-
   const hasActive = activeSubscriptions.length > 0
   const hasAny = allSubscriptions.length > 0
   const isAvailable = loading || plans.length > 0 || hasAny
-  const codexProControlAvailable = selfSubscriptionData
-    ? canUseCodexProModeControl(selfSubscriptionData)
-    : false
-  const codexProUnavailableMessageKey = selfSubscriptionData
-    ? getCodexProUnavailableMessageKey(
-        selfSubscriptionData.codex_pro_unavailable_reason
-      )
-    : getCodexProUnavailableMessageKey('no_paid_subscription')
+
+  const subscriptionRecordsForPurchaseCount =
+    selfSubscriptionData?.all_subscriptions ?? allSubscriptions
 
   const planPurchaseCountMap = useMemo(() => {
     const map = new Map<number, number>()
-    for (const sub of allSubscriptions) {
+    for (const sub of subscriptionRecordsForPurchaseCount) {
       const planId = sub?.subscription?.plan_id
       if (!planId) continue
       map.set(planId, (map.get(planId) || 0) + 1)
     }
     return map
-  }, [allSubscriptions])
+  }, [subscriptionRecordsForPurchaseCount])
 
   useEffect(() => {
     onAvailabilityChange?.(isAvailable)
@@ -596,8 +436,12 @@ export function SubscriptionPlansCard({
                     subscription?.status === 'active' && !isExpired
                   const isSelected =
                     !!subscription?.is_active_selected ||
-                    (!!activeSubscriptionId && subscriptionId === activeSubscriptionId)
-                  const canResetQuota = canResetSubscriptionQuotaFromRecord(sub, now)
+                    (!!activeSubscriptionId &&
+                      subscriptionId === activeSubscriptionId)
+                  const canResetQuota = canResetSubscriptionQuotaFromRecord(
+                    sub,
+                    now
+                  )
                   const isSettingActive =
                     pendingActiveSubscriptionId === subscriptionId
                   const isResetting = resettingQuotaId === subscriptionId
@@ -609,7 +453,9 @@ export function SubscriptionPlansCard({
                     >
                       <div className='flex flex-wrap items-start justify-between gap-2'>
                         <div className='flex min-w-0 flex-wrap items-center gap-2'>
-                          <span className='font-medium'>{subscriptionLabel}</span>
+                          <span className='font-medium'>
+                            {subscriptionLabel}
+                          </span>
                           {isActive ? (
                             <StatusBadge
                               label={t('Active')}
@@ -696,7 +542,8 @@ export function SubscriptionPlansCard({
                               render={<span className='cursor-help' />}
                             >
                               {formatUsedTokenCount(tokenUsed, t)}/
-                              {formatTokenLimit(tokenLimit, t)} · {t('Remaining')}{' '}
+                              {formatTokenLimit(tokenLimit, t)} ·{' '}
+                              {t('Remaining')}{' '}
                               {formatTokenLimit(remainTokens, t)}
                             </TooltipTrigger>
                             <TooltipContent>
@@ -715,7 +562,10 @@ export function SubscriptionPlansCard({
                       </div>
                       <div className='text-muted-foreground mt-1'>
                         {t('Concurrency Limit')}:{' '}
-                        {formatConcurrencyLimit(subscription?.concurrency_limit, t)}
+                        {formatConcurrencyLimit(
+                          subscription?.concurrency_limit,
+                          t
+                        )}
                       </div>
                       {tokenLimit > 0 && isActive && (
                         <Progress value={usagePercent} className='mt-2 h-1.5' />
@@ -731,79 +581,6 @@ export function SubscriptionPlansCard({
             <p className='text-muted-foreground mt-2 text-xs'>
               {t('Subscribe to a plan for model access')}
             </p>
-          )}
-
-          {selfSubscriptionData && (
-            <>
-              <Separator className='my-3' />
-              <div className='rounded-lg border bg-muted/20 p-3'>
-                <div className='flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between'>
-                  <div className='min-w-0 space-y-2'>
-                    <div className='flex flex-wrap items-center gap-2'>
-                      <span className='text-sm font-medium'>
-                        {t(CODEX_PRO_MODE_TITLE_KEY)}
-                      </span>
-                      <StatusBadge
-                        label={
-                          codexProControlAvailable
-                            ? t('Available')
-                            : t('Not available')
-                        }
-                        variant={codexProControlAvailable ? 'success' : 'neutral'}
-                        copyable={false}
-                      />
-                    </div>
-                    <div className='text-muted-foreground space-y-1 text-xs'>
-                      <p>
-                        {t('Only eligible GPT-family requests can try Codex Pro.')}
-                      </p>
-                      <p>
-                        {t(
-                          'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.'
-                        )}
-                      </p>
-                      <p>{t('Fallback requests are billed at the normal rate.')}</p>
-                      <p>
-                        <code>X-NewAPI-Codex-Pro-Intent: codex-pro</code>
-                      </p>
-                      {!codexProControlAvailable && (
-                        <p>{t(codexProUnavailableMessageKey)}</p>
-                      )}
-                    </div>
-                  </div>
-                  <div className='grid min-w-0 gap-2 sm:grid-cols-3 lg:w-[30rem]'>
-                    {CODEX_PRO_MODE_OPTIONS.map((option) => {
-                      const selected =
-                        selfSubscriptionData.codex_pro_mode === option.value
-                      return (
-                        <Button
-                          key={option.value}
-                          type='button'
-                          variant={selected ? 'default' : 'outline'}
-                          className='h-auto min-h-16 flex-col items-start justify-start gap-1 whitespace-normal px-3 py-2 text-left'
-                          onClick={() => handleCodexProModeChange(option.value)}
-                          disabled={!codexProControlAvailable || savingCodexProMode}
-                        >
-                          <span className='text-sm font-medium'>
-                            {t(option.labelKey)}
-                          </span>
-                          <span
-                            className={cn(
-                              'text-xs leading-snug',
-                              selected
-                                ? 'text-primary-foreground/80'
-                                : 'text-muted-foreground'
-                            )}
-                          >
-                            {t(option.descriptionKey)}
-                          </span>
-                        </Button>
-                      )
-                    })}
-                  </div>
-                </div>
-              </div>
-            </>
           )}
         </div>
 

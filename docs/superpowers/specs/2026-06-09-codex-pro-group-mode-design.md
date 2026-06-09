@@ -21,7 +21,7 @@
 5. 只在上游明确返回「实际由 Pro 分组 serve 成功」的可信 ack 后，才按 2 倍订阅 token 结算。
 6. 请求失败、上游回退普通分组、ack 缺失或 ack 值不匹配时，一律按普通倍率结算。
 7. 补齐下游请求意图、上游请求标记、上游 serve ack 的协议边界。
-8. 在控制台合适位置提供用户开关，并在 API 帮助中给出 Codex、Claude Code、OpenCode、Oh-My-Pi、Hermes Agent、OpenClaw 的 Header 配置方式。
+8. 在控制台合适位置提供用户开关，并在 API 帮助中给出 Codex、Claude Code、OpenCode、Oh My Pi / OMP、Hermes Agent、OpenClaw 的 Header 配置方式。
 
 ## 非目标
 
@@ -96,15 +96,16 @@
 
 生成 Pro 请求 marker 必须同时满足：
 
-1. 用户当前有有效付费套餐。
-2. 实际计费来源是订阅，而不是纯钱包。
-3. 套餐不是试用套餐。
-4. 请求模型属于 GPT 系列文本模型。
-5. 用户模式不是 `off`。
-6. 当前请求路径支持读取上游 serve ack。
-7. 模式为 `all`；或模式为 `flexible` 且下游请求带 `X-NewAPI-Codex-Pro-Intent: codex-pro`。
+1. 当前请求实际创建的是订阅 `BillingSession`，不是纯钱包或免费请求。
+2. 该 `BillingSession` 选中的 `UserSubscription` 是当前 active、未过期、未耗尽的可计费订阅。
+3. 关联 `SubscriptionPlan.price_amount > 0`，且 `is_trial = false`、`invite_trial = false`。
+4. `UserSubscription.grant_reason` / `source` 不属于 `trial_code`、`invite_trial`、`monthly_invite_entitlement` 等非销售赠送来源。
+5. 请求模型属于 GPT 系列文本模型。
+6. 用户模式不是 `off`。
+7. 当前请求路径支持读取上游 serve ack。
+8. 模式为 `all`；或模式为 `flexible` 且下游请求带 `X-NewAPI-Codex-Pro-Intent: codex-pro`。
 
-其中「付费套餐」以有效订阅关联的 `SubscriptionPlan.price_amount > 0` 且 `is_trial = false` 为基础判断。不能只依赖套餐名称、兑换码来源或客户端声明。`flexible` 模式中的下游 intent 只是弱意图，不能绕过前 6 条资格判断。
+其中「付费套餐资格」必须落在本次请求实际选中的订阅实例上，不能只按套餐定义、套餐名称、兑换码来源或客户端声明判断。实现应复用订阅预扣 / 主计费订阅选择逻辑，或抽出与其等价的只读 helper，确保资格判断与实际计费来源一致。管理员售后分配的有价订阅按付费等价处理；试用、邀请试用、邀请奖励等非销售赠送权益不算付费等价。`flexible` 模式中的下游 intent 只是弱意图，不能绕过前 7 条资格判断。
 
 ## 协议设计
 
@@ -146,8 +147,9 @@ X-NewAPI-Pro-Request: codex-pro
 最终化规则：
 
 1. 最终出站前先按大小写不敏感语义删除任何来源的 `X-NewAPI-Pro-Request`。
-2. 仅当内部 `RelayInfo` 判定本次请求允许尝试 Pro 时，写入 `X-NewAPI-Pro-Request: codex-pro`。
-3. 其他情况保持 Header 缺失。
+2. 最终化必须晚于 adaptor 默认 Header、通道 `header_override`、`param_override` 的 `set_header` / `delete_header` / `pass_headers`、runtime Header override 和客户端 Header passthrough。
+3. 仅当内部 `RelayInfo` 判定本次请求允许尝试 Pro 时，写入 `X-NewAPI-Pro-Request: codex-pro`。
+4. 其他情况保持 Header 缺失。
 
 ### 上游响应 ack（sub2api → new-api）
 
@@ -156,17 +158,17 @@ X-NewAPI-Pro-Request: codex-pro
 ```http
 X-NewAPI-Pro-Served: codex-pro
 ```
-
 语义：
 
-- `sub2api` 确认本次请求实际由 Codex Pro 分组 serve 成功。
-- 只有该 Header 存在且值精确等于 `codex-pro` 时，`new-api` 才能把本次订阅 token 消耗解释为 Pro serve。
-- 请求回退普通分组、未命中 Pro 分组、失败、超时、取消或未完成 Pro 分组 serve 时，`sub2api` 不得返回该 Header。
+- `sub2api` 用该 Header 声明本次响应由 Codex Pro 分组 serve。
+- `new-api` 只能把它作为候选 ack；只有同一次请求已发送 `X-NewAPI-Pro-Request: codex-pro`、响应 Header 值精确等于 `codex-pro`，且 handler 确认请求成功完成后，才能把内部 `CodexProServed` 置为 true。
+- 非流式 / compact 请求必须成功解析 usage 且没有 upstream error；流式请求必须收到 `response.completed` 且流状态为正常结束。
+- 请求回退普通分组、未命中 Pro 分组、失败、超时、取消、流式未完成、上游 error 或最终结算失败时，都不得按 Pro served 处理。
 - `sub2api` 不返回倍率，不返回金额，不返回用户信息。
 
 ### 上游 body ack
 
-本期不使用 body ack。唯一可信的上游 serve ack 是响应 Header：
+本期不使用 body ack。唯一可作为候选信号的上游 serve ack 是响应 Header：
 
 ```http
 X-NewAPI-Pro-Served: codex-pro
@@ -175,8 +177,21 @@ X-NewAPI-Pro-Served: codex-pro
 原因：
 
 - Header 不需要修改 OpenAI Responses 的下游 body，兼容非流式、流式和 compact 路径。
+- 对流式请求，响应 Header 早于 `response.completed` 到达，因此它只能是候选信号；最终是否 2x 必须由 `new-api` 在流正常完成后决定。
 - ack 是 `new-api` 与 `sub2api` 的内部结算信号，不面向终端用户展示。
-- 如果未来出现无法稳定读取响应 Header 的上游路径，需要单独设计 body ack；不能在本期实现中隐式接受任意 body 字段作为结算凭据。
+- 如果未来出现无法稳定读取响应 Header 的上游路径，需要单独设计 body ack 或 trailer ack；不能在本期实现中隐式接受任意 body 字段作为结算凭据。
+
+### ack 响应过滤
+
+`X-NewAPI-Pro-Served` 是内部结算 Header。`new-api` 读取候选 ack 后，必须在写给终端用户的响应 Header 中删除该 Header。
+
+该过滤必须覆盖：
+
+- Codex Responses 非流式路径；
+- Codex Responses 流式 SSE 路径；
+- Codex Responses compact 路径。
+
+终端用户不应从响应 Header 中看到 `X-NewAPI-Pro-Served`，也不能依赖该 Header 判断计费结果。
 
 ## 计费设计
 
@@ -217,13 +232,16 @@ if pro_served_ack == true:
 
 - 用户模式为 `off`。
 - 用户没有有效付费套餐。
-- 当前实际使用的是试用套餐。
+- 当前实际使用的是试用套餐或非销售赠送权益。
 - 请求模型不是 GPT 系列文本模型。
 - 未发送 `X-NewAPI-Pro-Request: codex-pro`。
 - 上游没有返回 `X-NewAPI-Pro-Served: codex-pro`。
 - 上游返回其他值，例如 `pro`、`true`、`2x`。
 - 请求失败、超时、取消、流式未完成。
 - 上游回退到普通分组。
+- 上游请求重试后由普通分组成功；失败尝试中的候选 ack 不得污染最终结算。
+
+每次上游尝试开始前，都必须重置 Pro request marker 候选、served ack 候选和最终 billed 标记。
 
 ## 数据与 API 设计
 
@@ -241,7 +259,14 @@ CodexProMode string `json:"codex_pro_mode,omitempty"`
 - `all`、`flexible`、`off`：原样保留。
 - 其他历史脏值：读取时按 `flexible` 处理，更新接口收到非法值时返回参数错误。
 
-该字段不放进通用 `UpdateUserSettingRequest`。新增订阅域接口：
+实现必须提供统一 helper，例如：
+
+- `NormalizeCodexProMode(mode string) string`：读取和响应规范化用。
+- `ValidateCodexProModeForUpdate(mode string) error`：更新接口校验用。
+
+所有写回用户 `setting` JSON 的路径都必须保留 `CodexProMode` 原值。现有通用通知设置更新、语言、侧栏、排行榜展示名、订阅扣费偏好、激活订阅等接口不能因为整包重写 `dto.UserSetting` 而擦掉该字段。新增订阅域接口也必须读取当前 setting 后只修改 `CodexProMode`，再按现有用户设置缓存策略同步 Redis / user cache。
+
+该字段不放进通用 `UpdateUserSettingRequest`。新增订阅域接口，与现有 `/api/subscription/self/preference`、`/api/subscription/self/active` 同属 `UserAuth` 保护的订阅路由：
 
 ```http
 PUT /api/subscription/self/codex-pro-mode
@@ -255,7 +280,15 @@ PUT /api/subscription/self/codex-pro-mode
 }
 ```
 
-响应体返回规范化后的模式和资格状态。
+非法 `mode` 返回现有参数错误风格。成功响应固定返回：
+
+```json
+{
+  "codex_pro_mode": "flexible",
+  "codex_pro_eligible": true,
+  "codex_pro_unavailable_reason": ""
+}
+```
 
 ### 资格返回
 
@@ -269,12 +302,15 @@ PUT /api/subscription/self/codex-pro-mode
 }
 ```
 
-`codex_pro_unavailable_reason` 使用固定枚举：
+`codex_pro_eligible` 表示账号 / 订阅层是否有资格配置和使用 Codex Pro，不包含当前请求的模型、下游 intent、上游 ack 路径，也不受当前 `codex_pro_mode = "off"` 影响。用户主动选择 `off` 只由 `codex_pro_mode` 表达，不能把选择器禁用，用户必须能再切回 `all` 或 `flexible`。
 
-- `no_paid_subscription`
-- `trial_subscription`
-- `wallet_only`
-- `disabled`
+`codex_pro_unavailable_reason` 使用固定枚举，并按以下优先级返回第一个命中的原因：
+
+1. `feature_disabled`：系统级功能关闭。本期若不实现系统级开关，则不返回该值。
+2. `wallet_only`：当前扣费策略或实际可用来源导致请求不会创建订阅 `BillingSession`。
+3. `trial_subscription`：当前可计费订阅是 `is_trial`、`invite_trial`、`trial_code` 或 `invite_trial` 来源。
+4. `reward_subscription`：当前权益来自 `monthly_invite_entitlement` 等邀请奖励 / 非销售赠送来源。
+5. `no_paid_subscription`：没有 active、未过期、未耗尽的付费等价订阅。
 
 前端展示中文时通过 i18n 翻译，不直接展示枚举原文。
 
@@ -282,7 +318,7 @@ PUT /api/subscription/self/codex-pro-mode
 
 ### 主入口
 
-主入口放在 `web/default/src/features/wallet/components/subscription-plans-card.tsx` 或其相邻订阅控制组件中。
+主入口放在 `web/default/src/features/wallet/components/subscription-plans-card.tsx` 的「My Subscriptions」/ 当前订阅信息区域附近，或抽成同目录相邻子组件后由该卡片引用。不得散落到充值卡片、可购买套餐卡片或 `ProfileSettingsCard`。
 
 理由：
 
@@ -293,9 +329,18 @@ PUT /api/subscription/self/codex-pro-mode
 ### 展示规则
 
 - 有资格用户：展示三态选择器和 2x 说明。
-- 无资格用户：展示禁用态和原因，例如「仅付费套餐用户可用」。
+- 无资格用户：展示禁用态和行动导向原因，例如「请先购买有效付费套餐」「试用套餐不支持 Codex Pro」「当前钱包优先策略不会创建订阅计费会话」。
+- 当前模式为 `off` 但账号仍有资格时，选择器保持可用，用户必须能切回 `all` 或 `flexible`。
 - 默认选择 `灵活`。
 - 切换后立即调用订阅域 API 保存，失败则回滚 UI 状态并提示。
+
+每个选项必须有用户可见说明：
+
+| 选项 | 用户可见说明 |
+| --- | --- |
+| 全部 | 符合资格的 GPT 系列请求无需额外 Header 即尝试 Pro；只有实际上游 Pro serve 成功才会 2x。 |
+| 灵活 | 默认。只有带 `X-NewAPI-Codex-Pro-Intent: codex-pro` 的请求才尝试 Pro；未配置 Header 的请求按普通模式处理。 |
+| 关闭 | 不尝试 Pro，不发送 Pro 请求 marker。 |
 
 ### i18n
 
@@ -311,12 +356,16 @@ PUT /api/subscription/self/codex-pro-mode
 文案需要明确：
 
 - Pro 分组只对符合条件的 GPT 系列请求生效。
-- 只有实际由 Pro 分组 serve 的请求才会产生 2 倍订阅 token 消耗。
+- `X-NewAPI-Codex-Pro-Intent` 只是弱 intent，不保证命中 Pro，也不保证 2x。
+- 只有实际由 Pro 分组 serve 且上游返回 `X-NewAPI-Pro-Served: codex-pro` 的请求，才会产生 2 倍订阅 token 消耗。
 - 回退普通分组不加倍。
+
+实现完成后必须在 `web/default` 下运行 `bun run i18n:sync`，并确认 6 种语言无缺失 key。若新增动态翻译 key，需要同步现有静态 key 收集文件。
 
 ## Harness 配置引导
 
-API 帮助弹窗应补充以下配置说明，目标是让用户能把 `X-NewAPI-Codex-Pro-Intent: codex-pro` 传给 `new-api`。该 Header 只让默认 `flexible` 模式按 harness 启用 Pro，不是计费凭据。
+API 帮助弹窗应补充以下配置说明，目标是让用户能把 `X-NewAPI-Codex-Pro-Intent: codex-pro` 传给 `new-api`。该 Header 只让默认 `flexible` 模式按 harness 启用 Pro，不是计费凭据；实际 2x 只在上游返回 `X-NewAPI-Pro-Served: codex-pro` 且请求成功结算后发生。
+
 ### Codex CLI
 
 Codex 官方配置支持：
@@ -330,9 +379,9 @@ Codex 官方配置支持：
 
 ```toml
 model = "gpt-5"
-model_provider = "newapi"
+model_provider = "new-api"
 
-[model_providers.newapi]
+[model_providers.new-api]
 name = "new-api"
 base_url = "https://example.com/v1"
 wire_api = "responses"
@@ -358,7 +407,7 @@ export ANTHROPIC_CUSTOM_HEADERS="X-NewAPI-Codex-Pro-Intent: codex-pro"
 
 ### OpenCode
 
-OpenCode provider 配置支持 `options.baseURL`，现有生成器也能在模型元数据中注入 `headers`。
+OpenCode 生成器必须保留现有 provider id、`npm` 包和文件结构，只追加 Header 配置；不得把 `new-api` 改成 `newapi`，也不得把 `@ai-sdk/openai` 改成其他包。
 
 示例：
 
@@ -366,8 +415,8 @@ OpenCode provider 配置支持 `options.baseURL`，现有生成器也能在模�
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "newapi": {
-      "npm": "@ai-sdk/openai-compatible",
+    "new-api": {
+      "npm": "@ai-sdk/openai",
       "name": "new-api",
       "options": {
         "baseURL": "https://example.com/v1",
@@ -386,20 +435,21 @@ OpenCode provider 配置支持 `options.baseURL`，现有生成器也能在模�
 }
 ```
 
-### Oh-My-Pi
+### Oh My Pi / OMP
 
-现有配置引导生成 `models.yml` / `config.yml`，provider 已有 `baseUrl` / `apiKey`。本期需要扩展 Oh-My-Pi 配置引导，使 provider 或模型级配置支持 headers：
+现有配置引导生成 `models.yml` / `config.yml`，provider id 为 `new-api`，provider 已有 `baseUrl` / `apiKey`。本期只在现有 artifact 上追加 Header，不改变 provider id、文件结构或基础字段。
 
 ```yaml
 providers:
-  newapi:
+  new-api:
+    api: openai-responses
     baseUrl: https://example.com/v1
     apiKey: sk-...
     headers:
       X-NewAPI-Codex-Pro-Intent: codex-pro
 ```
 
-如果目标 Oh-My-Pi 版本的配置 schema 尚不支持 `headers`，API 帮助必须明确标注「当前版本不支持按配置注入 Header，无法在 `flexible` 模式下按 harness 触发 Pro；可在控制台改用 `全部` 模式」。不得生成看似可用但实际不会生效的配置。
+如果目标 Oh My Pi / OMP 版本的配置 schema 尚不支持 `headers`，API 帮助必须明确标注「当前版本不支持按配置注入 Header，无法在 `flexible` 模式下按 harness 触发 Pro；可在控制台改用 `全部` 模式」。不得生成看似可用但实际不会生效的配置。
 
 ### Hermes Agent
 
@@ -410,45 +460,37 @@ Hermes Agent 官方配置目前稳定支持 `base_url` / `api_key`，未在已�
 
 ### OpenClaw
 
-OpenClaw 自定义 provider 支持 `models.providers.*.headers`，也支持 `models.providers.*.request.headers` 作为请求传输覆盖。API 帮助应优先生成 provider 级静态 Header：
-
-```json5
-{
-  models: {
-    providers: {
-      "newapi": {
-        baseUrl: "https://example.com/v1",
-        apiKey: "sk-...",
-        api: "openai-responses",
-        headers: {
-          "X-NewAPI-Codex-Pro-Intent": "codex-pro"
-        }
-      }
-    }
-  }
-}
-```
+OpenClaw 项也必须采用保守策略：只有完成当前版本配置字段核验后，才能输出带 `X-NewAPI-Codex-Pro-Intent: codex-pro` 的配置示例。未核验字段时，API 帮助必须明确提示 `flexible` 模式无法通过 OpenClaw 配置 Header 触发 Pro，用户可在控制台改用 `全部` 模式；不得生成未经验证的假配置。
 
 ## 后端实现边界
 
 实现时应保持改动集中：
 
-1. 用户模式枚举和校验函数。
-2. 订阅域 API 读取和更新模式。
-3. relay 运行时字段，例如：
+1. 用户模式枚举、读取规范化和更新校验函数。
+2. 订阅域 API 读取和更新模式，并保留其他用户 setting 字段。
+3. 订阅资格 helper，结果必须与本次请求实际订阅计费来源一致。
+4. relay 运行时字段，例如：
    - `RelayInfo.CodexProRequestMarker string`
    - `RelayInfo.CodexProServed bool`
-4. Header 最终化函数，例如：
+   - `RelayInfo.CodexProServedCandidate bool`
+5. Header 最终化函数，例如：
    - `FinalizeProRequestHeader(header http.Header, marker string)`
-5. Codex Responses handler 解析上游 ack 并写回 `BillingSession` 或等效结算输入。
-6. 结算阶段只根据内部 `CodexProServed` 状态对订阅 token 做 2x。
+6. Codex Responses handler 读取上游响应 Header 候选 ack，过滤下游响应 Header，并在请求成功完成后写回 `BillingSession` 或等效结算输入。
+7. 结算阶段只根据内部 `CodexProServed` 状态对订阅 token 做 2x。
 
 不要把 `X-NewAPI-Pro-Served` 从客户端透传为可信输入。它只应来自上游响应。
+
+本期支持读取 ack 的请求路径固定为 Codex adaptor 的 OpenAI Responses 非流式、Responses 流式和 Responses compact handler。其他 chat completions、realtime、audio、task、WebSocket、SDK 等路径即使模型是 GPT 且用户模式为 `all`，也不得发送 Pro request marker，除非同一实现计划补齐对应 ack 捕获和结算测试。
+
+GPT 系列 gating 必须复用现有 `common.IsOpenAITextModel` 或同等单一 helper，避免另写一套模型前缀判断。
+
+消费日志或 admin 可见排查信息中应记录：`codex_pro_mode`、是否发送 Pro request marker、是否看到候选 served ack、最终是否按 Pro 结算、固定倍率 `2`、request id / upstream request id。日志不得包含用户传入的敏感 Header 原文。
 
 ## 安全性
 
 - 所有 Pro 内部 Header 都是保留 Header。
 - 下游客户端传入 `X-NewAPI-Pro-Request`、`X-NewAPI-Pro-Served` 必须被删除或忽略。
+- 上游响应中的 `X-NewAPI-Pro-Served` 读取后必须从下游响应 Header 中删除。
 - 通道配置不能覆盖最终内部 Header。
 - 上游 ack 不携带用户 ID、订阅 ID、套餐 ID、金额或倍率。
 - 结算日志可记录是否 Pro served，但不应把敏感 Header 原样暴露给普通用户。
@@ -471,31 +513,40 @@ OpenClaw 自定义 provider 支持 `models.providers.*.headers`，也支持 `mod
    - `all`、`flexible`、`off` 合法。
    - 空值规范化为 `flexible`。
    - 更新接口收到非法值会返回参数错误；读取历史脏值时按 `flexible` 处理。
-2. **资格判断测试**
-   - 有效付费套餐可用。
-   - 试用套餐、无套餐、钱包-only 不可用。
-3. **模型 gating 测试**
+2. **用户设置保留与缓存测试**
+   - 通用用户设置更新、语言、侧栏、排行榜、订阅偏好、激活订阅写回后保留 `CodexProMode`。
+   - 更新 Codex Pro 模式后，DB setting 与 Redis / user cache 中的 setting 保持一致。
+3. **资格判断测试**
+   - active、未过期、未耗尽的付费等价订阅可用。
+   - 试用套餐、`invite_trial`、`trial_code`、邀请奖励、无套餐、过期 / 耗尽订阅、wallet-only 不可用。
+   - `ActiveSubscriptionId` 指向试用 / 奖励 / 付费订阅时，资格与实际预扣选择一致。
+4. **模型 gating 测试**
    - `gpt-*`、`o1`、`o3`、`o4`、`chatgpt` 类模型可参与。
    - 非 GPT 系列模型不参与。
-4. **上游请求 Header 最终化测试**
+   - gating 复用统一 helper，不能出现另一套前缀判断。
+5. **上游请求 Header 最终化测试**
    - 符合条件时最终写入 `X-NewAPI-Pro-Request: codex-pro`。
    - 不符合条件时缺失。
-   - 客户端或通道配置无法伪造、覆盖或删除。
-5. **上游 ack 解析测试**
-   - 响应 Header 为 `X-NewAPI-Pro-Served: codex-pro` 时记录 Pro served。
+   - 客户端或通道配置无法通过 `*` / regex passthrough、`{client_header:...}`、runtime `pass_headers`、`set_header`、`delete_header` 伪造、覆盖或删除。
+6. **上游 ack 解析与过滤测试**
+   - 响应 Header 为 `X-NewAPI-Pro-Served: codex-pro` 时只记录候选 ack。
    - 缺失、大小写异常值、其他值都不记录。
-   - 流式请求只有在 `response.completed` 后才可记录成功 serve。
-6. **2x 结算测试**
-   - ack 成功时订阅 token 按 2x 结算。
-   - ack 缺失、失败、回退普通分组时按 1x。
-   - 钱包 quota 不被错误 2x。
+   - 非流式 / compact 请求成功解析 usage 且无 upstream error 后才记录最终 Pro served。
+   - 流式请求只有在 `response.completed` 且正常结束后才可记录最终 Pro served。
+   - 下游响应 Header 不包含 `X-NewAPI-Pro-Served`。
+7. **2x 结算测试**
+   - ack 成功且请求成功完成时订阅 token 按 2x 结算。
+   - ack 缺失、失败、回退普通分组、流式未完成、重试后普通分组成功时按 1x。
+   - 钱包 quota、渠道 quota、模型价格倍率、非订阅 token 不被错误 2x。
    - 订阅预扣不足时补扣 / 退款行为符合现有账务规则。
-7. **前端测试**
+8. **前端测试**
    - 有资格用户可切换三态。
-   - 无资格用户看到禁用态和原因。
+   - `off` 模式不禁用选择器。
+   - 无资格用户看到行动导向原因。
    - 保存失败会回滚 UI。
-8. **配置引导测试**
-   - Codex、Claude Code、OpenCode、Oh-My-Pi、Hermes Agent、OpenClaw 帮助文案覆盖对应 Header 能力或明确限制。
+9. **配置引导测试**
+   - Codex、Claude Code、OpenCode、Oh My Pi / OMP、Hermes Agent、OpenClaw 帮助文案覆盖对应 Header 能力或明确限制。
+   - OpenCode / OMP 生成器保留现有 provider id、包名和文件结构，只追加 Header。
    - i18n 同步后 6 种语言均无缺失 key。
 
 ## 验收标准
@@ -504,8 +555,9 @@ OpenClaw 自定义 provider 支持 `models.providers.*.headers`，也支持 `mod
 - 默认模式为 `灵活`。
 - 付费套餐用户发起 GPT 系列请求时，只有 `all` 模式，或 `flexible` 模式且下游带 `X-NewAPI-Codex-Pro-Intent: codex-pro` 时，`new-api` 才向上游发送 `X-NewAPI-Pro-Request: codex-pro`。
 - 客户端和通道配置不能伪造 `X-NewAPI-Pro-Request` 或 `X-NewAPI-Pro-Served`。
-- `sub2api` 返回 `X-NewAPI-Pro-Served: codex-pro` 时，本次订阅 token 消耗按 2x 结算。
-- ack 缺失、请求失败、回退普通分组或非 GPT 模型时不 2x。
+- `X-NewAPI-Pro-Served` 不会暴露给终端用户响应。
+- `sub2api` 返回 `X-NewAPI-Pro-Served: codex-pro` 且请求成功完成时，本次订阅 token 消耗按 2x 结算。
+- ack 缺失、请求失败、回退普通分组、流式未完成、非 GPT 模型或非销售赠送权益时不 2x。
 - 钱包 quota、试用套餐、无订阅请求不被 Pro 2x 影响。
-- API 帮助中提供各 harness 的 Header 配置方式，并明确 Header 只是 intent，不是计费凭据。
-- 所有新增前端文案完成 `en`、`zh`、`fr`、`ja`、`ru`、`vi` 翻译。
+- API 帮助中提供各 harness 的 Header 配置方式或明确限制，并明确 Header 只是 intent，不是计费凭据。
+- 所有新增前端文案完成 `en`、`zh`、`fr`、`ja`、`ru`、`vi` 翻译，并通过 `bun run i18n:sync` 检查。

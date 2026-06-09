@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -437,4 +439,61 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 
 	require.Equal(t, int64(10000), summary.ToolCallSurchargeQuota.Round(0).IntPart())
 	require.Equal(t, 12000, quota)
+}
+
+func TestSubscriptionTokensForTextSettleCodexProServedDoublesSubscriptionTokens(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		BillingSource: BillingSourceSubscription,
+		Billing: &BillingSession{funding: &SubscriptionFunding{
+			DistributorTokenBilling: true,
+		}},
+		RelayMode: relayconstant.RelayModeResponses,
+	}
+	setTextQuotaBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+
+	actual := subscriptionTokensForTextSettle(relayInfo, 11, 999)
+
+	require.Equal(t, int64(22), actual)
+}
+
+func TestSubscriptionTokensForTextSettleCodexProUnavailableKeepsSingleSubscriptionTokens(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		BillingSource: BillingSourceSubscription,
+		Billing: &BillingSession{funding: &SubscriptionFunding{
+			DistributorTokenBilling: true,
+		}},
+		RelayMode: relayconstant.RelayModeResponses,
+	}
+
+	actual := subscriptionTokensForTextSettle(relayInfo, 11, 999)
+
+	require.Equal(t, int64(11), actual)
+}
+
+func TestSubscriptionTokensForTextSettleCodexProServedDoesNotDoubleWalletQuota(t *testing.T) {
+	legacySubscription := &relaycommon.RelayInfo{
+		BillingSource: BillingSourceSubscription,
+		Billing: &BillingSession{funding: &SubscriptionFunding{
+			DistributorTokenBilling: false,
+		}},
+		RelayMode: relayconstant.RelayModeResponses,
+	}
+	setTextQuotaBoolFieldForTest(t, legacySubscription, "CodexProServed", true)
+	require.Equal(t, int64(37), subscriptionTokensForTextSettle(legacySubscription, 11, 37))
+
+	walletOnly := &relaycommon.RelayInfo{BillingSource: BillingSourceWallet, RelayMode: relayconstant.RelayModeResponses}
+	setTextQuotaBoolFieldForTest(t, walletOnly, "CodexProServed", true)
+	require.Equal(t, int64(11), subscriptionTokensForTextSettle(walletOnly, 11, 37))
+
+	freeRequest := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeResponses}
+	setTextQuotaBoolFieldForTest(t, freeRequest, "CodexProServed", true)
+	require.Equal(t, int64(11), subscriptionTokensForTextSettle(freeRequest, 11, 37))
+}
+
+func setTextQuotaBoolFieldForTest(t *testing.T, target any, fieldName string, value bool) {
+	t.Helper()
+	field := reflect.ValueOf(target).Elem().FieldByName(fieldName)
+	require.Truef(t, field.IsValid(), "%T must expose %s", target, fieldName)
+	require.Truef(t, field.CanSet(), "%T.%s must be settable", target, fieldName)
+	field.SetBool(value)
 }

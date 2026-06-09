@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
@@ -1330,21 +1331,28 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 }
 
 type SubscriptionPreConsumeResult struct {
-	UserSubscriptionId      int
-	PreConsumed             int64
-	AmountTotal             int64
-	AmountUsedBefore        int64
-	AmountUsedAfter         int64
-	TokenLimit              int64
-	TokenUsedBefore         int64
-	TokenUsedAfter          int64
-	TokenRemaining          int64
-	DistributorTokenBilling bool
-	ConcurrencyLimit        int
-	QueueCapacity           int
-	PlanId                  int
-	PlanIsTrial             bool
-	PlanTitle               string
+	UserSubscriptionId         int
+	PreConsumed                int64
+	AmountTotal                int64
+	AmountUsedBefore           int64
+	AmountUsedAfter            int64
+	TokenLimit                 int64
+	TokenUsedBefore            int64
+	TokenUsedAfter             int64
+	TokenRemaining             int64
+	DistributorTokenBilling    bool
+	ConcurrencyLimit           int
+	QueueCapacity              int
+	PlanId                     int
+	PlanIsTrial                bool
+	PlanTitle                  string
+	PlanPriceAmount            float64
+	PlanInviteTrial            bool
+	SubscriptionSource         string
+	SubscriptionGrantReason    string
+	SubscriptionStatus         string
+	SubscriptionEndTime        int64
+	SubscriptionTokenRemaining int64
 }
 
 // ExpireDueSubscriptions marks expired subscriptions and handles group downgrade.
@@ -1811,6 +1819,68 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 	return summary, nil
 }
 
+func GetCodexProEligibility(userId int, _ dto.UserSetting) (bool, string, error) {
+	if userId <= 0 {
+		return false, "", errors.New("invalid userId")
+	}
+	now := GetDBTimestamp()
+	var selection *primaryBillableSubscription
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		selected, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, false, true)
+		if err != nil {
+			return err
+		}
+		selection = selected
+		return nil
+	})
+	if err != nil {
+		return false, "", err
+	}
+	if selection == nil {
+		return false, "no_paid_subscription", nil
+	}
+	sub := &selection.Subscription
+	plan := selection.Plan
+	if codexProTrialSubscriptionSource(sub.GrantReason) || codexProTrialSubscriptionSource(sub.Source) || (plan != nil && (plan.IsTrial || plan.InviteTrial)) {
+		return false, "trial_subscription", nil
+	}
+	if codexProRewardSubscriptionSource(sub.GrantReason) || codexProRewardSubscriptionSource(sub.Source) {
+		return false, "reward_subscription", nil
+	}
+	if codexProPaidEquivalentSubscription(sub, plan) {
+		return true, "", nil
+	}
+	return false, "no_paid_subscription", nil
+}
+
+func codexProPaidEquivalentSubscription(sub *UserSubscription, plan *SubscriptionPlan) bool {
+	if sub == nil || plan == nil || plan.PriceAmount <= 0 || plan.IsTrial || plan.InviteTrial {
+		return false
+	}
+	if codexProTrialSubscriptionSource(sub.GrantReason) || codexProTrialSubscriptionSource(sub.Source) || codexProRewardSubscriptionSource(sub.GrantReason) || codexProRewardSubscriptionSource(sub.Source) {
+		return false
+	}
+	switch normalizedSubscriptionGrantSource(sub) {
+	case SubscriptionGrantOrder, "redemption", "admin":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexProTrialSubscriptionSource(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "trial_code", "invite_trial":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexProRewardSubscriptionSource(value string) bool {
+	return strings.TrimSpace(value) == SubscriptionGrantMonthlyInviteEntitlement
+}
+
 func HasActiveDistributorSubscription(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
@@ -1850,16 +1920,29 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor
 	result.PlanId = sub.PlanId
-	result.PlanIsTrial = plan != nil && plan.IsTrial
+	result.PlanIsTrial = false
+	result.PlanInviteTrial = false
+	result.PlanPriceAmount = 0
 	if plan != nil {
+		result.PlanIsTrial = plan.IsTrial
+		result.PlanInviteTrial = plan.InviteTrial
+		result.PlanPriceAmount = plan.PriceAmount
 		result.PlanTitle = plan.Title
 	}
+	result.SubscriptionSource = sub.Source
+	result.SubscriptionGrantReason = sub.GrantReason
+	result.SubscriptionStatus = sub.Status
+	result.SubscriptionEndTime = sub.EndTime
 	if sub.TokenLimit > 0 {
 		remaining := sub.TokenLimit - sub.TokenUsed
 		if remaining < 0 {
 			remaining = 0
 		}
 		result.TokenRemaining = remaining
+		result.SubscriptionTokenRemaining = remaining
+	} else {
+		result.TokenRemaining = 0
+		result.SubscriptionTokenRemaining = 0
 	}
 }
 

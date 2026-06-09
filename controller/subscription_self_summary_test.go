@@ -12,10 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type gptAbuseWarningResetTableForSubscriptionSelfTest struct {
+	Id                int    `gorm:"primaryKey"`
+	UserId            int    `gorm:"not null;index;index:idx_gpt_abuse_reset_user_window,priority:1"`
+	WindowStart       int64  `gorm:"bigint;not null;index;index:idx_gpt_abuse_reset_user_window,priority:2"`
+	WindowEnd         int64  `gorm:"bigint;not null;index"`
+	ResetAt           int64  `gorm:"bigint;not null;index"`
+	ResetBy           int    `gorm:"default:0;index"`
+	PreviousRawCount  int    `gorm:"default:0"`
+	PreviousCount     int    `gorm:"default:0"`
+	CutoffSignalLogID int    `gorm:"default:0;index"`
+	Reason            string `gorm:"type:varchar(255);default:''"`
+	CreatedAt         int64  `gorm:"bigint"`
+}
+
+func (gptAbuseWarningResetTableForSubscriptionSelfTest) TableName() string {
+	return "gpt_abuse_warning_resets"
+}
+
 func setupSubscriptionSelfSummaryTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &gptAbuseWarningResetTableForSubscriptionSelfTest{}))
 }
 
 func performGetSubscriptionSelfSummaryRequest(t *testing.T, userID int) *httptest.ResponseRecorder {

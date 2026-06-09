@@ -53,13 +53,16 @@ import {
   buildAgentConfigArtifactQueryKey,
   buildAgentConfigGuideInstruction,
   buildAgentConfigSections,
+  buildCodexCliConfig,
   buildCherryStudioConfig,
   buildContinueConfig,
+  buildClaudeCodeConfig,
   buildGenericEnvConfig,
   buildGenericJsonConfig,
   buildOpenAIBaseUrl,
   buildOpenCodeMetadataQueryKey,
   canFetchAgentConfigArtifacts,
+  getUnverifiedCodexProHeaderConfigNotice,
   type AgentConfigArtifactFile,
   type AgentConfigGuideClient,
   type ConfigFile,
@@ -71,6 +74,13 @@ type ApiHelpKey = {
   name: string
   key: string
 }
+
+const CODEX_PRO_HELP_CLIENT_NAMES = [
+  'Codex CLI',
+  'Claude Code',
+  'Hermes Agent',
+  'OpenClaw',
+] as const
 
 const REQUIRED_OPENCODE_MODEL_IDS = ['gpt-5.5'] as const
 const REQUIRED_OMP_MODEL_IDS = ['gpt-5.5'] as const
@@ -513,6 +523,43 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
     [apiKey, hasSelectedApiKey, serverAddress, t]
   )
 
+  const codexHarnessFiles = useMemo<ConfigFile[]>(
+    () => {
+      if (!hasSelectedApiKey) return []
+      return [
+        {
+          path: t(CODEX_PRO_HELP_CLIENT_NAMES[0]),
+          hint: t(
+            'Use Codex Pro in flexible mode by adding the intent header where the client supports custom headers.'
+          ),
+          content: buildCodexCliConfig(serverAddress, apiKey, selectedModel),
+        },
+        {
+          path: t(CODEX_PRO_HELP_CLIENT_NAMES[1]),
+          hint: t(
+            'Use Codex Pro in flexible mode by adding the intent header where the client supports custom headers.'
+          ),
+          content: buildClaudeCodeConfig(serverAddress, apiKey),
+        },
+      ]
+    },
+    [apiKey, hasSelectedApiKey, selectedModel, serverAddress, t]
+  )
+
+  const unverifiedCodexHarnessNotices = useMemo(
+    () => [
+      {
+        client: CODEX_PRO_HELP_CLIENT_NAMES[2],
+        notice: getUnverifiedCodexProHeaderConfigNotice('hermes-agent'),
+      },
+      {
+        client: CODEX_PRO_HELP_CLIENT_NAMES[3],
+        notice: getUnverifiedCodexProHeaderConfigNotice('openclaw'),
+      },
+    ],
+    []
+  )
+
   const appFiles = useMemo<ConfigFile[]>(
     () => {
       if (!hasSelectedApiKey) return []
@@ -581,6 +628,9 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                       <Settings2 className='size-4' />
                       OMP
                     </TabsTrigger>
+                    <TabsTrigger value='codex-pro'>
+                      {t('Codex Pro')}
+                    </TabsTrigger>
                     <TabsTrigger value='generic'>{t('Generic')}</TabsTrigger>
                     <TabsTrigger value='apps'>{t('Common Apps')}</TabsTrigger>
                   </TabsList>
@@ -637,6 +687,36 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                     <Alert><AlertDescription>{t('Configuration file is unavailable.')}</AlertDescription></Alert>
                   ) : null}
                   <ConfigFileList files={ompFiles} />
+                </TabsContent>
+
+                <TabsContent value='codex-pro' className='space-y-3'>
+                  <p className='text-muted-foreground text-sm'>
+                    {t(
+                      'Use Codex Pro in flexible mode by adding the intent header where the client supports custom headers.'
+                    )}{' '}
+                    <code>X-NewAPI-Codex-Pro-Intent</code>
+                  </p>
+                  <ul className='text-muted-foreground list-disc space-y-1 pl-5 text-sm'>
+                    <li>
+                      {t(
+                        'The Codex Pro intent header only enables flexible-mode routing; it does not guarantee Pro service and is not a billing credential.'
+                      )}
+                    </li>
+                    <li>
+                      {t(
+                        'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.'
+                      )}
+                    </li>
+                    <li>{t('Fallback requests are billed at the normal rate.')}</li>
+                  </ul>
+                  <ConfigFileList files={codexHarnessFiles} />
+                  {unverifiedCodexHarnessNotices.map((item) => (
+                    <Alert key={item.client}>
+                      <AlertDescription>
+                        <span className='font-medium'>{t(item.client)}</span>: {t(item.notice)}
+                      </AlertDescription>
+                    </Alert>
+                  ))}
                 </TabsContent>
 
                 <TabsContent value='generic' className='space-y-3'>

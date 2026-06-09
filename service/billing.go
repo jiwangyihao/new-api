@@ -30,9 +30,28 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 // ---------------------------------------------------------------------------
 
 type BillingSettleInput struct {
-	WalletQuota        int
-	SubscriptionTokens int64
-	UsageEstimated     bool
+	WalletQuota                        int
+	SubscriptionTokens                 int64
+	UsageEstimated                     bool
+	SubscriptionTokensCodexProAdjusted bool
+}
+
+func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
+	if tokens <= 0 || relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription || !relayInfo.CodexProServed {
+		return tokens
+	}
+	switch relayInfo.CodexProUnavailableReason {
+	case "trial_subscription", "reward_subscription":
+		return tokens
+	}
+	session, ok := relayInfo.Billing.(*BillingSession)
+	if !ok || !session.IsDistributorTokenBilling() {
+		return tokens
+	}
+	if walletQuota < 0 {
+		return tokens
+	}
+	return tokens * 2
 }
 
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
@@ -58,6 +77,10 @@ func PostSettleErrorToOpenAIError(relayInfo *relaycommon.RelayInfo, err error) *
 func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, input BillingSettleInput) error {
 	if input.SubscriptionTokens < 0 {
 		input.SubscriptionTokens = 0
+	}
+	if !input.SubscriptionTokensCodexProAdjusted {
+		input.SubscriptionTokens = codexProAdjustedSubscriptionTokens(relayInfo, input.SubscriptionTokens, input.WalletQuota)
+		input.SubscriptionTokensCodexProAdjusted = true
 	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()

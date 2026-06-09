@@ -835,6 +835,25 @@ func (user *User) Update(updatePassword bool) error {
 	return updateUserCache(*user)
 }
 
+// SaveUserSetting persists a user setting JSON blob and synchronizes the setting field in user cache.
+func SaveUserSetting(userId int, setting dto.UserSetting) (string, error) {
+	if userId <= 0 {
+		return "", errors.New("invalid userId")
+	}
+	settingBytes, err := common.Marshal(setting)
+	if err != nil {
+		return "", err
+	}
+	settingJSON := string(settingBytes)
+	if err := DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingJSON).Error; err != nil {
+		return "", err
+	}
+	if err := updateUserSettingCache(userId, settingJSON); err != nil {
+		return "", err
+	}
+	return settingJSON, nil
+}
+
 func (user *User) Edit(updatePassword bool) error {
 	var err error
 	if updatePassword {

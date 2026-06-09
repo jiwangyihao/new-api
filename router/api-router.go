@@ -190,6 +190,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
 			subscriptionRoute.PUT("/self/active", controller.SetActiveSubscription)
+			subscriptionRoute.PUT("/self/codex-pro-mode", controller.UpdateCodexProMode)
 			subscriptionRoute.POST("/self/:id/reset-quota", controller.ResetSubscriptionQuota)
 			subscriptionRoute.POST("/epay/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestEpay)
 			subscriptionRoute.POST("/balance/pay", middleware.CriticalRateLimit(), controller.SubscriptionRequestBalance)
@@ -249,6 +250,15 @@ func SetApiRouter(router *gin.Engine) {
 			adminOpsRoute.GET("/concurrency", controller.GetAdminOpsConcurrency)
 		}
 
+		gptAbuseRoute := apiRouter.Group("/gpt-abuse")
+		gptAbuseRoute.Use(middleware.AdminAuth())
+		{
+			gptAbuseRoute.GET("/users", controller.ListGPTAbuseUsers)
+			gptAbuseRoute.GET("/users/:id/logs", controller.ListGPTAbuseUserLogs)
+			gptAbuseRoute.GET("/users/:id/repeat-blocks", controller.ListGPTAbuseRepeatBlocks)
+			gptAbuseRoute.POST("/users/:id/clear-suspension", controller.ClearGPTAbuseSuspension)
+			gptAbuseRoute.POST("/users/:id/reset-warnings", controller.ResetGPTAbuseWarnings)
+		}
 		trialAbuseRoute := apiRouter.Group("/trial-abuse")
 		trialAbuseRoute.Use(middleware.AdminAuth())
 		{

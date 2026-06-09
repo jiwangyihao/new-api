@@ -17,7 +17,7 @@ func setupSubscriptionActiveResetTestDB(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &gptAbuseWarningResetTableForSubscriptionSelfTest{}))
 }
 
 func performSetActiveSubscriptionRequest(t *testing.T, userID int, body string) *httptest.ResponseRecorder {
@@ -45,7 +45,9 @@ func performResetSubscriptionQuotaRequest(t *testing.T, userID int, subID string
 func TestSetActiveSubscriptionPersistsUserChoice(t *testing.T) {
 	setupSubscriptionActiveResetTestDB(t)
 	userID := 9701
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "active_user", Status: common.UserStatusEnabled}).Error)
+	settingJSON, err := common.Marshal(map[string]any{"codex_pro_mode": "all"})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "active_user", Status: common.UserStatusEnabled, Setting: string(settingJSON)}).Error)
 	code := "pro_monthly"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9702, Title: "Pro", Enabled: true, MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 9703, UserId: userID, PlanId: 9702, Status: "active", TokenLimit: 100, EndTime: common.GetTimestamp() + 86400, GrantReason: "order", Source: "order"}).Error)
@@ -54,6 +56,11 @@ func TestSetActiveSubscriptionPersistsUserChoice(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Contains(t, recorder.Body.String(), `"active_subscription_id":9703`)
+	var rawSetting string
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Select("setting").Scan(&rawSetting).Error)
+	var preserved map[string]interface{}
+	require.NoError(t, common.Unmarshal([]byte(rawSetting), &preserved))
+	assert.Equal(t, "all", preserved["codex_pro_mode"])
 	user, err := model.GetUserById(userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 9703, user.GetSetting().ActiveSubscriptionId)

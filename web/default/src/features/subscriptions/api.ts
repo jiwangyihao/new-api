@@ -33,6 +33,8 @@ import type {
   SubscriptionKyrenProductResponse,
   SubscriptionKyrenProductSyncResponse,
   SubscriptionKyrenProductSyncMode,
+  UpdateCodexProModeRequest,
+  UpdateCodexProModeResponse,
 } from './types'
 
 export interface SetActiveSubscriptionRequest {
@@ -206,6 +208,13 @@ export async function getSelfSubscriptionFull(): Promise<
   ApiResponse<SelfSubscriptionData>
 > {
   const res = await api.get('/api/subscription/self')
+  return res.data
+}
+
+export async function updateCodexProMode(
+  data: UpdateCodexProModeRequest
+): Promise<ApiResponse<UpdateCodexProModeResponse>> {
+  const res = await api.put('/api/subscription/self/codex-pro-mode', data)
   return res.data
 }
 

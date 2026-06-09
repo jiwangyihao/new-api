@@ -21,11 +21,13 @@ import (
 )
 
 const (
-	configGuideJSONContentType = "application/json; charset=utf-8"
-	configGuideYAMLContentType = "application/yaml; charset=utf-8"
-	configGuideProviderID      = "new-api"
-	configGuideDefaultModelID  = "gpt-5.5"
-	configGuideSmallModelID    = "gpt-5.4-mini"
+	configGuideJSONContentType           = "application/json; charset=utf-8"
+	configGuideYAMLContentType           = "application/yaml; charset=utf-8"
+	configGuideProviderID                = "new-api"
+	configGuideDefaultModelID            = "gpt-5.5"
+	configGuideSmallModelID              = "gpt-5.4-mini"
+	configGuideCodexProIntentHeaderName  = "X-NewAPI-Codex-Pro-Intent"
+	configGuideCodexProIntentHeaderValue = "codex-pro"
 )
 
 type configGuideClient string
@@ -600,8 +602,10 @@ func renderConfigGuideOMPModels(baseURL string, apiKey string, models map[string
     api: openai-responses
     baseUrl: %s
     apiKey: %s
+    headers:
+      %s: %s
     models:
-%s`, configGuideProviderID, configGuideYAMLDoubleQuotedScalar(baseURL), configGuideYAMLDoubleQuotedScalar(apiKey), strings.Join(selected, "\n")), nil
+%s`, configGuideProviderID, configGuideYAMLDoubleQuotedScalar(baseURL), configGuideYAMLDoubleQuotedScalar(apiKey), configGuideCodexProIntentHeaderName, configGuideYAMLDoubleQuotedScalar(configGuideCodexProIntentHeaderValue), strings.Join(selected, "\n")), nil
 }
 
 func normalizeConfigGuideOMPModel(model service.OpenCodeOpenAIModel) configGuideOMPModel {
@@ -837,9 +841,9 @@ func normalizeConfigGuideOpenCodeModel(id string, model service.OpenCodeOpenAIMo
 	if model.ReleaseDate != "" {
 		config["release_date"] = model.ReleaseDate
 	}
-	if len(model.Headers) > 0 {
-		config["headers"] = cloneStringAnyMapFromString(model.Headers)
-	}
+	headers := cloneStringAnyMapFromString(model.Headers)
+	headers[configGuideCodexProIntentHeaderName] = configGuideCodexProIntentHeaderValue
+	config["headers"] = headers
 	return config
 }
 

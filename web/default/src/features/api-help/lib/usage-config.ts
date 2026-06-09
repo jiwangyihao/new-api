@@ -19,6 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 
 const OPENAI_BASE_PATH = '/v1'
 const PROVIDER_ID = 'new-api'
+const CODEX_PRO_INTENT_HEADER_NAME = 'X-NewAPI-Codex-Pro-Intent'
+const CODEX_PRO_INTENT_HEADER_VALUE = 'codex-pro'
+
 
 export type OpenCodeOpenAIModel = {
   id: string
@@ -146,6 +149,42 @@ export function buildContinueConfig(
     null,
     2
   )
+}
+
+export function buildCodexCliConfig(
+  serverAddress: string,
+  apiKey: string,
+  model: string
+): string {
+  return [
+    '[model_providers.new-api]',
+    'name = "new-api"',
+    'wire_api = "responses"',
+    `base_url = "${buildOpenAIBaseUrl(serverAddress)}"`,
+    `api_key = "${normalizeApiKey(apiKey)}"`,
+    `http_headers = { "${CODEX_PRO_INTENT_HEADER_NAME}" = "${CODEX_PRO_INTENT_HEADER_VALUE}" }`,
+    '',
+    `[profiles.${PROVIDER_ID}]`,
+    'model_provider = "new-api"',
+    `model = "${model}"`,
+  ].join('\n')
+}
+
+export function buildClaudeCodeConfig(
+  serverAddress: string,
+  apiKey: string
+): string {
+  return [
+    `ANTHROPIC_BASE_URL="${buildOpenAIBaseUrl(serverAddress)}"`,
+    `ANTHROPIC_AUTH_TOKEN="${normalizeApiKey(apiKey)}"`,
+    `ANTHROPIC_CUSTOM_HEADERS="${CODEX_PRO_INTENT_HEADER_NAME}: ${CODEX_PRO_INTENT_HEADER_VALUE}"`,
+  ].join('\n')
+}
+
+export function getUnverifiedCodexProHeaderConfigNotice(
+  _client: 'hermes-agent' | 'openclaw' | string
+): string {
+  return `This client has no verified custom header field yet. Flexible mode cannot trigger Codex Pro from this harness; use All mode in the console if needed.`
 }
 
 export function buildAgentConfigGuidePath(

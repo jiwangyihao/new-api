@@ -346,7 +346,7 @@ func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens in
 	if !distributorTokenBillingEligibleForText(relayInfo) {
 		return 0
 	}
-	return tokens
+	return codexProAdjustedSubscriptionTokens(relayInfo, tokens, walletQuota)
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
@@ -411,7 +411,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated})
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated, SubscriptionTokensCodexProAdjusted: true})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

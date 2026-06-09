@@ -16,9 +16,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func markCodexProServedCandidateFromResponse(info *relaycommon.RelayInfo, resp *http.Response) {
+	if info == nil || resp == nil {
+		return
+	}
+	info.MarkCodexProServedCandidateFromHeaders(resp.Header)
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
-
+	markCodexProServedCandidateFromResponse(info, resp)
 	// read response body
 	var responsesResponse dto.OpenAIResponsesResponse
 	responseBody, err := io.ReadAll(resp.Body)
@@ -66,6 +73,9 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
+	if responsesResponse.Usage != nil && info != nil {
+		info.ConfirmCodexProServed()
+	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
 		return &usage, nil
 	}
@@ -88,8 +98,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
+	markCodexProServedCandidateFromResponse(info, resp)
 
 	var usage = &dto.Usage{}
+	completed := false
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
@@ -118,6 +130,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		sendResponsesStreamData(c, streamResponse, data)
 		switch streamResponse.Type {
 		case "response.completed":
+			completed = true
 			if info != nil && info.StreamStatus != nil {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 			}
@@ -160,6 +173,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if completed && info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone && !info.StreamStatus.HasErrors() {
+		info.ConfirmCodexProServed()
+	}
 
 	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 

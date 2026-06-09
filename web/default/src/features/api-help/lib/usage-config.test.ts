@@ -27,8 +27,11 @@ import {
   buildAgentConfigGuideURL,
   buildAgentConfigSections,
   buildCherryStudioConfig,
+  buildCodexCliConfig,
   buildContinueConfig,
   buildGenericEnvConfig,
+  buildClaudeCodeConfig,
+  getUnverifiedCodexProHeaderConfigNotice,
   buildGenericJsonConfig,
   buildOpenAIBaseUrl,
   buildOpenCodeMetadataQueryKey,
@@ -84,6 +87,28 @@ describe('api usage help config builders', () => {
         ],
       }
     )
+  })
+
+  test('builds verified Codex Pro header snippets only for clients with known header support', () => {
+    assert.match(
+      buildCodexCliConfig('https://api.example.com/', 'live', 'gpt-5'),
+      /http_headers = \{ "X-NewAPI-Codex-Pro-Intent" = "codex-pro" \}/
+    )
+    assert.match(
+      buildCodexCliConfig('https://api.example.com/', 'live', 'gpt-5'),
+      /wire_api = "responses"/
+    )
+    assert.match(
+      buildClaudeCodeConfig('https://api.example.com/', 'live'),
+      /ANTHROPIC_CUSTOM_HEADERS="X-NewAPI-Codex-Pro-Intent: codex-pro"/
+    )
+
+    for (const client of ['hermes-agent', 'openclaw'] as const) {
+      const notice = getUnverifiedCodexProHeaderConfigNotice(client)
+      assert.match(notice, /flexible/i)
+      assert.match(notice, /All/)
+      assert.doesNotMatch(notice, /["']?X-NewAPI-Codex-Pro-Intent["']?\s*[:=]/)
+    }
   })
 
   test('builds AI agent auto-configuration manifest links safely', () => {

@@ -72,4 +72,15 @@ describe('api help key loading', () => {
     assert.match(source, /state=\{opencodeCardState\}/)
     assert.match(source, /state=\{ompCardState\}/)
   })
+
+  test('shows Codex Pro header guidance only for verified harness configurations', () => {
+    assert.match(source, /buildCodexCliConfig/)
+    assert.match(source, /buildClaudeCodeConfig/)
+    assert.match(source, /getUnverifiedCodexProHeaderConfigNotice/)
+    assert.match(source, /Codex CLI/)
+    assert.match(source, /Claude Code/)
+    assert.match(source, /Hermes Agent/)
+    assert.match(source, /OpenClaw/)
+    assert.match(source, /X-NewAPI-Codex-Pro-Intent/)
+  })
 })

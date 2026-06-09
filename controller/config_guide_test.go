@@ -247,6 +247,70 @@ func TestOpenCodeConfigGuideJSONReturnsRenderableConfig(t *testing.T) {
 	}
 }
 
+func TestConfigGuideOpenCodeCodexProAddsIntentHeaderOnlyToModels(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var config map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &config))
+	provider := config["provider"].(map[string]any)["new-api"].(map[string]any)
+	require.Equal(t, "@ai-sdk/openai", provider["npm"])
+	require.Equal(t, "new-api", provider["name"])
+	options := provider["options"].(map[string]any)
+	require.Equal(t, "https://api.example.com/v1", options["baseURL"])
+	require.Equal(t, "sk-livetoken", options["apiKey"])
+	require.NotContains(t, options, "headers")
+
+	models := provider["models"].(map[string]any)
+	require.NotEmpty(t, models)
+	for modelID, rawModel := range models {
+		modelConfig := rawModel.(map[string]any)
+		headers, ok := modelConfig["headers"].(map[string]any)
+		require.True(t, ok, "model %s must carry Codex Pro intent header", modelID)
+		require.Equal(t, map[string]any{
+			"X-NewAPI-Codex-Pro-Intent": "codex-pro",
+		}, headers)
+		require.NotContains(t, headers, "X-NewAPI-Pro-Request")
+		require.NotContains(t, headers, "X-NewAPI-Pro-Served")
+	}
+}
+
+func TestConfigGuideOMPCodexProAddsHeadersWithoutChangingProviderShape(t *testing.T) {
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
+	GetOMPConfigGuideModels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := recorder.Body.String()
+	require.Contains(t, body, "providers:")
+	require.Contains(t, body, "new-api:")
+	require.Contains(t, body, "api: openai-responses")
+	require.Contains(t, body, `baseUrl: "https://api.example.com/v1"`)
+	require.Contains(t, body, `apiKey: "sk-livetoken"`)
+	require.Contains(t, body, "headers:")
+	require.Contains(t, body, "X-NewAPI-Codex-Pro-Intent")
+	require.Contains(t, body, `"codex-pro"`)
+	require.NotContains(t, body, "X-NewAPI-Pro-Request")
+	require.NotContains(t, body, "X-NewAPI-Pro-Served")
+
+	var parsed map[string]any
+	require.NoError(t, yaml.Unmarshal([]byte(body), &parsed), body)
+	providers := parsed["providers"].(map[string]any)
+	provider := providers["new-api"].(map[string]any)
+	require.Equal(t, "openai-responses", provider["api"])
+	require.Equal(t, "https://api.example.com/v1", provider["baseUrl"])
+	require.Equal(t, "sk-livetoken", provider["apiKey"])
+	require.Equal(t, map[string]any{
+		"X-NewAPI-Codex-Pro-Intent": "codex-pro",
+	}, provider["headers"])
+}
+
 func TestOpenCodeConfigGuideJSONDoesNotEmitProviderNativeTools(t *testing.T) {
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 	seedValidConfigGuideFixture(t)

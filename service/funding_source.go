@@ -71,17 +71,24 @@ type SubscriptionFunding struct {
 	subscriptionId    int
 	preConsumed       int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
-	AmountTotal             int64
-	AmountUsedAfter         int64
-	TokenLimit              int64
-	TokenUsedAfter          int64
-	TokenRemaining          int64
-	DistributorTokenBilling bool
-	PlanId                  int
-	PlanIsTrial             bool
-	PlanTitle               string
-	concurrencyLimit        int
-	queueCapacity           int
+	AmountTotal                int64
+	AmountUsedAfter            int64
+	TokenLimit                 int64
+	TokenUsedAfter             int64
+	TokenRemaining             int64
+	DistributorTokenBilling    bool
+	PlanId                     int
+	PlanIsTrial                bool
+	PlanTitle                  string
+	PlanPriceAmount            float64
+	PlanInviteTrial            bool
+	SubscriptionSource         string
+	SubscriptionGrantReason    string
+	SubscriptionStatus         string
+	SubscriptionEndTime        int64
+	SubscriptionTokenRemaining int64
+	concurrencyLimit           int
+	queueCapacity              int
 }
 
 func (s *SubscriptionFunding) ConcurrencyLimit() int {
@@ -121,6 +128,13 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.PlanId = res.PlanId
 	s.PlanIsTrial = res.PlanIsTrial
 	s.PlanTitle = res.PlanTitle
+	s.PlanPriceAmount = res.PlanPriceAmount
+	s.PlanInviteTrial = res.PlanInviteTrial
+	s.SubscriptionSource = res.SubscriptionSource
+	s.SubscriptionGrantReason = res.SubscriptionGrantReason
+	s.SubscriptionStatus = res.SubscriptionStatus
+	s.SubscriptionEndTime = res.SubscriptionEndTime
+	s.SubscriptionTokenRemaining = res.SubscriptionTokenRemaining
 	return nil
 }
 

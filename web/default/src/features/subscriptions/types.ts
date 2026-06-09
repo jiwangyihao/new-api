@@ -127,6 +127,25 @@ export interface ApiResponse<T = unknown> {
   data?: T
 }
 
+export type CodexProMode = 'all' | 'flexible' | 'off'
+export type CodexProUnavailableReason =
+  | ''
+  | 'wallet_only'
+  | 'trial_subscription'
+  | 'reward_subscription'
+  | 'no_paid_subscription'
+
+
+export interface UpdateCodexProModeRequest {
+  mode: CodexProMode
+}
+
+export interface UpdateCodexProModeResponse {
+  codex_pro_mode: CodexProMode
+  codex_pro_eligible: boolean
+  codex_pro_unavailable_reason: CodexProUnavailableReason
+}
+
 export interface PlanPayload {
   plan: Partial<SubscriptionPlan>
 }
@@ -229,6 +248,9 @@ export interface SelfSubscriptionSummary {
 
 export interface SelfSubscriptionData {
   billing_preference: string
+  codex_pro_mode: CodexProMode
+  codex_pro_eligible: boolean
+  codex_pro_unavailable_reason: CodexProUnavailableReason
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
   summary: SelfSubscriptionSummary

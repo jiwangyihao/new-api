@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -933,4 +934,250 @@ func TestTokenKeyQuotaDoesNotChangeWhenSubscriptionUsesTokens(t *testing.T) {
 	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
 	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
+}
+
+func TestPreConsumeBillingPaidSubscriptionCodexProEligibleSyncsRelayInfo(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		grantSource string
+	}{
+		{name: "order", grantSource: model.SubscriptionGrantOrder},
+		{name: "redemption", grantSource: "redemption"},
+		{name: "admin_after_sales", grantSource: "admin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 8211
+			const tokenID = 8212
+			const planID = 8213
+			const subID = 8214
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, "sk-codex-pro-eligible-"+tc.name, 10_000)
+			seedCodexProBillingPlan(t, planID, "codex-pro-eligible-"+tc.name, 100, 80, false, false)
+			seedCodexProBillingSubscription(t, subID, userID, planID, 100, 0, tc.grantSource, tc.grantSource, "active", time.Now().Add(24*time.Hour).Unix())
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-eligible-"+tc.name, "req-codex-pro-eligible-"+tc.name, "subscription_only")
+			relayInfo.RelayMode = relayconstant.RelayModeResponses
+			relayInfo.SetEstimatePromptTokens(10)
+
+			apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+
+			require.Nil(t, apiErr)
+			requireCodexProRelayInfoEligibility(t, relayInfo, true)
+		})
+	}
+}
+
+func TestPreConsumeBillingWalletOnlySettingWithPaidSubscriptionStillCodexProEligible(t *testing.T) {
+	truncate(t)
+	const userID = 8265
+	const tokenID = 8266
+	const planID = 8267
+	const subID = 8268
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-wallet-only-paid", 10_000)
+	seedCodexProBillingPlan(t, planID, "codex-pro-wallet-only-paid", 100, 80, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 100, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(24*time.Hour).Unix())
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-wallet-only-paid", "req-codex-pro-wallet-only-paid", "wallet_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.SetEstimatePromptTokens(10)
+
+	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+
+	require.Nil(t, apiErr)
+	requireCodexProRelayInfoEligibility(t, relayInfo, true)
+}
+
+func TestPreConsumeBillingCodexProUnavailableSyncsActualSubscriptionReason(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		price       float64
+		isTrial     bool
+		inviteTrial bool
+		grantReason string
+		source      string
+		tokenLimit  int64
+	}{
+		{name: "is_trial", price: 80, isTrial: true, grantReason: "trial_code", source: "trial_code", tokenLimit: 0},
+		{name: "invite_trial", price: 80, inviteTrial: true, grantReason: "invite_trial", source: "invite_trial", tokenLimit: 0},
+		{name: "trial_code_grant_reason", price: 80, grantReason: "trial_code", source: model.SubscriptionGrantOrder, tokenLimit: 100},
+		{name: "invite_trial_source", price: 80, grantReason: model.SubscriptionGrantOrder, source: "invite_trial", tokenLimit: 100},
+		{name: "monthly_invite_entitlement_grant_reason", price: 80, grantReason: model.SubscriptionGrantMonthlyInviteEntitlement, source: model.SubscriptionGrantOrder, tokenLimit: 100},
+		{name: "monthly_invite_entitlement_source", price: 80, grantReason: model.SubscriptionGrantOrder, source: model.SubscriptionGrantMonthlyInviteEntitlement, tokenLimit: 100},
+		{name: "zero_price", price: 0, grantReason: model.SubscriptionGrantOrder, source: model.SubscriptionGrantOrder, tokenLimit: 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 8221
+			const tokenID = 8222
+			const planID = 8223
+			const subID = 8224
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, "sk-codex-pro-unavailable-"+tc.name, 10_000)
+			seedCodexProBillingPlan(t, planID, "codex-pro-unavailable-"+tc.name, tc.tokenLimit, tc.price, tc.isTrial, tc.inviteTrial)
+			seedCodexProBillingSubscription(t, subID, userID, planID, tc.tokenLimit, 0, tc.grantReason, tc.source, "active", time.Now().Add(24*time.Hour).Unix())
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-unavailable-"+tc.name, "req-codex-pro-unavailable-"+tc.name, "subscription_only")
+			relayInfo.RelayMode = relayconstant.RelayModeResponses
+			relayInfo.SetEstimatePromptTokens(10)
+
+			apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+
+			require.Nil(t, apiErr)
+			requireCodexProRelayInfoEligibility(t, relayInfo, false)
+		})
+	}
+}
+
+func TestPreConsumeBillingCodexProUnavailableForExpiredExhaustedAndWalletOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     string
+		endTime    int64
+		tokenUsed  int64
+		preference string
+		wantError  string
+	}{
+		{name: "expired", status: "active", endTime: time.Now().Add(-time.Hour).Unix(), preference: "subscription_only", wantError: "active subscription"},
+		{name: "exhausted", status: "active", endTime: time.Now().Add(time.Hour).Unix(), tokenUsed: 100, preference: "subscription_only", wantError: "subscription token quota insufficient"},
+		{name: "wallet_only_without_subscription", preference: "wallet_only", wantError: "active subscription"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			const userID = 8231
+			const tokenID = 8232
+			const planID = 8233
+			const subID = 8234
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, "sk-codex-pro-unavailable-"+tc.name, 10_000)
+			if tc.name != "wallet_only_without_subscription" {
+				seedCodexProBillingPlan(t, planID, "codex-pro-unavailable-"+tc.name, 100, 80, false, false)
+				seedCodexProBillingSubscription(t, subID, userID, planID, 100, tc.tokenUsed, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, tc.status, tc.endTime)
+			}
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-unavailable-"+tc.name, "req-codex-pro-unavailable-"+tc.name, tc.preference)
+			relayInfo.RelayMode = relayconstant.RelayModeResponses
+			relayInfo.SetEstimatePromptTokens(10)
+
+			apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+
+			require.NotNil(t, apiErr)
+			assert.Contains(t, apiErr.Error(), tc.wantError)
+			requireCodexProRelayInfoEligibility(t, relayInfo, false)
+		})
+	}
+}
+
+func TestSettleBillingWithInputCodexProServedDoublesSubscriptionTokensOnly(t *testing.T) {
+	truncate(t)
+	const userID = 8241
+	const tokenID = 8242
+	const planID = 8243
+	const subID = 8244
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-settle", 10_000)
+	seedDistributorPlan(t, planID, "plan-codex-pro-settle", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-settle", "req-codex-pro-settle", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+
+	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
+
+	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(10), relayInfo.SubscriptionPostDelta, "2x settlement must add the extra subscription debit through the existing post-delta path")
+	assert.Equal(t, 10_000, getUserQuota(t, userID), "Codex Pro multiplier must not touch wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "Codex Pro multiplier must not touch token-key wallet quota")
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID), "Codex Pro multiplier must not record wallet usage")
+}
+
+func TestSettleBillingWithInputCodexProUnavailableUsesSingleSubscriptionTokens(t *testing.T) {
+	truncate(t)
+	const userID = 8251
+	const tokenID = 8252
+	const planID = 8253
+	const subID = 8254
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-single", 10_000)
+	seedDistributorPlan(t, planID, "plan-codex-pro-single", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-single", "req-codex-pro-single", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
+
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(2), relayInfo.SubscriptionPostDelta)
+	assert.Equal(t, 10_000, getUserQuota(t, userID))
+}
+
+func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFreeRequests(t *testing.T) {
+	truncate(t)
+	const userID = 8261
+	const tokenID = 8262
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-wallet-only", 10_000)
+	const planID = 8263
+	const subID = 8264
+	seedDistributorPlan(t, planID, "plan-codex-pro-wallet-only", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	ctx := newBillingTestContext(t)
+
+	walletOnly := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-wallet-only", "req-codex-pro-wallet-only", "wallet_only")
+	preConsumeForBillingTest(t, ctx, walletOnly, 6)
+	setBoolFieldForTest(t, walletOnly, "CodexProServed", true)
+	require.NoError(t, SettleBillingWithInput(ctx, walletOnly, BillingSettleInput{WalletQuota: 8, SubscriptionTokens: 8}))
+	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID), "wallet-only preference is compatibility metadata; actual subscription-funded Codex Pro settlement still uses the 2x path")
+	assert.Equal(t, 10_000, getUserQuota(t, userID), "subscription settlement must not touch wallet quota")
+	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
+
+	freeRequest := &relaycommon.RelayInfo{}
+	setBoolFieldForTest(t, freeRequest, "CodexProServed", true)
+	require.NoError(t, SettleBillingWithInput(ctx, freeRequest, BillingSettleInput{WalletQuota: 0, SubscriptionTokens: 8}))
+	assert.Empty(t, freeRequest.SubscriptionPostDelta)
+}
+
+func seedCodexProBillingPlan(t *testing.T, id int, code string, tokenLimit int64, price float64, isTrial bool, inviteTrial bool) {
+	t.Helper()
+	ensureSubscriptionBillingTables(t)
+	plan := &model.SubscriptionPlan{Id: id, Title: code, Enabled: true, TotalAmount: 1, PriceAmount: price, MonthlyTokenLimit: tokenLimit, ConcurrencyLimit: 1, IsTrial: isTrial, InviteTrial: inviteTrial, BusinessCode: &code}
+	require.NoError(t, model.DB.Create(plan).Error)
+	model.InvalidateSubscriptionPlanCache(id)
+}
+
+func seedCodexProBillingSubscription(t *testing.T, id int, userId int, planId int, tokenLimit int64, tokenUsed int64, grantReason string, source string, status string, endTime int64) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: id, UserId: userId, PlanId: planId, AmountTotal: 1, TokenLimit: tokenLimit, TokenUsed: tokenUsed, Status: status, GrantReason: grantReason, Source: source, StartTime: time.Now().Add(-time.Minute).Unix(), EndTime: endTime}).Error)
+}
+
+func requireCodexProRelayInfoEligibility(t *testing.T, relayInfo *relaycommon.RelayInfo, wantEligible bool) {
+	t.Helper()
+	v := reflect.ValueOf(relayInfo).Elem()
+	eligibleField := v.FieldByName("CodexProEligible")
+	require.True(t, eligibleField.IsValid(), "RelayInfo must expose CodexProEligible")
+	assert.Equal(t, wantEligible, eligibleField.Bool())
+	if wantEligible {
+		reasonField := v.FieldByName("CodexProUnavailableReason")
+		require.True(t, reasonField.IsValid(), "RelayInfo must expose CodexProUnavailableReason")
+		assert.Empty(t, reasonField.String())
+	}
+}
+
+func setBoolFieldForTest(t *testing.T, target any, fieldName string, value bool) {
+	t.Helper()
+	field := reflect.ValueOf(target).Elem().FieldByName(fieldName)
+	require.Truef(t, field.IsValid(), "%T must expose %s", target, fieldName)
+	require.Truef(t, field.CanSet(), "%T.%s must be settable", target, fieldName)
+	field.SetBool(value)
 }

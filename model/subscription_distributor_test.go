@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1205,4 +1206,221 @@ func assertDefaultDistributorPlan(t *testing.T, businessCode string, title strin
 	assert.Equal(t, trialHours, plan.TrialDurationHours)
 	assert.Equal(t, rewardEligible, plan.RewardEligible)
 	assert.Equal(t, resetPeriod, plan.QuotaResetPeriod)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsPaidSubscriptionCodexProEligibleMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		grantSource string
+	}{
+		{name: "order", grantSource: SubscriptionGrantOrder},
+		{name: "redemption", grantSource: "redemption"},
+		{name: "admin_after_sales", grantSource: "admin"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			require.NoError(t, DB.Create(&User{Id: 7801, Username: "codex_pro_paid_" + tc.name, Status: common.UserStatusEnabled, AffCode: "aff7801"}).Error)
+			ensureSubscriptionPreConsumeRecordTableForTest(t)
+			seedCodexProEligibilityPlanForTest(t, 7802, "paid-codex-pro-"+tc.name, 100, 80, false, false)
+			seedCodexProEligibilitySubscriptionForTest(t, 7803, 7801, 7802, 100, 0, tc.grantSource, tc.grantSource, "active", common.GetTimestamp()+3600)
+
+			pre, err := PreConsumeUserSubscriptionByUnits("paid-codex-pro-"+tc.name, 7801, "gpt-4o", 0, 0, 10)
+
+			require.NoError(t, err)
+			assert.Equal(t, 7803, pre.UserSubscriptionId)
+			requireCodexProPreConsumeEligibility(t, pre, true)
+		})
+	}
+}
+
+func TestPreConsumeUserSubscriptionByUnitsCodexProUnavailableForTrialsInviteRewardsAndInvalidSubscriptions(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		price       float64
+		isTrial     bool
+		inviteTrial bool
+		grantReason string
+		source      string
+		status      string
+		endOffset   int64
+		tokenLimit  int64
+		tokenUsed   int64
+		wantError   string
+	}{
+		{name: "is_trial_plan", price: 80, isTrial: true, grantReason: "trial_code", source: "trial_code", status: "active", endOffset: 3600, tokenLimit: 0},
+		{name: "invite_trial_plan", price: 80, inviteTrial: true, grantReason: "invite_trial", source: "invite_trial", status: "active", endOffset: 3600, tokenLimit: 0},
+		{name: "trial_code_source_paid_plan", price: 80, grantReason: "trial_code", source: "trial_code", status: "active", endOffset: 3600, tokenLimit: 100},
+		{name: "invite_trial_source_paid_plan", price: 80, grantReason: "invite_trial", source: "invite_trial", status: "active", endOffset: 3600, tokenLimit: 100},
+		{name: "monthly_invite_entitlement", price: 80, grantReason: SubscriptionGrantMonthlyInviteEntitlement, source: SubscriptionGrantMonthlyInviteEntitlement, status: "active", endOffset: 3600, tokenLimit: 100},
+		{name: "zero_price_paid_source", price: 0, grantReason: SubscriptionGrantOrder, source: SubscriptionGrantOrder, status: "active", endOffset: 3600, tokenLimit: 100},
+		{name: "expired", price: 80, grantReason: SubscriptionGrantOrder, source: SubscriptionGrantOrder, status: "active", endOffset: -60, tokenLimit: 100, wantError: "no active subscription"},
+		{name: "exhausted", price: 80, grantReason: SubscriptionGrantOrder, source: SubscriptionGrantOrder, status: "active", endOffset: 3600, tokenLimit: 100, tokenUsed: 100, wantError: "subscription token quota insufficient"},
+		{name: "cancelled", price: 80, grantReason: SubscriptionGrantOrder, source: SubscriptionGrantOrder, status: "cancelled", endOffset: 3600, tokenLimit: 100, wantError: "no active subscription"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			require.NoError(t, DB.Create(&User{Id: 7811, Username: "codex_pro_unavailable_" + tc.name, Status: common.UserStatusEnabled, AffCode: "aff7811"}).Error)
+			ensureSubscriptionPreConsumeRecordTableForTest(t)
+			seedCodexProEligibilityPlanForTest(t, 7812, "codex-pro-unavailable-"+tc.name, tc.tokenLimit, tc.price, tc.isTrial, tc.inviteTrial)
+			seedCodexProEligibilitySubscriptionForTest(t, 7813, 7811, 7812, tc.tokenLimit, tc.tokenUsed, tc.grantReason, tc.source, tc.status, common.GetTimestamp()+tc.endOffset)
+
+			pre, err := PreConsumeUserSubscriptionByUnits("codex-pro-unavailable-"+tc.name, 7811, "gpt-4o", 0, 0, 10)
+
+			if tc.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantError)
+				return
+			}
+			require.NoError(t, err)
+			requireCodexProPreConsumeEligibility(t, pre, false)
+		})
+	}
+}
+
+func TestPreConsumeUserSubscriptionByUnitsCodexProUnavailableWhenGrantReasonOrSourceIsTrialOrReward(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		grantReason string
+		source      string
+	}{
+		{name: "trial_grant_reason", grantReason: "trial_code", source: SubscriptionGrantOrder},
+		{name: "trial_source", grantReason: SubscriptionGrantOrder, source: "invite_trial"},
+		{name: "reward_grant_reason", grantReason: SubscriptionGrantMonthlyInviteEntitlement, source: SubscriptionGrantOrder},
+		{name: "reward_source", grantReason: SubscriptionGrantOrder, source: SubscriptionGrantMonthlyInviteEntitlement},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			truncateTables(t)
+			require.NoError(t, DB.Create(&User{Id: 7841, Username: "codex_pro_independent_" + tc.name, Status: common.UserStatusEnabled, AffCode: "aff7841"}).Error)
+			ensureSubscriptionPreConsumeRecordTableForTest(t)
+			seedCodexProEligibilityPlanForTest(t, 7842, "codex-pro-independent-"+tc.name, 100, 80, false, false)
+			seedCodexProEligibilitySubscriptionForTest(t, 7843, 7841, 7842, 100, 0, tc.grantReason, tc.source, "active", common.GetTimestamp()+3600)
+
+			pre, err := PreConsumeUserSubscriptionByUnits("codex-pro-independent-"+tc.name, 7841, "gpt-4o", 0, 0, 10)
+
+			require.NoError(t, err)
+			requireCodexProPreConsumeEligibility(t, pre, false)
+		})
+	}
+}
+
+func TestPreConsumeUserSubscriptionByUnitsCodexProUnavailableWhenInviteRewardActuallySelected(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7821, Username: "codex_pro_reward_selected", Status: common.UserStatusEnabled, AffCode: "aff7821"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	seedCodexProEligibilityPlanForTest(t, 7822, "codex-pro-same-tier", 100, 80, false, false)
+	now := common.GetTimestamp()
+	seedCodexProEligibilitySubscriptionForTest(t, 7823, 7821, 7822, 100, 0, SubscriptionGrantOrder, SubscriptionGrantOrder, "active", now+30*86400)
+	seedCodexProEligibilitySubscriptionForTest(t, 7824, 7821, 7822, 100, 0, SubscriptionGrantMonthlyInviteEntitlement, SubscriptionGrantMonthlyInviteEntitlement, "active", now+3*86400)
+
+	pre, err := PreConsumeUserSubscriptionByUnits("codex-pro-selected-reward", 7821, "gpt-4o", 0, 0, 10)
+
+	require.NoError(t, err)
+	assert.Equal(t, 7824, pre.UserSubscriptionId, "Codex Pro eligibility must describe the subscription that was actually pre-consumed")
+	requireCodexProPreConsumeEligibility(t, pre, false)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsCodexProUnavailableWithoutActiveSubscription(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7831, Username: "codex_pro_no_subscription", Status: common.UserStatusEnabled, AffCode: "aff7831"}).Error)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+
+	_, err := PreConsumeUserSubscriptionByUnits("codex-pro-no-subscription", 7831, "gpt-4o", 0, 0, 10)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no active subscription")
+}
+
+func seedCodexProEligibilityPlanForTest(t *testing.T, id int, code string, tokenLimit int64, price float64, isTrial bool, inviteTrial bool) {
+	t.Helper()
+	plan := &SubscriptionPlan{Id: id, Title: code, Enabled: true, TotalAmount: 1, PriceAmount: price, MonthlyTokenLimit: tokenLimit, ConcurrencyLimit: 1, IsTrial: isTrial, InviteTrial: inviteTrial, BusinessCode: &code}
+	require.NoError(t, DB.Create(plan).Error)
+	InvalidateSubscriptionPlanCache(id)
+}
+
+func seedCodexProEligibilitySubscriptionForTest(t *testing.T, id int, userId int, planId int, tokenLimit int64, tokenUsed int64, grantReason string, source string, status string, endTime int64) {
+	t.Helper()
+	require.NoError(t, DB.Create(&UserSubscription{Id: id, UserId: userId, PlanId: planId, Status: status, AmountTotal: 1, TokenLimit: tokenLimit, TokenUsed: tokenUsed, StartTime: common.GetTimestamp() - 60, EndTime: endTime, GrantReason: grantReason, Source: source}).Error)
+}
+
+func requireCodexProPreConsumeEligibility(t *testing.T, pre *SubscriptionPreConsumeResult, wantEligible bool) {
+	t.Helper()
+	require.NotNil(t, pre)
+	meta := codexProPreConsumeEligibilityMetadata(t, pre)
+	eligible := pre.UserSubscriptionId > 0 && meta.status == "active" && meta.endTime > common.GetTimestamp() && (meta.tokenUnlimited || meta.tokenRemaining > 0) && meta.priceAmount > 0 && !meta.planIsTrial && !meta.planInviteTrial && !codexProIneligibleGrantSourceForTest(meta.grantReason) && !codexProIneligibleGrantSourceForTest(meta.source)
+	assert.Equal(t, wantEligible, eligible, "metadata=%+v", meta)
+}
+
+type codexProPreConsumeMetadata struct {
+	priceAmount     float64
+	planIsTrial     bool
+	planInviteTrial bool
+	source          string
+	grantReason     string
+	status          string
+	endTime         int64
+	tokenRemaining  int64
+	tokenUnlimited  bool
+}
+
+func codexProPreConsumeEligibilityMetadata(t *testing.T, pre *SubscriptionPreConsumeResult) codexProPreConsumeMetadata {
+	t.Helper()
+	v := reflect.ValueOf(pre).Elem()
+	tokenRemaining := getInt64FieldForTest(t, v, "SubscriptionTokenRemaining", "TokenRemaining")
+	return codexProPreConsumeMetadata{
+		priceAmount:     getFloat64FieldForTest(t, v, "PlanPriceAmount"),
+		planIsTrial:     getBoolFieldForTest(t, v, "PlanIsTrial"),
+		planInviteTrial: getBoolFieldForTest(t, v, "PlanInviteTrial"),
+		source:          getStringFieldForTest(t, v, "SubscriptionSource"),
+		grantReason:     getStringFieldForTest(t, v, "SubscriptionGrantReason"),
+		status:          getStringFieldForTest(t, v, "SubscriptionStatus"),
+		endTime:         getInt64FieldForTest(t, v, "SubscriptionEndTime"),
+		tokenRemaining:  tokenRemaining,
+		tokenUnlimited:  getInt64FieldForTest(t, v, "TokenLimit") == 0,
+	}
+}
+
+func codexProIneligibleGrantSourceForTest(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "trial_code", "invite_trial", SubscriptionGrantMonthlyInviteEntitlement:
+		return true
+	default:
+		return false
+	}
+}
+
+func getFloat64FieldForTest(t *testing.T, v reflect.Value, name string) float64 {
+	t.Helper()
+	field := requireStructFieldForTest(t, v, name)
+	return field.Float()
+}
+
+func getBoolFieldForTest(t *testing.T, v reflect.Value, name string) bool {
+	t.Helper()
+	field := requireStructFieldForTest(t, v, name)
+	return field.Bool()
+}
+
+func getStringFieldForTest(t *testing.T, v reflect.Value, name string) string {
+	t.Helper()
+	field := requireStructFieldForTest(t, v, name)
+	return field.String()
+}
+
+func getInt64FieldForTest(t *testing.T, v reflect.Value, names ...string) int64 {
+	t.Helper()
+	for _, name := range names {
+		field := v.FieldByName(name)
+		if field.IsValid() {
+			return field.Int()
+		}
+	}
+	require.Failf(t, "missing field", "SubscriptionPreConsumeResult must expose one of %v for Codex Pro eligibility", names)
+	return 0
+}
+
+func requireStructFieldForTest(t *testing.T, v reflect.Value, name string) reflect.Value {
+	t.Helper()
+	field := v.FieldByName(name)
+	require.Truef(t, field.IsValid(), "SubscriptionPreConsumeResult must expose %s for Codex Pro eligibility", name)
+	return field
 }

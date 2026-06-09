@@ -66,6 +66,10 @@ type ActiveSubscriptionRequest struct {
 	SubscriptionId int `json:"subscription_id"`
 }
 
+type CodexProModeRequest struct {
+	Mode string `json:"mode"`
+}
+
 func normalizeSubscriptionPlanCurrency(currency string) string {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if currency == "" {
@@ -108,6 +112,12 @@ func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
 	settingMap, _ := model.GetUserSetting(userId, false)
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
+	mode := common.NormalizeCodexProMode(settingMap.CodexProMode)
+	codexProEligible, codexProUnavailableReason, err := model.GetCodexProEligibility(userId, settingMap)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 
 	// Get all subscriptions (including expired)
 	allSubscriptions, err := model.GetAllUserSubscriptions(userId)
@@ -128,11 +138,14 @@ func GetSubscriptionSelf(c *gin.Context) {
 	}
 
 	common.ApiSuccess(c, gin.H{
-		"active_subscription_id": settingMap.ActiveSubscriptionId,
-		"billing_preference":     pref,
-		"subscriptions":          model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId), // all active subscriptions
-		"all_subscriptions":      model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),    // all subscriptions including expired
-		"summary":                summary,
+		"active_subscription_id":       settingMap.ActiveSubscriptionId,
+		"billing_preference":           pref,
+		"codex_pro_mode":               mode,
+		"codex_pro_eligible":           codexProEligible,
+		"codex_pro_unavailable_reason": codexProUnavailableReason,
+		"subscriptions":                model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId), // all active subscriptions
+		"all_subscriptions":            model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),    // all subscriptions including expired
+		"summary":                      summary,
 	})
 }
 
@@ -152,8 +165,7 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 	}
 	current := user.GetSetting()
 	current.BillingPreference = pref
-	user.SetSetting(current)
-	if err := user.Update(false); err != nil {
+	if _, err := model.SaveUserSetting(userId, current); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -172,6 +184,42 @@ func SetActiveSubscription(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{"active_subscription_id": req.SubscriptionId})
+}
+
+func UpdateCodexProMode(c *gin.Context) {
+	userId := c.GetInt("id")
+	var req CodexProModeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if err := common.ValidateCodexProModeForUpdate(req.Mode); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	mode := strings.TrimSpace(req.Mode)
+
+	user, err := model.GetUserById(userId, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	current := user.GetSetting()
+	current.CodexProMode = mode
+	if _, err := model.SaveUserSetting(userId, current); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	codexProEligible, codexProUnavailableReason, err := model.GetCodexProEligibility(userId, current)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{
+		"codex_pro_mode":               mode,
+		"codex_pro_eligible":           codexProEligible,
+		"codex_pro_unavailable_reason": codexProUnavailableReason,
+	})
 }
 
 func ResetSubscriptionQuota(c *gin.Context) {

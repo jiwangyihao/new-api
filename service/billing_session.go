@@ -416,6 +416,56 @@ func (s *BillingSession) shouldTrust(c *gin.Context) bool {
 	return false
 }
 
+func codexProEligibilityFromSubscriptionFunding(sub *SubscriptionFunding) (bool, string) {
+	if sub == nil || sub.subscriptionId <= 0 {
+		return false, "no_paid_subscription"
+	}
+	if sub.SubscriptionStatus != "active" || sub.SubscriptionEndTime <= common.GetTimestamp() || (sub.TokenLimit > 0 && sub.SubscriptionTokenRemaining <= 0) {
+		return false, "no_paid_subscription"
+	}
+	if codexProIneligibleSubscriptionSource(sub.SubscriptionGrantReason) || codexProIneligibleSubscriptionSource(sub.SubscriptionSource) || sub.PlanIsTrial || sub.PlanInviteTrial {
+		return false, "trial_subscription"
+	}
+	if codexProRewardSubscriptionSource(sub.SubscriptionGrantReason) || codexProRewardSubscriptionSource(sub.SubscriptionSource) {
+		return false, "reward_subscription"
+	}
+	if sub.PlanPriceAmount <= 0 {
+		return false, "no_paid_subscription"
+	}
+	switch strings.TrimSpace(sub.SubscriptionGrantReason) {
+	case model.SubscriptionGrantOrder, "redemption", "admin":
+		return true, ""
+	}
+	switch strings.TrimSpace(sub.SubscriptionSource) {
+	case model.SubscriptionGrantOrder, "redemption", "admin":
+		return true, ""
+	}
+	return false, "no_paid_subscription"
+}
+
+func codexProIneligibleSubscriptionSource(value string) bool {
+	switch strings.TrimSpace(value) {
+	case "trial_code", "invite_trial":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexProRewardSubscriptionSource(value string) bool {
+	return strings.TrimSpace(value) == model.SubscriptionGrantMonthlyInviteEntitlement
+}
+
+func syncRelayCodexProEligibility(info *relaycommon.RelayInfo, sub *SubscriptionFunding) {
+	if info == nil {
+		return
+	}
+	info.CodexProMode = common.NormalizeCodexProMode(info.UserSetting.CodexProMode)
+	eligible, reason := codexProEligibilityFromSubscriptionFunding(sub)
+	info.CodexProEligible = eligible
+	info.CodexProUnavailableReason = reason
+}
+
 // syncRelayInfo 将 BillingSession 的状态同步到 RelayInfo 的兼容字段上。
 func (s *BillingSession) syncRelayInfo() {
 	info := s.relayInfo
@@ -443,6 +493,7 @@ func (s *BillingSession) syncRelayInfo() {
 		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
+		syncRelayCodexProEligibility(info, sub)
 		if sub.PlanIsTrial {
 			info.SubscriptionTrialMarker = "trial"
 		} else {
@@ -452,6 +503,8 @@ func (s *BillingSession) syncRelayInfo() {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
 		info.SubscriptionTrialMarker = ""
+		info.CodexProEligible = false
+		info.CodexProUnavailableReason = "no_paid_subscription"
 	}
 }
 
@@ -503,6 +556,9 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.SubscriptionPlanId = 0
 	info.SubscriptionPlanTitle = ""
 	info.SubscriptionTrialMarker = ""
+	info.CodexProEligible = false
+	info.CodexProUnavailableReason = "no_paid_subscription"
+	info.ResetCodexProRuntimeState()
 }
 
 func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {

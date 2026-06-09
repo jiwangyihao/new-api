@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -143,7 +144,14 @@ type RelayInfo struct {
 	SubscriptionPlanId    int
 	SubscriptionPlanTitle string
 	// SubscriptionTrialMarker is set to "trial" when the actual billed subscription plan is trial.
-	SubscriptionTrialMarker string
+	SubscriptionTrialMarker   string
+	CodexProMode              string
+	CodexProEligible          bool
+	CodexProUnavailableReason string
+	CodexProRequestMarker     string
+	CodexProRequestSent       bool
+	CodexProServedCandidate   bool
+	CodexProServed            bool
 	// RequestId is used for idempotent pre-consume/refund
 	RequestId string
 	// SubscriptionAmountTotal / SubscriptionAmountUsedAfterPreConsume are used to compute remaining in logs.
@@ -201,6 +209,103 @@ func (info *RelayInfo) EndpointType() constant.EndpointType {
 	default:
 		return ""
 	}
+}
+
+func (info *RelayInfo) ResetCodexProRuntimeState() {
+	if info == nil {
+		return
+	}
+	info.CodexProRequestMarker = ""
+	info.CodexProRequestSent = false
+	info.CodexProServedCandidate = false
+	info.CodexProServed = false
+}
+
+func (info *RelayInfo) FinalizeCodexProRequestMarker() {
+	if info == nil {
+		return
+	}
+	info.ResetCodexProRuntimeState()
+	if !info.CodexProEligible || !info.isCodexProSupportedChannel() {
+		return
+	}
+	switch info.RelayMode {
+	case relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact:
+	default:
+		return
+	}
+	modelName := strings.TrimSpace(info.OriginModelName)
+	if modelName == "" {
+		modelName = strings.TrimSpace(info.UpstreamModelName)
+	}
+	if !common.IsOpenAITextModel(modelName) {
+		return
+	}
+	switch common.NormalizeCodexProMode(info.CodexProMode) {
+	case common.CodexProModeAll:
+		info.MarkCodexProRequestSent()
+	case common.CodexProModeFlexible:
+		if info.hasCodexProIntentHeader() {
+			info.MarkCodexProRequestSent()
+		}
+	}
+}
+
+func (info *RelayInfo) isCodexProSupportedChannel() bool {
+	return info.ChannelMeta != nil &&
+		info.ChannelType == constant.ChannelTypeCodex &&
+		info.ApiType == constant.APITypeCodex
+}
+
+func (info *RelayInfo) MarkCodexProRequestSent() {
+	if info == nil {
+		return
+	}
+	info.CodexProRequestMarker = "codex-pro"
+	info.CodexProRequestSent = true
+}
+
+func (info *RelayInfo) MarkCodexProServedCandidateFromHeaders(headers http.Header) {
+	if info == nil || headers == nil || info.CodexProRequestMarker != "codex-pro" {
+		return
+	}
+	for key, values := range headers {
+		if !strings.EqualFold(key, "X-NewAPI-Pro-Served") {
+			continue
+		}
+		for _, value := range values {
+			if value == "codex-pro" {
+				info.CodexProServedCandidate = true
+				return
+			}
+		}
+	}
+}
+
+func (info *RelayInfo) ConfirmCodexProServed() {
+	if info == nil || !info.CodexProServedCandidate {
+		return
+	}
+	info.CodexProServed = true
+}
+
+func (info *RelayInfo) ClearCodexProServedCandidate() {
+	if info == nil {
+		return
+	}
+	info.CodexProServedCandidate = false
+}
+
+func (info *RelayInfo) hasCodexProIntentHeader() bool {
+	if info == nil {
+		return false
+	}
+	for key, value := range info.RequestHeaders {
+		if strings.EqualFold(key, "X-NewAPI-Codex-Pro-Intent") && value == "codex-pro" {
+			return true
+		}
+	}
+	return false
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

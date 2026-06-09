@@ -89,6 +89,31 @@ func TestUpdateUserSettingPreservesRankingsDisplayName(t *testing.T) {
 	assert.Equal(t, "rank@example.com", settings.NotificationEmail)
 }
 
+func TestUpdateUserSettingPreservesCodexProMode(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}))
+	user := model.User{Id: 9966, Username: "codex-pro-setting", Status: common.UserStatusEnabled}
+	settingJSON, err := common.Marshal(map[string]any{"codex_pro_mode": "all", "billing_preference": "wallet_first"})
+	require.NoError(t, err)
+	user.Setting = string(settingJSON)
+	require.NoError(t, model.DB.Create(&user).Error)
+
+	recorder := performUpdateUserSetting(t, user.Id, `{"notify_type":"email","quota_warning_threshold":0.5,"notification_email":"codex@example.com"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var rawSetting string
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", user.Id).Select("setting").Scan(&rawSetting).Error)
+	var preserved map[string]interface{}
+	require.NoError(t, common.Unmarshal([]byte(rawSetting), &preserved))
+	assert.Equal(t, "all", preserved["codex_pro_mode"])
+	assert.Equal(t, "wallet_first", preserved["billing_preference"])
+	updated, err := model.GetUserById(user.Id, false)
+	require.NoError(t, err)
+	settings := updated.GetSetting()
+	assert.Equal(t, "email", settings.NotifyType)
+	assert.Equal(t, "codex@example.com", settings.NotificationEmail)
+}
+
 func TestUpdateSelfRankingsDisplayNameFlushesRankingsCache(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.QuotaData{}, &model.Log{}))

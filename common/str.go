@@ -3,6 +3,7 @@ package common
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -104,6 +105,33 @@ func GetJsonString(data any) string {
 	}
 	b, _ := json.Marshal(data)
 	return string(b)
+}
+
+const (
+	CodexProModeAll      = "all"
+	CodexProModeFlexible = "flexible"
+	CodexProModeOff      = "off"
+)
+
+// NormalizeCodexProMode clamps persisted Codex Pro mode values to valid modes.
+func NormalizeCodexProMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	switch mode {
+	case CodexProModeAll, CodexProModeFlexible, CodexProModeOff:
+		return mode
+	default:
+		return CodexProModeFlexible
+	}
+}
+
+// ValidateCodexProModeForUpdate rejects empty or unknown Codex Pro mode updates.
+func ValidateCodexProModeForUpdate(mode string) error {
+	switch strings.TrimSpace(mode) {
+	case CodexProModeAll, CodexProModeFlexible, CodexProModeOff:
+		return nil
+	default:
+		return errors.New("invalid codex pro mode")
+	}
 }
 
 // NormalizeBillingPreference clamps the billing preference to valid values.

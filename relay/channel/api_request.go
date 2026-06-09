@@ -50,20 +50,52 @@ const (
 const (
 	SubscriptionMarkerHeaderName = "X-NewAPI-Subscription-Marker"
 	SubscriptionTrialMarkerValue = "trial"
+	CodexProIntentHeaderName     = "X-NewAPI-Codex-Pro-Intent"
+	CodexProRequestHeaderName    = "X-NewAPI-Pro-Request"
+	CodexProServedHeaderName     = "X-NewAPI-Pro-Served"
+	CodexProMarkerValue          = "codex-pro"
+	CodexProIntentHeaderValue    = CodexProMarkerValue
 )
+
+func deleteHeaderCaseInsensitive(headers http.Header, name string) {
+	for key := range headers {
+		if strings.EqualFold(key, name) {
+			delete(headers, key)
+		}
+	}
+}
+
+func FinalizeCodexProRequestHeader(headers http.Header, info *common.RelayInfo) {
+	if headers == nil {
+		return
+	}
+	deleteHeaderCaseInsensitive(headers, CodexProRequestHeaderName)
+	deleteHeaderCaseInsensitive(headers, CodexProServedHeaderName)
+	if info == nil {
+		return
+	}
+	info.FinalizeCodexProRequestMarker()
+	if info.CodexProRequestMarker == CodexProMarkerValue {
+		headers.Set(CodexProRequestHeaderName, CodexProMarkerValue)
+	}
+}
+
+func StripCodexProServedHeader(headers http.Header) {
+	if headers == nil {
+		return
+	}
+	deleteHeaderCaseInsensitive(headers, CodexProServedHeaderName)
+}
 
 func FinalizeSubscriptionMarkerHeader(headers http.Header, info *common.RelayInfo) {
 	if headers == nil {
 		return
 	}
-	for key := range headers {
-		if strings.EqualFold(key, SubscriptionMarkerHeaderName) {
-			delete(headers, key)
-		}
-	}
+	deleteHeaderCaseInsensitive(headers, SubscriptionMarkerHeaderName)
 	if info != nil && info.SubscriptionTrialMarker == SubscriptionTrialMarkerValue {
 		headers.Set(SubscriptionMarkerHeaderName, SubscriptionTrialMarkerValue)
 	}
+	FinalizeCodexProRequestHeader(headers, info)
 }
 
 var passthroughSkipHeaderNamesLower = map[string]struct{}{

@@ -291,6 +291,8 @@ func migrateDB() error {
 		&OAuthProviderLock{},
 		&GPTAbuseSignalLog{},
 		&GPTAbuseUserSuspension{},
+		&GPTAbuseWarningReset{},
+		&GPTAbuseRepeatBlockLog{},
 		&PerfMetric{},
 	)
 	if err != nil {
@@ -360,6 +362,8 @@ func migrateDBFast() error {
 		{&OAuthProviderLock{}, "OAuthProviderLock"},
 		{&GPTAbuseSignalLog{}, "GPTAbuseSignalLog"},
 		{&GPTAbuseUserSuspension{}, "GPTAbuseUserSuspension"},
+		{&GPTAbuseWarningReset{}, "GPTAbuseWarningReset"},
+		{&GPTAbuseRepeatBlockLog{}, "GPTAbuseRepeatBlockLog"},
 		{&PerfMetric{}, "PerfMetric"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大

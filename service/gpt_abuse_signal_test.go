@@ -16,23 +16,46 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
 )
 
 func setupGPTAbuseSignalServiceTest(t *testing.T) {
 	t.Helper()
-	require.NoError(t, model.DB.AutoMigrate(&model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}))
+	oldDB := model.DB
+	oldLogDB := model.LOG_DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
 	oldEnabled := common.GPTAbuseLimitEnabled
 	oldDefault := common.GPTAbuseDefaultWarningLimit
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
 	common.GPTAbuseLimitEnabled = true
 	common.GPTAbuseDefaultWarningLimit = 1
+	dsn := "file:" + strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name()) + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	model.DB = db
+	model.LOG_DB = db
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.Channel{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &model.GPTAbuseWarningReset{}))
+	for _, tableName := range []string{"gpt_abuse_warning_resets", "gpt_abuse_user_suspensions", "gpt_abuse_signal_logs", "user_subscriptions", "subscription_plans", "users", "tokens", "channels"} {
+		_ = model.DB.Exec("DELETE FROM " + tableName).Error
+	}
 	model.ClearPrimaryBillableSubscriptionCacheForTest()
 	t.Cleanup(func() {
 		model.ClearPrimaryBillableSubscriptionCacheForTest()
 		common.GPTAbuseLimitEnabled = oldEnabled
 		common.GPTAbuseDefaultWarningLimit = oldDefault
-		for _, tableName := range []string{"gpt_abuse_user_suspensions", "gpt_abuse_signal_logs", "user_subscriptions", "subscription_plans", "users", "tokens", "channels"} {
-			_ = model.DB.Exec("DELETE FROM " + tableName).Error
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
 		}
+		model.DB = oldDB
+		model.LOG_DB = oldLogDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
 	})
 }
 
@@ -74,8 +97,10 @@ func newGPTAbuseSignalTestRelayInfo() *relaycommon.RelayInfo {
 func seedGPTAbuseSubscription(t *testing.T, userID int, planLimit int) {
 	t.Helper()
 	now := common.GetTimestamp()
-	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "abuse-user", Email: "user@example.com", Status: common.UserStatusEnabled, AffCode: "abuse-aff"}).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: userID + 100, Title: "GPT Abuse Plan", Enabled: true, ConcurrencyLimit: 1, GPTAbuseWarningLimit: planLimit}).Error)
+	businessCode := "gpt-abuse-plan-" + common.Interface2String(userID)
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "abuse-user-" + common.Interface2String(userID), Email: "user" + common.Interface2String(userID) + "@example.com", Status: common.UserStatusEnabled, AffCode: "abuse-aff-" + common.Interface2String(userID)}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: userID + 100, Title: "GPT Abuse Plan", Enabled: true, ConcurrencyLimit: 1, GPTAbuseWarningLimit: planLimit, BusinessCode: &businessCode}).Error)
+	model.InvalidateSubscriptionPlanCache(userID + 100)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: userID + 200, UserId: userID, PlanId: userID + 100, Status: "active", StartTime: now - 60, EndTime: now + 3600, TokenLimit: 1000, TokenUsed: 0, GrantReason: "order", Source: "order"}).Error)
 }
 
@@ -309,6 +334,62 @@ func TestRecordGPTAbuseSignalCreatesSuspensionAtDailyLimit(t *testing.T) {
 	assert.Equal(t, dayEnd, susp.SuspendedUntil)
 }
 
+func TestGPTAbuseResetMakesSubscriptionSummaryUseEffectiveCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseSignalServiceTest(t)
+	const userID = 7011
+	seedGPTAbuseSubscription(t, userID, 5)
+	dayStart, dayEnd := model.GPTAbuseDayWindow(common.GetTimestamp())
+	logs := make([]model.GPTAbuseSignalLog, 5)
+	for i := range logs {
+		logs[i] = model.GPTAbuseSignalLog{CreatedAt: dayStart + int64(i+1), UserId: userID, Kind: GPTAbuseKindCyberPolicy, CountEligible: true, DedupeKey: "summary-reset-warning-" + common.Interface2String(i)}
+	}
+	require.NoError(t, model.DB.Create(&logs).Error)
+	require.NoError(t, model.CreateGPTAbuseWarningReset(&model.GPTAbuseWarningReset{UserId: userID, WindowStart: dayStart, WindowEnd: dayEnd, ResetAt: common.GetTimestamp(), PreviousRawCount: 5, PreviousCount: 5, CutoffSignalLogID: logs[4].Id, Reason: "summary reset"}))
+
+	summary, err := model.GetSubscriptionSelfSummary(userID)
+	require.NoError(t, err)
+
+	assert.Equal(t, 0, summary.GPTAbuseWarningCount)
+	assert.Equal(t, 5, summary.GPTAbuseWarningRemaining)
+}
+
+func TestGPTAbuseLimitUsesEffectiveCountAfterReset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseSignalServiceTest(t)
+	const userID = 7021
+	seedGPTAbuseSubscription(t, userID, 3)
+	c := newGPTAbuseSignalTestContext("/v1/responses")
+	common.SetContextKey(c, constant.ContextKeyUserId, userID)
+	info := newGPTAbuseSignalTestRelayInfo()
+	info.UserId = userID
+	info.RequestId = "req-local-reset-limit"
+	c.Set(common.RequestIdKey, info.RequestId)
+	dayStart, dayEnd := model.GPTAbuseDayWindow(common.GetTimestamp())
+	oldLogs := make([]model.GPTAbuseSignalLog, 3)
+	for i := range oldLogs {
+		oldLogs[i] = model.GPTAbuseSignalLog{CreatedAt: dayStart + int64(i+1), UserId: userID, Kind: GPTAbuseKindCyberPolicy, CountEligible: true, DedupeKey: "limit-reset-old-warning-" + common.Interface2String(i)}
+	}
+	require.NoError(t, model.DB.Create(&oldLogs).Error)
+	require.NoError(t, model.CreateGPTAbuseWarningReset(&model.GPTAbuseWarningReset{UserId: userID, WindowStart: dayStart, WindowEnd: dayEnd, ResetAt: common.GetTimestamp(), PreviousRawCount: 3, PreviousCount: 3, CutoffSignalLogID: oldLogs[2].Id, Reason: "limit reset"}))
+
+	RecordGPTAbuseSignal(c, info, GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindCyberPolicy, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceHTTPError, StatusCode: http.StatusBadRequest, ErrorCode: "cyber_policy", UpstreamRequestId: "req-upstream-after-reset-1", CountEligible: true})
+	var suspensionCount int64
+	require.NoError(t, model.DB.Model(&model.GPTAbuseUserSuspension{}).Where("user_id = ?", userID).Count(&suspensionCount).Error)
+	assert.Equal(t, int64(0), suspensionCount)
+
+	RecordGPTAbuseSignal(c, info, GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindContentPolicyViolation, Severity: GPTAbuseSeverityMedium, Source: GPTAbuseSourceHTTPError, StatusCode: http.StatusBadRequest, ErrorCode: "content_policy_violation", UpstreamRequestId: "req-upstream-after-reset-2", CountEligible: true})
+	require.NoError(t, model.DB.Model(&model.GPTAbuseUserSuspension{}).Where("user_id = ?", userID).Count(&suspensionCount).Error)
+	assert.Equal(t, int64(0), suspensionCount)
+
+	RecordGPTAbuseSignal(c, info, GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindGenericPolicyViolation, Severity: GPTAbuseSeverityMedium, Source: GPTAbuseSourceHTTPError, StatusCode: http.StatusBadRequest, ErrorCode: "policy_violation", UpstreamRequestId: "req-upstream-after-reset-3", CountEligible: true})
+	var susp model.GPTAbuseUserSuspension
+	require.NoError(t, model.DB.Where("user_id = ?", userID).First(&susp).Error)
+	assert.Equal(t, model.GPTAbuseSuspensionStatusActive, susp.Status)
+	assert.Equal(t, 3, susp.DailyCount)
+	assert.Equal(t, 3, susp.DailyLimit)
+}
+
 func TestRecordGPTAbuseSignalDoesNotSuspendWhenDisabled(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupGPTAbuseSignalServiceTest(t)
@@ -438,4 +519,89 @@ func TestGPTAwareRelayErrorHandlerClosesBodyOnReadError(t *testing.T) {
 	require.NotNil(t, err)
 	assert.Equal(t, http.StatusBadGateway, err.StatusCode)
 	assert.True(t, body.closed)
+}
+
+func captureGPTAbuseRepeatBlockForSignalTest(t *testing.T, c *gin.Context, info *relaycommon.RelayInfo, body string) {
+	t.Helper()
+	storage, err := common.CreateBodyStorage([]byte(body))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = storage.Close() })
+	require.NoError(t, CaptureGPTAbuseRepeatBlockFingerprint(c, info, storage))
+}
+
+func TestRecordGPTAbuseSignalStoresRepeatBlockOnlyAfterInserted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseRepeatBlockServiceTest(t)
+	common.GPTAbuseLimitEnabled = false
+	c := newGPTAbuseSignalTestContext("/v1/chat/completions")
+	info := newGPTAbuseSignalTestRelayInfo()
+	info.RequestId = "req-repeat-inserted"
+	c.Set(common.RequestIdKey, info.RequestId)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-4o","messages":[{"role":"user","content":"blocked"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	captureGPTAbuseRepeatBlockForSignalTest(t, c, info, `{"model":"gpt-4o","messages":[{"role":"user","content":"blocked"}]}`)
+	signal := GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindCyberPolicy, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceHTTPError, StatusCode: http.StatusBadRequest, ErrorCode: "cyber_policy", ErrorType: "invalid_request_error", UpstreamRequestId: "req-upstream-repeat", CountEligible: true}
+
+	RecordGPTAbuseSignal(c, info, signal)
+	var first model.GPTAbuseSignalLog
+	require.NoError(t, model.DB.Where("request_id = ?", info.RequestId).First(&first).Error)
+	RecordGPTAbuseSignal(c, info, signal)
+	apiErr := CheckGPTAbuseRepeatBlock(c, info)
+
+	require.NotNil(t, apiErr)
+	var repeatLog model.GPTAbuseRepeatBlockLog
+	require.NoError(t, model.DB.First(&repeatLog).Error)
+	assert.Equal(t, first.Id, repeatLog.FirstWarningLogId)
+	var signalCount int64
+	require.NoError(t, model.DB.Model(&model.GPTAbuseSignalLog{}).Where("request_id = ?", info.RequestId).Count(&signalCount).Error)
+	assert.Equal(t, int64(1), signalCount)
+}
+
+func TestRecordGPTAbuseSignalUsesCapturedClientFacingFingerprint(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseRepeatBlockServiceTest(t)
+	c := newGPTAbuseSignalTestContext("/v1/chat/completions")
+	info := newGPTAbuseSignalTestRelayInfo()
+	info.OriginModelName = "gpt-5.5"
+	info.RequestURLPath = "/v1/chat/completions"
+	info.RelayMode = relayconstant.RelayModeChatCompletions
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.5","messages":[{"role":"user","content":"blocked"}]}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	captureGPTAbuseRepeatBlockForSignalTest(t, c, info, `{"model":"gpt-5.5","messages":[{"role":"user","content":"blocked"}]}`)
+	info.RequestURLPath = "/v1/responses"
+	info.RelayMode = relayconstant.RelayModeResponses
+
+	RecordGPTAbuseSignal(c, info, GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindCyberPolicy, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceHTTPError, StatusCode: http.StatusBadRequest, ErrorCode: "cyber_policy", ErrorType: "invalid_request_error", UpstreamRequestId: "req-upstream-captured", CountEligible: true})
+	apiErr := CheckGPTAbuseRepeatBlock(c, info)
+
+	require.NotNil(t, apiErr)
+	var repeatLog model.GPTAbuseRepeatBlockLog
+	require.NoError(t, model.DB.First(&repeatLog).Error)
+	assert.Equal(t, "/v1/chat/completions", repeatLog.Endpoint)
+	assert.Equal(t, relayconstant.RelayModeChatCompletions, repeatLog.RelayMode)
+	assert.Equal(t, "gpt-5.5", repeatLog.RequestedModel)
+}
+
+func TestResponsesSSEWarningStoresRepeatBlockBeforeHandlerReturns(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseRepeatBlockServiceTest(t)
+	c := newGPTAbuseSignalTestContext("/v1/responses")
+	info := newGPTAbuseSignalTestRelayInfo()
+	info.RequestURLPath = "/v1/responses"
+	info.RelayMode = relayconstant.RelayModeResponses
+	info.OriginModelName = "gpt-5.5"
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":[{"role":"user","content":"blocked"}],"stream":true}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	captureGPTAbuseRepeatBlockForSignalTest(t, c, info, `{"model":"gpt-5.5","input":[{"role":"user","content":"blocked"}],"stream":true}`)
+	payload := []byte(`{"type":"response.failed","response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`)
+	signal := ClassifyGPTAbuseSignalFromSSEEvent("response.failed", payload)
+	require.True(t, signal.Matched)
+	signal.StatusCode = http.StatusOK
+	signal.UpstreamRequestId = "req-upstream-sse"
+
+	RecordGPTAbuseSignal(c, info, signal)
+	apiErr := CheckGPTAbuseRepeatBlock(c, info)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, string(types.ErrorCodeGPTAbuseRepeatedWarningRequest), apiErr.ToOpenAIError().Code)
 }

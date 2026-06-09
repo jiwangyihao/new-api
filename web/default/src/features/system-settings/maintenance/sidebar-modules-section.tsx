@@ -144,6 +144,10 @@ export function SidebarModulesSection({
         title: t('trialAbuse.title'),
         description: t('trialAbuse.description'),
       },
+      gpt_abuse: {
+        title: t('gptAbuse.title'),
+        description: t('gptAbuse.description'),
+      },
       user: {
         title: t('Users'),
         description: t('Administer user accounts and roles.'),

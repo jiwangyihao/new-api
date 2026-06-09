@@ -244,6 +244,11 @@ export function SidebarModulesCard() {
           description: t('trialAbuse.description'),
         },
         {
+          key: 'gpt_abuse',
+          title: t('gptAbuse.title'),
+          description: t('gptAbuse.description'),
+        },
+        {
           key: 'user',
           title: t('Users'),
           description: t('Manage users and their permissions'),

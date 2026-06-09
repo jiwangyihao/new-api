@@ -165,6 +165,11 @@ export function useSidebarData(): SidebarData {
             icon: ShieldAlert,
           },
           {
+            title: t('gptAbuse.title'),
+            url: '/gpt-abuse',
+            icon: ShieldAlert,
+          },
+          {
             title: t('Redemption Codes'),
             url: '/redemption-codes',
             icon: Ticket,

@@ -173,7 +173,11 @@ func RecordGPTAbuseSignal(c *gin.Context, info *relaycommon.RelayInfo, signal GP
 		logger.LogWarn(contextFromGin(c), "record GPT abuse signal failed: "+err.Error())
 		return
 	}
-	if !inserted || !log.CountEligible || !common.GPTAbuseLimitEnabled {
+	if !inserted {
+		return
+	}
+	StoreGPTAbuseRepeatBlock(c, info, log)
+	if !log.CountEligible || !common.GPTAbuseLimitEnabled {
 		return
 	}
 	applyGPTAbuseLimit(c, log)

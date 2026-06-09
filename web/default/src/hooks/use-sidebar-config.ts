@@ -67,6 +67,7 @@ const DEFAULT_SIDEBAR_MODULES: SidebarModulesAdminConfig = {
     redemption: true,
     trial_code: true,
     trial_abuse: true,
+    gpt_abuse: true,
     user: true,
     setting: true,
     subscription: true,
@@ -134,6 +135,7 @@ const URL_TO_CONFIG_MAP: Record<string, { section: string; module: string }> = {
   '/admin-analytics': { section: 'admin', module: 'analytics' },
   '/admin-ops': { section: 'admin', module: 'ops' },
   '/trial-abuse': { section: 'admin', module: 'trial_abuse' },
+  '/gpt-abuse': { section: 'admin', module: 'gpt_abuse' },
   '/invitation-commission/withdrawals': {
     section: 'admin',
     module: 'invitation_commission',

@@ -240,6 +240,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
+		if err := service.CaptureGPTAbuseRepeatBlockFingerprint(c, relayInfo, bodyStorage); err != nil {
+			newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			break
+		}
+		if repeatedErr := service.CheckGPTAbuseRepeatBlock(c, relayInfo); repeatedErr != nil {
+			newAPIError = repeatedErr
+			break
+		}
 
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:

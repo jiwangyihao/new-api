@@ -123,6 +123,63 @@ func (s *GPTAbuseUserSuspension) BeforeUpdate(tx *gorm.DB) error {
 	return nil
 }
 
+type GPTAbuseWarningReset struct {
+	Id                int    `json:"id" gorm:"primaryKey"`
+	UserId            int    `json:"user_id" gorm:"not null;index;index:idx_gpt_abuse_reset_user_window,priority:1"`
+	WindowStart       int64  `json:"window_start" gorm:"bigint;not null;index;index:idx_gpt_abuse_reset_user_window,priority:2"`
+	WindowEnd         int64  `json:"window_end" gorm:"bigint;not null;index"`
+	ResetAt           int64  `json:"reset_at" gorm:"bigint;not null;index"`
+	ResetBy           int    `json:"reset_by" gorm:"default:0;index"`
+	PreviousRawCount  int    `json:"previous_raw_count" gorm:"default:0"`
+	PreviousCount     int    `json:"previous_count" gorm:"default:0"`
+	CutoffSignalLogID int    `json:"cutoff_signal_log_id" gorm:"default:0;index"`
+	Reason            string `json:"reason" gorm:"type:varchar(255);default:''"`
+	CreatedAt         int64  `json:"created_at" gorm:"bigint"`
+}
+
+func (r *GPTAbuseWarningReset) BeforeCreate(tx *gorm.DB) error {
+	now := common.GetTimestamp()
+	if r.ResetAt == 0 {
+		r.ResetAt = now
+	}
+	if r.CreatedAt == 0 {
+		r.CreatedAt = now
+	}
+	return nil
+}
+
+type GPTAbuseRepeatBlockLog struct {
+	Id                            int    `json:"id" gorm:"primaryKey"`
+	CreatedAt                     int64  `json:"created_at" gorm:"bigint;index;index:idx_gpt_abuse_repeat_user_created,priority:2"`
+	UserId                        int    `json:"user_id" gorm:"not null;index;index:idx_gpt_abuse_repeat_user_created,priority:1"`
+	Username                      string `json:"username" gorm:"type:varchar(255);default:''"`
+	TokenId                       int    `json:"token_id" gorm:"default:0;index"`
+	TokenName                     string `json:"token_name" gorm:"type:varchar(255);default:''"`
+	RequestId                     string `json:"request_id" gorm:"type:varchar(128);default:'';index"`
+	Endpoint                      string `json:"endpoint" gorm:"type:varchar(255);default:''"`
+	RelayMode                     int    `json:"relay_mode" gorm:"default:0"`
+	RequestedModel                string `json:"requested_model" gorm:"type:varchar(255);default:''"`
+	BodyFingerprint               string `json:"-" gorm:"type:varchar(128);default:'';index"`
+	FirstWarningLogId             int    `json:"first_warning_log_id" gorm:"default:0;index"`
+	FirstWarningAt                int64  `json:"first_warning_at" gorm:"bigint;default:0"`
+	FirstWarningRequestId         string `json:"first_warning_request_id" gorm:"type:varchar(128);default:''"`
+	FirstWarningUpstreamRequestId string `json:"first_warning_upstream_request_id" gorm:"type:varchar(128);default:''"`
+	FirstWarningSource            string `json:"first_warning_source" gorm:"type:varchar(64);default:''"`
+	FirstWarningKind              string `json:"first_warning_kind" gorm:"type:varchar(64);default:''"`
+	FirstWarningSeverity          string `json:"first_warning_severity" gorm:"type:varchar(16);default:''"`
+	ChannelId                     int    `json:"channel_id" gorm:"default:0;index"`
+	ChannelName                   string `json:"channel_name" gorm:"type:varchar(255);default:''"`
+	ChannelType                   int    `json:"channel_type" gorm:"default:0"`
+}
+
+func (l *GPTAbuseRepeatBlockLog) BeforeCreate(tx *gorm.DB) error {
+	if l.CreatedAt == 0 {
+		l.CreatedAt = common.GetTimestamp()
+	}
+	return nil
+}
+
+
 func RecordGPTAbuseSignalLog(log *GPTAbuseSignalLog) (bool, error) {
 	if log == nil {
 		return false, nil
@@ -141,19 +198,131 @@ func RecordGPTAbuseSignalLog(log *GPTAbuseSignalLog) (bool, error) {
 }
 
 func CountGPTAbuseSignalsForUser(userID int, start, end int64) (int, error) {
-	if userID <= 0 {
+	count, _, err := CountEffectiveGPTAbuseSignalsForUser(userID, start, end)
+	return count, err
+}
+
+func CountGPTAbuseSignalsForUserRaw(userID int, start, end int64) (int, error) {
+	return CountGPTAbuseSignalsForUserRawTx(DB, userID, start, end)
+}
+
+func CountGPTAbuseSignalsForUserRawTx(tx *gorm.DB, userID int, start, end int64) (int, error) {
+	return countGPTAbuseSignalsForUserTx(tx, userID, start, end, 0)
+}
+
+func CountEffectiveGPTAbuseSignalsForUser(userID int, start, end int64) (int, *GPTAbuseWarningReset, error) {
+	return CountEffectiveGPTAbuseSignalsForUserTx(DB, userID, start, end)
+}
+
+func CountEffectiveGPTAbuseSignalsForUserTx(tx *gorm.DB, userID int, start, end int64) (int, *GPTAbuseWarningReset, error) {
+	if userID <= 0 || end <= start {
+		return 0, nil, nil
+	}
+	reset, err := latestGPTAbuseWarningResetTx(tx, userID, start)
+	if err != nil {
+		return 0, nil, err
+	}
+	cutoffID := 0
+	if reset != nil {
+		cutoffID = reset.CutoffSignalLogID
+	}
+	count, err := countGPTAbuseSignalsForUserTx(tx, userID, start, end, cutoffID)
+	if err != nil {
+		return 0, nil, err
+	}
+	return count, reset, nil
+}
+
+func LatestGPTAbuseWarningReset(userID int, windowStart int64) (*GPTAbuseWarningReset, error) {
+	return latestGPTAbuseWarningResetTx(DB, userID, windowStart)
+}
+
+func MaxGPTAbuseSignalLogIDForUserWindow(userID int, start, end int64) (int, error) {
+	return MaxGPTAbuseSignalLogIDForUserWindowTx(DB, userID, start, end)
+}
+
+func MaxGPTAbuseSignalLogIDForUserWindowTx(tx *gorm.DB, userID int, start, end int64) (int, error) {
+	if tx == nil {
+		return 0, errors.New("tx is nil")
+	}
+	if userID <= 0 || end <= start {
 		return 0, nil
 	}
-	if end <= start {
+	var maxID int
+	err := tx.Model(&GPTAbuseSignalLog{}).
+		Select("COALESCE(MAX(id), 0)").
+		Where("user_id = ? AND count_eligible = ? AND created_at >= ? AND created_at < ?", userID, true, start, end).
+		Scan(&maxID).Error
+	return maxID, err
+}
+
+func CreateGPTAbuseWarningReset(reset *GPTAbuseWarningReset) error {
+	return CreateGPTAbuseWarningResetTx(DB, reset)
+}
+
+func CreateGPTAbuseWarningResetTx(tx *gorm.DB, reset *GPTAbuseWarningReset) error {
+	if tx == nil {
+		return errors.New("tx is nil")
+	}
+	if reset == nil {
+		return nil
+	}
+	return tx.Create(reset).Error
+}
+
+func RecordGPTAbuseRepeatBlockLog(log *GPTAbuseRepeatBlockLog) error {
+	if log == nil {
+		return nil
+	}
+	if log.UserId <= 0 {
+		return errors.New("invalid user id")
+	}
+	if strings.TrimSpace(log.BodyFingerprint) == "" {
+		return errors.New("body fingerprint is empty")
+	}
+	if log.FirstWarningLogId <= 0 {
+		return errors.New("first warning log id is empty")
+	}
+	return DB.Create(log).Error
+}
+
+func countGPTAbuseSignalsForUserTx(tx *gorm.DB, userID int, start, end int64, cutoffID int) (int, error) {
+	if tx == nil {
+		return 0, errors.New("tx is nil")
+	}
+	if userID <= 0 || end <= start {
 		return 0, nil
+	}
+	query := tx.Model(&GPTAbuseSignalLog{}).
+		Where("user_id = ? AND count_eligible = ? AND created_at >= ? AND created_at < ?", userID, true, start, end)
+	if cutoffID > 0 {
+		query = query.Where("id > ?", cutoffID)
 	}
 	var count int64
-	if err := DB.Model(&GPTAbuseSignalLog{}).
-		Where("user_id = ? AND count_eligible = ? AND created_at >= ? AND created_at < ?", userID, true, start, end).
-		Count(&count).Error; err != nil {
+	if err := query.Count(&count).Error; err != nil {
 		return 0, err
 	}
 	return int(count), nil
+}
+
+func latestGPTAbuseWarningResetTx(tx *gorm.DB, userID int, windowStart int64) (*GPTAbuseWarningReset, error) {
+	if tx == nil {
+		return nil, errors.New("tx is nil")
+	}
+	if userID <= 0 {
+		return nil, nil
+	}
+	var reset GPTAbuseWarningReset
+	err := tx.Where("user_id = ? AND window_start = ?", userID, windowStart).
+		Order("reset_at desc, id desc").
+		First(&reset).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &reset, nil
 }
 
 func GetActiveGPTAbuseSuspension(userID int, now int64) (*GPTAbuseUserSuspension, error) {

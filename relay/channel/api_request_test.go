@@ -366,6 +366,36 @@ func TestFinalizeProRequestHeaderPaidSubscriptionCodexProEligibleModes(t *testin
 	}
 }
 
+func TestFinalizeProRequestHeaderAddsTEForTrailerAck(t *testing.T) {
+	t.Parallel()
+
+	info := newCodexProRelayInfoForHeaderTest(t, "all", "gpt-5.4", constant.RelayModeResponses, true)
+	markCodexProRequestForHeaderTest(t, info)
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/backend-api/codex/responses", nil)
+	req.Header.Set("TE", "client-spoof")
+
+	FinalizeSubscriptionMarkerHeader(req.Header, info)
+
+	requireOnlyCodexProRequestHeader(t, req.Header)
+	require.True(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProRequestAllowed"))
+	require.Equal(t, "trailers", req.Header.Get("TE"))
+}
+
+func TestFinalizeProRequestHeaderRemovesSpoofedTrailerDeclaration(t *testing.T) {
+	t.Parallel()
+
+	info := newCodexProRelayInfoForHeaderTest(t, "all", "gpt-5.4", constant.RelayModeResponses, true)
+	markCodexProRequestForHeaderTest(t, info)
+	req := httptest.NewRequest(http.MethodPost, "https://example.com/backend-api/codex/responses", nil)
+	req.Header.Set("Trailer", codexProRequestHeaderNameForTest)
+	req.Header.Add("Trailer", "X-NewAPI-Pro-Served")
+
+	FinalizeSubscriptionMarkerHeader(req.Header, info)
+
+	require.Empty(t, req.Header.Get("Trailer"))
+	requireOnlyCodexProRequestHeader(t, req.Header)
+}
+
 func TestFinalizeProRequestHeaderCodexProUnavailableForModelAndPath(t *testing.T) {
 	t.Parallel()
 
@@ -387,10 +417,13 @@ func TestFinalizeProRequestHeaderCodexProUnavailableForModelAndPath(t *testing.T
 			markCodexProRequestForHeaderTest(t, info)
 			req := httptest.NewRequest(http.MethodPost, "https://example.com/upstream", nil)
 			req.Header["X-NewAPI-Pro-Request"] = []string{"codex-pro"}
+			req.Header.Set("TE", "client-spoof")
 
 			FinalizeSubscriptionMarkerHeader(req.Header, info)
 
 			requireNoCodexProRequestHeader(t, req.Header)
+			require.False(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProRequestAllowed"))
+			require.Empty(t, req.Header.Get("TE"))
 		})
 	}
 }
@@ -420,6 +453,7 @@ func TestFinalizeProRequestHeaderRequiresCodexChannel(t *testing.T) {
 			FinalizeSubscriptionMarkerHeader(req.Header, info)
 
 			requireNoCodexProRequestHeader(t, req.Header)
+			require.False(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProRequestAllowed"))
 			require.Empty(t, getRelayInfoStringFieldForHeaderTest(t, info, "CodexProRequestMarker"))
 		})
 	}
@@ -440,6 +474,7 @@ func TestFinalizeProRequestHeaderResetsAttemptRuntimeState(t *testing.T) {
 	requireOnlyCodexProRequestHeader(t, req.Header)
 	require.False(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProServedCandidate"))
 	require.False(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProServed"))
+	require.True(t, getRelayInfoBoolFieldForHeaderTest(t, info, "CodexProRequestAllowed"))
 }
 
 func TestFinalizeProRequestHeaderKeepsServerFinalValueAfterOverrideSpoofs(t *testing.T) {

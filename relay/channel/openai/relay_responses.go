@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -16,16 +17,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func markCodexProServedCandidateFromResponse(info *relaycommon.RelayInfo, resp *http.Response) {
+func markCodexProServedCandidateFromResponseTrailer(info *relaycommon.RelayInfo, resp *http.Response) {
 	if info == nil || resp == nil {
 		return
 	}
-	info.MarkCodexProServedCandidateFromHeaders(resp.Header)
+	info.MarkCodexProServedCandidateFromTrailers(resp.Trailer)
+}
+
+func openAIResponseStatusCompleted(status []byte) bool {
+	return strings.EqualFold(strings.TrimSpace(common.JsonRawMessageToString(status)), "completed")
 }
 
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
-	markCodexProServedCandidateFromResponse(info, resp)
 	// read response body
 	var responsesResponse dto.OpenAIResponsesResponse
 	responseBody, err := io.ReadAll(resp.Body)
@@ -73,7 +77,8 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if responsesResponse.Usage != nil && info != nil {
+	if responsesResponse.Usage != nil && info != nil && openAIResponseStatusCompleted(responsesResponse.Status) {
+		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
@@ -98,7 +103,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	defer service.CloseResponseBodyGracefully(resp)
-	markCodexProServedCandidateFromResponse(info, resp)
 
 	var usage = &dto.Usage{}
 	completed := false
@@ -128,6 +132,16 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 		sendResponsesStreamData(c, streamResponse, data)
+		if streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" || streamResponse.Type == "response.incomplete" || streamResponse.Type == "response.cancelled" || streamResponse.Type == "response.canceled" {
+			streamErr := fmt.Errorf("responses stream terminal error: %s", streamResponse.Type)
+			if streamResponse.Response != nil {
+				if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
+					streamErr = fmt.Errorf("responses stream terminal error: %s: %s", streamResponse.Type, oaiErr.Message)
+				}
+			}
+			sr.Error(streamErr)
+			return
+		}
 		switch streamResponse.Type {
 		case "response.completed":
 			completed = true
@@ -174,6 +188,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 	})
 	if completed && info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone && !info.StreamStatus.HasErrors() {
+		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
 

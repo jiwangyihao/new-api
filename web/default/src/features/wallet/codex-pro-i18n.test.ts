@@ -21,7 +21,7 @@ const requiredCodexProKeys = [
   ...CODEX_PRO_MODE_OPTIONS.map((option) => option.labelKey),
   ...CODEX_PRO_MODE_OPTIONS.map((option) => option.descriptionKey),
   'Only eligible GPT-family requests can try Codex Pro.',
-  'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.',
+  'Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.',
   'Fallback requests are billed at the normal rate.',
   'Please purchase an eligible paid subscription first.',
   'Trial subscriptions do not support Codex Pro.',

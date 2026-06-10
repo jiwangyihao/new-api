@@ -4,7 +4,7 @@
 
 **目标：** 为付费订阅用户新增 `Codex Pro` 三态服务模式，并只在上游确认 Pro 分组实际 serve 成功后对订阅 token 做 2x 结算。
 
-**架构：** 用户模式保存在现有 `User.Setting` JSON 中，由订阅域 API 读写；relay 侧根据本次实际订阅 `BillingSession`、模型、模式和下游弱 intent 生成上游 Pro request marker。上游 `X-NewAPI-Pro-Served: codex-pro` 只作为候选 ack，handler 成功完成后才置内部 served 状态；结算阶段只对订阅 token 乘 2，且过滤内部响应 Header。
+**架构：** 用户模式保存在现有 `User.Setting` JSON 中，由订阅域 API 读写；relay 侧根据本次实际订阅 `BillingSession`、模型、模式和下游弱 intent 生成上游 Pro request marker。上游 response trailer `X-NewAPI-Pro-Served: codex-pro` 只作为候选 ack，handler 完整消费 body / stream 且成功完成后才置内部 served 状态；结算阶段只对订阅 token 乘 2，且过滤内部响应 Header / trailer。
 
 **技术栈：** Go、Gin、GORM、React 19、TypeScript、TanStack Query、i18next、Bun、Go 单元测试、前端 typecheck。
 
@@ -22,9 +22,9 @@
 - Header 常量固定：
   - 下游弱 intent：`X-NewAPI-Codex-Pro-Intent: codex-pro`。
   - 上游请求 marker：`X-NewAPI-Pro-Request: codex-pro`。
-  - 上游响应候选 ack：`X-NewAPI-Pro-Served: codex-pro`。
+  - 上游响应 trailer ack：`X-NewAPI-Pro-Served: codex-pro`。
 - 客户端和通道配置不能伪造、覆盖或删除内部 Pro request / served Header。
-- `X-NewAPI-Pro-Served` 读取后必须从下游响应 Header 中删除。
+- `X-NewAPI-Pro-Served` 只能从上游 response trailer 读取，且不得暴露到下游响应 Header 或 trailer；普通 response Header 中同名字段必须忽略。
 - 本期只支持 Codex adaptor 的 OpenAI Responses 非流式、Responses 流式、Responses compact 路径；其他路径不得发送 Pro request marker。
 - GPT 系列 gating 必须复用 `common.IsOpenAITextModel` 或同等单一 helper。
 - `codex_pro_eligible` 表示账号 / 订阅层资格，不受 `codex_pro_mode = "off"` 影响；`off` 模式选择器仍可切回。
@@ -48,7 +48,7 @@
 - 修改：`relay/channel/codex/adaptor.go`
   - 限定 Codex Responses 路径才允许 Pro marker。
 - 修改：`relay/channel/openai/relay_responses.go`、`relay/channel/openai/relay_responses_compact.go`
-  - 读取候选 ack、过滤 Header、成功完成后置最终 served 状态。
+  - 完整消费 body / stream 后读取 response trailer 候选 ack、过滤 Header / trailer、成功完成后置最终 served 状态。
 - 修改：`controller/subscription.go`、`router/api-router.go`
   - `/api/subscription/self` 补充 Pro 字段；新增 `PUT /api/subscription/self/codex-pro-mode`。
 - 修改：`controller/config_guide.go`
@@ -320,18 +320,19 @@ git commit -m "feat(codex-pro): 添加分组请求标记最终化"
 
 覆盖：
 
-- 已发送 Pro request marker 且响应 Header `X-NewAPI-Pro-Served: codex-pro`：只设置 candidate。
-- 缺失 Header、值为 `pro` / `true` / `2x` / 空值：不设置 candidate。
+- 已发送 Pro request marker 且 response trailer `X-NewAPI-Pro-Served: codex-pro`：只设置 candidate。
+- 普通 response Header `X-NewAPI-Pro-Served: codex-pro`：必须忽略，不设置 candidate。
+- 缺失 trailer、值为 `pro` / `true` / `2x` / 空值：不设置 candidate。
 - 非流式成功解析 usage 且无 upstream error 后设置 final served。
 - compact 成功解析 usage 且无 upstream error 后设置 final served。
-- 流式只有收到 `response.completed` 且正常结束后设置 final served。
+- 流式只有收到 `response.completed`、正常读到 EOF 且无流错误后设置 final served。
 - upstream error、解析失败、流式中断、请求取消时不设置 final served。
-- 下游响应 Header 不包含 `X-NewAPI-Pro-Served`。
+- 下游响应 Header 和 trailer 不包含 `X-NewAPI-Pro-Served`。
 
 运行：
 
 ```bash
-go test -p 1 ./relay/channel/openai ./service -run 'CodexPro.*Ack|ProServed|Responses.*Header' -count=1
+go test -p 1 ./relay/channel/openai ./service -run 'CodexPro.*Ack|ProServed|Responses.*Header|Trailer' -count=1
 ```
 
 预期：失败。
@@ -341,21 +342,21 @@ go test -p 1 ./relay/channel/openai ./service -run 'CodexPro.*Ack|ProServed|Resp
 实现 helper：
 
 ```go
-func MarkCodexProServedCandidateFromResponse(info *RelayInfo, headers http.Header)
-func ConfirmCodexProServed(info *RelayInfo)
+func (info *RelayInfo) MarkCodexProServedCandidateFromTrailers(trailers http.Header)
+func (info *RelayInfo) ConfirmCodexProServed()
 ```
 
 规则：
 
 - 只有本次内部已发送 `X-NewAPI-Pro-Request: codex-pro` 时，才接受 candidate。
-- candidate 只来自上游响应 Header。
-- handler 成功解析 usage / completion 后才确认 final served。
-- `service.ShouldCopyUpstreamHeader` 或调用处过滤 `X-NewAPI-Pro-Served`。
+- candidate 只来自上游 response trailer。
+- handler 成功解析 usage / completion 且流式正常读到 EOF 后才确认 final served。
+- `service.ShouldCopyUpstreamHeader` 或调用处过滤 `X-NewAPI-Pro-Served`，并确保下游 response trailer 不暴露该字段。
 
 - [ ] **步骤 3：运行 ack 测试确认通过**
 
 ```bash
-go test -p 1 ./relay/channel/openai ./service -run 'CodexPro.*Ack|ProServed|Responses.*Header' -count=1
+go test -p 1 ./relay/channel/openai ./service -run 'CodexPro.*Ack|ProServed|Responses.*Header|Trailer' -count=1
 ```
 
 - [ ] **步骤 4：编写失败测试：2x 订阅结算**
@@ -478,7 +479,7 @@ api.put('/api/subscription/self/codex-pro-mode', data)
 - `Flexible`
 - `Off`
 - `Only eligible GPT-family requests can try Codex Pro.`
-- `Only requests actually served by the Pro group consume 2x subscription tokens.`
+- `Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.`
 - `Fallback requests are billed at the normal rate.`
 - `Please purchase an eligible paid subscription first.`
 - `Trial subscriptions do not support Codex Pro.`
@@ -564,8 +565,8 @@ git commit -m "fix(codex-pro): 修复分组服务审查问题"
 - 只有付费等价订阅、实际订阅计费来源、GPT 系列、Codex Responses 支持路径才会尝试 Pro。
 - `flexible` 必须有 `X-NewAPI-Codex-Pro-Intent: codex-pro`；`all` 不要求 intent；`off` 不触发。
 - 客户端 / 通道 / runtime 不能伪造 `X-NewAPI-Pro-Request` 或 `X-NewAPI-Pro-Served`。
-- `X-NewAPI-Pro-Served` 不暴露给终端响应。
-- 只有上游 ack 候选存在且 handler 成功完成后才对订阅 token 2x。
+- `X-NewAPI-Pro-Served` 不暴露给终端响应 Header 或 trailer。
+- 只有上游 response trailer ack 候选存在且 handler 成功完成后才对订阅 token 2x。
 - 钱包 quota、试用、奖励、无订阅、失败、回退普通分组不 2x。
 - 前端文案完成 6 语言翻译，i18n sync 通过。
 - API Help 对 Codex CLI、Claude Code、OpenCode、OMP、Hermes Agent、OpenClaw 均给出可用 Header 配置或明确限制。

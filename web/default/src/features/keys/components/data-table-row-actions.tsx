@@ -30,6 +30,7 @@ import {
   Copy,
   Link,
   Loader2,
+  RotateCcw,
   MoreHorizontal as DotsHorizontalIcon,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -56,7 +57,7 @@ import { useChatPresets } from '@/features/chat/hooks/use-chat-presets'
 import { resolveChatUrl, type ChatPreset } from '@/features/chat/lib/chat-links'
 import { sendToFluent } from '@/features/chat/lib/send-to-fluent'
 import { buildApiKeyUsageAnalyticsSearch } from '@/features/usage-analytics/lib/filters'
-import { updateApiKeyStatus } from '../api'
+import { resetApiKeyTokenUsage, updateApiKeyStatus } from '../api'
 import { API_KEY_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import { apiKeySchema } from '../types'
 import { useApiKeys } from './api-keys-provider'
@@ -102,6 +103,7 @@ export function DataTableRowActions<TData>({
   const isEnabled = apiKey.status === API_KEY_STATUS.ENABLED
   const { chatPresets, serverAddress } = useChatPresets()
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [isResettingTokenUsage, setIsResettingTokenUsage] = useState(false)
 
   const hasChatPresets = chatPresets.length > 0
 
@@ -170,6 +172,29 @@ export function DataTableRowActions<TData>({
       toast.error(t(ERROR_MESSAGES.UNEXPECTED))
     } finally {
       setIsTogglingStatus(false)
+    }
+  }
+
+  const handleResetTokenUsage = async () => {
+    if (isResettingTokenUsage) return
+    setIsResettingTokenUsage(true)
+    try {
+      const result = await resetApiKeyTokenUsage(apiKey.id)
+      if (result.success) {
+        toast.success(t('API key token usage reset'))
+        if (result.data) {
+          setCurrentRow((currentRow) =>
+            currentRow?.id === apiKey.id ? result.data! : currentRow
+          )
+        }
+        triggerRefresh()
+      } else {
+        toast.error(result.message || t(ERROR_MESSAGES.UNEXPECTED))
+      }
+    } catch {
+      toast.error(t(ERROR_MESSAGES.UNEXPECTED))
+    } finally {
+      setIsResettingTokenUsage(false)
     }
   }
 
@@ -274,6 +299,21 @@ export function DataTableRowActions<TData>({
             {t('Edit')}
             <DropdownMenuShortcut>
               <Edit size={16} />
+            </DropdownMenuShortcut>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            disabled={isResettingTokenUsage}
+            onClick={() => {
+              void handleResetTokenUsage()
+            }}
+          >
+            {t('Reset token usage')}
+            <DropdownMenuShortcut>
+              {isResettingTokenUsage ? (
+                <Loader2 size={16} className='animate-spin' />
+              ) : (
+                <RotateCcw size={16} />
+              )}
             </DropdownMenuShortcut>
           </DropdownMenuItem>
           <DropdownMenuItem

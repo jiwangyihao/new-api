@@ -35,7 +35,6 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 		return nil, types.NewError(nil, types.ErrorCodeBadResponse)
 	}
 	defer service.CloseResponseBodyGracefully(resp)
-	markCodexProServedCandidateFromResponse(info, resp)
 
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -61,7 +60,8 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if compactResp.Usage != nil && info != nil {
+	if compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
+		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
 

@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
-import { formatQuota, formatTimestampToDate } from '@/lib/format'
+import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
-import { API_KEY_STATUSES } from '../constants'
+import { getApiKeyStatusConfig, formatApiKeyTokenCount } from '../constants'
 import { type ApiKey } from '../types'
 import {
   ApiKeyCell,
@@ -38,9 +38,9 @@ import {
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
 
-function getQuotaProgressColor(percentage: number): string {
-  if (percentage <= 10) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
-  if (percentage <= 30) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
+function getTokenProgressColor(percentage: number): string {
+  if (percentage >= 90) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
+  if (percentage >= 70) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
@@ -89,7 +89,7 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         <DataTableColumnHeader column={column} title={t('Status')} />
       ),
       cell: ({ row }) => {
-        const statusConfig = API_KEY_STATUSES[row.getValue('status') as number]
+        const statusConfig = getApiKeyStatusConfig(row.original)
         if (!statusConfig) return null
         return (
           <StatusBadge
@@ -112,14 +112,14 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       meta: { label: t('API Key') },
     },
     {
-      id: 'quota',
-      accessorKey: 'remain_quota',
+      id: 'token_limit',
+      accessorKey: 'token_limit',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Quota')} />
+        <DataTableColumnHeader column={column} title={t('Token limit')} />
       ),
       cell: ({ row }) => {
         const apiKey = row.original
-        if (apiKey.unlimited_quota) {
+        if (!apiKey.token_limit_enabled || apiKey.token_unlimited) {
           return (
             <StatusBadge
               label={t('Unlimited')}
@@ -129,45 +129,45 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
           )
         }
 
-        const used = apiKey.used_quota
-        const remaining = apiKey.remain_quota
-        const total = used + remaining
-        const percentage = total > 0 ? (remaining / total) * 100 : 0
+        const used = apiKey.token_used
+        const limit = apiKey.token_limit
+        const remaining = apiKey.token_remaining
+        const percentage = limit > 0 ? Math.min((used / limit) * 100, 100) : 0
 
         return (
           <Tooltip>
             <TooltipTrigger render={<div className='w-[150px] space-y-1' />}>
               <div className='flex justify-between text-xs'>
                 <span className='font-medium tabular-nums'>
-                  {formatQuota(remaining)}
+                  {formatApiKeyTokenCount(used, t('tokens'))}
                 </span>
                 <span className='text-muted-foreground tabular-nums'>
-                  {formatQuota(total)}
+                  {formatApiKeyTokenCount(limit, t('tokens'))}
                 </span>
               </div>
               <Progress
                 value={percentage}
-                className={cn('h-1.5', getQuotaProgressColor(percentage))}
+                className={cn('h-1.5', getTokenProgressColor(percentage))}
               />
             </TooltipTrigger>
             <TooltipContent>
               <div className='space-y-1 text-xs'>
                 <div>
-                  {t('Used:')} {formatQuota(used)}
+                  {t('Used:')} {formatApiKeyTokenCount(used, t('tokens'))}
                 </div>
                 <div>
-                  {t('Remaining:')} {formatQuota(remaining)} (
-                  {percentage.toFixed(1)}%)
+                  {t('Remaining:')} {formatApiKeyTokenCount(remaining, t('tokens'))} (
+                  {Math.max(100 - percentage, 0).toFixed(1)}%)
                 </div>
                 <div>
-                  {t('Total:')} {formatQuota(total)}
+                  {t('Total:')} {formatApiKeyTokenCount(limit, t('tokens'))}
                 </div>
               </div>
             </TooltipContent>
           </Tooltip>
         )
       },
-      meta: { label: t('Quota') },
+      meta: { label: t('Token limit') },
     },
     {
       id: 'model_limits',

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/QuantumNous/new-api/logger"
@@ -34,6 +35,8 @@ type BillingSettleInput struct {
 	SubscriptionTokens                 int64
 	UsageEstimated                     bool
 	SubscriptionTokensCodexProAdjusted bool
+	ApiKeyTokens                       int64
+	ResponseStarted                    bool
 }
 
 func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
@@ -68,19 +71,55 @@ func PostSettleErrorToOpenAIError(relayInfo *relaycommon.RelayInfo, err error) *
 	if err == nil {
 		return nil
 	}
+	var apiErr *types.NewAPIError
+	if errors.As(err, &apiErr) && apiErr.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted {
+		return apiErr
+	}
 	if relayInfo != nil && relayInfo.Billing != nil {
 		relayInfo.Billing.CommitPreConsumedOnFailure()
 	}
 	return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 }
 
+func ResponseAlreadyWritten(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, explicit bool) bool {
+	relayStarted := relayInfo != nil && relayInfo.HasSendResponse()
+	ginStarted := ctx != nil && ctx.Writer != nil && ctx.Writer.Written()
+	return explicit || relayStarted || ginStarted
+}
+
+func ShouldAuditTokenLimitSettle(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, explicit bool) bool {
+	return ResponseAlreadyWritten(ctx, relayInfo, explicit) || (relayInfo != nil && relayInfo.IsStream)
+}
+
 func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, input BillingSettleInput) error {
+	if relayInfo == nil {
+		return nil
+	}
 	if input.SubscriptionTokens < 0 {
 		input.SubscriptionTokens = 0
 	}
 	if !input.SubscriptionTokensCodexProAdjusted {
 		input.SubscriptionTokens = codexProAdjustedSubscriptionTokens(relayInfo, input.SubscriptionTokens, input.WalletQuota)
 		input.SubscriptionTokensCodexProAdjusted = true
+	}
+	apiKeyTokens := input.ApiKeyTokens
+	if apiKeyTokens == 0 {
+		apiKeyTokens = input.SubscriptionTokens
+	}
+	auditSettle := ShouldAuditTokenLimitSettle(ctx, relayInfo, input.ResponseStarted)
+	if relayInfo.TokenLimit != nil {
+		if auditSettle {
+			if err := relayInfo.TokenLimit.SettleForAudit(apiKeyTokens, "api_key_token_limit_settle_failed"); err != nil {
+				return err
+			}
+		} else if err := relayInfo.TokenLimit.Settle(apiKeyTokens); err != nil {
+			if isTokenLimitExceededError(err) {
+				relayInfo.TokenLimit.Refund(string(types.ErrorCodeAPIKeyTokenLimitExhausted))
+				RefundBillingAfterTokenLimitReject(relayInfo.Billing)
+				return newAPIKeyTokenLimitError(err)
+			}
+			return err
+		}
 	}
 	if relayInfo.Billing != nil {
 		preConsumed := relayInfo.Billing.GetPreConsumedQuota()
@@ -106,9 +145,15 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 
 		if session, ok := relayInfo.Billing.(*BillingSession); ok {
 			if err := session.SettleWithInput(input); err != nil {
+				if relayInfo.TokenLimit != nil && !auditSettle {
+					relayInfo.TokenLimit.Refund(errorCodeForRefund(err))
+				}
 				return err
 			}
 		} else if err := relayInfo.Billing.Settle(input.WalletQuota); err != nil {
+			if relayInfo.TokenLimit != nil && !auditSettle {
+				relayInfo.TokenLimit.Refund(errorCodeForRefund(err))
+			}
 			return err
 		}
 
@@ -131,4 +176,15 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
 	}
 	return nil
+}
+
+func errorCodeForRefund(err error) string {
+	var apiErr *types.NewAPIError
+	if errors.As(err, &apiErr) {
+		return string(apiErr.GetErrorCode())
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "settle_failed"
 }

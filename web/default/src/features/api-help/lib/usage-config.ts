@@ -229,17 +229,8 @@ export function buildAgentConfigGuideURL(
   return origin ? `${origin}${path}` : path
 }
 
-export function buildAgentConfigGuideInstruction(
-  serverAddress: string,
-  client: AgentConfigGuideClient,
-  apiKey: string
-): string {
-  const label = client === 'omp' ? 'OMP' : 'OpenCode'
-  return `Use this manifest to auto-configure ${label}: ${buildAgentConfigGuideURL(
-    serverAddress,
-    client,
-    apiKey
-  )}`
+export function getAgentConfigGuideClientLabel(client: AgentConfigGuideClient): string {
+  return client === 'omp' ? 'OMP' : 'OpenCode'
 }
 
 export function buildOpenCodeMetadataQueryKey(

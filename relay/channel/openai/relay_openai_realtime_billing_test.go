@@ -35,6 +35,27 @@ func TestRealtimeSubscriptionErrorPreservesSubscriptionCode(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
 }
 
+func TestRealtimeAPIKeyTokenLimitExhaustedPreservesAPIKeyCode(t *testing.T) {
+	origin := types.NewOpenAIError(errors.New("api key token limit exhausted"), types.ErrorCodeAPIKeyTokenLimitExhausted, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry())
+
+	apiErr, usage := realtimeErrorFromErrChan(origin, nil)
+
+	require.NotNil(t, apiErr)
+	assert.Nil(t, usage)
+	assert.Equal(t, types.ErrorCodeAPIKeyTokenLimitExhausted, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+}
+
+func TestOpenaiRealtimeAPIKeyTokenLimitExhaustedWrapPreservesAPIKeyCode(t *testing.T) {
+	origin := types.NewOpenAIError(errors.New("api key token limit exhausted"), types.ErrorCodeAPIKeyTokenLimitExhausted, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry())
+
+	apiErr := realtimePreConsumeErrorToAPIError(origin)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, types.ErrorCodeAPIKeyTokenLimitExhausted, apiErr.GetErrorCode())
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+}
+
 func TestResponsesConvertDoesNotInjectProviderNativeToolsFromMetadata(t *testing.T) {
 	request := dto.OpenAIResponsesRequest{
 		Model: "gpt-5",

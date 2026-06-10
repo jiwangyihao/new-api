@@ -99,6 +99,14 @@ export async function updateApiKeyStatus(
   return res.data
 }
 
+// Reset API key token cap usage
+export async function resetApiKeyTokenUsage(
+  id: number
+): Promise<ApiResponse<ApiKey>> {
+  const response = await api.post(`/api/token/${id}/reset-token-usage`)
+  return response.data
+}
+
 // Fetch the real (unmasked) key for a token by ID
 export async function fetchTokenKey(
   id: number

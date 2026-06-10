@@ -174,6 +174,17 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	})
 }
 
+func RefundBillingAfterTokenLimitReject(billing relaycommon.BillingSettler) {
+	if billing == nil {
+		return
+	}
+	if session, ok := billing.(*BillingSession); ok {
+		session.refundSync()
+		return
+	}
+	billing.Refund(nil)
+}
+
 func (s *BillingSession) refundSync() {
 	s.mu.Lock()
 	if s.settled || s.refunded || !s.needsRefundLocked() {

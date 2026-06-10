@@ -33,7 +33,6 @@ import {
 import { Database } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatQuota } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import {
@@ -54,8 +53,9 @@ import { getApiKeys, searchApiKeys } from '../api'
 import {
   API_KEY_STATUS,
   API_KEY_STATUS_OPTIONS,
-  API_KEY_STATUSES,
+  getApiKeyStatusConfig,
   ERROR_MESSAGES,
+  formatApiKeyTokenCount,
 } from '../constants'
 import { type ApiKey } from '../types'
 import { ApiKeyCell } from './api-keys-cells'
@@ -129,8 +129,7 @@ function ApiKeysMobileList({
     <div className='divide-border overflow-hidden rounded-lg border'>
       {rows.map((row) => {
         const apiKey = row.original
-        const statusConfig = API_KEY_STATUSES[apiKey.status]
-        const total = apiKey.used_quota + apiKey.remain_quota
+        const statusConfig = getApiKeyStatusConfig(apiKey)
 
         return (
           <div
@@ -167,15 +166,18 @@ function ApiKeysMobileList({
             </div>
 
             <div className='flex items-center justify-between gap-2 text-xs'>
-              <span className='text-muted-foreground'>{t('Quota')}</span>
-              {apiKey.unlimited_quota ? (
-                <span className='font-medium'>{t('Unlimited')}</span>
+              <span className='text-muted-foreground'>{t('Token limit')}</span>
+              {!apiKey.token_limit_enabled || apiKey.token_unlimited ? (
+                <span className='font-medium'>{t('No key limit')}</span>
               ) : (
                 <span className='font-medium tabular-nums'>
-                  {formatQuota(apiKey.remain_quota)}
+                  {formatApiKeyTokenCount(apiKey.token_used, t('tokens'))}
                   <span className='text-muted-foreground font-normal'>
                     {' / '}
-                    {formatQuota(total)}
+                    {formatApiKeyTokenCount(apiKey.token_limit, t('tokens'))}
+                  </span>
+                  <span className='text-muted-foreground ml-1 font-normal'>
+                    ({t('Remaining:')} {formatApiKeyTokenCount(apiKey.token_remaining, t('tokens'))})
                   </span>
                 </span>
               )}

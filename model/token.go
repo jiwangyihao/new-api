@@ -29,6 +29,9 @@ type Token struct {
 	ModelLimits        string         `json:"model_limits" gorm:"type:text"`
 	AllowIps           *string        `json:"allow_ips" gorm:"default:''"`
 	UsedQuota          int            `json:"used_quota" gorm:"default:0"` // used quota
+	TokenLimitEnabled  bool           `json:"token_limit_enabled" gorm:"not null;default:false"`
+	TokenLimit         int64          `json:"token_limit" gorm:"type:bigint;not null;default:0"`
+	TokenUsed          int64          `json:"token_used" gorm:"type:bigint;not null;default:0"`
 	Group              string         `json:"-" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"-"` // legacy business-group compatibility only
 	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
@@ -57,6 +60,42 @@ func (token *Token) GetFullKey() string {
 
 func (token *Token) GetMaskedKey() string {
 	return MaskTokenKey(token.Key)
+}
+
+func (token *Token) TokenLimitUnlimited() bool {
+	return token == nil || !token.TokenLimitEnabled
+}
+
+func (token *Token) TokenLimitRemaining() int64 {
+	if token == nil || !token.TokenLimitEnabled {
+		return 0
+	}
+	remaining := token.TokenLimit - token.TokenUsed
+	if remaining < 0 {
+		return 0
+	}
+	return remaining
+}
+
+type TokenLimitView struct {
+	TokenLimitEnabled bool  `json:"token_limit_enabled"`
+	TokenLimit        int64 `json:"token_limit"`
+	TokenUsed         int64 `json:"token_used"`
+	TokenRemaining    int64 `json:"token_remaining"`
+	TokenUnlimited    bool  `json:"token_unlimited"`
+}
+
+func (token *Token) BuildTokenLimitView() TokenLimitView {
+	if token == nil {
+		return TokenLimitView{TokenUnlimited: true}
+	}
+	return TokenLimitView{
+		TokenLimitEnabled: token.TokenLimitEnabled,
+		TokenLimit:        token.TokenLimit,
+		TokenUsed:         token.TokenUsed,
+		TokenRemaining:    token.TokenLimitRemaining(),
+		TokenUnlimited:    token.TokenLimitUnlimited(),
+	}
 }
 
 func (token *Token) GetIpLimits() []string {
@@ -295,17 +334,14 @@ func (token *Token) Insert() error {
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (token *Token) Update() (err error) {
 	defer func() {
-		if shouldUpdateRedis(true, err) {
-			gopool.Go(func() {
-				err := cacheSetToken(*token)
-				if err != nil {
-					common.SysLog("failed to update token cache: " + err.Error())
-				}
-			})
+		if err == nil {
+			if cacheErr := invalidateTokenCacheById(token.Id); cacheErr != nil {
+				common.SysLog("failed to invalidate token cache: " + cacheErr.Error())
+			}
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "token_limit_enabled", "token_limit").Updates(token).Error
 	return err
 }
 

@@ -35,6 +35,12 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 	if strings.EqualFold(k, "X-NewAPI-Pro-Served") {
 		return false
 	}
+	if strings.EqualFold(k, "X-NewAPI-Pro-Request") {
+		return false
+	}
+	if strings.EqualFold(k, "Trailer") {
+		return false
+	}
 	if strings.EqualFold(k, common.RequestIdKey) {
 		if c != nil && len(v) > 0 {
 			c.Set(common.UpstreamRequestIdKey, v[0])

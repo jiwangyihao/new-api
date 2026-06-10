@@ -20,8 +20,8 @@ import (
 
 func setupSubscriptionOnlyBillingTestDB(t *testing.T) {
 	t.Helper()
-	require.NoError(t, model.DB.Migrator().DropTable(&model.SubscriptionPreConsumeRecord{}, &model.UserSubscription{}, &model.SubscriptionPlan{}, &model.Token{}, &model.User{}))
-	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}))
+	require.NoError(t, model.DB.Migrator().DropTable(&model.TokenLimitPreConsumeRecord{}, &model.SubscriptionPreConsumeRecord{}, &model.UserSubscription{}, &model.SubscriptionPlan{}, &model.Token{}, &model.User{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPreConsumeRecord{}, &model.TokenLimitPreConsumeRecord{}))
 }
 
 func subscriptionOnlyTestContext(t *testing.T) *gin.Context {

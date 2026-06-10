@@ -51,7 +51,7 @@ import { CopyButton } from '@/components/copy-button'
 import {
   buildAgentConfigArtifactPath,
   buildAgentConfigArtifactQueryKey,
-  buildAgentConfigGuideInstruction,
+  buildAgentConfigGuideURL,
   buildAgentConfigSections,
   buildCodexCliConfig,
   buildCherryStudioConfig,
@@ -62,6 +62,7 @@ import {
   buildOpenAIBaseUrl,
   buildOpenCodeMetadataQueryKey,
   canFetchAgentConfigArtifacts,
+  getAgentConfigGuideClientLabel,
   getUnverifiedCodexProHeaderConfigNotice,
   type AgentConfigArtifactFile,
   type AgentConfigGuideClient,
@@ -249,10 +250,14 @@ function AutoConfigCard(props: {
 }) {
   const { t } = useTranslation()
   const ready = props.state === 'ready' && Boolean(props.apiKey)
+  const url = ready ? buildAgentConfigGuideURL(props.serverAddress, props.client, props.apiKey) : ''
+  const label = getAgentConfigGuideClientLabel(props.client)
   const instruction = ready
-    ? buildAgentConfigGuideInstruction(props.serverAddress, props.client, props.apiKey)
+    ? t('Use this manifest to auto-configure {{client}}: {{url}}', {
+        client: label,
+        url,
+      })
     : ''
-  const label = props.client === 'omp' ? 'OMP' : 'OpenCode'
 
   return (
     <div className='rounded-xl border bg-muted/30 p-3'>
@@ -704,7 +709,7 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                     </li>
                     <li>
                       {t(
-                        'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.'
+                        'Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.'
                       )}
                     </li>
                     <li>{t('Fallback requests are billed at the normal rate.')}</li>

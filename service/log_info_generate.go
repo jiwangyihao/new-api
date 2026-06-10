@@ -77,7 +77,29 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	appendTokenLimitAuditInfo(relayInfo, other)
 	return other
+}
+
+func appendTokenLimitAuditInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil || relayInfo.TokenLimit == nil {
+		return
+	}
+	type tokenLimitAudit interface {
+		AuditInfo() (bool, int64, int64, string)
+	}
+	audit, ok := relayInfo.TokenLimit.(tokenLimitAudit)
+	if !ok {
+		return
+	}
+	failed, actualTokens, preConsumed, failureCode := audit.AuditInfo()
+	if !failed {
+		return
+	}
+	other["api_key_token_limit_settle_failed"] = true
+	other["api_key_token_limit_actual_tokens"] = actualTokens
+	other["api_key_token_limit_pre_consumed"] = preConsumed
+	other["api_key_token_limit_failure_code"] = failureCode
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

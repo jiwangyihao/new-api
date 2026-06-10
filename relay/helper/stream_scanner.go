@@ -230,6 +230,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 		}()
 
+		sawDone := false
 		for scanner.Scan() {
 			// 检查是否需要停止
 			select {
@@ -249,6 +250,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				println(data)
 			}
 
+			if sawDone {
+				continue
+			}
 			if len(data) < 6 {
 				continue
 			}
@@ -276,10 +280,10 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				Done(c)
 				writeMutex.Unlock()
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				sawDone = true
 				if common.DebugEnabled {
-					println("received [DONE], stopping scanner")
+					println("received [DONE], draining stream for trailers")
 				}
-				return
 			}
 		}
 

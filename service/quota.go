@@ -94,11 +94,25 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if tokens <= 0 {
 		return nil
 	}
+	var sequence int64
+	if relayInfo.TokenLimit != nil {
+		var apiErr *types.NewAPIError
+		sequence, apiErr = relayInfo.TokenLimit.ConsumeIncrement(int64(tokens))
+		if apiErr != nil {
+			return apiErr
+		}
+	}
 	session, ok := relayInfo.Billing.(*BillingSession)
 	if !ok {
+		if relayInfo.TokenLimit != nil && sequence > 0 {
+			relayInfo.TokenLimit.RefundIncrement(sequence, "subscription_increment_failed")
+		}
 		return errors.New("subscription billing session is missing for realtime billing")
 	}
 	if err := session.SettleSubscriptionIncrement(int64(tokens)); err != nil {
+		if relayInfo.TokenLimit != nil && sequence > 0 {
+			relayInfo.TokenLimit.RefundIncrement(sequence, "subscription_increment_failed")
+		}
 		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", tokens))
@@ -182,7 +196,7 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 			subscriptionTokens -= relayInfo.SubscriptionPostDelta
 		}
 	}
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens})
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens, ApiKeyTokens: subscriptionTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false)})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

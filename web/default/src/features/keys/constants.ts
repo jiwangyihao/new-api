@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { type StatusBadgeProps } from '@/components/status-badge'
+import { formatTokens } from '@/lib/format'
 
 // ============================================================================
 // API Key Status Configuration
@@ -62,6 +63,45 @@ export const API_KEY_STATUSES: Record<
     showDot: true,
   },
 } as const
+
+const API_KEY_TOKEN_LIMIT_REACHED_STATUS: Pick<StatusBadgeProps, 'variant' | 'showDot'> & {
+  label: string
+  value: number
+} = {
+  label: 'Token Limit Reached',
+  variant: 'danger',
+  value: API_KEY_STATUS.ENABLED,
+  showDot: true,
+}
+
+type ApiKeyStatusSource = {
+  status: number
+  token_limit_enabled?: boolean
+  token_limit?: number
+  token_used?: number
+  token_unlimited?: boolean
+}
+
+export function getApiKeyStatusConfig(apiKey: ApiKeyStatusSource) {
+  if (
+    apiKey.status === API_KEY_STATUS.ENABLED &&
+    apiKey.token_limit_enabled &&
+    !apiKey.token_unlimited &&
+    (apiKey.token_limit ?? 0) > 0 &&
+    (apiKey.token_used ?? 0) >= (apiKey.token_limit ?? 0)
+  ) {
+    return API_KEY_TOKEN_LIMIT_REACHED_STATUS
+  }
+  return API_KEY_STATUSES[apiKey.status]
+}
+
+export function formatApiKeyTokenCount(tokens: number, unit?: string): string {
+  if (tokens === 0) return unit ? `0 ${unit}` : '0'
+  const formatted = formatTokens(tokens)
+  if (formatted === '-') return unit ? `0 ${unit}` : '0'
+  if (tokens > 0 && tokens < 1000 && unit) return `${formatted} ${unit}`
+  return formatted
+}
 
 export const API_KEY_STATUS_OPTIONS = Object.values(API_KEY_STATUSES).map(
   (config) => ({

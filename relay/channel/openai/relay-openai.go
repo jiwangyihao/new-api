@@ -503,13 +503,13 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 	if usage.TotalTokens != 0 {
 		if err := preConsumeUsage(c, info, usage, sumUsage); err != nil {
-			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry()), sumUsage
+			return realtimePreConsumeErrorToAPIError(err), sumUsage
 		}
 	}
 
 	if localUsage.TotalTokens != 0 {
 		if err := preConsumeUsage(c, info, localUsage, sumUsage); err != nil {
-			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry()), sumUsage
+			return realtimePreConsumeErrorToAPIError(err), sumUsage
 		}
 	}
 
@@ -520,10 +520,21 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 
 func realtimeErrorFromErrChan(err error, sumUsage *dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {
 	var newAPIError *types.NewAPIError
-	if errors.As(err, &newAPIError) && newAPIError.GetErrorCode() == types.ErrorCodeSubscriptionTokenExhausted {
-		return types.NewOpenAIError(newAPIError, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry()), sumUsage
+	if errors.As(err, &newAPIError) {
+		switch newAPIError.GetErrorCode() {
+		case types.ErrorCodeSubscriptionTokenExhausted, types.ErrorCodeAPIKeyTokenLimitExhausted:
+			return realtimePreConsumeErrorToAPIError(newAPIError), sumUsage
+		}
 	}
 	return types.NewError(err, types.ErrorCodeDoRequestFailed), sumUsage
+}
+
+func realtimePreConsumeErrorToAPIError(err error) *types.NewAPIError {
+	var newAPIError *types.NewAPIError
+	if errors.As(err, &newAPIError) && newAPIError.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted {
+		return newAPIError
+	}
+	return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry())
 }
 
 func preConsumeUsage(ctx *gin.Context, info *relaycommon.RelayInfo, usage *dto.RealtimeUsage, totalUsage *dto.RealtimeUsage) error {

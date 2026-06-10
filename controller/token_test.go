@@ -33,10 +33,18 @@ type tokenPageResponse struct {
 }
 
 type tokenResponseItem struct {
-	ID     int    `json:"id"`
-	Name   string `json:"name"`
-	Key    string `json:"key"`
-	Status int    `json:"status"`
+	ID                int    `json:"id"`
+	Name              string `json:"name"`
+	Key               string `json:"key"`
+	Status            int    `json:"status"`
+	RemainQuota       int    `json:"remain_quota"`
+	UsedQuota         int    `json:"used_quota"`
+	UnlimitedQuota    bool   `json:"unlimited_quota"`
+	TokenLimitEnabled bool   `json:"token_limit_enabled"`
+	TokenLimit        int64  `json:"token_limit"`
+	TokenUsed         int64  `json:"token_used"`
+	TokenRemaining    int64  `json:"token_remaining"`
+	TokenUnlimited    bool   `json:"token_unlimited"`
 }
 
 type tokenKeyResponse struct {
@@ -102,8 +110,8 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
 
-	if err := db.AutoMigrate(&model.Token{}); err != nil {
-		t.Fatalf("failed to migrate token table: %v", err)
+	if err := db.AutoMigrate(&model.Token{}, &model.Log{}, &model.TokenLimitPreConsumeRecord{}, &model.User{}); err != nil {
+		t.Fatalf("failed to migrate token controller tables: %v", err)
 	}
 }
 
@@ -215,6 +223,22 @@ func decodeAPIResponse(t *testing.T, recorder *httptest.ResponseRecorder) tokenA
 		t.Fatalf("failed to decode api response: %v", err)
 	}
 	return response
+}
+
+func decodeTokenData(t *testing.T, response tokenAPIResponse) tokenResponseItem {
+	t.Helper()
+	var data tokenResponseItem
+	require.NoError(t, common.Unmarshal(response.Data, &data))
+	return data
+}
+
+func requireTokenLimitResponse(t *testing.T, data tokenResponseItem, enabled bool, limit int64, used int64, remaining int64, unlimited bool) {
+	t.Helper()
+	require.Equal(t, enabled, data.TokenLimitEnabled)
+	require.Equal(t, limit, data.TokenLimit)
+	require.Equal(t, used, data.TokenUsed)
+	require.Equal(t, remaining, data.TokenRemaining)
+	require.Equal(t, unlimited, data.TokenUnlimited)
 }
 
 func getSQLiteColumnType(t *testing.T, db *gorm.DB, tableName string, columnName string) string {
@@ -474,6 +498,343 @@ func TestGetTokenMasksKeyInResponse(t *testing.T) {
 	assertTokenResponseOmitsLegacyGroupFields(t, recorder.Body.String())
 }
 
+func TestAddTokenAcceptsTokenLimitFields(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name":                "limited",
+		"expired_time":        -1,
+		"token_limit_enabled": true,
+		"token_limit":         1000,
+		"token_used":          777,
+	}, 94001)
+
+	AddToken(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	requireTokenLimitResponse(t, data, true, 1000, 0, 1000, false)
+	require.Contains(t, recorder.Body.String(), "remain_quota")
+	require.Contains(t, recorder.Body.String(), "used_quota")
+	require.Contains(t, recorder.Body.String(), "unlimited_quota")
+
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 94001, "limited").First(&token).Error)
+	require.True(t, token.TokenLimitEnabled)
+	require.Equal(t, int64(1000), token.TokenLimit)
+	require.Equal(t, int64(0), token.TokenUsed)
+	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
+}
+
+func TestGetTokenReturnsTokenLimitFields(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94011, "limited-token", "limitfieldkey1234")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(250),
+		"remain_quota":        123,
+		"used_quota":          456,
+		"unlimited_quota":     false,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/token/"+strconv.Itoa(token.Id), nil, 94011)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
+	GetToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	detail := decodeTokenData(t, response)
+	requireTokenLimitResponse(t, detail, true, 1000, 250, 750, false)
+	require.Equal(t, 123, detail.RemainQuota)
+	require.Equal(t, 456, detail.UsedQuota)
+	require.False(t, detail.UnlimitedQuota)
+	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/token/?p=1&size=10", nil, 94011)
+	GetAllTokens(ctx)
+	response = decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	var page tokenPageResponse
+	require.NoError(t, common.Unmarshal(response.Data, &page))
+	require.Len(t, page.Items, 1)
+	requireTokenLimitResponse(t, page.Items[0], true, 1000, 250, 750, false)
+	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
+
+	ctx, recorder = newAuthenticatedContext(t, http.MethodGet, "/api/token/search?keyword=limited-token&p=1&size=10", nil, 94011)
+	SearchTokens(ctx)
+	response = decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	require.NoError(t, common.Unmarshal(response.Data, &page))
+	require.Len(t, page.Items, 1)
+	requireTokenLimitResponse(t, page.Items[0], true, 1000, 250, 750, false)
+	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
+}
+
+func TestUpdateTokenLimitValidationAndStateSwitch(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94501, "switch", "sk-switch")
+	require.NoError(t, db.Model(token).Updates(map[string]any{"token_used": int64(123), "used_quota": 456}).Error)
+
+	badCtx, badRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "switch", "expired_time": -1, "unlimited_quota": true, "token_limit_enabled": true, "token_limit": 0,
+	}, 94501)
+	UpdateToken(badCtx)
+	badResponse := decodeAPIResponse(t, badRecorder)
+	require.False(t, badResponse.Success)
+
+	onCtx, onRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "switch", "expired_time": -1, "unlimited_quota": true, "token_limit_enabled": true, "token_limit": 500,
+	}, 94501)
+	UpdateToken(onCtx)
+	onResponse := decodeAPIResponse(t, onRecorder)
+	require.True(t, onResponse.Success, onResponse.Message)
+	onData := decodeTokenData(t, onResponse)
+	requireTokenLimitResponse(t, onData, true, 500, 123, 377, false)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.True(t, got.TokenLimitEnabled)
+	require.Equal(t, int64(500), got.TokenLimit)
+	require.Equal(t, int64(123), got.TokenUsed, "editing limit must not reset usage")
+	require.Equal(t, 456, got.UsedQuota, "new token cap must not read legacy used_quota")
+
+	offCtx, offRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "switch", "expired_time": -1, "unlimited_quota": true, "token_limit_enabled": false, "token_limit": 999999,
+	}, 94501)
+	UpdateToken(offCtx)
+	offResponse := decodeAPIResponse(t, offRecorder)
+	require.True(t, offResponse.Success, offResponse.Message)
+	offData := decodeTokenData(t, offResponse)
+	requireTokenLimitResponse(t, offData, false, 0, 123, 0, true)
+
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.False(t, got.TokenLimitEnabled)
+	require.Equal(t, int64(0), got.TokenLimit)
+	require.Equal(t, int64(123), got.TokenUsed, "disabling limit must not reset usage")
+	require.Equal(t, 456, got.UsedQuota, "new token cap must not read legacy used_quota")
+}
+
+func TestUpdateTokenLimitPreservesLegacyQuotaWhenPayloadOmitsFields(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94521, "preserve-legacy-quota", "sk-preserve-legacy-quota")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"remain_quota":    777,
+		"used_quota":      333,
+		"unlimited_quota": false,
+		"token_used":      int64(12),
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "preserve-legacy-quota", "expired_time": -1, "token_limit_enabled": true, "token_limit": 500,
+	}, 94521)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, 777, got.RemainQuota)
+	require.Equal(t, 333, got.UsedQuota)
+	require.False(t, got.UnlimitedQuota)
+	require.True(t, got.TokenLimitEnabled)
+	require.Equal(t, int64(500), got.TokenLimit)
+	require.Equal(t, int64(12), got.TokenUsed)
+}
+
+func TestUpdateTokenPreservesTokenLimitWhenPayloadOmitsTokenFields(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94525, "preserve-token-limit", "sk-preserve-token-limit")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(77),
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "preserve-token-limit-updated", "expired_time": -1,
+	}, 94525)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.True(t, got.TokenLimitEnabled)
+	require.Equal(t, int64(1000), got.TokenLimit)
+	require.Equal(t, int64(77), got.TokenUsed)
+	require.Equal(t, "preserve-token-limit-updated", got.Name)
+}
+
+func TestUpdateTokenStatusAllowsLegacyExhaustedWhenSubscriptionBacked(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94531, "legacy-exhausted", "sk-legacy-exhausted")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"status":          common.TokenStatusExhausted,
+		"remain_quota":    0,
+		"unlimited_quota": false,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/?status_only=true", map[string]any{
+		"id": token.Id, "status": common.TokenStatusEnabled,
+	}, 94531)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, common.TokenStatusEnabled, got.Status)
+	require.Equal(t, 0, got.RemainQuota)
+	require.False(t, got.UnlimitedQuota)
+}
+
+func TestUpdateTokenStatusRejectsExpiredLegacyExhaustedToken(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94541, "expired-legacy-exhausted", "sk-expired-legacy-exhausted")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"status":          common.TokenStatusExhausted,
+		"expired_time":    common.GetTimestamp() - 1,
+		"remain_quota":    0,
+		"unlimited_quota": false,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/?status_only=true", map[string]any{
+		"id": token.Id, "status": common.TokenStatusEnabled,
+	}, 94541)
+	UpdateToken(ctx)
+	response := decodeAPIResponse(t, recorder)
+	require.False(t, response.Success)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, common.TokenStatusExhausted, got.Status)
+}
+
+func TestResetTokenUsageClearsNewTokenUsedOnlyAndRecordsAudit(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 95001, "reset", "sk-reset")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(900),
+		"remain_quota":        123,
+		"used_quota":          456,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, fmt.Sprintf("/api/token/%d/reset-token-usage", token.Id), nil, 95001)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
+	ResetTokenUsage(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	requireTokenLimitResponse(t, data, true, 1000, 0, 1000, false)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, int64(0), got.TokenUsed)
+	require.Equal(t, 123, got.RemainQuota)
+	require.Equal(t, 456, got.UsedQuota)
+
+	var audit model.Log
+	require.NoError(t, model.LOG_DB.Where("user_id = ?", 95001).Order("id desc").First(&audit).Error)
+	require.Contains(t, audit.Content, "reset token usage")
+	require.Contains(t, audit.Other, "\"token_id\":")
+	require.Contains(t, audit.Other, "\"operator_user_id\":95001")
+	require.Contains(t, audit.Other, "\"before_token_used\":900")
+	require.Contains(t, audit.Other, "\"after_token_used\":0")
+}
+
+func TestResetTokenUsageRejectsForeignToken(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 95012, "foreign", "sk-foreign-reset")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(700),
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, fmt.Sprintf("/api/token/%d/reset-token-usage", token.Id), nil, 95001)
+	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(token.Id)}}
+	ResetTokenUsage(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.False(t, response.Success)
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, int64(700), got.TokenUsed)
+
+	var count int64
+	require.NoError(t, model.LOG_DB.Model(&model.Log{}).Where("user_id = ? AND content LIKE ?", 95001, "%reset token usage%").Count(&count).Error)
+	require.Equal(t, int64(0), count)
+}
+
+func TestGetTokenStatusIncludesTokenLimit(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 96001, "status", "status-token")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(250),
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/dashboard/billing/credit_grants", nil, 96001)
+	ctx.Set("token_id", token.Id)
+	GetTokenStatus(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var body map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, "credit_summary", body["object"])
+	require.Equal(t, true, body["token_limit_enabled"])
+	require.Equal(t, float64(1000), body["token_limit"])
+	require.Equal(t, float64(250), body["token_used"])
+	require.Equal(t, float64(750), body["token_remaining"])
+	require.Equal(t, false, body["token_unlimited"])
+	require.Contains(t, body, "total_granted")
+	require.Contains(t, body, "total_used")
+	require.Contains(t, body, "total_available")
+}
+
+func TestGetTokenUsageIncludesTokenLimit(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 96011, "usage", "usage-token")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(1000),
+		"token_used":          int64(250),
+		"remain_quota":        300,
+		"used_quota":          200,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/api/usage/token/", nil, 0)
+	ctx.Request.Header.Set("Authorization", "Bearer sk-usage-token")
+	GetTokenUsage(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var body struct {
+		Code bool            `json:"code"`
+		Data json.RawMessage `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+	require.True(t, body.Code)
+	var data map[string]any
+	require.NoError(t, common.Unmarshal(body.Data, &data))
+	require.Equal(t, true, data["token_limit_enabled"])
+	require.Equal(t, float64(1000), data["token_limit"])
+	require.Equal(t, float64(250), data["token_used"])
+	require.Equal(t, float64(750), data["token_remaining"])
+	require.Equal(t, false, data["token_unlimited"])
+	require.Equal(t, float64(500), data["total_granted"])
+	require.Equal(t, float64(200), data["total_used"])
+	require.Equal(t, float64(300), data["total_available"])
+	require.Equal(t, float64(500), data["legacy_total_granted"])
+	require.Equal(t, float64(200), data["legacy_total_used"])
+	require.Equal(t, float64(300), data["legacy_total_available"])
+}
+
 func TestUpdateTokenMasksKeyInResponse(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 1, "editable-token", "yzab1234cdef5678")
@@ -685,7 +1046,7 @@ func TestGetOpenCodeOpenAIModelsReusesPublicTokenStatusCodes(t *testing.T) {
 		{name: "disabled", tokenStatus: common.TokenStatusDisabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
 		{name: "expired status", tokenStatus: common.TokenStatusExpired, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
 		{name: "expired time", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: 1, group: "default", wantStatus: http.StatusForbidden},
-		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusTooManyRequests},
+		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", wantStatus: http.StatusOK},
 		{name: "user disabled", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusDisabled, expiredTime: -1, group: "default", wantStatus: http.StatusForbidden},
 		{name: "deprecated group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", wantStatus: http.StatusOK},
 		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), wantStatus: http.StatusForbidden},

@@ -253,12 +253,54 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 	// Subscription used should decrease by preConsumed
 	assert.Equal(t, subUsed-int64(preConsumed), getSubscriptionUsed(t, subID))
 
-	// Token should also be refunded
-	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+	// Legacy API key quota is compatibility data and must not be adjusted.
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
 
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+func TestRefundTaskQuotaDoesNotAdjustLegacyTokenQuota(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, tokenID, channelID, subID = 97001, 97002, 97003, 97004
+	const preConsumed = 10
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-task-refund-no-legacy", 100)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("used_quota", 50).Error)
+	seedChannel(t, channelID)
+	seedSubscription(t, subID, userID, 1000, 500)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	RefundTaskQuota(ctx, task, "task failed")
+
+	require.Equal(t, int64(500-preConsumed), getSubscriptionUsed(t, subID))
+	require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, 50, getTokenUsedQuota(t, tokenID))
+}
+
+func TestRecalculateTaskQuotaDoesNotAdjustLegacyTokenQuota(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, tokenID, channelID, subID = 97011, 97012, 97013, 97014
+	const preConsumed = 10
+	const actualQuota = 15
+
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-task-recalc-no-legacy", 100)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Update("used_quota", 50).Error)
+	seedChannel(t, channelID)
+	seedSubscription(t, subID, userID, 1000, 500)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
+	RecalculateTaskQuota(ctx, task, actualQuota, "task settle")
+
+	require.Equal(t, int64(500+actualQuota-preConsumed), getSubscriptionUsed(t, subID))
+	require.Equal(t, 100, getTokenRemainQuota(t, tokenID))
+	require.Equal(t, 50, getTokenUsedQuota(t, tokenID))
 }
 
 func seedDistributorTaskSubscription(t *testing.T, id int, userId int, tokenLimit int64, tokenUsed int64) {
@@ -475,8 +517,9 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	// Subscription used should decrease by delta (refund 3000)
 	assert.Equal(t, subUsed-int64(preConsumed-actualQuota), getSubscriptionUsed(t, subID))
 
-	// Token refunded
-	assert.Equal(t, tokenRemain+(preConsumed-actualQuota), getTokenRemainQuota(t, tokenID))
+	// Legacy API key quota is compatibility data and must not be adjusted.
+	assert.Equal(t, tokenRemain, getTokenRemainQuota(t, tokenID))
+	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID))
 
 	assert.Equal(t, actualQuota, task.Quota)
 

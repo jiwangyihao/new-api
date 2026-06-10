@@ -1,7 +1,9 @@
 package relay
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -42,7 +44,15 @@ func WssHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.
 		return newAPIError
 	}
 	if err := service.PostWssConsumeQuota(c, info, info.UpstreamModelName, usage.(*dto.RealtimeUsage), ""); err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+		return postWssConsumeQuotaErrorToAPIError(err)
 	}
 	return nil
+}
+
+func postWssConsumeQuotaErrorToAPIError(err error) *types.NewAPIError {
+	var apiErr *types.NewAPIError
+	if errors.As(err, &apiErr) && apiErr.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted {
+		return apiErr
+	}
+	return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 }

@@ -555,7 +555,7 @@ func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
 		{name: "deprecated token group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "gone", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "ip denied", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", allowIps: common.GetPointer("10.0.0.0/8"), target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusForbidden},
 		{name: "deprecated user group", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
-		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusTooManyRequests},
+		{name: "exhausted", tokenStatus: common.TokenStatusExhausted, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "enabled zero quota ok", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", remainQuota: 0, target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", wantStatus: http.StatusOK},
 		{name: "suffix key accepted like TokenAuth", tokenStatus: common.TokenStatusEnabled, userStatus: common.UserStatusEnabled, expiredTime: -1, group: "default", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken-extra-suffix", wantStatus: http.StatusOK},
 		{name: "control character", target: "/config-guides/opencode-openai/manifest.json?api_key=sk-live%0A-token", wantStatus: http.StatusBadRequest},
@@ -588,6 +588,24 @@ func TestConfigGuidePublicAPIKeyValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestConfigGuideValidationIgnoresLegacyExhaustedAndQuotaContext(t *testing.T) {
+	db := setupConfigGuideTestDB(t)
+	seedConfigGuideUser(t, db, 10, "default", common.UserStatusEnabled)
+	token := seedConfigGuideToken(t, db, 10, "livetoken", common.TokenStatusExhausted, -1, "default", false, "", nil)
+	token.RemainQuota = 0
+	require.NoError(t, db.Save(token).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/manifest.json?api_key=sk-livetoken", nil, 0)
+	user, _, ok := validateConfigGuideTokenUsability(ctx, token)
+
+	require.True(t, ok, recorder.Body.String())
+	require.NotNil(t, user)
+	_, hasTokenQuota := ctx.Get("token_quota")
+	require.False(t, hasTokenQuota, "config guide availability must not be driven by legacy token_quota")
+	_, hasTokenUnlimitedQuota := ctx.Get("token_unlimited_quota")
+	require.False(t, hasTokenUnlimitedQuota, "config guide should not expose legacy token quota context")
 }
 
 func TestConfigGuideIgnoresUserTokenAndAbilityGroups(t *testing.T) {

@@ -24,8 +24,8 @@ import (
 
 func ensureSubscriptionBillingTables(t *testing.T) {
 	t.Helper()
-	require.NoError(t, model.DB.Migrator().DropTable(&model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}))
-	require.NoError(t, model.DB.AutoMigrate(&model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}))
+	require.NoError(t, model.DB.Migrator().DropTable(&model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}, &model.TokenLimitPreConsumeRecord{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.SubscriptionPlan{}, &model.SubscriptionPreConsumeRecord{}, &model.TokenLimitPreConsumeRecord{}))
 }
 
 func seedDistributorPlan(t *testing.T, id int, code string, tokenLimit int64) {
@@ -668,6 +668,38 @@ func TestSubscriptionBillingDoesNotChargeWhenUsageMissing(t *testing.T) {
 	assert.Nil(t, other["usage_estimated"])
 }
 
+func TestTokenLimitDoesNotChargeWhenUsageMissing(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID = 80121, 80122, 80123, 80124
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-missing-usage-key-cap", 10_000)
+	seedChannel(t, 80125)
+	seedDistributorPlan(t, planID, "plan-missing-usage-key-cap", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(100),
+		"token_used":          int64(0),
+	}).Error)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-missing-usage-key-cap", "req-missing-usage-key-cap", "subscription_only")
+	relayInfo.ChannelId = 80125
+	relayInfo.RelayMode = relayconstant.RelayModeChatCompletions
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+	relayInfo.TokenLimit = NewTokenLimitSession(relayInfo)
+	require.Nil(t, relayInfo.TokenLimit.PreConsume(relayInfo.SubscriptionPreConsumedTokens()))
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, nil, nil))
+
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(0), getTokenUsed(t, tokenID))
+	record := getTokenLimitRecordForTest(t, "req-missing-usage-key-cap")
+	assert.Equal(t, model.TokenLimitPreConsumeStatusSettled, record.Status)
+	assert.Equal(t, int64(0), record.ActualTokens)
+}
+
 func TestSubscriptionBillingDoesNotChargeLocalCountUsage(t *testing.T) {
 	truncate(t)
 	const userID = 8021
@@ -1120,6 +1152,42 @@ func TestSettleBillingWithInputCodexProUnavailableUsesSingleSubscriptionTokens(t
 	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(2), relayInfo.SubscriptionPostDelta)
 	assert.Equal(t, 10_000, getUserQuota(t, userID))
+}
+
+func TestPostTextConsumeQuotaCodexProServedDoesNotDoubleApiKeyTokenLimit(t *testing.T) {
+	truncate(t)
+	const userID = 8251
+	const tokenID = 8252
+	const planID = 8253
+	const subID = 8254
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-token-limit", 10_000)
+	seedChannel(t, 8255)
+	seedCodexProBillingPlan(t, planID, "codex-pro-token-limit", 1_000, 100, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 1_000, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(time.Hour).Unix())
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(100),
+		"token_used":          int64(0),
+	}).Error)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-token-limit", "req-codex-pro-token-limit", "subscription_only")
+	relayInfo.ChannelId = 8255
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+	relayInfo.TokenLimit = NewTokenLimitSession(relayInfo)
+	require.Nil(t, relayInfo.TokenLimit.PreConsume(relayInfo.SubscriptionPreConsumedTokens()))
+	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}, nil))
+
+	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(8), getTokenUsed(t, tokenID))
+	record := getTokenLimitRecordForTest(t, "req-codex-pro-token-limit")
+	assert.Equal(t, model.TokenLimitPreConsumeStatusSettled, record.Status)
+	assert.Equal(t, int64(8), record.ActualTokens)
 }
 
 func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFreeRequests(t *testing.T) {

@@ -76,24 +76,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		ws          *websocket.Conn
 	)
 
+	var relayInfo *relaycommon.RelayInfo
 	defer func() {
-		if newAPIError != nil {
-			logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
-			newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
-			switch {
-			case relayFormat == types.RelayFormatOpenAIRealtime && ws != nil:
-				helper.WssError(c, ws, newAPIError.ToOpenAIError())
-			case relayFormat == types.RelayFormatClaude:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"type":  "error",
-					"error": newAPIError.ToClaudeError(),
-				})
-			default:
-				c.JSON(newAPIError.StatusCode, gin.H{
-					"error": newAPIError.ToOpenAIError(),
-				})
-			}
-		}
+		_ = writeRelayErrorResponse(c, relayFormat, ws, requestId, relayInfo, newAPIError)
 	}()
 
 	request, err := helper.GetAndValidateRequest(c, relayFormat)
@@ -107,7 +92,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 
-	relayInfo, err := relaycommon.GenRelayInfo(c, relayFormat, request, ws)
+	relayInfo, err = relaycommon.GenRelayInfo(c, relayFormat, request, ws)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
@@ -174,17 +159,29 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			_ = lease.Release(context.Background())
 		}
 	}()
-
 	defer func() {
-		// Only return quota if downstream failed and quota was actually pre-consumed
-		if newAPIError != nil {
-			newAPIError = service.NormalizeViolationFeeError(newAPIError)
-			if relayInfo.Billing != nil {
-				relayInfo.Billing.Refund(c)
-			}
-			service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+		recovered := recover()
+		if recovered != nil {
+			handleRelayPanicForTokenLimit(c, relayInfo, recovered)
 		}
+		if newAPIError != nil {
+			newAPIError = handleRelayErrorForTokenLimit(c, relayInfo, newAPIError)
+			return
+		}
+		handleRelayClientGoneForTokenLimit(c, relayInfo)
 	}()
+	relayInfo.TokenLimit = service.NewTokenLimitSession(relayInfo)
+	if relayInfo.TokenLimit != nil {
+		if apiErr := relayInfo.TokenLimit.PreConsume(relayInfo.SubscriptionPreConsumedTokens()); apiErr != nil {
+			newAPIError = apiErr
+			if lease != nil {
+				_ = lease.Release(context.Background())
+				lease = nil
+			}
+			service.RefundBillingAfterTokenLimitReject(relayInfo.Billing)
+			return
+		}
+	}
 
 	retryParam := &service.RetryParam{
 		Ctx:          c,
@@ -292,6 +289,82 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // 允许跨域
 	},
+}
+
+func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *websocket.Conn, requestId string, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) bool {
+	if newAPIError == nil {
+		return false
+	}
+	alreadyWritten := service.ResponseAlreadyWritten(c, relayInfo, false)
+	allowRealtimeError := relayFormat == types.RelayFormatOpenAIRealtime && ws != nil && newAPIError.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted
+	if alreadyWritten && !allowRealtimeError {
+		return false
+	}
+	logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.Error()))
+	newAPIError.SetMessage(common.MessageWithRequestId(newAPIError.Error(), requestId))
+	switch {
+	case relayFormat == types.RelayFormatOpenAIRealtime && ws != nil:
+		helper.WssError(c, ws, newAPIError.ToOpenAIError())
+	case relayFormat == types.RelayFormatClaude:
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"type":  "error",
+			"error": newAPIError.ToClaudeError(),
+		})
+	default:
+		c.JSON(newAPIError.StatusCode, gin.H{
+			"error": newAPIError.ToOpenAIError(),
+		})
+	}
+	return true
+}
+
+func handleRelayErrorForTokenLimit(c *gin.Context, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) *types.NewAPIError {
+	if newAPIError == nil {
+		return nil
+	}
+	newAPIError = service.NormalizeViolationFeeError(newAPIError)
+	if service.ResponseAlreadyWritten(c, relayInfo, false) {
+		service.MarkTokenLimitAfterResponseFailure(relayInfo, "error_after_response")
+		if newAPIError.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted {
+			return newAPIError
+		}
+		return nil
+	}
+	if relayInfo != nil && relayInfo.Billing != nil {
+		relayInfo.Billing.Refund(c)
+	}
+	service.RefundTokenLimitOnRelayFailure(relayInfo, string(newAPIError.GetErrorCode()))
+	service.ChargeViolationFeeIfNeeded(c, relayInfo, newAPIError)
+	return newAPIError
+}
+
+func handleRelayPanicForTokenLimit(c *gin.Context, relayInfo *relaycommon.RelayInfo, recovered any) {
+	if recovered == nil {
+		return
+	}
+	if service.ResponseAlreadyWritten(c, relayInfo, false) {
+		service.MarkTokenLimitAfterResponseFailure(relayInfo, "panic_after_response")
+	} else {
+		service.RefundTokenLimitOnRelayFailure(relayInfo, "panic")
+		if relayInfo != nil && relayInfo.Billing != nil {
+			relayInfo.Billing.Refund(c)
+		}
+	}
+	panic(recovered)
+}
+
+func handleRelayClientGoneForTokenLimit(c *gin.Context, relayInfo *relaycommon.RelayInfo) {
+	if c == nil || c.Request == nil || c.Request.Context().Err() == nil || relayInfo == nil || relayInfo.TokenLimit == nil {
+		return
+	}
+	if service.ResponseAlreadyWritten(c, relayInfo, false) {
+		service.MarkTokenLimitAfterResponseFailure(relayInfo, "client_gone_after_response")
+		return
+	}
+	service.RefundTokenLimitOnRelayFailure(relayInfo, "client_gone_before_response")
+	if relayInfo.Billing != nil {
+		relayInfo.Billing.Refund(c)
+	}
 }
 
 func addUsedChannel(c *gin.Context, channelId int) {

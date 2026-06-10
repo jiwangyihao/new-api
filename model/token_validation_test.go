@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,17 +14,24 @@ import (
 func setupTokenValidationTestDB(t *testing.T) {
 	t.Helper()
 	originalDB := DB
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	originalRedisEnabled := common.RedisEnabled
+	originalRDB := common.RDB
+	common.RedisEnabled = false
+	common.RDB = nil
+	safeName := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name())
+	db, err := gorm.Open(sqlite.Open("file:"+safeName+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)
 	DB = db
 	t.Cleanup(func() {
 		DB = originalDB
+		common.RedisEnabled = originalRedisEnabled
+		common.RDB = originalRDB
 		sqlDB, dbErr := db.DB()
 		if dbErr == nil {
 			_ = sqlDB.Close()
 		}
 	})
-	require.NoError(t, db.AutoMigrate(&Token{}))
+	require.NoError(t, db.AutoMigrate(&Token{}, &TokenLimitPreConsumeRecord{}))
 }
 
 func TestValidateUserTokenAllowsExhaustedQuotaForSubscriptionOnlyBilling(t *testing.T) {
@@ -45,6 +53,9 @@ func TestValidateUserTokenAllowsExhaustedQuotaForSubscriptionOnlyBilling(t *test
 	require.NotNil(t, token)
 	assert.Equal(t, common.TokenStatusEnabled, token.Status)
 	assert.Equal(t, 0, token.RemainQuota)
+	assert.False(t, token.TokenLimitEnabled)
+	assert.Equal(t, int64(0), token.TokenLimit)
+	assert.Equal(t, int64(0), token.TokenUsed)
 }
 
 func TestValidateUserTokenAllowsHistoricalExhaustedStatus(t *testing.T) {

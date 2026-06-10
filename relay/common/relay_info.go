@@ -99,38 +99,41 @@ type RelayInfo struct {
 	FirstResponseTime time.Time
 	isFirstResponse   bool
 	//SendLastReasoningResponse bool
-	IsStream               bool
-	IsGeminiBatchEmbedding bool
-	IsPlayground           bool
-	UsePrice               bool
-	RelayMode              int
-	OriginModelName        string
-	RequestURLPath         string
-	RequestHeaders         map[string]string
-	ShouldIncludeUsage     bool
-	DisablePing            bool // 是否禁止向下游发送自定义 Ping
-	ClientWs               *websocket.Conn
-	TargetWs               *websocket.Conn
-	InputAudioFormat       string
-	OutputAudioFormat      string
-	RealtimeTools          []dto.RealTimeTool
-	IsFirstRequest         bool
-	AudioUsage             bool
-	ReasoningEffort        string
-	UserSetting            dto.UserSetting
-	UserEmail              string
-	UserQuota              int
-	RelayFormat            types.RelayFormat
-	SendResponseCount      int
-	ReceivedResponseCount  int
-	FinalPreConsumedQuota  int // 最终预消耗的配额
+	IsStream                bool
+	IsGeminiBatchEmbedding  bool
+	IsPlayground            bool
+	UsePrice                bool
+	RelayMode               int
+	OriginModelName         string
+	RequestURLPath          string
+	RequestHeaders          map[string]string
+	ShouldIncludeUsage      bool
+	DisablePing             bool // 是否禁止向下游发送自定义 Ping
+	ClientWs                *websocket.Conn
+	TargetWs                *websocket.Conn
+	InputAudioFormat        string
+	OutputAudioFormat       string
+	RealtimeTools           []dto.RealTimeTool
+	IsFirstRequest          bool
+	AudioUsage              bool
+	ReasoningEffort         string
+	UserSetting             dto.UserSetting
+	UserEmail               string
+	UserQuota               int
+	RelayFormat             types.RelayFormat
+	CodexProRequestAllowed  bool
+	CodexProRequestDisabled bool
+	SendResponseCount       int
+	ReceivedResponseCount   int
+	FinalPreConsumedQuota   int // 最终预消耗的配额
 	// ForcePreConsume 为 true 时禁用 BillingSession 的信任额度旁路，
 	// 强制预扣全额。用于异步任务（视频/音乐生成等），因为请求返回后任务仍在运行，
 	// 必须在提交前锁定全额。
 	ForcePreConsume bool
 	// Billing 是计费会话，封装了预扣费/结算/退款的统一生命周期。
 	// 免费模型时为 nil。
-	Billing BillingSettler
+	Billing    BillingSettler
+	TokenLimit TokenLimitSettler
 	// BillingSource indicates whether this request is billed from wallet quota or subscription.
 	// "" or "wallet" => wallet; "subscription" => subscription
 	BillingSource string
@@ -215,6 +218,7 @@ func (info *RelayInfo) ResetCodexProRuntimeState() {
 	if info == nil {
 		return
 	}
+	info.CodexProRequestAllowed = false
 	info.CodexProRequestMarker = ""
 	info.CodexProRequestSent = false
 	info.CodexProServedCandidate = false
@@ -226,7 +230,7 @@ func (info *RelayInfo) FinalizeCodexProRequestMarker() {
 		return
 	}
 	info.ResetCodexProRuntimeState()
-	if !info.CodexProEligible || !info.isCodexProSupportedChannel() {
+	if info.CodexProRequestDisabled || !info.CodexProEligible || !info.isCodexProSupportedChannel() {
 		return
 	}
 	switch info.RelayMode {
@@ -249,6 +253,7 @@ func (info *RelayInfo) FinalizeCodexProRequestMarker() {
 			info.MarkCodexProRequestSent()
 		}
 	}
+	info.CodexProRequestAllowed = info.CodexProRequestSent
 }
 
 func (info *RelayInfo) isCodexProSupportedChannel() bool {
@@ -265,11 +270,11 @@ func (info *RelayInfo) MarkCodexProRequestSent() {
 	info.CodexProRequestSent = true
 }
 
-func (info *RelayInfo) MarkCodexProServedCandidateFromHeaders(headers http.Header) {
-	if info == nil || headers == nil || info.CodexProRequestMarker != "codex-pro" {
+func (info *RelayInfo) MarkCodexProServedCandidateFromTrailers(trailers http.Header) {
+	if info == nil || trailers == nil || !info.CodexProRequestSent || info.CodexProRequestMarker != "codex-pro" {
 		return
 	}
-	for key, values := range headers {
+	for key, values := range trailers {
 		if !strings.EqualFold(key, "X-NewAPI-Pro-Served") {
 			continue
 		}
@@ -775,6 +780,13 @@ func (info *RelayInfo) SetFirstResponseTime() {
 
 func (info *RelayInfo) HasSendResponse() bool {
 	return info.FirstResponseTime.After(info.StartTime)
+}
+
+func (info *RelayInfo) SubscriptionPreConsumedTokens() int64 {
+	if info == nil {
+		return 0
+	}
+	return info.SubscriptionPreConsumed
 }
 
 type TaskRelayInfo struct {

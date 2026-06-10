@@ -88,8 +88,9 @@ const (
 	ErrorCodeSubscriptionRequired            ErrorCode = "subscription_required"
 	ErrorCodeSubscriptionTokenExhausted      ErrorCode = "subscription_token_exhausted"
 	ErrorCodeSubscriptionConcurrencyExceeded ErrorCode = "subscription_concurrency_exceeded"
+	ErrorCodeAPIKeyTokenLimitExhausted       ErrorCode = "api_key_token_limit_exhausted"
 	ErrorCodeGPTAbuseSuspended               ErrorCode = "gpt_abuse_suspended"
-	ErrorCodeGPTAbuseRepeatedWarningRequest ErrorCode = "gpt_abuse_repeated_warning_request"
+	ErrorCodeGPTAbuseRepeatedWarningRequest  ErrorCode = "gpt_abuse_repeated_warning_request"
 )
 
 type NewAPIError struct {

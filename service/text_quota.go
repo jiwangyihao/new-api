@@ -362,12 +362,14 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	subscriptionTokens := SubscriptionMeteredTokens(usage)
+	apiKeyTokens := SubscriptionMeteredTokens(usage)
+	subscriptionTokens := apiKeyTokens
 	if usageUnavailable {
 		summary.PromptTokens = 0
 		summary.CompletionTokens = 0
 		summary.TotalTokens = 0
 		summary.Quota = 0
+		apiKeyTokens = 0
 		subscriptionTokens = 0
 	}
 	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens, summary.Quota)
@@ -411,7 +413,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, UsageEstimated: usageEstimated, SubscriptionTokensCodexProAdjusted: true})
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, ApiKeyTokens: apiKeyTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), UsageEstimated: usageEstimated, SubscriptionTokensCodexProAdjusted: true})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

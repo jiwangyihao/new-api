@@ -20,17 +20,10 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import {
-  ChevronDown,
-  KeyRound,
-  Settings2,
-  WalletCards,
-  type LucideIcon,
-} from 'lucide-react'
+import { ChevronDown, KeyRound, Settings2, Gauge, type LucideIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels } from '@/lib/api'
-import { getCurrencyDisplay, getCurrencyLabel } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -217,14 +210,7 @@ export function ApiKeysMutateDrawer({
     form.setValue('expired_time', now)
   }
 
-  const { meta: currencyMeta } = getCurrencyDisplay()
-  const currencyLabel = getCurrencyLabel()
-  const tokensOnly = currencyMeta.kind === 'tokens'
-  const quotaLabel = t('Quota ({{currency}})', { currency: currencyLabel })
-  const quotaPlaceholder = tokensOnly
-    ? t('Enter quota in tokens')
-    : t('Enter quota in {{currency}}', { currency: currencyLabel })
-  const unlimitedQuota = form.watch('unlimited_quota')
+  const tokenLimitEnabled = form.watch('token_limit_enabled')
 
   return (
     <Sheet
@@ -367,34 +353,39 @@ export function ApiKeysMutateDrawer({
             </ApiKeyFormSection>
 
             <ApiKeyFormSection
-              title={t('Quota Settings')}
-              description={t('Set quota amount and limits')}
-              icon={WalletCards}
+              title={t('API Key Token Limit')}
+              description={t(
+                'Limits only this API key. Requests still consume subscription tokens.'
+              )}
+              icon={Gauge}
             >
-              {!unlimitedQuota && (
+              {tokenLimitEnabled && (
                 <FormField
                   control={form.control}
-                  name='remain_quota_dollars'
+                  name='token_limit'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{quotaLabel}</FormLabel>
+                      <FormLabel>{t('Token limit')}</FormLabel>
                       <FormControl>
                         <Input
-                          {...field}
                           type='number'
-                          step={tokensOnly ? 1 : 0.01}
-                          placeholder={quotaPlaceholder}
-                          onChange={(e) =>
-                            field.onChange(parseFloat(e.target.value) || 0)
-                          }
+                          min='1'
+                          step='1'
+                          inputMode='numeric'
+                          value={field.value ?? ''}
+                          placeholder={t('Enter token limit')}
+                          onChange={(e) => {
+                            const value = e.target.value
+                            field.onChange(
+                              value === '' ? undefined : Number(value)
+                            )
+                          }}
                         />
                       </FormControl>
                       <FormDescription>
-                        {tokensOnly
-                          ? t('Enter the quota amount in tokens')
-                          : t('Enter the quota amount in {{currency}}', {
-                              currency: currencyLabel,
-                            })}
+                        {t(
+                          'This API key uses the new token limit model. Historical quota limits were not migrated.'
+                        )}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -404,15 +395,19 @@ export function ApiKeysMutateDrawer({
 
               <FormField
                 control={form.control}
-                name='unlimited_quota'
+                name='token_limit_enabled'
                 render={({ field }) => (
                   <FormItem className='flex min-h-16 flex-row items-center justify-between gap-3 rounded-lg border px-3 py-2.5 sm:min-h-20 sm:gap-4 sm:px-4 sm:py-3'>
                     <div className='space-y-0.5'>
                       <FormLabel className='text-sm'>
-                        {t('Unlimited Quota')}
+                        {field.value
+                          ? t('Enable token limit')
+                          : t('No token limit for this API key')}
                       </FormLabel>
                       <FormDescription className='text-xs'>
-                        {t('Enable unlimited quota for this API key')}
+                        {t(
+                          'Limits only this API key. Requests still consume subscription tokens.'
+                        )}
                       </FormDescription>
                     </div>
                     <FormControl>

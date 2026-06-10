@@ -108,6 +108,31 @@ func TestFinalizeCodexProRequestMarkerClearsStaleServedStateBeforeAttempt(t *tes
 	require.False(t, info.CodexProServed)
 }
 
+func TestFinalizeCodexProRequestMarkerHonorsRequestDisabled(t *testing.T) {
+	info := &RelayInfo{
+		OriginModelName:         "gpt-5.4",
+		RelayMode:               relayconstant.RelayModeResponses,
+		RequestHeaders:          map[string]string{},
+		ChannelMeta:             &ChannelMeta{ChannelType: appconstant.ChannelTypeCodex, ApiType: appconstant.APITypeCodex},
+		CodexProMode:            appcommon.CodexProModeAll,
+		CodexProEligible:        true,
+		CodexProRequestDisabled: true,
+		CodexProRequestAllowed:  true,
+		CodexProRequestMarker:   "stale",
+		CodexProRequestSent:     true,
+		CodexProServedCandidate: true,
+		CodexProServed:          true,
+	}
+
+	info.FinalizeCodexProRequestMarker()
+
+	require.Empty(t, info.CodexProRequestMarker)
+	require.False(t, info.CodexProRequestSent)
+	require.False(t, info.CodexProRequestAllowed)
+	require.False(t, info.CodexProServedCandidate)
+	require.False(t, info.CodexProServed)
+}
+
 func TestCodexProAckFromFailedAttemptDoesNotPolluteFallbackAttempt(t *testing.T) {
 	info := &RelayInfo{
 		OriginModelName:  "gpt-5.4",
@@ -118,7 +143,7 @@ func TestCodexProAckFromFailedAttemptDoesNotPolluteFallbackAttempt(t *testing.T)
 		CodexProEligible: true,
 	}
 	info.FinalizeCodexProRequestMarker()
-	info.MarkCodexProServedCandidateFromHeaders(http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}})
+	info.MarkCodexProServedCandidateFromTrailers(http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}})
 	require.True(t, info.CodexProServedCandidate)
 	require.False(t, info.CodexProServed)
 
@@ -128,6 +153,19 @@ func TestCodexProAckFromFailedAttemptDoesNotPolluteFallbackAttempt(t *testing.T)
 
 	require.Empty(t, info.CodexProRequestMarker)
 	require.False(t, info.CodexProRequestSent)
+	require.False(t, info.CodexProServedCandidate)
+	require.False(t, info.CodexProServed)
+}
+
+func TestCodexProTrailerAckRequiresRequestSentState(t *testing.T) {
+	info := &RelayInfo{
+		CodexProRequestMarker: "codex-pro",
+		CodexProRequestSent:   false,
+	}
+
+	info.MarkCodexProServedCandidateFromTrailers(http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}})
+	info.ConfirmCodexProServed()
+
 	require.False(t, info.CodexProServedCandidate)
 	require.False(t, info.CodexProServed)
 }

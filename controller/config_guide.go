@@ -307,11 +307,11 @@ func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*mod
 		writeConfigGuideError(c, http.StatusUnauthorized, "invalid api_key")
 		return nil, "", false
 	}
-	if token.Status == common.TokenStatusExhausted {
-		writeConfigGuideError(c, http.StatusTooManyRequests, "token quota exhausted")
+	if token.Status != common.TokenStatusEnabled && token.Status != common.TokenStatusExhausted {
+		writeConfigGuideError(c, http.StatusForbidden, "token is not usable")
 		return nil, "", false
 	}
-	if token.Status != common.TokenStatusEnabled || token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
+	if token.ExpiredTime != -1 && token.ExpiredTime < common.GetTimestamp() {
 		writeConfigGuideError(c, http.StatusForbidden, "token is not usable")
 		return nil, "", false
 	}
@@ -342,10 +342,7 @@ func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*mod
 	c.Set("token_id", token.Id)
 	c.Set("token_key", token.Key)
 	c.Set("token_name", token.Name)
-	c.Set("token_unlimited_quota", token.UnlimitedQuota)
-	if !token.UnlimitedQuota {
-		c.Set("token_quota", token.RemainQuota)
-	}
+	// Legacy API-key quota is not a config-guide availability signal.
 	if token.ModelLimitsEnabled {
 		c.Set("token_model_limit_enabled", true)
 		c.Set("token_model_limit", token.GetModelLimitsMap())

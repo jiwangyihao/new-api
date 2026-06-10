@@ -22,7 +22,6 @@ import { describe, test } from 'node:test'
 import {
   buildAgentConfigArtifactPath,
   buildAgentConfigArtifactQueryKey,
-  buildAgentConfigGuideInstruction,
   buildAgentConfigGuidePath,
   buildAgentConfigGuideURL,
   buildAgentConfigSections,
@@ -31,6 +30,7 @@ import {
   buildContinueConfig,
   buildGenericEnvConfig,
   buildClaudeCodeConfig,
+  getAgentConfigGuideClientLabel,
   getUnverifiedCodexProHeaderConfigNotice,
   buildGenericJsonConfig,
   buildOpenAIBaseUrl,
@@ -111,7 +111,7 @@ describe('api usage help config builders', () => {
     }
   })
 
-  test('builds AI agent auto-configuration manifest links safely', () => {
+  test('builds AI agent auto-configuration manifest links and labels safely', () => {
     assert.equal(
       buildAgentConfigGuidePath('omp', 'sk-live', 'https://api.example.com/v1'),
       '/config-guides/omp-openai/manifest.json?api_key=sk-live&base_url=https%3A%2F%2Fapi.example.com%2Fv1'
@@ -120,10 +120,8 @@ describe('api usage help config builders', () => {
       buildAgentConfigGuideURL('https://api.example.com/v1', 'opencode', 'sk-live'),
       'https://api.example.com/config-guides/opencode-openai/manifest.json?api_key=sk-live&base_url=https%3A%2F%2Fapi.example.com%2Fv1'
     )
-    assert.equal(
-      buildAgentConfigGuideInstruction('https://api.example.com/v1', 'omp', 'sk-live'),
-      'Use this manifest to auto-configure OMP: https://api.example.com/config-guides/omp-openai/manifest.json?api_key=sk-live&base_url=https%3A%2F%2Fapi.example.com%2Fv1'
-    )
+    assert.equal(getAgentConfigGuideClientLabel('omp'), 'OMP')
+    assert.equal(getAgentConfigGuideClientLabel('opencode'), 'OpenCode')
   })
 
   test('builds metadata and artifact query keys with selected key and normalized artifact identity', () => {

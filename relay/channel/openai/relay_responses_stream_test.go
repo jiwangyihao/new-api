@@ -25,6 +25,37 @@ func (r flushableRecorder) Flush() {
 	r.ResponseRecorder.Flush()
 }
 
+type trailerOnEOFBodyForOpenAITest struct {
+	reader *strings.Reader
+	onEOF  func()
+}
+
+func (b *trailerOnEOFBodyForOpenAITest) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if err == io.EOF && b.onEOF != nil {
+		b.onEOF()
+		b.onEOF = nil
+	}
+	return n, err
+}
+
+func (b *trailerOnEOFBodyForOpenAITest) Close() error {
+	return nil
+}
+
+func newCodexProTrailerResponseForOpenAITest(body string, trailerAck string) *http.Response {
+	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Trailer: http.Header{}}
+	resp.Body = &trailerOnEOFBodyForOpenAITest{
+		reader: strings.NewReader(body),
+		onEOF: func() {
+			if trailerAck != "" {
+				resp.Trailer.Set("X-NewAPI-Pro-Served", trailerAck)
+			}
+		},
+	}
+	return resp
+}
+
 func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing.T) {
 	t.Parallel()
 
@@ -91,26 +122,31 @@ func TestOaiResponsesStreamHandlerDoesNotEstimatePromptTokens(t *testing.T) {
 	assert.Equal(t, 2, usage.TotalTokens)
 }
 
-func TestOaiResponsesHandlerCodexProServedAckRequiresRequestMarkerAndSuccessfulUsage(t *testing.T) {
+func TestOaiResponsesHandlerCodexProServedAckRequiresTrailerAndSuccessfulUsage(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name          string
 		requestMarker bool
-		ack           string
+		headerAck     string
+		trailerAck    string
 		body          string
 		wantCandidate bool
 		wantFinal     bool
 	}{
-		{name: "request_marker_and_exact_ack", requestMarker: true, ack: "codex-pro", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`, wantCandidate: true, wantFinal: true},
-		{name: "ack_without_request_marker", ack: "codex-pro", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "missing_ack", requestMarker: true, body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "wrong_ack_pro", requestMarker: true, ack: "pro", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "wrong_ack_true", requestMarker: true, ack: "true", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "wrong_ack_2x", requestMarker: true, ack: "2x", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "empty_ack", requestMarker: true, ack: "", body: `{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
-		{name: "parse_failure", requestMarker: true, ack: "codex-pro", body: `{not-json`, wantCandidate: true},
-		{name: "upstream_error", requestMarker: true, ack: "codex-pro", body: `{"error":{"type":"server_error","message":"upstream failed"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`, wantCandidate: true},
+		{name: "request_marker_and_exact_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`, wantCandidate: true, wantFinal: true},
+		{name: "ordinary_header_ack_ignored", requestMarker: true, headerAck: "codex-pro", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "trailer_ack_without_request_marker", trailerAck: "codex-pro", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "missing_trailer_ack", requestMarker: true, body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "wrong_trailer_ack_pro", requestMarker: true, trailerAck: "pro", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "wrong_trailer_ack_true", requestMarker: true, trailerAck: "true", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "wrong_trailer_ack_2x", requestMarker: true, trailerAck: "2x", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "empty_trailer_ack", requestMarker: true, trailerAck: "", body: `{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "incomplete_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"incomplete","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "failed_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"failed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "cancelled_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"cancelled","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`},
+		{name: "parse_failure_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{not-json`},
+		{name: "upstream_error_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"failed","error":{"type":"server_error","message":"upstream failed"},"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,14 +157,14 @@ func TestOaiResponsesHandlerCodexProServedAckRequiresRequestMarkerAndSuccessfulU
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 			markCodexProRequestSentForOpenAITest(t, info, tc.requestMarker)
-			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
-			if tc.ack != "" || tc.name == "empty_ack" {
-				resp.Header.Set("X-NewAPI-Pro-Served", tc.ack)
+			resp := newCodexProTrailerResponseForOpenAITest(tc.body, tc.trailerAck)
+			if tc.headerAck != "" {
+				resp.Header.Set("X-NewAPI-Pro-Served", tc.headerAck)
 			}
 
 			_, apiErr := OaiResponsesHandler(c, info, resp)
 
-			if tc.name == "parse_failure" || tc.name == "upstream_error" {
+			if tc.name == "parse_failure_ignores_trailer_ack" || tc.name == "upstream_error_ignores_trailer_ack" {
 				require.NotNil(t, apiErr)
 			} else {
 				require.Nil(t, apiErr)
@@ -140,21 +176,26 @@ func TestOaiResponsesHandlerCodexProServedAckRequiresRequestMarkerAndSuccessfulU
 	}
 }
 
-func TestOaiResponsesCompactionHandlerCodexProServedAckRequiresSuccess(t *testing.T) {
+func TestOaiResponsesCompactionHandlerCodexProServedAckRequiresTrailerAndSuccess(t *testing.T) {
 	t.Parallel()
 
 	for _, tc := range []struct {
 		name          string
 		requestMarker bool
-		ack           string
+		headerAck     string
+		trailerAck    string
 		body          string
 		wantCandidate bool
 		wantFinal     bool
 	}{
-		{name: "success", requestMarker: true, ack: "codex-pro", body: `{"usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`, wantCandidate: true, wantFinal: true},
-		{name: "wrong_ack", requestMarker: true, ack: "true", body: `{"usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
-		{name: "parse_failure", requestMarker: true, ack: "codex-pro", body: `{bad-json`, wantCandidate: true},
-		{name: "upstream_error", requestMarker: true, ack: "codex-pro", body: `{"error":{"type":"server_error","message":"upstream failed"},"usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}`, wantCandidate: true},
+		{name: "success", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`, wantCandidate: true, wantFinal: true},
+		{name: "ordinary_header_ack_ignored", requestMarker: true, headerAck: "codex-pro", body: `{"status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
+		{name: "wrong_trailer_ack", requestMarker: true, trailerAck: "true", body: `{"status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
+		{name: "incomplete_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"incomplete","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
+		{name: "failed_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"failed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
+		{name: "cancelled_status_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"cancelled","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`},
+		{name: "parse_failure_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{bad-json`},
+		{name: "upstream_error_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: `{"status":"failed","error":{"type":"server_error","message":"upstream failed"},"usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7}}`},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -166,14 +207,14 @@ func TestOaiResponsesCompactionHandlerCodexProServedAckRequiresSuccess(t *testin
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 			markCodexProRequestSentForOpenAITest(t, info, tc.requestMarker)
 			c.Set("relay_info", info)
-			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
-			if tc.ack != "" {
-				resp.Header.Set("X-NewAPI-Pro-Served", tc.ack)
+			resp := newCodexProTrailerResponseForOpenAITest(tc.body, tc.trailerAck)
+			if tc.headerAck != "" {
+				resp.Header.Set("X-NewAPI-Pro-Served", tc.headerAck)
 			}
 
 			_, apiErr := OaiResponsesCompactionHandler(c, resp)
 
-			if tc.name == "parse_failure" || tc.name == "upstream_error" {
+			if tc.name == "parse_failure_ignores_trailer_ack" || tc.name == "upstream_error_ignores_trailer_ack" {
 				require.NotNil(t, apiErr)
 			} else {
 				require.Nil(t, apiErr)
@@ -191,19 +232,24 @@ func TestOaiResponsesStreamHandlerCodexProServedAckFinalOnlyAfterCompletedNormal
 	for _, tc := range []struct {
 		name          string
 		requestMarker bool
-		ack           string
+		headerAck     string
+		trailerAck    string
 		body          string
 		cancelBefore  bool
 		wantCandidate bool
 		wantFinal     bool
 	}{
-		{name: "completed", requestMarker: true, ack: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), wantCandidate: true, wantFinal: true},
-		{name: "missing_completed", requestMarker: true, ack: "codex-pro", body: strings.Join([]string{`data: {"type":"response.output_text.delta","delta":"hello"}`, ""}, "\n"), wantCandidate: true},
-		{name: "upstream_failed_event", requestMarker: true, ack: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, "data: [DONE]", ""}, "\n"), wantCandidate: true},
-		{name: "request_cancelled", requestMarker: true, ack: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), cancelBefore: true, wantCandidate: true},
-		{name: "wrong_ack", requestMarker: true, ack: "pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
-		{name: "ack_without_request_marker", ack: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
-		{name: "parse_failure", requestMarker: true, ack: "codex-pro", body: strings.Join([]string{`data: {not-json`, "data: [DONE]", ""}, "\n"), wantCandidate: true},
+		{name: "completed", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), wantCandidate: true, wantFinal: true},
+		{name: "ordinary_header_ack_ignored", requestMarker: true, headerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "missing_completed", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.output_text.delta","delta":"hello"}`, ""}, "\n")},
+		{name: "upstream_failed_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, "data: [DONE]", ""}, "\n")},
+		{name: "upstream_incomplete_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`, "data: [DONE]", ""}, "\n")},
+		{name: "upstream_cancelled_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.cancelled","response":{"id":"resp_cancelled","status":"cancelled","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`, "data: [DONE]", ""}, "\n")},
+		{name: "failed_then_completed_does_not_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, `data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "request_cancelled", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), cancelBefore: true},
+		{name: "wrong_trailer_ack", requestMarker: true, trailerAck: "pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "trailer_ack_without_request_marker", trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "parse_failure_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {not-json`, "data: [DONE]", ""}, "\n")},
 	} {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,9 +265,9 @@ func TestOaiResponsesStreamHandlerCodexProServedAckFinalOnlyAfterCompletedNormal
 			}
 			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
 			markCodexProRequestSentForOpenAITest(t, info, tc.requestMarker)
-			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(tc.body))}
-			if tc.ack != "" {
-				resp.Header.Set("X-NewAPI-Pro-Served", tc.ack)
+			resp := newCodexProTrailerResponseForOpenAITest(tc.body, tc.trailerAck)
+			if tc.headerAck != "" {
+				resp.Header.Set("X-NewAPI-Pro-Served", tc.headerAck)
 			}
 
 			_, apiErr := OaiResponsesStreamHandler(c, info, resp)

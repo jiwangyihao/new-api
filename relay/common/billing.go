@@ -1,6 +1,9 @@
 package common
 
-import "github.com/gin-gonic/gin"
+import (
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
+)
 
 // BillingSettler 抽象计费会话的生命周期操作。
 // 由 service.BillingSession 实现，存储在 RelayInfo 上以避免循环引用。
@@ -25,4 +28,15 @@ type BillingSettler interface {
 
 	// Reserve 将预扣额度补到目标值；若目标值不高于当前预扣额度则不做任何事。
 	Reserve(targetQuota int) error
+}
+
+type TokenLimitSettler interface {
+	PreConsume(tokens int64) *types.NewAPIError
+	Settle(actualTokens int64) error
+	SettleForAudit(actualTokens int64, reason string) error
+	MarkSettleFailed(actualTokens int64, reason string) error
+	Refund(reason string)
+	ConsumeIncrement(tokens int64) (int64, *types.NewAPIError)
+	RefundIncrement(sequence int64, reason string)
+	PreConsumedTokens() int64
 }

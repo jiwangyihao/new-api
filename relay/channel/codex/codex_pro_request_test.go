@@ -44,6 +44,9 @@ func TestCodexAdaptorPaidSubscriptionCodexProMarksResponsesAndCompactOnly(t *tes
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.want, getCodexAdaptorStringFieldForTest(t, info, "CodexProRequestMarker") == "codex-pro")
+			if tc.relayMode == relayconstant.RelayModeChatCompletions {
+				require.Empty(t, getCodexAdaptorStringFieldForTest(t, info, "CodexProRequestMarker"))
+			}
 		})
 	}
 }
@@ -90,6 +93,25 @@ func TestCodexAdaptorConvertResponsesRequiresCodexChannelMetadata(t *testing.T) 
 	require.Empty(t, getCodexAdaptorStringFieldForTest(t, info, "CodexProRequestMarker"))
 }
 
+func TestCodexAdaptorConvertResponsesKeepsChatCompletionsViaResponsesProDisabled(t *testing.T) {
+	t.Parallel()
+
+	info := &relaycommon.RelayInfo{
+		OriginModelName:         "gpt-5.4",
+		RelayMode:               relayconstant.RelayModeResponses,
+		RequestHeaders:          map[string]string{"X-NewAPI-Codex-Pro-Intent": "codex-pro"},
+		ChannelMeta:             &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex, ApiType: constant.APITypeCodex},
+		CodexProRequestDisabled: true,
+	}
+	setCodexAdaptorStringFieldForTest(t, info, "CodexProMode", "flexible")
+	setCodexAdaptorBoolFieldForTest(t, info, "CodexProEligible", true)
+	setCodexAdaptorBoolFieldForTest(t, info, "CodexProRequestAllowed", false)
+
+	_, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(&gin.Context{}, info, dto.OpenAIResponsesRequest{})
+	require.NoError(t, err)
+	require.Empty(t, getCodexAdaptorStringFieldForTest(t, info, "CodexProRequestMarker"))
+	require.False(t, getCodexAdaptorBoolFieldForTest(t, info, "CodexProRequestAllowed"))
+}
 func setCodexAdaptorBoolFieldForTest(t *testing.T, info *relaycommon.RelayInfo, fieldName string, value bool) {
 	t.Helper()
 	field := reflect.ValueOf(info).Elem().FieldByName(fieldName)

@@ -71,11 +71,14 @@ func FinalizeCodexProRequestHeader(headers http.Header, info *common.RelayInfo) 
 	}
 	deleteHeaderCaseInsensitive(headers, CodexProRequestHeaderName)
 	deleteHeaderCaseInsensitive(headers, CodexProServedHeaderName)
+	deleteHeaderCaseInsensitive(headers, "Trailer")
+	deleteHeaderCaseInsensitive(headers, "TE")
 	if info == nil {
 		return
 	}
 	info.FinalizeCodexProRequestMarker()
-	if info.CodexProRequestMarker == CodexProMarkerValue {
+	if info.CodexProRequestAllowed && info.CodexProRequestMarker == CodexProMarkerValue {
+		headers.Set("TE", "trailers")
 		headers.Set(CodexProRequestHeaderName, CodexProMarkerValue)
 	}
 }

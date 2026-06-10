@@ -58,6 +58,7 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		info.ResetCodexProRuntimeState()
 		if info.RelayMode == relayconstant.RelayModeResponses || info.RelayMode == relayconstant.RelayModeResponsesCompact {
 			info.FinalizeCodexProRequestMarker()
+			info.CodexProRequestAllowed = info.CodexProRequestSent
 		}
 	}
 

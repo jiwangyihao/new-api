@@ -153,22 +153,25 @@ X-NewAPI-Pro-Request: codex-pro
 
 ### 上游响应 ack（sub2api → new-api）
 
-固定上游响应 Header：
+固定上游响应 trailer：
 
 ```http
 X-NewAPI-Pro-Served: codex-pro
 ```
+
 语义：
 
-- `sub2api` 用该 Header 声明本次响应由 Codex Pro 分组 serve。
-- `new-api` 只能把它作为候选 ack；只有同一次请求已发送 `X-NewAPI-Pro-Request: codex-pro`、响应 Header 值精确等于 `codex-pro`，且 handler 确认请求成功完成后，才能把内部 `CodexProServed` 置为 true。
-- 非流式 / compact 请求必须成功解析 usage 且没有 upstream error；流式请求必须收到 `response.completed` 且流状态为正常结束。
-- 请求回退普通分组、未命中 Pro 分组、失败、超时、取消、流式未完成、上游 error 或最终结算失败时，都不得按 Pro served 处理。
+- `sub2api` 用该 response trailer 声明本次响应由 Codex Pro 分组 serve。
+- `new-api` 只能在完整消费 body / stream 到 EOF 后读取 `resp.Trailer`；普通 response Header 中的 `X-NewAPI-Pro-Served` 必须忽略，不能作为 ack。
+- 最终状态机固定为 `CodexProServed = proRequestSent && handlerSuccess && trailerAck`。
+- 非流式 / compact 请求必须成功解析 usage 且没有 upstream error；流式请求必须收到 `response.completed`、正常读到 EOF，且流状态没有错误。
+- 请求回退普通分组、未命中 Pro 分组、失败、超时、取消、客户端中断、流式未完成、上游 error 或最终结算失败时，都不得按 Pro served 处理。
 - `sub2api` 不返回倍率，不返回金额，不返回用户信息。
+- `new-api` 发送 `X-NewAPI-Pro-Request: codex-pro` 时需要请求上游保留 response trailer，例如 HTTP/1.1 场景设置 `TE: trailers`；部署链路中的反向代理也必须保留 response trailer。
 
 ### 上游 body ack
 
-本期不使用 body ack。唯一可作为候选信号的上游 serve ack 是响应 Header：
+本期不使用 body ack。唯一可作为候选信号的上游 serve ack 是响应 trailer：
 
 ```http
 X-NewAPI-Pro-Served: codex-pro
@@ -176,14 +179,14 @@ X-NewAPI-Pro-Served: codex-pro
 
 原因：
 
-- Header 不需要修改 OpenAI Responses 的下游 body，兼容非流式、流式和 compact 路径。
-- 对流式请求，响应 Header 早于 `response.completed` 到达，因此它只能是候选信号；最终是否 2x 必须由 `new-api` 在流正常完成后决定。
+- Trailer 在响应体结束后才可可靠读取，天然匹配「完整消费 body / stream 后才能确认」的结算语义。
+- 普通 response Header 到达时间早于 `response.completed` 和 EOF，不能证明请求成功完成，因此不再作为候选 ack。
 - ack 是 `new-api` 与 `sub2api` 的内部结算信号，不面向终端用户展示。
-- 如果未来出现无法稳定读取响应 Header 的上游路径，需要单独设计 body ack 或 trailer ack；不能在本期实现中隐式接受任意 body 字段作为结算凭据。
+- 如果未来需要 body ack，必须单独设计；不能在本期实现中隐式接受任意 body 字段作为结算凭据。
 
 ### ack 响应过滤
 
-`X-NewAPI-Pro-Served` 是内部结算 Header。`new-api` 读取候选 ack 后，必须在写给终端用户的响应 Header 中删除该 Header。
+`X-NewAPI-Pro-Served` 是内部结算 trailer。`new-api` 读取 trailer ack 后，必须确保写给终端用户的响应 Header 和 trailer 都不包含该字段。
 
 该过滤必须覆盖：
 
@@ -191,7 +194,7 @@ X-NewAPI-Pro-Served: codex-pro
 - Codex Responses 流式 SSE 路径；
 - Codex Responses compact 路径。
 
-终端用户不应从响应 Header 中看到 `X-NewAPI-Pro-Served`，也不能依赖该 Header 判断计费结果。
+终端用户不应从响应 Header 或 trailer 中看到 `X-NewAPI-Pro-Served`，也不能依赖该字段判断计费结果。
 
 ## 计费设计
 
@@ -235,8 +238,8 @@ if pro_served_ack == true:
 - 当前实际使用的是试用套餐或非销售赠送权益。
 - 请求模型不是 GPT 系列文本模型。
 - 未发送 `X-NewAPI-Pro-Request: codex-pro`。
-- 上游没有返回 `X-NewAPI-Pro-Served: codex-pro`。
-- 上游返回其他值，例如 `pro`、`true`、`2x`。
+- 上游 response trailer 没有返回 `X-NewAPI-Pro-Served: codex-pro`。
+- 上游 response trailer 返回其他值，例如 `pro`、`true`、`2x`。
 - 请求失败、超时、取消、流式未完成。
 - 上游回退到普通分组。
 - 上游请求重试后由普通分组成功；失败尝试中的候选 ack 不得污染最终结算。
@@ -357,14 +360,14 @@ PUT /api/subscription/self/codex-pro-mode
 
 - Pro 分组只对符合条件的 GPT 系列请求生效。
 - `X-NewAPI-Codex-Pro-Intent` 只是弱 intent，不保证命中 Pro，也不保证 2x。
-- 只有实际由 Pro 分组 serve 且上游返回 `X-NewAPI-Pro-Served: codex-pro` 的请求，才会产生 2 倍订阅 token 消耗。
+- 只有实际由 Pro 分组 serve、上游 response trailer 返回 `X-NewAPI-Pro-Served: codex-pro`，且请求成功完成的请求，才会产生 2 倍订阅 token 消耗。
 - 回退普通分组不加倍。
 
 实现完成后必须在 `web/default` 下运行 `bun run i18n:sync`，并确认 6 种语言无缺失 key。若新增动态翻译 key，需要同步现有静态 key 收集文件。
 
 ## Harness 配置引导
 
-API 帮助弹窗应补充以下配置说明，目标是让用户能把 `X-NewAPI-Codex-Pro-Intent: codex-pro` 传给 `new-api`。该 Header 只让默认 `flexible` 模式按 harness 启用 Pro，不是计费凭据；实际 2x 只在上游返回 `X-NewAPI-Pro-Served: codex-pro` 且请求成功结算后发生。
+API 帮助弹窗应补充以下配置说明，目标是让用户能把 `X-NewAPI-Codex-Pro-Intent: codex-pro` 传给 `new-api`。该 Header 只让默认 `flexible` 模式按 harness 启用 Pro，不是计费凭据；实际 2x 只在上游 response trailer 返回 `X-NewAPI-Pro-Served: codex-pro` 且请求成功结算后发生。
 
 ### Codex CLI
 
@@ -475,10 +478,10 @@ OpenClaw 项也必须采用保守策略：只有完成当前版本配置字段�
    - `RelayInfo.CodexProServedCandidate bool`
 5. Header 最终化函数，例如：
    - `FinalizeProRequestHeader(header http.Header, marker string)`
-6. Codex Responses handler 读取上游响应 Header 候选 ack，过滤下游响应 Header，并在请求成功完成后写回 `BillingSession` 或等效结算输入。
+6. Codex Responses handler 在完整消费 body / stream 后读取上游 response trailer ack，过滤下游响应 Header / trailer，并在请求成功完成后写回 `BillingSession` 或等效结算输入。
 7. 结算阶段只根据内部 `CodexProServed` 状态对订阅 token 做 2x。
 
-不要把 `X-NewAPI-Pro-Served` 从客户端透传为可信输入。它只应来自上游响应。
+不要把 `X-NewAPI-Pro-Served` 从客户端或普通上游 response Header 透传为可信输入。它只应来自 `sub2api` 的上游 response trailer。
 
 本期支持读取 ack 的请求路径固定为 Codex adaptor 的 OpenAI Responses 非流式、Responses 流式和 Responses compact handler。其他 chat completions、realtime、audio、task、WebSocket、SDK 等路径即使模型是 GPT 且用户模式为 `all`，也不得发送 Pro request marker，除非同一实现计划补齐对应 ack 捕获和结算测试。
 
@@ -490,7 +493,7 @@ GPT 系列 gating 必须复用现有 `common.IsOpenAITextModel` 或同等单一 
 
 - 所有 Pro 内部 Header 都是保留 Header。
 - 下游客户端传入 `X-NewAPI-Pro-Request`、`X-NewAPI-Pro-Served` 必须被删除或忽略。
-- 上游响应中的 `X-NewAPI-Pro-Served` 读取后必须从下游响应 Header 中删除。
+- 上游 response trailer 中的 `X-NewAPI-Pro-Served` 读取后不得透传到终端响应 Header 或 trailer；普通 response Header 中同名字段必须忽略。
 - 通道配置不能覆盖最终内部 Header。
 - 上游 ack 不携带用户 ID、订阅 ID、套餐 ID、金额或倍率。
 - 结算日志可记录是否 Pro served，但不应把敏感 Header 原样暴露给普通用户。
@@ -503,7 +506,7 @@ GPT 系列 gating 必须复用现有 `common.IsOpenAITextModel` 或同等单一 
 - **试用套餐**：不参与 Pro 分组和 2x。
 - **钱包-only 用户**：不参与 Pro 分组和 2x。
 - **非 GPT 模型**：不参与 Pro 分组和 2x。
-- **sub2api 未升级**：不会返回 `X-NewAPI-Pro-Served: codex-pro`，因此不会 2x。
+- **sub2api 未升级**：不会通过 response trailer 返回 `X-NewAPI-Pro-Served: codex-pro`，因此不会 2x。
 
 ## 测试
 
@@ -529,11 +532,12 @@ GPT 系列 gating 必须复用现有 `common.IsOpenAITextModel` 或同等单一 
    - 不符合条件时缺失。
    - 客户端或通道配置无法通过 `*` / regex passthrough、`{client_header:...}`、runtime `pass_headers`、`set_header`、`delete_header` 伪造、覆盖或删除。
 6. **上游 ack 解析与过滤测试**
-   - 响应 Header 为 `X-NewAPI-Pro-Served: codex-pro` 时只记录候选 ack。
+   - response trailer 为 `X-NewAPI-Pro-Served: codex-pro` 时只记录候选 ack。
+   - 普通 response Header 为 `X-NewAPI-Pro-Served: codex-pro` 时必须忽略。
    - 缺失、大小写异常值、其他值都不记录。
    - 非流式 / compact 请求成功解析 usage 且无 upstream error 后才记录最终 Pro served。
-   - 流式请求只有在 `response.completed` 且正常结束后才可记录最终 Pro served。
-   - 下游响应 Header 不包含 `X-NewAPI-Pro-Served`。
+   - 流式请求只有在 `response.completed`、正常读到 EOF 且无流错误后才可记录最终 Pro served。
+   - 下游响应 Header 和 trailer 都不包含 `X-NewAPI-Pro-Served`。
 7. **2x 结算测试**
    - ack 成功且请求成功完成时订阅 token 按 2x 结算。
    - ack 缺失、失败、回退普通分组、流式未完成、重试后普通分组成功时按 1x。

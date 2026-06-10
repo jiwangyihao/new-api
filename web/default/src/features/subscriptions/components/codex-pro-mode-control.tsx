@@ -147,7 +147,7 @@ export function CodexProModeControl(props: CodexProModeControlProps) {
         <p>{t('Only eligible GPT-family requests can try Codex Pro.')}</p>
         <p>
           {t(
-            'Only requests acknowledged by the upstream Pro served signal and completed successfully consume 2x subscription tokens.'
+            'Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.'
           )}
         </p>
         <p>{t('Fallback requests are billed at the normal rate.')}</p>

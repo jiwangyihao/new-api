@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,21 +22,57 @@ type tokenPayload struct {
 	CrossGroupRetry *bool   `json:"cross_group_retry"`
 }
 
-func buildMaskedTokenResponse(token *model.Token) *model.Token {
+const maxAPIKeyTokenLimit int64 = 10_000_000_000_000
+
+type tokenResponse struct {
+	*model.Token
+	TokenLimitEnabled bool  `json:"token_limit_enabled"`
+	TokenLimit        int64 `json:"token_limit"`
+	TokenUsed         int64 `json:"token_used"`
+	TokenRemaining    int64 `json:"token_remaining"`
+	TokenUnlimited    bool  `json:"token_unlimited"`
+}
+
+func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	if token == nil {
 		return nil
 	}
 	maskedToken := *token
 	maskedToken.Key = token.GetMaskedKey()
-	return &maskedToken
+	view := maskedToken.BuildTokenLimitView()
+	return &tokenResponse{
+		Token:             &maskedToken,
+		TokenLimitEnabled: view.TokenLimitEnabled,
+		TokenLimit:        view.TokenLimit,
+		TokenUsed:         view.TokenUsed,
+		TokenRemaining:    view.TokenRemaining,
+		TokenUnlimited:    view.TokenUnlimited,
+	}
 }
 
-func buildMaskedTokenResponses(tokens []*model.Token) []*model.Token {
-	maskedTokens := make([]*model.Token, 0, len(tokens))
+func buildMaskedTokenResponses(tokens []*model.Token) []*tokenResponse {
+	maskedTokens := make([]*tokenResponse, 0, len(tokens))
 	for _, token := range tokens {
 		maskedTokens = append(maskedTokens, buildMaskedTokenResponse(token))
 	}
 	return maskedTokens
+}
+
+func normalizeTokenLimitFields(token *model.Token) error {
+	if token == nil {
+		return errors.New("token is nil")
+	}
+	if !token.TokenLimitEnabled {
+		token.TokenLimit = 0
+		return nil
+	}
+	if token.TokenLimit <= 0 {
+		return errors.New("token limit must be greater than 0")
+	}
+	if token.TokenLimit > maxAPIKeyTokenLimit {
+		return fmt.Errorf("token limit exceeds max: %d", maxAPIKeyTokenLimit)
+	}
+	return nil
 }
 
 func GetOpenCodeOpenAIModels(c *gin.Context) {
@@ -152,12 +190,18 @@ func GetTokenStatus(c *gin.Context) {
 	if expiredAt == -1 {
 		expiredAt = 0
 	}
+	view := token.BuildTokenLimitView()
 	c.JSON(http.StatusOK, gin.H{
-		"object":          "credit_summary",
-		"total_granted":   token.RemainQuota,
-		"total_used":      0, // not supported currently
-		"total_available": token.RemainQuota,
-		"expires_at":      expiredAt * 1000,
+		"object":              "credit_summary",
+		"total_granted":       token.RemainQuota,
+		"total_used":          token.UsedQuota,
+		"total_available":     token.RemainQuota,
+		"expires_at":          expiredAt * 1000,
+		"token_limit_enabled": view.TokenLimitEnabled,
+		"token_limit":         view.TokenLimit,
+		"token_used":          view.TokenUsed,
+		"token_remaining":     view.TokenRemaining,
+		"token_unlimited":     view.TokenUnlimited,
 	})
 }
 
@@ -193,19 +237,29 @@ func GetTokenUsage(c *gin.Context) {
 		expiredAt = 0
 	}
 
+	view := token.BuildTokenLimitView()
+	legacyTotalGranted := token.RemainQuota + token.UsedQuota
 	c.JSON(http.StatusOK, gin.H{
 		"code":    true,
 		"message": "ok",
 		"data": gin.H{
-			"object":               "token_usage",
-			"name":                 token.Name,
-			"total_granted":        token.RemainQuota + token.UsedQuota,
-			"total_used":           token.UsedQuota,
-			"total_available":      token.RemainQuota,
-			"unlimited_quota":      token.UnlimitedQuota,
-			"model_limits":         token.GetModelLimitsMap(),
-			"model_limits_enabled": token.ModelLimitsEnabled,
-			"expires_at":           expiredAt,
+			"object":                 "token_usage",
+			"name":                   token.Name,
+			"total_granted":          legacyTotalGranted,
+			"total_used":             token.UsedQuota,
+			"total_available":        token.RemainQuota,
+			"legacy_total_granted":   legacyTotalGranted,
+			"legacy_total_used":      token.UsedQuota,
+			"legacy_total_available": token.RemainQuota,
+			"unlimited_quota":        token.UnlimitedQuota,
+			"model_limits":           token.GetModelLimitsMap(),
+			"model_limits_enabled":   token.ModelLimitsEnabled,
+			"expires_at":             expiredAt,
+			"token_limit_enabled":    view.TokenLimitEnabled,
+			"token_limit":            view.TokenLimit,
+			"token_used":             view.TokenUsed,
+			"token_remaining":        view.TokenRemaining,
+			"token_unlimited":        view.TokenUnlimited,
 		},
 	})
 }
@@ -221,17 +275,14 @@ func AddToken(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
 	}
-	// 非无限额度时，检查额度值是否超出有效范围
-	if !token.UnlimitedQuota {
-		if token.RemainQuota < 0 {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
-			return
-		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
-		if token.RemainQuota > maxQuotaValue {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
-			return
-		}
+	// Legacy quota fields are kept for compatibility only; API key token cap is validated separately.
+	if token.RemainQuota < 0 {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
+		return
+	}
+	if err := normalizeTokenLimitFields(&token); err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	// 检查用户令牌数量是否已达上限
 	maxTokens := operation_setting.GetMaxUserTokens()
@@ -265,6 +316,9 @@ func AddToken(c *gin.Context) {
 		ModelLimitsEnabled: token.ModelLimitsEnabled,
 		ModelLimits:        token.ModelLimits,
 		AllowIps:           token.AllowIps,
+		TokenLimitEnabled:  token.TokenLimitEnabled,
+		TokenLimit:         token.TokenLimit,
+		TokenUsed:          0,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -274,6 +328,7 @@ func AddToken(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+		"data":    buildMaskedTokenResponse(&cleanToken),
 	})
 }
 
@@ -294,27 +349,35 @@ func DeleteToken(c *gin.Context) {
 func UpdateToken(c *gin.Context) {
 	userId := c.GetInt("id")
 	statusOnly := c.Query("status_only")
-	var req tokenPayload
-	err := c.ShouldBindJSON(&req)
-	token := req.Token
+	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	var req tokenPayload
+	err = common.Unmarshal(body, &req)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var rawPayload map[string]any
+	if err = common.Unmarshal(body, &rawPayload); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token := req.Token
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
 	}
-	if !token.UnlimitedQuota {
-		if token.RemainQuota < 0 {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
-			return
-		}
-		maxQuotaValue := int((1000000000 * common.QuotaPerUnit))
-		if token.RemainQuota > maxQuotaValue {
-			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
-			return
-		}
+	// Legacy quota fields are kept for compatibility only; API key token cap is validated separately.
+	_, hasRemainQuota := rawPayload["remain_quota"]
+	_, hasUnlimitedQuota := rawPayload["unlimited_quota"]
+	_, hasTokenLimitEnabled := rawPayload["token_limit_enabled"]
+	_, hasTokenLimit := rawPayload["token_limit"]
+	if hasRemainQuota && token.RemainQuota < 0 {
+		common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
+		return
 	}
 	cleanToken, err := model.GetTokenByIds(token.Id, userId)
 	if err != nil {
@@ -322,12 +385,8 @@ func UpdateToken(c *gin.Context) {
 		return
 	}
 	if token.Status == common.TokenStatusEnabled {
-		if cleanToken.Status == common.TokenStatusExpired && cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
+		if cleanToken.ExpiredTime <= common.GetTimestamp() && cleanToken.ExpiredTime != -1 {
 			common.ApiErrorI18n(c, i18n.MsgTokenExpiredCannotEnable)
-			return
-		}
-		if cleanToken.Status == common.TokenStatusExhausted && cleanToken.RemainQuota <= 0 && !cleanToken.UnlimitedQuota {
-			common.ApiErrorI18n(c, i18n.MsgTokenExhaustedCannotEable)
 			return
 		}
 	}
@@ -337,11 +396,27 @@ func UpdateToken(c *gin.Context) {
 		// If you add more fields, please also update token.Update()
 		cleanToken.Name = token.Name
 		cleanToken.ExpiredTime = token.ExpiredTime
-		cleanToken.RemainQuota = token.RemainQuota
-		cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		if hasRemainQuota {
+			cleanToken.RemainQuota = token.RemainQuota
+		}
+		if hasUnlimitedQuota {
+			cleanToken.UnlimitedQuota = token.UnlimitedQuota
+		}
 		cleanToken.ModelLimitsEnabled = token.ModelLimitsEnabled
 		cleanToken.ModelLimits = token.ModelLimits
 		cleanToken.AllowIps = token.AllowIps
+		if hasTokenLimitEnabled {
+			cleanToken.TokenLimitEnabled = token.TokenLimitEnabled
+		}
+		if hasTokenLimit {
+			cleanToken.TokenLimit = token.TokenLimit
+		}
+		if hasTokenLimitEnabled || hasTokenLimit {
+			if err := normalizeTokenLimitFields(cleanToken); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 
 	}
 	err = cleanToken.Update()
@@ -354,6 +429,33 @@ func UpdateToken(c *gin.Context) {
 		"message": "",
 		"data":    buildMaskedTokenResponse(cleanToken),
 	})
+}
+
+func ResetTokenUsage(c *gin.Context) {
+	tokenId, err := strconv.Atoi(c.Param("id"))
+	if err != nil || tokenId <= 0 {
+		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
+		return
+	}
+	userId := c.GetInt("id")
+	before, err := model.ResetTokenUsage(tokenId, userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token, err := model.GetTokenByIds(tokenId, userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.RecordLogWithAdminInfo(userId, model.LogTypeManage, "reset token usage", map[string]interface{}{
+		"token_id":          tokenId,
+		"operator_user_id":  userId,
+		"before_token_used": before,
+		"after_token_used":  int64(0),
+		"reset_at":          common.GetTimestamp(),
+	})
+	common.ApiSuccess(c, buildMaskedTokenResponse(token))
 }
 
 type TokenBatch struct {

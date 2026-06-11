@@ -16,7 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import type { PublicPlanRecord } from '@/features/subscriptions/types'
+import {
+  formatPlanChannelEquivalent,
+  getVisibleChannelEquivalents,
+  shouldShowChannelEquivalents,
+} from '@/features/wallet/lib/subscription-display'
+
+type TranslationFn = (key: string, options?: Record<string, unknown>) => string
+
+export function getHomePublicPlansQueryKey() {
+  return subscriptionQueryKeys.homePublicPlans
+}
 
 export const HOME_PLANS_PREVIEW_LIMIT = 3
 
@@ -43,4 +55,22 @@ export function selectHomePlanRecords(
 
 export function hasMoreHomePlans(records: readonly unknown[] = []): boolean {
   return records.filter(isVisiblePlanRecord).length > HOME_PLANS_PREVIEW_LIMIT
+}
+
+export function renderHomePlanChannelEquivalentLabels(
+  record: PublicPlanRecord,
+  t: TranslationFn
+): string[] {
+  const equivalents = record.plan.channel_token_equivalents ?? []
+  if (!shouldShowChannelEquivalents(equivalents)) return []
+
+  const visible = getVisibleChannelEquivalents(equivalents, 2)
+  const labels = visible.items.map((item) =>
+    formatPlanChannelEquivalent(item, t)
+  )
+  if (visible.hiddenCount > 0) {
+    labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+  }
+
+  return labels
 }

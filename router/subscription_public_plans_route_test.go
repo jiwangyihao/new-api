@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/controller"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-contrib/sessions"
@@ -46,20 +47,21 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	require.Len(t, payload.Data, 2)
 
 	allowedPlanKeys := map[string]struct{}{
-		"id":                      {},
-		"title":                   {},
-		"subtitle":                {},
-		"price_amount":            {},
-		"currency":                {},
-		"duration_unit":           {},
-		"duration_value":          {},
-		"custom_seconds":          {},
-		"monthly_token_limit":     {},
-		"concurrency_limit":       {},
-		"queue_capacity":          {},
-		"public_visible":          {},
-		"gpt_abuse_warning_limit": {},
-		"kyren_product_id":        {},
+		"id":                        {},
+		"title":                     {},
+		"subtitle":                  {},
+		"price_amount":              {},
+		"currency":                  {},
+		"duration_unit":             {},
+		"duration_value":            {},
+		"custom_seconds":            {},
+		"monthly_token_limit":       {},
+		"concurrency_limit":         {},
+		"queue_capacity":            {},
+		"public_visible":            {},
+		"gpt_abuse_warning_limit":   {},
+		"channel_token_equivalents": {},
+		"kyren_product_id":          {},
 	}
 
 	assert.Equal(t, "Public High", payload.Data[0].Plan["title"])
@@ -84,6 +86,15 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 		title, ok := record.Plan["title"].(string)
 		require.True(t, ok)
 		assert.Equal(t, kyrenProductByTitle[title], record.Plan["kyren_product_id"])
+
+		equivalents, ok := record.Plan["channel_token_equivalents"].([]any)
+		require.True(t, ok, "public plan channel_token_equivalents must be an array")
+		require.Len(t, equivalents, 1)
+		equivalent, ok := equivalents[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "single", equivalent["kind"])
+		assert.Equal(t, float64(constant.ChannelTypeOpenAI), equivalent["channel_type"])
+		assert.Equal(t, float64(2), equivalent["multiplier"])
 	}
 
 	body := publicRecorder.Body.String()
@@ -160,7 +171,7 @@ func setupSubscriptionPublicPlansRouteTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB = db
 	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.Channel{}))
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()
@@ -182,6 +193,7 @@ func setupSubscriptionPublicPlansRouteTestDB(t *testing.T) *gorm.DB {
 func seedSubscriptionPublicPlanRouteTestPlans(t *testing.T) {
 	t.Helper()
 
+	require.NoError(t, model.DB.Create(&model.Channel{Id: 9181, Type: constant.ChannelTypeOpenAI, Key: "sk-public-plans", Status: common.ChannelStatusEnabled, Name: "public-plans-openai", Models: "gpt-test", TokenBillingMultiplier: 2}).Error)
 	createSubscriptionPublicPlanRouteTestPlan(t, model.SubscriptionPlan{
 		Id:                 9101,
 		Title:              "Public Low",

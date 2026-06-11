@@ -2,10 +2,12 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   formatConcurrencyLimit,
+  formatFiniteTokenCount,
   formatPlanPrice,
   formatQueueCapacity,
   formatTokenLimit,
 } from './format'
+import { subscriptionPlanSchema } from '../types'
 
 const t = (key: string, values?: Record<string, unknown>) =>
   key.replace(/{{(\w+)}}/g, (_match, name: string) =>
@@ -15,6 +17,39 @@ const t = (key: string, values?: Record<string, unknown>) =>
 describe('subscription distributor format helpers', () => {
   test('formats zero monthly token limit as unlimited tokens', () => {
     assert.equal(formatTokenLimit(0, t), 'Unlimited tokens')
+  })
+
+  test('formats finite zero token counts as zero tokens', () => {
+    assert.equal(formatFiniteTokenCount(0, t), '0 tokens')
+  })
+
+  test('parses discriminated channel token equivalents from plan API data', () => {
+    const plan = subscriptionPlanSchema.parse({
+      id: 1,
+      title: 'Pro',
+      price_amount: 10,
+      duration_unit: 'month',
+      duration_value: 1,
+      quota_reset_period: 'monthly',
+      enabled: true,
+      sort_order: 1,
+      max_purchase_per_user: 0,
+      total_amount: 0,
+      channel_token_equivalents: [
+        {
+          kind: 'range',
+          channel_type: 14,
+          channel_type_name: 'Claude',
+          variant_count: 2,
+          min_multiplier: 1.5,
+          max_multiplier: 2,
+          equivalent_token_limit_min: 500_000,
+          equivalent_token_limit_max: 666_666,
+        },
+      ],
+    })
+
+    assert.equal(plan.channel_token_equivalents[0]?.kind, 'range')
   })
 
   test('formats billion-scale monthly token limits compactly', () => {

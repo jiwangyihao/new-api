@@ -121,7 +121,7 @@ func NewAPIBillingFromRelayInfo(relayInfo *relaycommon.RelayInfo) dto.NewAPIBill
 }
 
 func NewAPIBillingFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) *dto.NewAPIBilling {
-	if usage == nil {
+	if usage == nil || usage.TotalTokens <= 0 {
 		return nil
 	}
 	meteredTokens := SubscriptionMeteredTokens(usage)

@@ -17,8 +17,62 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
+import type { QueryClient } from '@tanstack/react-query'
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import { CHANNEL_STATUS, MODEL_FETCHABLE_TYPES } from '../constants'
 import type { Channel } from '../types'
+import { channelsQueryKeys } from './channel-actions'
+
+const TOKEN_BILLING_MULTIPLIER_REQUIRED_MESSAGE =
+  'Channel token billing multiplier is required'
+
+export function parseTokenBillingMultiplierInput(
+  value: string,
+  valueAsNumber: number
+): number | '' {
+  if (value === '' || !Number.isFinite(valueAsNumber)) return ''
+  return valueAsNumber
+}
+
+export function invalidateChannelTokenMultiplierRelatedQueries(
+  queryClient: QueryClient
+): void {
+  void queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+  void queryClient.invalidateQueries({
+    queryKey: subscriptionQueryKeys.walletPlans,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: subscriptionQueryKeys.homePublicPlans,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: subscriptionQueryKeys.selfSummary,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: subscriptionQueryKeys.dashboardSelfSubscriptions,
+  })
+  void queryClient.invalidateQueries({
+    queryKey: subscriptionQueryKeys.adminPlans,
+  })
+}
+
+const tokenBillingMultiplierSchema = z.preprocess(
+  (value) => {
+    if (value === '') {
+      return undefined
+    }
+    const parsed = typeof value === 'string' ? Number(value) : value
+    return typeof parsed === 'number' && Number.isFinite(parsed)
+      ? parsed
+      : undefined
+  },
+  z
+    .number({ message: TOKEN_BILLING_MULTIPLIER_REQUIRED_MESSAGE })
+    .gt(0, 'Channel token billing multiplier must be greater than 0')
+    .max(
+      100,
+      'Channel token billing multiplier must be less than or equal to 100'
+    )
+)
 
 // ============================================================================
 // Form Validation Schema
@@ -36,6 +90,7 @@ export const channelFormSchema = z.object({
   weight: z.number().optional(),
   test_model: z.string().optional(),
   auto_ban: z.number().optional(),
+  token_billing_multiplier: tokenBillingMultiplierSchema,
   status: z.number(),
   status_code_mapping: z.string().optional(),
   tag: z.string().optional(),
@@ -98,6 +153,7 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   weight: 0,
   test_model: '',
   auto_ban: 1,
+  token_billing_multiplier: 1,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -237,6 +293,7 @@ export function transformChannelToFormDefaults(
     weight: channel.weight || 0,
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
+    token_billing_multiplier: channel.token_billing_multiplier ?? 1,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
@@ -330,7 +387,10 @@ function buildSettingsJSON(formData: ChannelFormValues): string {
     delete settingsObj.aws_key_type
   }
 
-  if (formData.supported_endpoint_types && formData.supported_endpoint_types.length > 0) {
+  if (
+    formData.supported_endpoint_types &&
+    formData.supported_endpoint_types.length > 0
+  ) {
     settingsObj.supported_endpoint_types = Array.from(
       new Set(
         formData.supported_endpoint_types
@@ -430,6 +490,7 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     weight: formData.weight || null,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    token_billing_multiplier: formData.token_billing_multiplier,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
@@ -477,6 +538,7 @@ export function transformFormDataToUpdatePayload(
     weight: formData.weight || null,
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
+    token_billing_multiplier: formData.token_billing_multiplier,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,

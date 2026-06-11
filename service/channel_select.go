@@ -7,12 +7,15 @@ import (
 )
 
 type RetryParam struct {
-	Ctx          *gin.Context
-	TokenGroup   string
-	ModelName    string
-	Retry        *int
-	resetNextTry bool
-	EndpointType constant.EndpointType
+	Ctx                               *gin.Context
+	TokenGroup                        string
+	ModelName                         string
+	Retry                             *int
+	resetNextTry                      bool
+	EndpointType                      constant.EndpointType
+	FrozenTokenBillingMultiplier      float64
+	UsedChannelIds                    []int
+	RequireSameTokenBillingMultiplier bool
 }
 
 func (p *RetryParam) GetRetry() int {
@@ -47,6 +50,6 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	if param == nil {
 		return nil, "", nil
 	}
-	channel, err := model.GetRandomSatisfiedChannelForEndpoint("", param.ModelName, param.GetRetry(), param.EndpointType)
+	channel, err := model.GetRandomSatisfiedChannelForEndpointWithRetryConstraints(param.TokenGroup, param.ModelName, param.GetRetry(), param.EndpointType, param.UsedChannelIds, param.FrozenTokenBillingMultiplier, param.RequireSameTokenBillingMultiplier)
 	return channel, "default", err
 }

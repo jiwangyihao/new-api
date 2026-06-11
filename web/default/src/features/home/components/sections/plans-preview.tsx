@@ -32,14 +32,16 @@ import {
 } from '@/features/subscriptions/lib'
 import type { PublicPlanRecord } from '@/features/subscriptions/types'
 import {
+  getHomePublicPlansQueryKey,
   hasMoreHomePlans,
+  renderHomePlanChannelEquivalentLabels,
   selectHomePlanRecords,
 } from '../../lib/plans-preview'
 
 export function PlansPreview() {
   const { t } = useTranslation()
   const plansQuery = useQuery({
-    queryKey: ['home', 'subscription-public-plans'],
+    queryKey: getHomePublicPlansQueryKey(),
     queryFn: getHomePublicPlansQuiet,
     staleTime: 60_000,
   })
@@ -108,6 +110,10 @@ function PlanCard(props: { record: PublicPlanRecord }) {
   const { t } = useTranslation()
   const plan = props.record.plan
 
+  const channelEquivalentLabels = renderHomePlanChannelEquivalentLabels(
+    props.record,
+    t
+  )
   return (
     <Card className='h-full transition-shadow hover:shadow-md'>
       <CardContent className='flex h-full flex-col p-5'>
@@ -135,6 +141,14 @@ function PlanCard(props: { record: PublicPlanRecord }) {
             label={t('Monthly Token Limit')}
             value={formatTokenLimit(plan.monthly_token_limit, t)}
           />
+          {channelEquivalentLabels.length > 0 && (
+            <div className='text-muted-foreground ml-5 space-y-1 text-xs'>
+              <div>{t('Equivalent by channel')}:</div>
+              {channelEquivalentLabels.map((label) => (
+                <div key={label}>{label}</div>
+              ))}
+            </div>
+          )}
           <PlanMetric
             label={t('Concurrency Limit')}
             value={formatConcurrencyLimit(plan.concurrency_limit, t)}

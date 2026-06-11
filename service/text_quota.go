@@ -354,7 +354,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 	originUsage := usage
 	usageEstimated := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
 	rawMeteredTokens := SubscriptionMeteredTokens(usage)
-	usageUnavailable := usage == nil || usageEstimated || rawMeteredTokens <= 0
+	usageUnavailable := usage == nil || usageEstimated || usage.TotalTokens <= 0 || rawMeteredTokens <= 0
 	if usageUnavailable {
 		extraContent = append(extraContent, "上游无计费信息")
 	}

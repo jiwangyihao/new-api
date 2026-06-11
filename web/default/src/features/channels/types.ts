@@ -52,6 +52,7 @@ export const channelSchema = z.object({
   balance_updated_time: z.number(),
   models: z.string().default(''),
   used_quota: z.number().default(0),
+  token_billing_multiplier: z.number().default(1),
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
@@ -306,6 +307,7 @@ export interface ChannelFormData {
   test_model?: string
   auto_ban?: number
   status: number
+  token_billing_multiplier: number
   status_code_mapping?: string
   tag?: string
   remark?: string

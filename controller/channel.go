@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
@@ -432,14 +433,18 @@ func validateTwoFactorAuth(twoFA *model.TwoFA, code string) bool {
 
 // validateChannel 通用的渠道校验函数
 func validateChannel(channel *model.Channel, isAdd bool) error {
+	if channel == nil {
+		return fmt.Errorf("channel cannot be empty")
+	}
+
 	// 校验 channel settings
 	if err := channel.ValidateSettings(); err != nil {
 		return fmt.Errorf("渠道额外设置[channel setting] 格式错误：%s", err.Error())
 	}
 
-	// 如果是添加操作，检查 channel 和 key 是否为空
+	// 如果是添加操作，检查 key 是否为空
 	if isAdd {
-		if channel == nil || channel.Key == "" {
+		if channel.Key == "" {
 			return fmt.Errorf("channel cannot be empty")
 		}
 
@@ -529,6 +534,29 @@ type AddChannelRequest struct {
 	Channel                   *model.Channel        `json:"channel"`
 }
 
+type addChannelRawRequest struct {
+	Channel *struct {
+		TokenBillingMultiplier json.RawMessage `json:"token_billing_multiplier"`
+	} `json:"channel"`
+}
+
+type patchChannelRawRequest struct {
+	TokenBillingMultiplier json.RawMessage `json:"token_billing_multiplier"`
+}
+
+func parseChannelTokenBillingMultiplier(raw json.RawMessage) (present bool, value float64, err error) {
+	if len(raw) == 0 {
+		return false, 0, nil
+	}
+	if common.GetJsonType(raw) != "number" {
+		return true, 0, fmt.Errorf("渠道扣费倍率必须是数字")
+	}
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return true, 0, err
+	}
+	return true, value, tokenbilling.ValidateMultiplier(value)
+}
+
 func getVertexArrayKeys(keys string) ([]string, error) {
 	if keys == "" {
 		return nil, nil
@@ -568,10 +596,32 @@ func refreshChannelDerivedCaches() {
 
 func AddChannel(c *gin.Context) {
 	addChannelRequest := AddChannelRequest{}
-	err := c.ShouldBindJSON(&addChannelRequest)
-	if err != nil {
+	if err := common.UnmarshalBodyReusable(c, &addChannelRequest); err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	rawRequest := addChannelRawRequest{}
+	if err := common.UnmarshalBodyReusable(c, &rawRequest); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if rawRequest.Channel != nil {
+		present, value, err := parseChannelTokenBillingMultiplier(rawRequest.Channel.TokenBillingMultiplier)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		if present && addChannelRequest.Channel != nil {
+			addChannelRequest.Channel.TokenBillingMultiplier = value
+		}
+		if !present && addChannelRequest.Channel != nil {
+			addChannelRequest.Channel.TokenBillingMultiplier = tokenbilling.DefaultMultiplier
+		}
+	} else if addChannelRequest.Channel != nil {
+		addChannelRequest.Channel.TokenBillingMultiplier = tokenbilling.DefaultMultiplier
 	}
 
 	// 使用统一的校验函数
@@ -586,6 +636,7 @@ func AddChannel(c *gin.Context) {
 	addChannelRequest.Channel.Group = ""
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
+	var err error
 	switch addChannelRequest.Mode {
 	case "multi_to_single":
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
@@ -643,7 +694,7 @@ func AddChannel(c *gin.Context) {
 		if key == "" {
 			continue
 		}
-		localChannel := addChannelRequest.Channel
+		localChannel := *addChannelRequest.Channel
 		localChannel.Key = key
 		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
 			keyPrefix := localChannel.Key
@@ -652,7 +703,7 @@ func AddChannel(c *gin.Context) {
 			}
 			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
 		}
-		channels = append(channels, *localChannel)
+		channels = append(channels, localChannel)
 	}
 	err = model.BatchInsertChannels(channels)
 	if err != nil {
@@ -846,8 +897,12 @@ type PatchChannel struct {
 
 func UpdateChannel(c *gin.Context) {
 	channel := PatchChannel{}
-	err := c.ShouldBindJSON(&channel)
-	if err != nil {
+	if err := common.UnmarshalBodyReusable(c, &channel); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	rawRequest := patchChannelRawRequest{}
+	if err := common.UnmarshalBodyReusable(c, &rawRequest); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -868,6 +923,19 @@ func UpdateChannel(c *gin.Context) {
 			"message": err.Error(),
 		})
 		return
+	}
+	present, multiplier, err := parseChannelTokenBillingMultiplier(rawRequest.TokenBillingMultiplier)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if present {
+		channel.TokenBillingMultiplier = multiplier
+	} else {
+		channel.TokenBillingMultiplier = originChannel.TokenBillingMultiplier
 	}
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
@@ -892,7 +960,7 @@ func UpdateChannel(c *gin.Context) {
 				if strings.HasPrefix(strings.TrimSpace(originChannel.Key), "[") {
 					// JSON数组格式
 					var arr []json.RawMessage
-					if err := json.Unmarshal([]byte(strings.TrimSpace(originChannel.Key)), &arr); err == nil {
+					if err := common.Unmarshal([]byte(strings.TrimSpace(originChannel.Key)), &arr); err == nil {
 						existingKeys = make([]string, len(arr))
 						for i, v := range arr {
 							existingKeys[i] = string(v)

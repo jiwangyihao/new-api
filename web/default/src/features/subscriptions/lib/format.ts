@@ -86,6 +86,15 @@ export function formatTokenLimit(
   return `${tokens} ${t('tokens')}`
 }
 
+export function formatFiniteTokenCount(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const tokens = Number(value || 0)
+  if (!Number.isFinite(tokens) || tokens <= 0) return `0 ${t('tokens')}`
+  return formatTokenLimit(tokens, t)
+}
+
 export function formatConcurrencyLimit(
   value: number | null | undefined,
   t: TranslationFn

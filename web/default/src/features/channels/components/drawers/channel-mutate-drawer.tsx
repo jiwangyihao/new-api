@@ -24,7 +24,7 @@ import {
   useCallback,
   useRef,
 } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, type Resolver } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -128,6 +128,7 @@ import {
   CHANNEL_FORM_DEFAULT_VALUES,
   channelFormSchema,
   channelsQueryKeys,
+  invalidateChannelTokenMultiplierRelatedQueries,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
   transformFormDataToUpdatePayload,
@@ -142,6 +143,7 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  parseTokenBillingMultiplierInput,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -348,7 +350,6 @@ export function ChannelMutateDrawer({
     enabled: isEditing && Boolean(currentRow?.id),
   })
 
-
   // Fetch all available models
   const { data: allModelsData } = useQuery({
     queryKey: ['channel_models'],
@@ -389,7 +390,9 @@ export function ChannelMutateDrawer({
 
   // Form setup
   const form = useForm<ChannelFormValues>({
-    resolver: zodResolver(channelFormSchema),
+    resolver: zodResolver(
+      channelFormSchema
+    ) as unknown as Resolver<ChannelFormValues>,
     defaultValues: CHANNEL_FORM_DEFAULT_VALUES,
   })
 
@@ -451,7 +454,6 @@ export function ChannelMutateDrawer({
     () => prefillGroupsData?.data || [],
     [prefillGroupsData]
   )
-
 
   // Parse current models as array
   const currentModelsArray = useMemo(
@@ -885,7 +887,7 @@ export function ChannelMutateDrawer({
 
   // Handle successful submission
   const handleSuccess = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    invalidateChannelTokenMultiplierRelatedQueries(queryClient)
     onOpenChange(false)
     setOpen(null)
   }, [queryClient, onOpenChange, setOpen])
@@ -1199,6 +1201,41 @@ export function ChannelMutateDrawer({
                           }
                         />
                       </FormControl>
+                    </FormItem>
+                  )}
+                />
+
+                <FormField
+                  control={form.control}
+                  name='token_billing_multiplier'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>
+                        {t('Channel token billing multiplier')}
+                      </FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          step='0.01'
+                          min='0.01'
+                          max='100'
+                          {...field}
+                          onChange={(e) =>
+                            field.onChange(
+                              parseTokenBillingMultiplierInput(
+                                e.target.value,
+                                e.target.valueAsNumber
+                              )
+                            )
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t(
+                          '1 means raw token deduction; 2 means each upstream token deducts 2 subscription tokens; 0.5 means each upstream token deducts 0.5 subscription tokens.'
+                        )}
+                      </FormDescription>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -2409,7 +2446,6 @@ export function ChannelMutateDrawer({
                     </FormItem>
                   )}
                 />
-
               </div>
 
               <Collapsible
@@ -2854,13 +2890,17 @@ export function ChannelMutateDrawer({
                         name='supported_endpoint_types'
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>{t('Supported Endpoint Types')}</FormLabel>
+                            <FormLabel>
+                              {t('Supported Endpoint Types')}
+                            </FormLabel>
                             <FormControl>
                               <MultiSelect
-                                options={CHANNEL_ENDPOINT_OPTIONS.map((option) => ({
-                                  value: option.value,
-                                  label: t(option.label),
-                                }))}
+                                options={CHANNEL_ENDPOINT_OPTIONS.map(
+                                  (option) => ({
+                                    value: option.value,
+                                    label: t(option.label),
+                                  })
+                                )}
                                 selected={field.value || []}
                                 onChange={field.onChange}
                                 placeholder={t('Use channel type defaults')}

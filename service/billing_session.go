@@ -633,9 +633,6 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
 		distributorConsumeRaw := int64(relayInfo.GetEstimatePromptTokens())
 		if distributorConsumeRaw <= 0 {
-			distributorConsumeRaw = int64(preConsumedQuota)
-		}
-		if distributorConsumeRaw <= 0 {
 			distributorConsumeRaw = 1
 		}
 		distributorConsume, err := tokenbilling.ApplyMultiplier(distributorConsumeRaw, relayInfo.FrozenChannelTokenBillingMultiplier())

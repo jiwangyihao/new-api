@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
@@ -203,6 +204,48 @@ func getCachedChannelIDsForEndpoint(model string, endpointType constant.Endpoint
 	return filtered, nil
 }
 
+func channelIDSet(ids []int) map[int]struct{} {
+	if len(ids) == 0 {
+		return nil
+	}
+	set := make(map[int]struct{}, len(ids))
+	for _, id := range ids {
+		if id > 0 {
+			set[id] = struct{}{}
+		}
+	}
+	return set
+}
+
+func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) []int {
+	if len(channels) == 0 {
+		return channels
+	}
+	used := channelIDSet(usedChannelIDs)
+	filtered := make([]int, 0, len(channels))
+	for _, channelID := range channels {
+		if _, ok := used[channelID]; ok {
+			continue
+		}
+		channel, ok := channelsIDM[channelID]
+		if !ok {
+			continue
+		}
+		if requireSameMultiplier && !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
+			continue
+		}
+		filtered = append(filtered, channelID)
+	}
+	return filtered
+}
+
+func retryIndexAfterRetryConstraints(retry int, usedChannelIDs []int, requireSameMultiplier bool) int {
+	if len(usedChannelIDs) > 0 || requireSameMultiplier {
+		return 0
+	}
+	return retry
+}
+
 func selectCachedChannelByPriority(channels []int, retry int, model string) (*Channel, error) {
 	if len(channels) == 0 {
 		return nil, nil
@@ -261,6 +304,31 @@ func selectCachedChannelByPriority(channels []int, retry int, model string) (*Ch
 		}
 	}
 	return nil, errors.New("channel not found")
+}
+
+func GetRandomSatisfiedChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) (*Channel, error) {
+	if !common.MemoryCacheEnabled {
+		return GetChannelForEndpointWithRetryConstraints(group, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
+	}
+	channelSyncLock.RLock()
+	defer channelSyncLock.RUnlock()
+	var channels []int
+	var err error
+	if endpointType == "" {
+		channels = model2channels[model]
+		if len(channels) == 0 {
+			normalizedModel := ratio_setting.FormatMatchingModelName(model)
+			channels = model2channels[normalizedModel]
+		}
+	} else {
+		channels, err = getCachedChannelIDsForEndpoint(model, endpointType)
+		if err != nil {
+			return nil, err
+		}
+	}
+	channels = filterCachedChannelIDsByRetryConstraints(channels, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
+	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier)
+	return selectCachedChannelByPriority(channels, retry, model)
 }
 
 func GetRandomSatisfiedChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {

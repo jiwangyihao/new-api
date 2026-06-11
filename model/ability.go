@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
@@ -123,6 +124,30 @@ func GetChannel(model string, retry int) (*Channel, error) {
 	return &channel, err
 }
 
+func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) ([]Ability, error) {
+	if len(abilities) == 0 {
+		return abilities, nil
+	}
+	used := channelIDSet(usedChannelIDs)
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		if _, ok := used[ability.ChannelId]; ok {
+			continue
+		}
+		if requireSameMultiplier {
+			channel := Channel{}
+			if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil {
+				return nil, err
+			}
+			if !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
+				continue
+			}
+		}
+		filtered = append(filtered, ability)
+	}
+	return filtered, nil
+}
+
 func GetChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {
 	if endpointType == "" {
 		return GetChannel(model, retry)
@@ -140,6 +165,37 @@ func GetChannelForEndpoint(group string, model string, retry int, endpointType c
 			}
 		}
 	}
+	return selectChannelFromEndpointFilteredAbilities(abilities, retry)
+}
+
+func GetChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) (*Channel, error) {
+	var abilities []Ability
+	var err error
+	if endpointType == "" {
+		if err = DB.Where("model = ? and enabled = ?", model, true).Find(&abilities).Error; err != nil {
+			return nil, err
+		}
+		abilities = uniqueAbilitiesByChannelID(abilities)
+	} else {
+		abilities, err = getEndpointFilteredAbilities(model, endpointType)
+		if err != nil {
+			return nil, err
+		}
+		if len(abilities) == 0 {
+			normalizedModel := ratio_setting.FormatMatchingModelName(model)
+			if normalizedModel != "" && normalizedModel != model {
+				abilities, err = getEndpointFilteredAbilities(normalizedModel, endpointType)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	abilities, err = filterAbilitiesByRetryConstraints(abilities, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
+	if err != nil {
+		return nil, err
+	}
+	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier)
 	return selectChannelFromEndpointFilteredAbilities(abilities, retry)
 }
 

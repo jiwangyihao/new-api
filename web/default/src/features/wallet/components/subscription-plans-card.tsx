@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -44,7 +45,9 @@ import {
   resetSubscriptionQuota,
   setActiveSubscription,
 } from '@/features/subscriptions/api'
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
+import { formatFiniteTokenCount } from '@/features/subscriptions/lib/format'
 import {
   formatConcurrencyLimit,
   formatPlanPrice,
@@ -56,7 +59,13 @@ import type {
   SelfSubscriptionData,
   UserSubscriptionRecord,
 } from '@/features/subscriptions/types'
-import { getSubscriptionDisplayLabel } from '../lib/subscription-display'
+import {
+  formatPlanChannelEquivalent,
+  formatSubscriptionChannelEquivalent,
+  getSubscriptionDisplayLabel,
+  getVisibleChannelEquivalents,
+  shouldShowChannelEquivalents,
+} from '../lib/subscription-display'
 import type { PaymentMethod, TopupInfo } from '../types'
 
 type TranslationFn = (key: string, options?: Record<string, unknown>) => string
@@ -146,6 +155,47 @@ function formatUsedTokenCount(value: number, t: TranslationFn): string {
   return formatTokenLimit(value, t)
 }
 
+export function renderPlanChannelEquivalentLabels(
+  plan: PlanRecord['plan'],
+  t: TranslationFn,
+  limit = 3
+): string[] {
+  const equivalents = plan.channel_token_equivalents ?? []
+  if (!shouldShowChannelEquivalents(equivalents)) return []
+
+  const visible = getVisibleChannelEquivalents(equivalents, limit)
+  const labels = visible.items.map((item) =>
+    formatPlanChannelEquivalent(item, t)
+  )
+  if (visible.hiddenCount > 0) {
+    labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+  }
+
+  return labels
+}
+
+export function renderSubscriptionChannelEquivalentLabels(
+  data: Pick<SelfSubscriptionData, 'summary'> | null,
+  isCurrentActive: boolean,
+  t: TranslationFn,
+  limit = 3
+): string[] {
+  const equivalents = isCurrentActive
+    ? (data?.summary?.channel_token_equivalents ?? [])
+    : []
+  if (!shouldShowChannelEquivalents(equivalents)) return []
+
+  const visible = getVisibleChannelEquivalents(equivalents, limit)
+  const labels = visible.items.map((item) =>
+    formatSubscriptionChannelEquivalent(item, t)
+  )
+  if (visible.hiddenCount > 0) {
+    labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+  }
+
+  return labels
+}
+
 export function SubscriptionPlansCard({
   topupInfo,
   onAvailabilityChange,
@@ -154,27 +204,13 @@ export function SubscriptionPlansCard({
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
 
-  const [plans, setPlans] = useState<PlanRecord[]>([])
-  const [activeSubscriptions, setActiveSubscriptions] = useState<
-    UserSubscriptionRecord[]
-  >([])
-  const [allSubscriptions, setAllSubscriptions] = useState<
-    UserSubscriptionRecord[]
-  >([])
-  const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeSubscriptionId, setActiveSubscriptionId] = useState<
-    number | null
-  >(null)
   const [pendingActiveSubscriptionId, setPendingActiveSubscriptionId] =
     useState<number | null>(null)
   const [resetTarget, setResetTarget] = useState<UserSubscriptionRecord | null>(
     null
   )
   const [resettingQuotaId, setResettingQuotaId] = useState<number | null>(null)
-  const [selfSubscriptionData, setSelfSubscriptionData] =
-    useState<SelfSubscriptionData | null>(null)
-
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [selectedPlan, setSelectedPlan] = useState<PlanRecord | null>(null)
 
@@ -186,51 +222,42 @@ export function SubscriptionPlansCard({
     [topupInfo?.pay_methods]
   )
 
-  const fetchPlans = useCallback(async () => {
-    try {
-      const res = await getPublicPlans()
-      if (res.success) {
-        setPlans(res.data || [])
+  const plansQuery = useQuery({
+    queryKey: subscriptionQueryKeys.walletPlans,
+    queryFn: async () => {
+      try {
+        return await getPublicPlans()
+      } catch {
+        return { success: false, data: [] }
       }
-    } catch {
-      setPlans([])
-    }
-  }, [])
+    },
+  })
 
-  const fetchSelfSubscription = useCallback(async () => {
-    try {
-      const res = await getSelfSubscriptionFull()
-      if (res.success && res.data) {
-        const data = res.data
-        setSelfSubscriptionData(data)
-        setActiveSubscriptions(data.subscriptions || [])
-        setAllSubscriptions(data.all_subscriptions || [])
-        const activeId = Number(
-          data.active_subscription_id ||
-            data.summary?.active_subscription_id ||
-            data.summary?.subscription_id ||
-            0
-        )
-        setActiveSubscriptionId(activeId > 0 ? activeId : null)
-      }
-    } catch {
-      // ignore
-    }
-  }, [])
+  const selfSubscriptionQuery = useQuery({
+    queryKey: subscriptionQueryKeys.selfSummary,
+    queryFn: getSelfSubscriptionFull,
+  })
 
-  useEffect(() => {
-    const init = async () => {
-      setLoading(true)
-      await Promise.all([fetchPlans(), fetchSelfSubscription()])
-      setLoading(false)
-    }
-    init()
-  }, [fetchPlans, fetchSelfSubscription])
+  const plans = plansQuery.data?.success ? (plansQuery.data.data ?? []) : []
+  const selfSubscriptionData = selfSubscriptionQuery.data?.success
+    ? (selfSubscriptionQuery.data.data ?? null)
+    : null
+  const activeSubscriptions = selfSubscriptionData?.subscriptions ?? []
+  const allSubscriptions = selfSubscriptionData?.all_subscriptions ?? []
+  const backendActiveSubscriptionId = Number(
+    selfSubscriptionData?.active_subscription_id ||
+      selfSubscriptionData?.summary?.active_subscription_id ||
+      selfSubscriptionData?.summary?.subscription_id ||
+      0
+  )
+  const activeSubscriptionId =
+    backendActiveSubscriptionId > 0 ? backendActiveSubscriptionId : null
+  const loading = plansQuery.isLoading || selfSubscriptionQuery.isLoading
 
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
-      await fetchSelfSubscription()
+      await selfSubscriptionQuery.refetch()
     } finally {
       setRefreshing(false)
     }
@@ -243,12 +270,8 @@ export function SubscriptionPlansCard({
         subscription_id: subscriptionId,
       })
       if (res.success) {
-        const activeId = Number(
-          res.data?.active_subscription_id || subscriptionId
-        )
-        setActiveSubscriptionId(activeId)
         toast.success(t('Active subscription updated'))
-        await fetchSelfSubscription()
+        await selfSubscriptionQuery.refetch()
         return
       }
       toast.error(res.message || t('Request failed'))
@@ -266,9 +289,8 @@ export function SubscriptionPlansCard({
     try {
       const res = await resetSubscriptionQuota(subscriptionId)
       if (res.success) {
-        toast.success(t('Quota reset successfully'))
+        await selfSubscriptionQuery.refetch()
         setResetTarget(null)
-        await fetchSelfSubscription()
         return
       }
       toast.error(res.message || t('Request failed'))
@@ -354,7 +376,6 @@ export function SubscriptionPlansCard({
         icon={<Crown className='h-4 w-4' />}
         contentClassName='space-y-4 sm:space-y-5'
       >
-        {/* My subscriptions */}
         <div className='rounded-xl border p-3 sm:p-4'>
           <div className='flex flex-wrap items-center justify-between gap-2.5 sm:gap-3'>
             <div className='flex min-w-0 flex-wrap items-center gap-2'>
@@ -445,6 +466,12 @@ export function SubscriptionPlansCard({
                   const isSettingActive =
                     pendingActiveSubscriptionId === subscriptionId
                   const isResetting = resettingQuotaId === subscriptionId
+                  const remainingEquivalentLabels =
+                    renderSubscriptionChannelEquivalentLabels(
+                      selfSubscriptionData,
+                      isActive && isSelected,
+                      t
+                    )
 
                   return (
                     <div
@@ -544,7 +571,7 @@ export function SubscriptionPlansCard({
                               {formatUsedTokenCount(tokenUsed, t)}/
                               {formatTokenLimit(tokenLimit, t)} ·{' '}
                               {t('Remaining')}{' '}
-                              {formatTokenLimit(remainTokens, t)}
+                              {formatFiniteTokenCount(remainTokens, t)}
                             </TooltipTrigger>
                             <TooltipContent>
                               {t('Raw Tokens')}: {tokenUsed}/{tokenLimit} ·{' '}
@@ -560,6 +587,19 @@ export function SubscriptionPlansCard({
                           </span>
                         )}
                       </div>
+                      {remainingEquivalentLabels.length > 0 && (
+                        <div className='text-muted-foreground mt-1 space-y-1 pl-3'>
+                          <div>{t('Equivalent by channel')}:</div>
+                          {remainingEquivalentLabels.map((label) => (
+                            <div key={label}>{label}</div>
+                          ))}
+                          <div>
+                            {t(
+                              'Estimated by current channel multiplier. Actual deduction depends on the channel used.'
+                            )}
+                          </div>
+                        </div>
+                      )}
                       <div className='text-muted-foreground mt-1'>
                         {t('Concurrency Limit')}:{' '}
                         {formatConcurrencyLimit(
@@ -584,7 +624,6 @@ export function SubscriptionPlansCard({
           )}
         </div>
 
-        {/* Available plans grid */}
         {plans.length > 0 ? (
           <div className='grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4'>
             {plans.map((p, index) => {
@@ -595,6 +634,10 @@ export function SubscriptionPlansCard({
               const limit = Number(plan.max_purchase_per_user || 0)
               const count = planPurchaseCountMap.get(plan.id) || 0
               const reached = limit > 0 && count >= limit
+              const planEquivalentLabels = renderPlanChannelEquivalentLabels(
+                plan,
+                t
+              )
 
               const benefits = [
                 `${t('Validity Period')}: ${formatDuration(plan, t)}`,
@@ -657,6 +700,19 @@ export function SubscriptionPlansCard({
                           <span>{label}</span>
                         </div>
                       ))}
+                      {planEquivalentLabels.length > 0 && (
+                        <div className='text-muted-foreground space-y-1 pl-5 text-xs'>
+                          <div>{t('Equivalent by channel')}:</div>
+                          {planEquivalentLabels.map((label) => (
+                            <div key={label}>{label}</div>
+                          ))}
+                          <div>
+                            {t(
+                              'Estimated by current channel multiplier. Actual deduction depends on the channel used.'
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <Separator className='mb-3' />
@@ -701,7 +757,7 @@ export function SubscriptionPlansCard({
         onOpenChange={(open) => {
           setPurchaseOpen(open)
           if (!open) {
-            fetchSelfSubscription()
+            void selfSubscriptionQuery.refetch()
           }
         }}
         plan={selectedPlan}

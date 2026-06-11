@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,8 +140,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	// common.SetContextKey(c, constant.ContextKeyTokenCountMeta, meta)
 
+	relayInfo.FreeModel = priceData.FreeModel
 	if priceData.FreeModel {
 		logger.LogInfo(c, fmt.Sprintf("模型 %s 免费，仍执行订阅校验", relayInfo.OriginModelName))
+	}
+	if err := relayInfo.FreezeChannelTokenBillingSnapshot(c); err != nil {
+		newAPIError = types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		return
 	}
 	newAPIError = service.PreConsumeBilling(c, priceData.QuotaToPreConsume, relayInfo)
 	if newAPIError != nil {
@@ -184,10 +190,13 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	}
 
 	retryParam := &service.RetryParam{
-		Ctx:          c,
-		ModelName:    relayInfo.OriginModelName,
-		Retry:        common.GetPointer(0),
-		EndpointType: relayInfo.EndpointType(),
+		Ctx:                               c,
+		ModelName:                         relayInfo.OriginModelName,
+		Retry:                             common.GetPointer(0),
+		EndpointType:                      relayInfo.EndpointType(),
+		FrozenTokenBillingMultiplier:      relayInfo.FrozenChannelTokenBillingMultiplier(),
+		UsedChannelIds:                    usedChannelIds(c),
+		RequireSameTokenBillingMultiplier: shouldRequireSameTokenBillingMultiplier(relayInfo),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -197,10 +206,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		channel, channelErr := getChannel(c, relayInfo, retryParam)
 		if channelErr != nil {
 			logger.LogError(c, channelErr.Error())
-			newAPIError = channelErr
+			newAPIError = retryChannelSelectionErrorForResponse(relayInfo, channelErr)
 			break
 		}
 		relayInfo.InitChannelMeta(c)
+		if relayInfo.ChannelMeta != nil {
+			relayInfo.ChannelId = relayInfo.ChannelMeta.ChannelId
+			relayInfo.ChannelType = relayInfo.ChannelMeta.ChannelType
+		}
 		if mappedModel, isMapped, err := helper.ResolveMappedModelName(relayInfo.OriginModelName, common.GetContextKeyString(c, constant.ContextKeyChannelModelMapping)); err != nil {
 			newAPIError = types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 			break
@@ -373,6 +386,21 @@ func addUsedChannel(c *gin.Context, channelId int) {
 	c.Set("use_channel", useChannel)
 }
 
+func usedChannelIds(c *gin.Context) []int {
+	if c == nil {
+		return nil
+	}
+	useChannel := c.GetStringSlice("use_channel")
+	ids := make([]int, 0, len(useChannel))
+	for _, value := range useChannel {
+		id, err := strconv.Atoi(strings.TrimSpace(value))
+		if err == nil && id > 0 {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	if request == nil {
 		return &types.TokenCountMeta{}
@@ -402,6 +430,13 @@ func fastTokenCountMetaForPricing(request dto.Request) *types.TokenCountMeta {
 	return meta
 }
 
+func shouldRequireSameTokenBillingMultiplier(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.RelayFormat == types.RelayFormatTask {
+		return false
+	}
+	return info.ChannelTokenBillingMultiplier > 0 && info.BillingSource == service.BillingSourceSubscription && info.SubscriptionDistributorTokenBilling
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
@@ -416,6 +451,9 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 			AutoBan: &autoBanInt,
 		}, nil
 	}
+	retryParam.FrozenTokenBillingMultiplier = info.FrozenChannelTokenBillingMultiplier()
+	retryParam.UsedChannelIds = usedChannelIds(c)
+	retryParam.RequireSameTokenBillingMultiplier = shouldRequireSameTokenBillingMultiplier(info)
 	channel, _, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.QuotaMultiplierInfo = helper.HandleQuotaMultiplier(c, info)
@@ -432,6 +470,13 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+func retryChannelSelectionErrorForResponse(info *relaycommon.RelayInfo, channelErr *types.NewAPIError) *types.NewAPIError {
+	if info != nil && shouldRequireSameTokenBillingMultiplier(info) && info.LastError != nil && channelErr != nil && channelErr.GetErrorCode() == types.ErrorCodeGetChannelFailed {
+		return info.LastError
+	}
+	return channelErr
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {

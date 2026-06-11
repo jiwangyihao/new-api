@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -87,17 +88,21 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 	if relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription {
 		return errors.New("active subscription is required for realtime billing")
 	}
-	tokens := usage.TotalTokens
-	if tokens <= 0 {
-		tokens = usage.InputTokens + usage.OutputTokens
+	rawTokens := usage.TotalTokens
+	if rawTokens <= 0 {
+		rawTokens = usage.InputTokens + usage.OutputTokens
 	}
-	if tokens <= 0 {
+	if rawTokens <= 0 {
 		return nil
+	}
+	billableTokens, err := tokenbilling.ApplyMultiplier(int64(rawTokens), relayInfo.FrozenChannelTokenBillingMultiplier())
+	if err != nil {
+		return err
 	}
 	var sequence int64
 	if relayInfo.TokenLimit != nil {
 		var apiErr *types.NewAPIError
-		sequence, apiErr = relayInfo.TokenLimit.ConsumeIncrement(int64(tokens))
+		sequence, apiErr = relayInfo.TokenLimit.ConsumeIncrement(billableTokens)
 		if apiErr != nil {
 			return apiErr
 		}
@@ -109,13 +114,17 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		}
 		return errors.New("subscription billing session is missing for realtime billing")
 	}
-	if err := session.SettleSubscriptionIncrement(int64(tokens)); err != nil {
+	if err := session.SettleSubscriptionIncrement(billableTokens); err != nil {
 		if relayInfo.TokenLimit != nil && sequence > 0 {
 			relayInfo.TokenLimit.RefundIncrement(sequence, "subscription_increment_failed")
 		}
 		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
-	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", tokens))
+	relayInfo.RawMeteredTokens += int64(rawTokens)
+	relayInfo.ChannelBillableTokens += billableTokens
+	relayInfo.ApiKeyBillableTokens += billableTokens
+	relayInfo.SubscriptionBillableTokens += billableTokens
+	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", billableTokens))
 	return nil
 }
 
@@ -189,14 +198,18 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	subscriptionTokens := int64(totalTokens)
+	skipDefaultApiKeyTokens := false
+	subscriptionTokens := int64(0)
 	if session, ok := relayInfo.Billing.(*BillingSession); ok && relayInfo.BillingSource == BillingSourceSubscription {
+		skipDefaultApiKeyTokens = true
 		subscriptionTokens = session.RealtimeSubscriptionTokens()
 		if subscriptionTokens > 0 {
 			subscriptionTokens -= relayInfo.SubscriptionPostDelta
 		}
+	} else if totalTokens > 0 {
+		subscriptionTokens = int64(totalTokens)
 	}
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens, ApiKeyTokens: subscriptionTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false)})
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), SubscriptionTokensCodexProAdjusted: true, SkipDefaultApiKeyTokens: skipDefaultApiKeyTokens})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

@@ -28,6 +28,10 @@ func openAIResponseStatusCompleted(status []byte) bool {
 	return strings.EqualFold(strings.TrimSpace(common.JsonRawMessageToString(status)), "completed")
 }
 
+func openAIResponsesCompletedWithUsage(resp *dto.OpenAIResponsesResponse) bool {
+	return resp != nil && resp.Usage != nil && openAIResponseStatusCompleted(resp.Status)
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 	// read response body
@@ -63,7 +67,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	// 写入新的 response body
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	// compute usage
 	usage := dto.Usage{}
@@ -77,7 +81,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if responsesResponse.Usage != nil && info != nil && openAIResponseStatusCompleted(responsesResponse.Status) {
+	if writeOK && openAIResponsesCompletedWithUsage(&responsesResponse) && info != nil {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
@@ -105,7 +109,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	defer service.CloseResponseBodyGracefully(resp)
 
 	var usage = &dto.Usage{}
-	completed := false
+	completedWithUsage := false
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
@@ -131,7 +135,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				service.RecordGPTAbuseSignal(c, info, signal)
 			}
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+			sr.Stop(err)
+			return
+		}
 		if streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" || streamResponse.Type == "response.incomplete" || streamResponse.Type == "response.cancelled" || streamResponse.Type == "response.canceled" {
 			streamErr := fmt.Errorf("responses stream terminal error: %s", streamResponse.Type)
 			if streamResponse.Response != nil {
@@ -144,10 +151,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		switch streamResponse.Type {
 		case "response.completed":
-			completed = true
-			if info != nil && info.StreamStatus != nil {
-				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
-			}
+			completedWithUsage = openAIResponsesCompletedWithUsage(streamResponse.Response)
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
 					if streamResponse.Response.Usage.InputTokens != 0 {
@@ -187,7 +191,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
-	if completed && info != nil && info.StreamStatus != nil && info.StreamStatus.EndReason == relaycommon.StreamEndReasonDone && !info.StreamStatus.HasErrors() {
+	if completedWithUsage && info != nil && info.StreamStatus != nil && info.StreamStatus.Completed && info.StreamStatus.DrainedToEOF && !info.StreamStatus.HasErrors() {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}

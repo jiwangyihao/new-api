@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -55,6 +58,60 @@ func newCodexProTrailerResponseForOpenAITest(body string, trailerAck string) *ht
 	}
 	return resp
 }
+
+type failingReadCloserForOpenAITest struct{}
+
+func (failingReadCloserForOpenAITest) Read([]byte) (int, error) {
+	return 0, errors.New("upstream stream failed")
+}
+
+func (failingReadCloserForOpenAITest) Close() error { return nil }
+
+type errAfterDoneReadCloserForOpenAITest struct {
+	reader *strings.Reader
+}
+
+func (b *errAfterDoneReadCloserForOpenAITest) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if err == io.EOF {
+		return 0, errors.New("upstream stream failed after done")
+	}
+	return n, err
+}
+
+type delayEOFReadCloserForOpenAITest struct {
+	reader *strings.Reader
+	delay  time.Duration
+}
+
+func (b *delayEOFReadCloserForOpenAITest) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if err == io.EOF && b.delay > 0 {
+		time.Sleep(b.delay)
+	}
+	return n, err
+}
+
+func (b *delayEOFReadCloserForOpenAITest) Close() error     { return nil }
+func (b *errAfterDoneReadCloserForOpenAITest) Close() error { return nil }
+
+type failingStreamResponseWriterForOpenAITest struct {
+	flushableRecorder
+}
+
+func (w failingStreamResponseWriterForOpenAITest) Write([]byte) (int, error) {
+	return 0, errors.New("downstream stream closed")
+}
+
+func (w failingStreamResponseWriterForOpenAITest) WriteString(string) (int, error) {
+	return 0, errors.New("downstream stream closed")
+}
+
+type failingFlushResponseWriterForOpenAITest struct {
+	flushableRecorder
+}
+
+func (w failingFlushResponseWriterForOpenAITest) Flush() {}
 
 func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing.T) {
 	t.Parallel()
@@ -226,6 +283,25 @@ func TestOaiResponsesCompactionHandlerCodexProServedAckRequiresTrailerAndSuccess
 	}
 }
 
+func TestOpenAIAdaptorResponsesCompactCodexProServedAckUsesRelayInfo(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, RelayMode: relayconstant.RelayModeResponsesCompact}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := newCodexProTrailerResponseForOpenAITest(`{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}`, "codex-pro")
+
+	usage, apiErr := (&Adaptor{}).DoResponse(c, resp, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.True(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
+	assert.True(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+}
+
 func TestOaiResponsesStreamHandlerCodexProServedAckFinalOnlyAfterCompletedNormalEnd(t *testing.T) {
 	t.Parallel()
 
@@ -239,16 +315,35 @@ func TestOaiResponsesStreamHandlerCodexProServedAckFinalOnlyAfterCompletedNormal
 		wantCandidate bool
 		wantFinal     bool
 	}{
-		{name: "completed", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), wantCandidate: true, wantFinal: true},
-		{name: "ordinary_header_ack_ignored", requestMarker: true, headerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "completed", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), wantCandidate: true, wantFinal: true},
+		{name: "completed_incomplete_status_does_not_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"status":"incomplete","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "completed_without_usage_does_not_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"status":"completed","output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "ordinary_header_ack_ignored", requestMarker: true, headerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
 		{name: "missing_completed", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.output_text.delta","delta":"hello"}`, ""}, "\n")},
 		{name: "upstream_failed_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, "data: [DONE]", ""}, "\n")},
 		{name: "upstream_incomplete_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`, "data: [DONE]", ""}, "\n")},
 		{name: "upstream_cancelled_event", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.cancelled","response":{"id":"resp_cancelled","status":"cancelled","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}`, "data: [DONE]", ""}, "\n")},
-		{name: "failed_then_completed_does_not_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, `data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
-		{name: "request_cancelled", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), cancelBefore: true},
-		{name: "wrong_trailer_ack", requestMarker: true, trailerAck: "pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
-		{name: "trailer_ack_without_request_marker", trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "failed_then_completed_does_not_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`, `data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n")},
+		{name: "request_cancelled", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`, "data: [DONE]", ""}, "\n"), cancelBefore: true},
+		{
+			name:          "wrong_trailer_ack",
+			requestMarker: true,
+			trailerAck:    "pro",
+			body: strings.Join([]string{
+				`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+				"data: [DONE]",
+				"",
+			}, "\n"),
+		},
+		{
+			name:       "trailer_ack_without_request_marker",
+			trailerAck: "codex-pro",
+			body: strings.Join([]string{
+				`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+				"data: [DONE]",
+				"",
+			}, "\n"),
+		},
 		{name: "parse_failure_ignores_trailer_ack", requestMarker: true, trailerAck: "codex-pro", body: strings.Join([]string{`data: {not-json`, "data: [DONE]", ""}, "\n")},
 	} {
 		tc := tc
@@ -278,6 +373,114 @@ func TestOaiResponsesStreamHandlerCodexProServedAckFinalOnlyAfterCompletedNormal
 			require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
 		})
 	}
+}
+
+func TestOaiResponsesStreamHandlerCodexProAckRequiresSuccessfulDownstreamWrite(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(failingStreamResponseWriterForOpenAITest{flushableRecorder: flushableRecorder{ResponseRecorder: httptest.NewRecorder()}})
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := newCodexProTrailerResponseForOpenAITest(strings.Join([]string{
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n"), "codex-pro")
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
+}
+
+func TestOaiResponsesStreamHandlerCodexProAckRequiresSuccessfulStreamRead(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Trailer:    http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}},
+		Body:       failingReadCloserForOpenAITest{},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
+}
+
+func TestOaiResponsesStreamHandlerCodexProAckRequiresEOFDrainAfterDone(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	body := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Trailer:    http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}},
+		Body:       &errAfterDoneReadCloserForOpenAITest{reader: strings.NewReader(body)},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
+	assert.True(t, info.StreamStatus.HasErrors())
+}
+
+func TestOaiResponsesStreamHandlerCodexProAckRequiresNoTimeoutAfterDone(t *testing.T) {
+	// Not parallel: modifies global constant.StreamingTimeout.
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 1
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	gin.SetMode(gin.TestMode)
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	body := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{},
+		Trailer:    http.Header{"X-NewAPI-Pro-Served": []string{"codex-pro"}},
+		Body: &delayEOFReadCloserForOpenAITest{
+			reader: strings.NewReader(body),
+			delay:  2 * time.Second,
+		},
+	}
+
+	_, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
+	assert.True(t, info.StreamStatus.HasErrors())
 }
 
 func markCodexProRequestSentForOpenAITest(t *testing.T, info *relaycommon.RelayInfo, enabled bool) {

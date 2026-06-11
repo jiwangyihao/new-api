@@ -200,6 +200,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				logger.LogError(c, fmt.Sprintf("data handler goroutine panic: %v", r))
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPanic, fmt.Errorf("handler panic: %v", r))
 			}
+			cancel()
 			common.SafeSendBool(stopChan, true)
 		}()
 		sr := newStreamResult(info.StreamStatus)
@@ -224,6 +225,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				logger.LogError(c, fmt.Sprintf("scanner goroutine panic: %v", r))
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonPanic, fmt.Errorf("scanner panic: %v", r))
 			}
+			cancel()
 			common.SafeSendBool(stopChan, true)
 			if common.DebugEnabled {
 				println("scanner goroutine exited")
@@ -277,7 +279,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				}
 			} else {
 				writeMutex.Lock()
-				Done(c)
+				if err := Done(c); err != nil {
+					writeMutex.Unlock()
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+					return
+				}
 				writeMutex.Unlock()
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				sawDone = true
@@ -291,6 +297,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			if err != io.EOF {
 				logger.LogError(c, "scanner error: "+err.Error())
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonScannerErr, err)
+				return
 			}
 		}
 		info.StreamStatus.FinalizeEOF()
@@ -299,9 +306,11 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	// 主循环等待完成或超时
 	select {
 	case <-ticker.C:
-		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, nil)
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonTimeout, fmt.Errorf("stream timeout after %s", streamingTimeout))
 	case <-stopChan:
 		// EndReason already set by the goroutine that triggered stopChan
+	case <-ctx.Done():
+		// EndReason already set by the goroutine that cancelled the stream.
 	case <-c.Request.Context().Done():
 		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonClientGone, c.Request.Context().Err())
 	}

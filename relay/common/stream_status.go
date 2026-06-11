@@ -31,8 +31,10 @@ type StreamErrorEntry struct {
 type StreamStatus struct {
 	mu sync.Mutex
 
-	EndReason StreamEndReason
-	EndError  error
+	EndReason    StreamEndReason
+	EndError     error
+	Completed    bool
+	DrainedToEOF bool
 
 	Errors     []StreamErrorEntry
 	ErrorCount int
@@ -50,11 +52,24 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	defer s.mu.Unlock()
 
 	if s.EndReason != StreamEndReasonNone {
-		if s.EndReason == StreamEndReasonEOF && reason == StreamEndReasonDone {
-			s.EndReason = reason
-			s.EndError = err
+		if reason == StreamEndReasonDone {
+			s.Completed = true
+			if s.EndReason == StreamEndReasonEOF {
+				s.EndReason = reason
+				s.EndError = err
+			}
+			return
+		}
+		if err != nil && s.EndReason == StreamEndReasonDone {
+			s.recordErrorLocked(err.Error())
 		}
 		return
+	}
+	if err != nil {
+		s.recordErrorLocked(err.Error())
+	}
+	if reason == StreamEndReasonDone {
+		s.Completed = true
 	}
 	s.EndReason = reason
 	s.EndError = err
@@ -71,6 +86,7 @@ func (s *StreamStatus) FinalizeEOF() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.DrainedToEOF = true
 	if s.EndReason == StreamEndReasonNone {
 		s.EndReason = StreamEndReasonEOF
 	}
@@ -82,6 +98,13 @@ func (s *StreamStatus) RecordError(msg string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.recordErrorLocked(msg)
+}
+
+func (s *StreamStatus) recordErrorLocked(msg string) {
+	if msg == "" {
+		return
+	}
 	s.ErrorCount++
 	if len(s.Errors) < maxStreamErrorEntries {
 		s.Errors = append(s.Errors, StreamErrorEntry{

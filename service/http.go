@@ -50,9 +50,9 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 	return true
 }
 
-func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
-	if c.Writer == nil {
-		return
+func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) bool {
+	if c == nil || c.Writer == nil {
+		return false
 	}
 
 	body := io.NopCloser(bytes.NewBuffer(data))
@@ -83,6 +83,8 @@ func IOCopyBytesGracefully(c *gin.Context, src *http.Response, data []byte) {
 	_, err := io.Copy(c.Writer, body)
 	if err != nil {
 		logger.LogError(c, fmt.Sprintf("failed to copy response body: %s", err.Error()))
+		return false
 	}
 	c.Writer.Flush()
+	return true
 }

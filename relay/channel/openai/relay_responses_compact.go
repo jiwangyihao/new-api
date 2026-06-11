@@ -49,7 +49,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	service.IOCopyBytesGracefully(c, resp, responseBody)
+	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
 
 	usage := dto.Usage{}
 	if compactResp.Usage != nil {
@@ -60,7 +60,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
+	if writeOK && compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}

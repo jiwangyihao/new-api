@@ -2,10 +2,12 @@ package model
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,28 +21,32 @@ import (
 )
 
 type Log struct {
-	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
-	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
-	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
-	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content           string `json:"content"`
-	Username          string `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
-	TokenName         string `json:"token_name" gorm:"index;default:''"`
-	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota             int    `json:"quota" gorm:"default:0"`
-	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0"`
-	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0"`
-	MeteredTokens     *int   `json:"metered_tokens" gorm:"default:null"`
-	UseTime           int    `json:"use_time" gorm:"default:0"`
-	IsStream          bool   `json:"is_stream"`
-	ChannelId         int    `json:"channel" gorm:"index"`
-	ChannelName       string `json:"channel_name" gorm:"->"`
-	TokenId           int    `json:"token_id" gorm:"default:0;index"`
-	Group             string `json:"-" gorm:"index"` // legacy business group column; ignored at runtime
-	Ip                string `json:"ip" gorm:"index;default:''"`
-	RequestId         string `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
-	UpstreamRequestId string `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
-	Other             string `json:"other"`
+	Id                         int     `json:"id" gorm:"index:idx_created_at_id,priority:1;index:idx_user_id_id,priority:2"`
+	UserId                     int     `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
+	CreatedAt                  int64   `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:2;index:idx_created_at_type"`
+	Type                       int     `json:"type" gorm:"index:idx_created_at_type"`
+	Content                    string  `json:"content"`
+	Username                   string  `json:"username" gorm:"index;index:index_username_model_name,priority:2;default:''"`
+	TokenName                  string  `json:"token_name" gorm:"index;default:''"`
+	ModelName                  string  `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	Quota                      int     `json:"quota" gorm:"default:0"`
+	PromptTokens               int     `json:"prompt_tokens" gorm:"default:0"`
+	CompletionTokens           int     `json:"completion_tokens" gorm:"default:0"`
+	MeteredTokens              *int    `json:"metered_tokens" gorm:"default:null"`
+	UseTime                    int     `json:"use_time" gorm:"default:0"`
+	IsStream                   bool    `json:"is_stream"`
+	ChannelId                  int     `json:"channel" gorm:"index"`
+	ChannelName                string  `json:"channel_name" gorm:"->"`
+	TokenId                    int     `json:"token_id" gorm:"default:0;index"`
+	Group                      string  `json:"-" gorm:"index"` // legacy business group column; ignored at runtime
+	Ip                         string  `json:"ip" gorm:"index;default:''"`
+	RequestId                  string  `json:"request_id,omitempty" gorm:"type:varchar(64);index:idx_logs_request_id;default:''"`
+	UpstreamRequestId          string  `json:"upstream_request_id,omitempty" gorm:"type:varchar(128);index:idx_logs_upstream_request_id;default:''"`
+	SubscriptionID             *int    `json:"subscription_id,omitempty" gorm:"column:subscription_id;type:integer"`
+	SubscriptionTokensConsumed *int64  `json:"subscription_tokens_consumed,omitempty" gorm:"column:subscription_tokens_consumed"`
+	BillingSource              *string `json:"billing_source,omitempty" gorm:"column:billing_source;type:varchar(32)"`
+	Endpoint                   *string `json:"endpoint,omitempty" gorm:"column:endpoint;type:varchar(255)"`
+	Other                      string  `json:"other"`
 }
 
 // don't use iota, avoid change log type value
@@ -89,6 +95,12 @@ func RecordLog(userId int, logType int, content string) {
 		Content:   content,
 	}
 	err := LOG_DB.Create(log).Error
+	if err == nil {
+		if queueErr := queueLogAggregationEventsForLogs([]*Log{log}); queueErr != nil {
+			common.SysError("failed to queue log aggregation events: " + queueErr.Error())
+			requestMissingLogAggregationReplay()
+		}
+	}
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
@@ -115,6 +127,9 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo m
 	}
 	if err := LOG_DB.Create(log).Error; err != nil {
 		common.SysLog("failed to record log: " + err.Error())
+	} else if queueErr := queueLogAggregationEventsForLogs([]*Log{log}); queueErr != nil {
+		common.SysError("failed to queue log aggregation events: " + queueErr.Error())
+		requestMissingLogAggregationReplay()
 	}
 }
 
@@ -187,6 +202,12 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		Other:             otherStr,
 	}
 	err := LOG_DB.Create(log).Error
+	if err == nil {
+		if queueErr := queueLogAggregationEventsForLogs([]*Log{log}); queueErr != nil {
+			common.SysError("failed to queue log aggregation events: " + queueErr.Error())
+			requestMissingLogAggregationReplay()
+		}
+	}
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
@@ -313,6 +334,95 @@ func intFromMapValue(value interface{}) (int, bool) {
 	}
 }
 
+func intFromLogDerivedMapValue(value interface{}) (int, bool) {
+	if v, ok := intFromMapValue(value); ok {
+		return v, true
+	}
+	str, ok := value.(string)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.ParseInt(strings.TrimSpace(str), 10, 64)
+	if err == nil {
+		return int(parsed), true
+	}
+	floatParsed, err := strconv.ParseFloat(strings.TrimSpace(str), 64)
+	if err != nil {
+		return 0, false
+	}
+	return int(floatParsed), true
+}
+
+func int64FromMapValue(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		if err == nil {
+			return parsed, true
+		}
+		floatParsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return 0, false
+		}
+		return int64(floatParsed), true
+	case json.Number:
+		parsed, err := strconv.ParseInt(v.String(), 10, 64)
+		if err == nil {
+			return parsed, true
+		}
+		floatParsed, err := strconv.ParseFloat(v.String(), 64)
+		if err != nil {
+			return 0, false
+		}
+		return int64(floatParsed), true
+	default:
+		return 0, false
+	}
+}
+
+func stringFromMapValue(value interface{}) (string, bool) {
+	v, ok := value.(string)
+	return v, ok
+}
+
+func fillLogDerivedFields(log *Log) {
+	if log == nil || strings.TrimSpace(log.Other) == "" {
+		return
+	}
+	var other map[string]interface{}
+	if err := common.UnmarshalJsonStr(log.Other, &other); err != nil {
+		return
+	}
+	if log.SubscriptionID == nil {
+		if v, ok := intFromLogDerivedMapValue(other["subscription_id"]); ok && v > 0 {
+			log.SubscriptionID = &v
+		}
+	}
+	if log.SubscriptionTokensConsumed == nil {
+		if v, ok := int64FromMapValue(other["subscription_tokens_consumed"]); ok && v >= 0 {
+			log.SubscriptionTokensConsumed = &v
+		}
+	}
+	if log.BillingSource == nil {
+		if value, ok := stringFromMapValue(other["billing_source"]); ok {
+			log.BillingSource = &value
+		}
+	}
+	if log.Endpoint == nil {
+		if value, ok := stringFromMapValue(other["endpoint"]); ok {
+			log.Endpoint = &value
+		} else if value, ok := stringFromMapValue(other["request_path"]); ok {
+			log.Endpoint = &value
+		}
+	}
+}
+
 type RecordTaskBillingLogParams struct {
 	UserId    int
 	LogType   int
@@ -350,7 +460,14 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     "",
 		Other:     common.MapToJsonStr(params.Other),
 	}
+	fillLogDerivedFields(log)
 	err := LOG_DB.Create(log).Error
+	if err == nil {
+		if queueErr := queueLogAggregationEventsForLogs([]*Log{log}); queueErr != nil {
+			common.SysError("failed to queue log aggregation events: " + queueErr.Error())
+			requestMissingLogAggregationReplay()
+		}
+	}
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
 	}
@@ -622,7 +739,11 @@ func GetUserLogsWithFilter(filter LogFilter, startIdx int, num int) (logs []*Log
 	return logs, total, err
 }
 
-func SumUsedQuotaWithFilter(filter LogFilter) (stat Stat, err error) {
+func SumUsedQuotaWithFilter(filter LogFilter) (Stat, error) {
+	return SumUsedQuotaWithFilterOptions(filter, LogStatOptions{})
+}
+
+func sumUsedQuotaWithFilterDirect(filter LogFilter) (stat Stat, err error) {
 	if filter.LogType == LogTypeUnknown && filter.Status == "" {
 		filter.LogType = LogTypeConsume
 	}
@@ -652,12 +773,220 @@ func SumUsedQuotaWithFilter(filter LogFilter) (stat Stat, err error) {
 	return stat, nil
 }
 
+func RunLogDBReadSnapshot(fn func(tx *gorm.DB) error) error {
+	if LOG_DB == nil {
+		return errors.New("log database is nil")
+	}
+	switch LOG_DB.Dialector.Name() {
+	case "sqlite", "sqlite3":
+		return LOG_DB.Transaction(fn)
+	default:
+		return LOG_DB.Transaction(fn, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+}
+
+func sumUsedQuotaWithFilterAggregated(filter LogFilter) (Stat, bool, error) {
+	if !canUseLogUsageHourlyAggregation(filter) || LOG_DB == nil || !LOG_DB.Migrator().HasTable(&LogUsageHourly{}) || !LOG_DB.Migrator().HasTable(&LogAggregationEvent{}) {
+		return Stat{}, false, nil
+	}
+	normalized := normalizeLogStatFilter(filter)
+	start := normalized.StartTimestamp
+	end := normalized.EndTimestamp
+	if end == 0 {
+		end = common.GetTimestamp()
+	}
+	if end < start {
+		return Stat{}, true, nil
+	}
+	firstFullHour := ((start + 3599) / 3600) * 3600
+	lastFullHour := (end / 3600) * 3600
+	if firstFullHour >= lastFullHour {
+		stat, err := sumUsedQuotaWithFilterDirect(filter)
+		return stat, true, err
+	}
+
+	var totals logUsageStatTotals
+	var rpmTpm Stat
+	err := RunLogDBReadSnapshot(func(tx *gorm.DB) error {
+		if firstFullHour > start {
+			head, err := sumLogUsageDetailStats(tx, normalized, start, firstFullHour, false, false)
+			if err != nil {
+				return err
+			}
+			totals.add(head)
+		}
+		aggregated, err := sumLogUsageHourlyStats(tx, normalized, firstFullHour, lastFullHour)
+		if err != nil {
+			return err
+		}
+		totals.add(aggregated)
+		fallback, err := sumLogUsageDetailStats(tx, normalized, firstFullHour, lastFullHour, false, true)
+		if err != nil {
+			return err
+		}
+		totals.add(fallback)
+		tail, err := sumLogUsageDetailStats(tx, normalized, lastFullHour, end, true, false)
+		if err != nil {
+			return err
+		}
+		totals.add(tail)
+		rpmTpm, err = sumLogUsageRecentDirect(tx, filter)
+		return err
+	})
+	if err != nil {
+		return Stat{}, true, err
+	}
+
+	stat := Stat{Quota: int(totals.Quota), TotalTokens: int(totals.MeteredTokens), Rpm: rpmTpm.Rpm, Tpm: rpmTpm.Tpm}
+	return stat, true, nil
+}
+
+func normalizeLogStatFilter(filter LogFilter) LogFilter {
+	if filter.LogType == LogTypeUnknown && filter.Status == "" {
+		filter.LogType = LogTypeConsume
+	}
+	return filter
+}
+
+func canUseLogUsageHourlyAggregation(filter LogFilter) bool {
+	if filter.Username != "" || filter.TokenName != "" || filter.RequestId != "" || filter.UpstreamRequestId != "" || filter.IsStream != nil {
+		return false
+	}
+	logType := filter.LogType
+	switch filter.Status {
+	case UsageAnalyticsStatusSuccess:
+		logType = LogTypeConsume
+	case UsageAnalyticsStatusError:
+		logType = LogTypeError
+	case "":
+	default:
+		return false
+	}
+	return logType == LogTypeUnknown || logType == LogTypeConsume || logType == LogTypeError
+}
+
+type logUsageStatTotals struct {
+	Requests      int64
+	Quota         int64
+	MeteredTokens int64
+}
+
+func (totals *logUsageStatTotals) add(other logUsageStatTotals) {
+	totals.Requests += other.Requests
+	totals.Quota += other.Quota
+	totals.MeteredTokens += other.MeteredTokens
+}
+
+func sumLogUsageHourlyStats(db *gorm.DB, filter LogFilter, startBucket int64, endBucket int64) (logUsageStatTotals, error) {
+	if endBucket <= startBucket {
+		return logUsageStatTotals{}, nil
+	}
+	query := db.Table("log_usage_hourly").Select("COALESCE(SUM(request_count), 0) AS requests, COALESCE(SUM(quota_sum), 0) AS quota, COALESCE(SUM(metered_tokens_sum), 0) AS metered_tokens").
+		Where("bucket_start >= ?", startBucket).
+		Where("bucket_start < ?", endBucket)
+	query, err := applyLogUsageHourlyFilters(query, filter)
+	if err != nil {
+		return logUsageStatTotals{}, err
+	}
+	var totals logUsageStatTotals
+	if err := query.Scan(&totals).Error; err != nil {
+		common.SysError("failed to query log usage hourly stat: " + err.Error())
+		return logUsageStatTotals{}, errors.New("查询统计数据失败")
+	}
+	return totals, nil
+}
+
+func sumLogUsageDetailStats(db *gorm.DB, filter LogFilter, start int64, end int64, inclusiveEnd bool, onlyUnapplied bool) (logUsageStatTotals, error) {
+	if inclusiveEnd {
+		if end < start {
+			return logUsageStatTotals{}, nil
+		}
+	} else if end <= start {
+		return logUsageStatTotals{}, nil
+	}
+	query := db.Table("logs").Select("COUNT(*) AS requests, COALESCE(SUM(quota), 0) AS quota, " + meteredTokensExpr() + " AS metered_tokens")
+	filter.StartTimestamp = 0
+	filter.EndTimestamp = 0
+	var err error
+	query, err = applyLogFilters(query, filter, false)
+	if err != nil {
+		return logUsageStatTotals{}, err
+	}
+	query = query.Where("created_at >= ?", start)
+	if inclusiveEnd {
+		query = query.Where("created_at <= ?", end)
+	} else {
+		query = query.Where("created_at < ?", end)
+	}
+	if onlyUnapplied {
+		query = query.Where("NOT EXISTS (SELECT 1 FROM log_aggregation_events WHERE log_aggregation_events.log_id = logs.id AND log_aggregation_events.aggregate_name = ? AND log_aggregation_events.status = ?)", logAggregationNameLogUsageHourly, logAggregationEventStatusApplied)
+	}
+	var totals logUsageStatTotals
+	if err := query.Scan(&totals).Error; err != nil {
+		common.SysError("failed to query log detail stat: " + err.Error())
+		return logUsageStatTotals{}, errors.New("查询统计数据失败")
+	}
+	return totals, nil
+}
+
+func sumLogUsageRecentDirect(db *gorm.DB, filter LogFilter) (Stat, error) {
+	recentFilter := filter
+	recentFilter.StartTimestamp = time.Now().Add(-60 * time.Second).Unix()
+	recentFilter.EndTimestamp = 0
+	query := db.Table("logs").Select("COUNT(*) AS rpm, " + meteredTokensExpr() + " AS tpm")
+	var err error
+	query, err = applyLogFilters(query, recentFilter, false)
+	if err != nil {
+		return Stat{}, err
+	}
+	var stat Stat
+	if err := query.Scan(&stat).Error; err != nil {
+		common.SysError("failed to query rpm/tpm stat: " + err.Error())
+		return Stat{}, errors.New("查询统计数据失败")
+	}
+	return stat, nil
+}
+
+func applyLogUsageHourlyFilters(query *gorm.DB, filter LogFilter) (*gorm.DB, error) {
+	if filter.SelfUserId != nil {
+		query = query.Where("user_id = ?", *filter.SelfUserId)
+	} else if filter.UserId != nil {
+		query = query.Where("user_id = ?", *filter.UserId)
+	}
+	logType := filter.LogType
+	switch filter.Status {
+	case UsageAnalyticsStatusSuccess:
+		logType = LogTypeConsume
+	case UsageAnalyticsStatusError:
+		logType = LogTypeError
+	}
+	if logType == LogTypeError {
+		query = query.Where("status = ?", UsageAnalyticsStatusError)
+	} else if logType == LogTypeConsume || logType == LogTypeUnknown {
+		query = query.Where("status = ?", UsageAnalyticsStatusSuccess)
+	}
+	if filter.ModelName != "" {
+		modelNamePattern, err := sanitizeLikePattern(filter.ModelName)
+		if err != nil {
+			return nil, err
+		}
+		query = query.Where("model_name LIKE ? ESCAPE '!'", modelNamePattern)
+	}
+	if filter.Channel != 0 {
+		query = query.Where("channel_id = ?", filter.Channel)
+	}
+	if filter.TokenId != nil {
+		query = query.Where("token_id = ?", *filter.TokenId)
+	}
+	return query, nil
+}
+
 func meteredTokensExpr() string {
 	return "COALESCE(SUM(CASE WHEN metered_tokens IS NOT NULL THEN metered_tokens ELSE prompt_tokens + completion_tokens END), 0)"
 }
 
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	return SumUsedQuotaWithFilter(LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel})
+	return sumUsedQuotaWithFilterDirect(LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel})
 }
 
 func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {

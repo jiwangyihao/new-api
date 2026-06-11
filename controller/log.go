@@ -250,8 +250,9 @@ func GetLogsStat(c *gin.Context) {
 		writeLogBadRequest(c, err.Error())
 		return
 	}
+	refresh := c.Query("refresh") == "true"
 	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, Username: username, TokenName: tokenName, Channel: channel, TokenId: tokenID, IsStream: isStream, Status: status, UserId: userID}
-	stat, err := model.SumUsedQuotaWithFilter(filter)
+	stat, err := model.SumUsedQuotaWithFilterOptions(filter, model.LogStatOptions{Refresh: refresh})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -298,8 +299,9 @@ func GetLogsSelfStat(c *gin.Context) {
 			return
 		}
 	}
+	refresh := c.Query("refresh") == "true"
 	filter := model.LogFilter{LogType: logType, StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ModelName: modelName, TokenName: tokenName, Channel: channel, TokenId: tokenID, IsStream: isStream, Status: status, SelfUserId: &userId}
-	quotaNum, err := model.SumUsedQuotaWithFilter(filter)
+	quotaNum, err := model.SumUsedQuotaWithFilterOptions(filter, model.LogStatOptions{Refresh: refresh})
 	if err != nil {
 		common.ApiError(c, err)
 		return

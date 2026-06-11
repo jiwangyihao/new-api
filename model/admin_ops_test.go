@@ -1,7 +1,9 @@
 package model
 
 import (
+	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 type adminOpsModelTestDBs struct {
@@ -61,6 +64,31 @@ func setupAdminOpsModelTestDBs(t *testing.T) adminOpsModelTestDBs {
 	})
 
 	return adminOpsModelTestDBs{DB: businessDB, LogDB: logDB}
+}
+
+type adminOpsSQLCaptureLogger struct {
+	logger.Interface
+	aggregateSelects atomic.Int64
+	detailSelects    atomic.Int64
+}
+
+func (l *adminOpsSQLCaptureLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	normalized := normalizeAdminOpsSQL(sql)
+	if strings.Contains(normalized, "select") && strings.Contains(normalized, "from logs") {
+		if strings.Contains(normalized, "count(") || strings.Contains(normalized, "sum(") {
+			l.aggregateSelects.Add(1)
+		} else {
+			l.detailSelects.Add(1)
+		}
+	}
+	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+}
+
+func normalizeAdminOpsSQL(sql string) string {
+	normalized := strings.ReplaceAll(sql, "`", "")
+	normalized = strings.ReplaceAll(normalized, "\"", "")
+	return strings.ToLower(strings.Join(strings.Fields(normalized), " "))
 }
 
 func TestGetAdminOpsUserConcurrencyLimitsPrefersPlanValues(t *testing.T) {
@@ -135,4 +163,32 @@ func TestGetAdminOpsTrafficStatsCountsRequestsErrorsAndTokens(t *testing.T) {
 	assert.EqualValues(t, 3, stats.Requests)
 	assert.EqualValues(t, 1, stats.Errors)
 	assert.EqualValues(t, 29, stats.TotalTokens)
+}
+
+func TestGetAdminOpsTrafficStatsUsesSQLAggregation(t *testing.T) {
+	dbs := setupAdminOpsModelTestDBs(t)
+	now := time.Now().Unix()
+	zeroMeteredTokens := 0
+	negativeMeteredTokens := -7
+	logs := []Log{
+		{Id: 11, UserId: 7211, Username: "ops-sql-aggregation-null", CreatedAt: now - 30, Type: LogTypeConsume, ModelName: "gpt-ops", PromptTokens: 10, CompletionTokens: 5},
+		{Id: 12, UserId: 7212, Username: "ops-sql-aggregation-zero", CreatedAt: now - 25, Type: LogTypeConsume, ModelName: "gpt-ops", PromptTokens: 100, CompletionTokens: 100, MeteredTokens: &zeroMeteredTokens},
+		{Id: 13, UserId: 7213, Username: "ops-sql-aggregation-error", CreatedAt: now - 20, Type: LogTypeError, ModelName: "gpt-ops", PromptTokens: 4, CompletionTokens: 6},
+		{Id: 14, UserId: 7214, Username: "ops-sql-aggregation-negative", CreatedAt: now - 15, Type: LogTypeConsume, ModelName: "gpt-ops", PromptTokens: 100, CompletionTokens: 100, MeteredTokens: &negativeMeteredTokens},
+		{Id: 15, UserId: 7215, Username: "ops-sql-aggregation-null-negative", CreatedAt: now - 10, Type: LogTypeConsume, ModelName: "gpt-ops", PromptTokens: -8, CompletionTokens: 3},
+	}
+	for i := range logs {
+		require.NoError(t, LOG_DB.Create(&logs[i]).Error)
+	}
+	capture := &adminOpsSQLCaptureLogger{Interface: dbs.LogDB.Logger}
+	LOG_DB = dbs.LogDB.Session(&gorm.Session{Logger: capture})
+
+	stats, err := GetAdminOpsTrafficStats(now-60, now)
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(5), stats.Requests)
+	assert.Equal(t, int64(1), stats.Errors)
+	assert.Equal(t, int64(25), stats.TotalTokens)
+	assert.GreaterOrEqual(t, capture.aggregateSelects.Load(), int64(1), "traffic stats must use SQL aggregation")
+	assert.Zero(t, capture.detailSelects.Load(), "traffic stats must not load log detail rows")
 }

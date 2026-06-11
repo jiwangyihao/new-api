@@ -18,22 +18,20 @@ type adminOpsTrafficLogRow struct {
 }
 
 func GetAdminOpsTrafficStats(startTimestamp int64, endTimestamp int64) (AdminOpsTrafficStats, error) {
-	var logs []adminOpsTrafficLogRow
+	var stats AdminOpsTrafficStats
 	err := LOG_DB.Model(&Log{}).
-		Select("type", "prompt_tokens", "completion_tokens", "metered_tokens").
+		Select(`COUNT(*) AS requests,
+			COALESCE(SUM(CASE WHEN type = ? THEN 1 ELSE 0 END), 0) AS errors,
+			COALESCE(SUM(CASE
+				WHEN metered_tokens IS NOT NULL AND metered_tokens > 0 THEN metered_tokens
+				WHEN metered_tokens IS NOT NULL THEN 0
+				WHEN prompt_tokens + completion_tokens > 0 THEN prompt_tokens + completion_tokens
+				ELSE 0 END), 0) AS total_tokens`, LogTypeError).
 		Where("type IN ?", []int{LogTypeConsume, LogTypeError}).
 		Where("created_at >= ? AND created_at <= ?", startTimestamp, endTimestamp).
-		Find(&logs).Error
+		Scan(&stats).Error
 	if err != nil {
 		return AdminOpsTrafficStats{}, err
-	}
-
-	stats := AdminOpsTrafficStats{Requests: int64(len(logs))}
-	for _, log := range logs {
-		if log.Type == LogTypeError {
-			stats.Errors++
-		}
-		stats.TotalTokens += adminOpsLogTokens(log)
 	}
 	return stats, nil
 }

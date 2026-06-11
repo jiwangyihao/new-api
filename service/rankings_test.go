@@ -189,6 +189,85 @@ func TestGetRankingsSnapshotBuildsFreeUserHistoryFromSubscriptionLogs(t *testing
 	assert.Equal(t, "#1 · Token Sprinter", result.FreeUserHistory.Points[0].SeriesLabel)
 }
 
+func TestFreeUserHistoryUsesDerivedColumnsWithoutDoubleCountingOtherFallback(t *testing.T) {
+	truncate(t)
+	FlushRankingsCacheForTest()
+	require.NoError(t, model.DB.AutoMigrate(&model.QuotaData{}))
+
+	start := time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC).Unix()
+	freeCode := "derived-free"
+	plan := &model.SubscriptionPlan{Id: 10011, Title: "Derived Free", Enabled: true, PriceAmount: 0, ConcurrencyLimit: 1, IsTrial: true, BusinessCode: &freeCode}
+	require.NoError(t, model.DB.Create(plan).Error)
+	user := model.User{Id: 10012, Username: "derived-user", Status: common.UserStatusEnabled, AffCode: "aff10012"}
+	require.NoError(t, model.DB.Create(&user).Error)
+	sub := model.UserSubscription{Id: 10013, UserId: user.Id, PlanId: plan.Id, Status: "active", TokenUsed: 600, StartTime: start, EndTime: start + 48*3600, GrantReason: "trial_code"}
+	require.NoError(t, model.DB.Create(&sub).Error)
+
+	conflictingDerivedTokens := int64(100)
+	conflictingMeteredTokens := 100
+	derivedOnlyTokens := int64(200)
+	derivedOnlyMeteredTokens := 200
+	require.NoError(t, model.LOG_DB.Create(&model.Log{
+		Id:                         10014,
+		UserId:                     user.Id,
+		CreatedAt:                  start + 10*60,
+		Type:                       model.LogTypeConsume,
+		ModelName:                  "gpt-5.5",
+		MeteredTokens:              &conflictingMeteredTokens,
+		SubscriptionID:             &sub.Id,
+		SubscriptionTokensConsumed: &conflictingDerivedTokens,
+		Other: common.MapToJsonStr(map[string]interface{}{
+			"subscription_id":              sub.Id,
+			"subscription_tokens_consumed": 999,
+		}),
+	}).Error)
+	require.NoError(t, model.LOG_DB.Create(&model.Log{
+		Id:                         10015,
+		UserId:                     user.Id,
+		CreatedAt:                  start + 20*60,
+		Type:                       model.LogTypeConsume,
+		ModelName:                  "gpt-5.5",
+		MeteredTokens:              &derivedOnlyMeteredTokens,
+		SubscriptionID:             &sub.Id,
+		SubscriptionTokensConsumed: &derivedOnlyTokens,
+	}).Error)
+	seedRankingConsumeLog(t, 10016, user.Id, start+30*60, sub.Id, 300)
+
+	result, err := GetRankingsSnapshot("all")
+	require.NoError(t, err)
+	require.Len(t, result.FreeUsers, 1)
+	require.Len(t, result.FreeUserHistory.Points, 24)
+	assert.Equal(t, int64(600), result.FreeUserHistory.Points[0].Tokens)
+	assert.Equal(t, int64(600), result.FreeUserHistory.Points[0].CumulativeTokens)
+}
+
+func TestFreeUserHistoryUsesHourlyAggregateAndUnappliedFallback(t *testing.T) {
+	truncate(t)
+	FlushRankingsCacheForTest()
+	require.NoError(t, model.LOG_DB.AutoMigrate(&model.LogAggregationEvent{}, &model.FreeSubscriptionUsageHourly{}))
+
+	start := time.Date(2026, 5, 21, 12, 0, 0, 0, time.UTC).Unix()
+	freeCode := "aggregate-free"
+	plan := &model.SubscriptionPlan{Id: 10111, Title: "Aggregate Free", Enabled: true, PriceAmount: 0, ConcurrencyLimit: 1, IsTrial: true, BusinessCode: &freeCode}
+	require.NoError(t, model.DB.Create(plan).Error)
+	user := model.User{Id: 10112, Username: "aggregate-user", Status: common.UserStatusEnabled, AffCode: "aff10112"}
+	require.NoError(t, model.DB.Create(&user).Error)
+	sub := model.UserSubscription{Id: 10113, UserId: user.Id, PlanId: plan.Id, Status: "active", TokenUsed: 400, StartTime: start, EndTime: start + 48*3600, GrantReason: "trial_code"}
+	require.NoError(t, model.DB.Create(&sub).Error)
+
+	require.NoError(t, model.LOG_DB.Create(&model.FreeSubscriptionUsageHourly{SubscriptionID: sub.Id, UserID: user.Id, HourIndex: 0, Tokens: 100}).Error)
+	seedRankingConsumeLog(t, 10114, user.Id, start+10*60, sub.Id, 100)
+	require.NoError(t, model.LOG_DB.Create(&model.LogAggregationEvent{LogID: 10114, AggregateName: "free_subscription_usage_hourly", Status: "applied"}).Error)
+	seedRankingConsumeLog(t, 10115, user.Id, start+20*60, sub.Id, 50)
+
+	result, err := GetRankingsSnapshot("all")
+	require.NoError(t, err)
+	require.Len(t, result.FreeUsers, 1)
+	require.Len(t, result.FreeUserHistory.Points, 24)
+	assert.Equal(t, int64(150), result.FreeUserHistory.Points[0].Tokens)
+	assert.Equal(t, int64(150), result.FreeUserHistory.Points[0].CumulativeTokens)
+}
+
 func TestGetRankingsSnapshotFreeUserHistoryDoesNotDuplicateOverlappingSubscriptions(t *testing.T) {
 	truncate(t)
 	FlushRankingsCacheForTest()
@@ -223,6 +302,8 @@ func TestGetRankingsSnapshotFreeUserHistoryIgnoresNonPositiveAndDeletedUsers(t *
 	start := time.Date(2026, 5, 20, 9, 0, 0, 0, time.UTC).Unix()
 	freeCode := "ignore-free"
 	plan := &model.SubscriptionPlan{Id: 9986, Title: "Ignore Free", Enabled: true, PriceAmount: 0, ConcurrencyLimit: 1, IsTrial: true, BusinessCode: &freeCode}
+	rewardPlan := &model.SubscriptionPlan{Id: 9985, Title: "Reward Ignore", Enabled: true, PriceAmount: 0, ConcurrencyLimit: 1}
+	require.NoError(t, model.DB.Create(rewardPlan).Error)
 	require.NoError(t, model.DB.Create(plan).Error)
 	active := model.User{Id: 9987, Username: "active-history", Status: common.UserStatusEnabled, AffCode: "aff9987"}
 	deleted := model.User{Id: 9988, Username: "deleted-history", Status: common.UserStatusEnabled, AffCode: "aff9988"}
@@ -235,8 +316,12 @@ func TestGetRankingsSnapshotFreeUserHistoryIgnoresNonPositiveAndDeletedUsers(t *
 	require.NoError(t, deleted.Delete())
 	seedRankingConsumeLogWithMetered(t, 9991, active.Id, start+60, activeSub.Id, 1, 0, true)
 	seedRankingConsumeLogWithMetered(t, 9992, active.Id, start+120, activeSub.Id, 1, -10, true)
-	seedRankingConsumeLog(t, 9993, active.Id, start+180, activeSub.Id, 50)
-	seedRankingConsumeLog(t, 9994, deleted.Id, start+180, deletedSub.Id, 500)
+	seedRankingConsumeLogWithMetered(t, 9993, active.Id, start+150, activeSub.Id, 1, 999, false)
+	seedRankingConsumeLog(t, 9994, active.Id, start+180, activeSub.Id, 50)
+	seedRankingConsumeLog(t, 9995, deleted.Id, start+180, deletedSub.Id, 500)
+	rewardSub := model.UserSubscription{Id: 9996, UserId: active.Id, PlanId: rewardPlan.Id, Status: "active", TokenUsed: 700, StartTime: start, EndTime: start + 48*3600, GrantReason: model.SubscriptionGrantMonthlyInviteEntitlement}
+	require.NoError(t, model.DB.Create(&rewardSub).Error)
+	seedRankingConsumeLog(t, 9997, active.Id, start+240, rewardSub.Id, 700)
 
 	result, err := GetRankingsSnapshot("all")
 	require.NoError(t, err)

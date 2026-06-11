@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"gorm.io/gorm"
 )
 
 const (
@@ -377,11 +378,13 @@ func buildFreeUserHistory(users []rankedFreeUserInternal) (FreeUserHistorySeries
 		return buildFreeUserHistoryPoints(users, map[int][]int64{}), nil
 	}
 
+	subIDs := make([]int, 0, len(subs))
 	subsByID := make(map[int]model.RankingFreeUserSubscription, len(subs))
 	minStart := subs[0].StartTime
 	maxEnd := subs[0].StartTime + int64(rankingFreeUserHistoryHours*3600)
 	for _, sub := range subs {
 		subsByID[sub.ID] = sub
+		subIDs = append(subIDs, sub.ID)
 		if sub.StartTime < minStart {
 			minStart = sub.StartTime
 		}
@@ -391,25 +394,33 @@ func buildFreeUserHistory(users []rankedFreeUserInternal) (FreeUserHistorySeries
 		}
 	}
 
-	logs, err := model.GetRankingFreeUserLogCandidates(userIDs, minStart, maxEnd)
-	if err != nil {
-		return series, err
-	}
-
 	tokensByUserHour := make(map[int][]int64, len(users))
 	for _, user := range users {
 		tokensByUserHour[user.UserID] = make([]int64, rankingFreeUserHistoryHours)
 	}
+	var aggregates []model.RankingFreeUserHourlyAggregate
+	var logs []model.RankingFreeUserLogCandidate
+	if err := model.RunLogDBReadSnapshot(func(tx *gorm.DB) error {
+		var err error
+		aggregates, err = model.GetRankingFreeUserHourlyAggregatesTx(tx, subIDs)
+		if err != nil {
+			return err
+		}
+		logs, err = model.GetRankingFreeUserLogCandidatesTx(tx, userIDs, minStart, maxEnd)
+		return err
+	}); err != nil {
+		return series, err
+	}
+	for _, aggregate := range aggregates {
+		sub, ok := subsByID[aggregate.SubscriptionID]
+		if !ok || sub.UserID != aggregate.UserID || aggregate.HourIndex < 0 || aggregate.HourIndex >= rankingFreeUserHistoryHours {
+			continue
+		}
+		tokensByUserHour[aggregate.UserID][aggregate.HourIndex] += aggregate.Tokens
+	}
+
 	for _, candidate := range logs {
-		var other map[string]interface{}
-		if err := common.UnmarshalJsonStr(candidate.Other, &other); err != nil {
-			continue
-		}
-		subID, ok := intFromOtherMapValue(other["subscription_id"])
-		if !ok {
-			continue
-		}
-		consumed, ok := intFromOtherMapValue(other["subscription_tokens_consumed"])
+		subID, consumed, ok := rankingCandidateSubscriptionUsage(candidate)
 		if !ok || consumed <= 0 {
 			continue
 		}
@@ -424,7 +435,7 @@ func buildFreeUserHistory(users []rankedFreeUserInternal) (FreeUserHistorySeries
 		if hour < 0 || hour >= rankingFreeUserHistoryHours {
 			continue
 		}
-		tokensByUserHour[candidate.UserID][hour] += int64(consumed)
+		tokensByUserHour[candidate.UserID][hour] += consumed
 	}
 
 	return buildFreeUserHistoryPoints(users, tokensByUserHour), nil
@@ -455,6 +466,43 @@ func buildFreeUserHistoryPoints(users []rankedFreeUserInternal, tokensByUserHour
 	return series
 }
 
+func rankingCandidateSubscriptionUsage(candidate model.RankingFreeUserLogCandidate) (subID int, consumed int64, ok bool) {
+	if candidate.SubscriptionID != nil && candidate.SubscriptionTokensConsumed != nil {
+		return *candidate.SubscriptionID, *candidate.SubscriptionTokensConsumed, true
+	}
+	if strings.TrimSpace(candidate.Other) == "" {
+		return 0, 0, false
+	}
+	var other map[string]interface{}
+	if err := common.UnmarshalJsonStr(candidate.Other, &other); err != nil {
+		return 0, 0, false
+	}
+	parsedSubID, ok := intFromOtherMapValue(other["subscription_id"])
+	if !ok {
+		return 0, 0, false
+	}
+	parsedConsumed, ok := int64FromOtherMapValue(other["subscription_tokens_consumed"])
+	if !ok {
+		return 0, 0, false
+	}
+	return parsedSubID, parsedConsumed, true
+}
+
+func int64FromOtherMapValue(value interface{}) (int64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
 func intFromOtherMapValue(value interface{}) (int, bool) {
 	switch v := value.(type) {
 	case float64:

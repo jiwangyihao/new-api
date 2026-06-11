@@ -263,7 +263,6 @@ func migrateDB() error {
 		&Option{},
 		&Redemption{},
 		&Ability{},
-		&Log{},
 		&Midjourney{},
 		&TopUp{},
 		&QuotaData{},
@@ -298,6 +297,11 @@ func migrateDB() error {
 	)
 	if err != nil {
 		return err
+	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := migrateLogSchema(DB); err != nil {
+			return err
+		}
 	}
 	if err := ensureTopUpAmountUnitColumnSQLite(); err != nil {
 		return err
@@ -335,7 +339,6 @@ func migrateDBFast() error {
 		{&Option{}, "Option"},
 		{&Redemption{}, "Redemption"},
 		{&Ability{}, "Ability"},
-		{&Log{}, "Log"},
 		{&Midjourney{}, "Midjourney"},
 		{&TopUp{}, "TopUp"},
 		{&QuotaData{}, "QuotaData"},
@@ -391,6 +394,11 @@ func migrateDBFast() error {
 			return err
 		}
 	}
+	if os.Getenv("LOG_SQL_DSN") == "" {
+		if err := migrateLogSchema(DB); err != nil {
+			return err
+		}
+	}
 	if err := ensureTopUpAmountUnitColumnSQLite(); err != nil {
 		return err
 	}
@@ -425,11 +433,87 @@ func backfillLegacyInvitationRewardEventsAfterMigration() error {
 }
 
 func migrateLOGDB() error {
-	var err error
-	if err = LOG_DB.AutoMigrate(&Log{}); err != nil {
-		return err
+	return migrateLogSchema(LOG_DB)
+}
+
+type logManualColumnDef struct {
+	name       string
+	columnType string
+}
+
+var logManualColumns = []logManualColumnDef{
+	{name: "user_id", columnType: "integer"},
+	{name: "created_at", columnType: "bigint"},
+	{name: "type", columnType: "integer"},
+	{name: "content", columnType: "text"},
+	{name: "username", columnType: "text"},
+	{name: "token_name", columnType: "text"},
+	{name: "model_name", columnType: "text"},
+	{name: "quota", columnType: "integer"},
+	{name: "prompt_tokens", columnType: "integer"},
+	{name: "completion_tokens", columnType: "integer"},
+	{name: "metered_tokens", columnType: "integer"},
+	{name: "use_time", columnType: "integer"},
+	{name: "is_stream", columnType: "boolean"},
+	{name: "channel_id", columnType: "integer"},
+	{name: "token_id", columnType: "integer"},
+	{name: "group", columnType: "text"},
+	{name: "ip", columnType: "text"},
+	{name: "request_id", columnType: "varchar(64)"},
+	{name: "upstream_request_id", columnType: "varchar(128)"},
+	{name: "other", columnType: "text"},
+	{name: "subscription_id", columnType: "integer"},
+	{name: "subscription_tokens_consumed", columnType: "bigint"},
+	{name: "billing_source", columnType: "varchar(32)"},
+	{name: "endpoint", columnType: "varchar(255)"},
+}
+
+func migrateLogSchema(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("log database is nil")
+	}
+	if db.Migrator().HasTable(&Log{}) {
+		if err := migrateLogManualColumns(db); err != nil {
+			return err
+		}
+	} else {
+		if err := db.AutoMigrate(&Log{}); err != nil {
+			return err
+		}
+		if err := migrateLogManualColumns(db); err != nil {
+			return err
+		}
+	}
+	return db.AutoMigrate(&LogAggregationEvent{}, &FreeSubscriptionUsageHourly{}, &LogUsageHourly{})
+}
+
+func migrateLogManualColumns(db *gorm.DB) error {
+	if db == nil {
+		return fmt.Errorf("log database is nil")
+	}
+	if !db.Migrator().HasTable(&Log{}) {
+		return nil
+	}
+	for _, column := range logManualColumns {
+		if db.Migrator().HasColumn(&Log{}, column.name) {
+			continue
+		}
+		if err := db.Exec("ALTER TABLE " + quoteLogMigrationIdentifier(db, "logs") + " ADD COLUMN " + quoteLogMigrationIdentifier(db, column.name) + " " + column.columnType).Error; err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func migrateLogDerivedColumns(db *gorm.DB) error {
+	return migrateLogManualColumns(db)
+}
+
+func quoteLogMigrationIdentifier(db *gorm.DB, identifier string) string {
+	if db != nil && db.Dialector != nil && db.Dialector.Name() == "postgres" {
+		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
+	}
+	return "`" + strings.ReplaceAll(identifier, "`", "``") + "`"
 }
 
 type sqliteColumnDef struct {

@@ -4,6 +4,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+
 	"gorm.io/gorm"
 )
 
@@ -113,13 +115,32 @@ func flushConsumeLogRequests(requests []*consumeLogRequest) {
 }
 
 func insertConsumeLogDirect(log *Log) error {
-	return LOG_DB.Create(log).Error
+	fillLogDerivedFields(log)
+	if err := LOG_DB.Create(log).Error; err != nil {
+		return err
+	}
+	if err := queueLogAggregationEventsForLogs([]*Log{log}); err != nil {
+		common.SysError("failed to queue log aggregation events: " + err.Error())
+		requestMissingLogAggregationReplay()
+	}
+	return nil
 }
 
 func insertConsumeLogsDirect(logs []*Log) error {
-	return LOG_DB.Transaction(func(tx *gorm.DB) error {
+	for _, log := range logs {
+		fillLogDerivedFields(log)
+	}
+	err := LOG_DB.Transaction(func(tx *gorm.DB) error {
 		return tx.Create(&logs).Error
 	})
+	if err != nil {
+		return err
+	}
+	if err := queueLogAggregationEventsForLogs(logs); err != nil {
+		common.SysError("failed to queue log aggregation events: " + err.Error())
+		requestMissingLogAggregationReplay()
+	}
+	return nil
 }
 
 var consumeLogCoalescer = newConsumeLogCoalescer(consumeLogCoalesceDelay)

@@ -204,8 +204,9 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
-	CreatedAt int64 `json:"created_at" gorm:"bigint"`
-	UpdatedAt int64 `json:"updated_at" gorm:"bigint"`
+	CreatedAt               int64                        `json:"created_at" gorm:"bigint"`
+	UpdatedAt               int64                        `json:"updated_at" gorm:"bigint"`
+	ChannelTokenEquivalents []PlanChannelTokenEquivalent `json:"channel_token_equivalents" gorm:"-"`
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
@@ -357,8 +358,8 @@ func RestoreClaimedKyrenSubscriptionOrder(tradeNo string, leaseTime int64) error
 
 // User subscription instance
 type UserSubscription struct {
-	Id     int `json:"id"`
-	UserId int `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1"`
+	Id     int `json:"id" gorm:"index:idx_user_sub_active_order,priority:4"`
+	UserId int `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1;index:idx_user_sub_active_order,priority:1"`
 	PlanId int `json:"plan_id" gorm:"index"`
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
@@ -371,8 +372,8 @@ type UserSubscription struct {
 	GrantSourceUserId int    `json:"grant_source_user_id" gorm:"type:int;default:0;index"`
 
 	StartTime int64  `json:"start_time" gorm:"bigint"`
-	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3"`
-	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2"` // active/expired/cancelled
+	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3;index:idx_user_sub_active_order,priority:3"`
+	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2;index:idx_user_sub_active_order,priority:2"` // active/expired/cancelled
 
 	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin
 
@@ -452,24 +453,25 @@ type PublicSubscriptionSummary struct {
 }
 
 type SelfSubscriptionSummary struct {
-	ActiveSubscriptionId     int    `json:"active_subscription_id,omitempty"`
-	ActiveCount              int    `json:"active_count"`
-	SubscriptionId           int    `json:"subscription_id"`
-	PlanId                   int    `json:"plan_id"`
-	PrimaryPlanTitle         string `json:"primary_plan_title"`
-	TokenLimit               int64  `json:"token_limit"`
-	TokenUsed                int64  `json:"token_used"`
-	TokenRemaining           int64  `json:"token_remaining"`
-	TokenUnlimited           bool   `json:"token_unlimited"`
-	ConcurrencyLimit         int    `json:"concurrency_limit"`
-	QueueCapacity            int    `json:"queue_capacity"`
-	GPTAbuseWarningLimit     int    `json:"gpt_abuse_warning_limit"`
-	GPTAbuseWarningCount     int    `json:"gpt_abuse_warning_count"`
-	GPTAbuseWarningRemaining int    `json:"gpt_abuse_warning_remaining"`
-	GPTAbuseSuspendedUntil   int64  `json:"gpt_abuse_suspended_until,omitempty"`
-	GPTAbuseLimitEnabled     bool   `json:"gpt_abuse_limit_enabled"`
-	NextResetTime            int64  `json:"next_reset_time,omitempty"`
-	EndTime                  int64  `json:"end_time,omitempty"`
+	ActiveSubscriptionId     int                                  `json:"active_subscription_id,omitempty"`
+	ActiveCount              int                                  `json:"active_count"`
+	SubscriptionId           int                                  `json:"subscription_id"`
+	PlanId                   int                                  `json:"plan_id"`
+	PrimaryPlanTitle         string                               `json:"primary_plan_title"`
+	TokenLimit               int64                                `json:"token_limit"`
+	TokenUsed                int64                                `json:"token_used"`
+	TokenRemaining           int64                                `json:"token_remaining"`
+	TokenUnlimited           bool                                 `json:"token_unlimited"`
+	ConcurrencyLimit         int                                  `json:"concurrency_limit"`
+	QueueCapacity            int                                  `json:"queue_capacity"`
+	GPTAbuseWarningLimit     int                                  `json:"gpt_abuse_warning_limit"`
+	GPTAbuseWarningCount     int                                  `json:"gpt_abuse_warning_count"`
+	GPTAbuseWarningRemaining int                                  `json:"gpt_abuse_warning_remaining"`
+	GPTAbuseSuspendedUntil   int64                                `json:"gpt_abuse_suspended_until,omitempty"`
+	GPTAbuseLimitEnabled     bool                                 `json:"gpt_abuse_limit_enabled"`
+	NextResetTime            int64                                `json:"next_reset_time,omitempty"`
+	EndTime                  int64                                `json:"end_time,omitempty"`
+	ChannelTokenEquivalents  []SubscriptionChannelTokenEquivalent `json:"channel_token_equivalents" gorm:"-"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {

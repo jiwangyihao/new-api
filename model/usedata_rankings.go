@@ -31,12 +31,21 @@ type RankingFreeUserSubscription struct {
 	EndTime   int64
 }
 
+type RankingFreeUserHourlyAggregate struct {
+	SubscriptionID int
+	UserID         int
+	HourIndex      int
+	Tokens         int64
+}
+
 type RankingFreeUserLogCandidate struct {
-	ID            int
-	UserID        int
-	CreatedAt     int64
-	MeteredTokens *int
-	Other         string
+	ID                         int
+	UserID                     int
+	CreatedAt                  int64
+	MeteredTokens              *int
+	SubscriptionID             *int
+	SubscriptionTokensConsumed *int64
+	Other                      string
 }
 
 func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal, error) {
@@ -108,19 +117,47 @@ func GetRankingFreeUserSubscriptions(userIDs []int) ([]RankingFreeUserSubscripti
 	return rows, err
 }
 
+func GetRankingFreeUserHourlyAggregates(subscriptionIDs []int) ([]RankingFreeUserHourlyAggregate, error) {
+	if LOG_DB == nil {
+		return nil, nil
+	}
+	return GetRankingFreeUserHourlyAggregatesTx(LOG_DB, subscriptionIDs)
+}
+
+func GetRankingFreeUserHourlyAggregatesTx(db *gorm.DB, subscriptionIDs []int) ([]RankingFreeUserHourlyAggregate, error) {
+	if len(subscriptionIDs) == 0 || db == nil || !db.Migrator().HasTable(&FreeSubscriptionUsageHourly{}) {
+		return nil, nil
+	}
+	var rows []RankingFreeUserHourlyAggregate
+	err := db.Table("free_subscription_usage_hourly").
+		Select("subscription_id, user_id, hour_index, tokens").
+		Where("subscription_id IN ?", subscriptionIDs).
+		Where("hour_index >= ? AND hour_index < ?", 0, 24).
+		Find(&rows).Error
+	return rows, err
+}
+
 func GetRankingFreeUserLogCandidates(userIDs []int, startTime int64, endTime int64) ([]RankingFreeUserLogCandidate, error) {
-	if len(userIDs) == 0 || endTime <= startTime {
+	return GetRankingFreeUserLogCandidatesTx(LOG_DB, userIDs, startTime, endTime)
+}
+
+func GetRankingFreeUserLogCandidatesTx(db *gorm.DB, userIDs []int, startTime int64, endTime int64) ([]RankingFreeUserLogCandidate, error) {
+	if len(userIDs) == 0 || endTime <= startTime || db == nil {
 		return nil, nil
 	}
 	var rows []RankingFreeUserLogCandidate
-	err := LOG_DB.Table("logs").
-		Select("id, user_id, created_at, metered_tokens, other").
+	query := db.Table("logs").
+		Select("id, user_id, created_at, metered_tokens, subscription_id, subscription_tokens_consumed, other").
 		Where("user_id IN ?", userIDs).
 		Where("type = ?", LogTypeConsume).
 		Where("created_at >= ?", startTime).
 		Where("created_at < ?", endTime).
 		Where("metered_tokens > ?", 0).
-		Find(&rows).Error
+		Where("((subscription_id IS NOT NULL AND subscription_tokens_consumed > ?) OR ((subscription_id IS NULL OR subscription_tokens_consumed IS NULL) AND other <> ''))", 0)
+	if logAggregationEventsTableReady(db) {
+		query = query.Where("NOT EXISTS (SELECT 1 FROM log_aggregation_events WHERE log_aggregation_events.log_id = logs.id AND log_aggregation_events.aggregate_name = ? AND log_aggregation_events.status = ?)", logAggregationNameFreeSubscriptionUsageHourly, logAggregationEventStatusApplied)
+	}
+	err := query.Find(&rows).Error
 	return rows, err
 }
 

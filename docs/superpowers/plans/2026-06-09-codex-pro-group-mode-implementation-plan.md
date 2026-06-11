@@ -55,8 +55,8 @@
   - 在 Codex / Claude Code / OpenCode / OMP / Hermes Agent / OpenClaw 帮助中补充 intent Header 配置或限制说明。
 - 修改：`web/default/src/features/subscriptions/api.ts`、`web/default/src/features/subscriptions/types.ts`
   - 增加 Codex Pro API 与类型。
-- 修改：`web/default/src/features/wallet/components/subscription-plans-card.tsx` 或同目录相邻子组件
-  - 增加三态控制、无资格原因展示、保存失败回滚。
+- 修改：`web/default/src/features/dashboard/components/models/log-stat-cards.tsx` 与 `web/default/src/features/subscriptions/components/codex-pro-mode-control.tsx`
+  - 在 Dashboard 用量概览统计卡片下方增加三态控制、无资格原因展示、保存失败回滚。
 - 修改：`web/default/src/i18n/locales/{en,zh,fr,ja,ru,vi}.json`
   - 补齐前端文案翻译。
 - 新增或修改测试：
@@ -410,8 +410,8 @@ git commit -m "feat(codex-pro): 按上游确认执行订阅双倍结算"
 **文件：**
 - `web/default/src/features/subscriptions/api.ts`
 - `web/default/src/features/subscriptions/types.ts`
-- `web/default/src/features/wallet/components/subscription-plans-card.tsx`
-- 可选新建：`web/default/src/features/wallet/components/codex-pro-mode-control.tsx`
+- `web/default/src/features/dashboard/components/models/log-stat-cards.tsx`
+- `web/default/src/features/subscriptions/components/codex-pro-mode-control.tsx`
 - `web/default/src/features/keys/components/dialogs/cc-switch-dialog.tsx`
 - `web/default/src/i18n/locales/{en,zh,fr,ja,ru,vi}.json`
 - 可能修改：`controller/config_guide.go` 及其测试
@@ -448,10 +448,9 @@ api.put('/api/subscription/self/codex-pro-mode', data)
 
 `SelfSubscriptionData` 补充三项返回字段。
 
-- [ ] **步骤 3：实现订阅区域三态控制**
+- [ ] **步骤 3：实现 Dashboard 用量概览三态控制**
 
-在 `subscription-plans-card.tsx` 或同目录相邻组件中实现：
-
+在 `log-stat-cards.tsx` 的统计卡片下方挂载 `codex-pro-mode-control.tsx`：
 - 有资格：展示 `全部` / `灵活` / `关闭` 三态选择器、当前 2x 说明、弱 intent Header 说明。
 - 无资格：展示禁用态和行动导向原因，不直接显示枚举。
 - `off` 但有资格：选择器可用，可切回。
@@ -509,7 +508,7 @@ go test -p 1 ./controller -run 'ConfigGuide|OpenCode|OMP|CodexPro' -count=1
 - [ ] **步骤 8：提交任务 4**
 
 ```bash
-git add controller/config_guide.go controller/*config*test.go web/default/src/features/subscriptions/api.ts web/default/src/features/subscriptions/types.ts web/default/src/features/wallet/components/subscription-plans-card.tsx web/default/src/features/wallet/components/codex-pro-mode-control.tsx web/default/src/features/keys/components/dialogs/cc-switch-dialog.tsx web/default/src/i18n/locales/en.json web/default/src/i18n/locales/zh.json web/default/src/i18n/locales/fr.json web/default/src/i18n/locales/ja.json web/default/src/i18n/locales/ru.json web/default/src/i18n/locales/vi.json
+git add controller/config_guide.go controller/*config*test.go web/default/src/features/subscriptions/api.ts web/default/src/features/subscriptions/types.ts web/default/src/features/dashboard/components/models/log-stat-cards.tsx web/default/src/features/subscriptions/components/codex-pro-mode-control.tsx web/default/src/features/keys/components/dialogs/cc-switch-dialog.tsx web/default/src/i18n/locales/en.json web/default/src/i18n/locales/zh.json web/default/src/i18n/locales/fr.json web/default/src/i18n/locales/ja.json web/default/src/i18n/locales/ru.json web/default/src/i18n/locales/vi.json
 git commit -m "feat(codex-pro): 增加前端模式控制和配置引导"
 ```
 

@@ -321,12 +321,12 @@ PUT /api/subscription/self/codex-pro-mode
 
 ### 主入口
 
-主入口放在 `web/default/src/features/wallet/components/subscription-plans-card.tsx` 的「My Subscriptions」/ 当前订阅信息区域附近，或抽成同目录相邻子组件后由该卡片引用。不得散落到充值卡片、可购买套餐卡片或 `ProfileSettingsCard`。
+主入口放在 Dashboard 用量概览的统计卡片下方，由 `web/default/src/features/dashboard/components/models/log-stat-cards.tsx` 读取 `getSelfSubscriptionFull` 后渲染 `web/default/src/features/subscriptions/components/codex-pro-mode-control.tsx`。不得散落到充值卡片、可购买套餐卡片或 `ProfileSettingsCard`。
 
 理由：
 
-- 该区域已经读取 `getSelfSubscriptionFull` 和 active subscription。
-- `Codex Pro` 只对付费套餐用户开放，本质是订阅权益控制。
+- Dashboard 用量概览已经是用户查看当前消耗、套餐状态和请求行为的入口，模式切换放在这里更贴近「本次请求是否尝试 Pro 分组」的使用场景。
+- `LogStatCards` 已读取当前订阅信息并统一处理保存状态，复用 `CodexProModeControl` 可以避免钱包页与订阅页出现两套并行控制。
 - `ProfileSettingsCard` 主要是账号绑定、通知、排行榜，不适合作为套餐权益开关主入口。
 
 ### 展示规则
@@ -555,7 +555,7 @@ GPT 系列 gating 必须复用现有 `common.IsOpenAITextModel` 或同等单一 
 
 ## 验收标准
 
-- 用户可以在订阅 / 钱包区域设置 `Codex Pro` 模式：`全部`、`灵活`、`关闭`。
+- 用户可以在 Dashboard 用量概览统计卡片下方设置 `Codex Pro` 模式：`全部`、`灵活`、`关闭`。
 - 默认模式为 `灵活`。
 - 付费套餐用户发起 GPT 系列请求时，只有 `all` 模式，或 `flexible` 模式且下游带 `X-NewAPI-Codex-Pro-Intent: codex-pro` 时，`new-api` 才向上游发送 `X-NewAPI-Pro-Request: codex-pro`。
 - 客户端和通道配置不能伪造 `X-NewAPI-Pro-Request` 或 `X-NewAPI-Pro-Served`。

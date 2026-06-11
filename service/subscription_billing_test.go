@@ -847,6 +847,30 @@ func TestPostTextConsumeQuotaSkipsDistributorTokensForNonTextRelay(t *testing.T)
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "token key quota must be refunded when distributor subscription is rejected")
 }
 
+func TestPreConsumeBillingFreeNonTextModelOnlyRequiresActiveSubscription(t *testing.T) {
+	truncate(t)
+	const userID = 8096
+	const tokenID = 8097
+	const planID = 8098
+	const subID = 8099
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-free-embedding", 10_000)
+	seedDistributorPlan(t, planID, "plan-free-embedding", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-free-embedding", "req-free-embedding", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeEmbeddings
+	relayInfo.FreeModel = true
+	relayInfo.SetEstimatePromptTokens(6)
+
+	apiErr := PreConsumeBilling(ctx, 0, relayInfo)
+
+	require.Nil(t, apiErr)
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+}
 func TestPostAudioConsumeQuotaDoesNotConsumeDistributorSubscription(t *testing.T) {
 	truncate(t)
 	const userID = 8121
@@ -1131,6 +1155,27 @@ func TestSettleBillingWithInputCodexProServedDoublesSubscriptionTokensOnly(t *te
 	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID), "Codex Pro multiplier must not record wallet usage")
 }
 
+func TestSettleBillingWithInputUsesPreConsumeQuotaWhenEstimateMissing(t *testing.T) {
+	truncate(t)
+	const userID = 8246
+	const tokenID = 8247
+	const planID = 8248
+	const subID = 8249
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-missing-estimate-settle", 10_000)
+	seedDistributorPlan(t, planID, "plan-missing-estimate-settle", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-missing-estimate-settle", "req-missing-estimate-settle", "subscription_only")
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
+
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(2), relayInfo.SubscriptionPostDelta)
+}
+
 func TestSettleBillingWithInputCodexProUnavailableUsesSingleSubscriptionTokens(t *testing.T) {
 	truncate(t)
 	const userID = 8251
@@ -1190,6 +1235,92 @@ func TestPostTextConsumeQuotaCodexProServedDoesNotDoubleApiKeyTokenLimit(t *test
 	assert.Equal(t, int64(8), record.ActualTokens)
 }
 
+func TestPostTextConsumeQuotaFreeModelCodexProServedDoesNotConsumeSubscriptionTokens(t *testing.T) {
+	truncate(t)
+	const userID = 8265
+	const tokenID = 8266
+	const planID = 8267
+	const subID = 8268
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-free-model", 10_000)
+	seedCodexProBillingPlan(t, planID, "codex-pro-free-model", 1_000, 100, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 1_000, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(time.Hour).Unix())
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-free-model", "req-codex-pro-free-model", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.FreeModel = true
+
+	relayInfo.TieredBillingSnapshot = makeSnapshot(`tier("default", p * 100 + c * 100)`, 1, 6, 0)
+
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 0)
+	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}, nil))
+
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
+	assert.Equal(t, 0, relayInfo.FinalPreConsumedQuota)
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(0), relayInfo.SubscriptionPostDelta)
+}
+
+func TestPostTextConsumeQuotaFreeModelTokenLimitDoesNotSettleMissingPreconsume(t *testing.T) {
+	truncate(t)
+	const userID = 8281
+	const tokenID = 8282
+	const planID = 8283
+	const subID = 8284
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-free-token-limit", 10_000)
+	seedCodexProBillingPlan(t, planID, "codex-pro-free-token-limit", 1_000, 100, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 1_000, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(time.Hour).Unix())
+	require.NoError(t, model.DB.Model(&model.Token{}).Where("id = ?", tokenID).Updates(map[string]any{
+		"token_limit_enabled": true,
+		"token_limit":         int64(100),
+		"token_used":          int64(0),
+	}).Error)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-free-token-limit", "req-free-token-limit", "subscription_only")
+	relayInfo.ChannelId = 8285
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.FreeModel = true
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 0)
+	relayInfo.TokenLimit = NewTokenLimitSession(relayInfo)
+	require.Nil(t, relayInfo.TokenLimit.PreConsume(relayInfo.SubscriptionPreConsumedTokens()))
+	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}, nil))
+
+	assert.Nil(t, relayInfo.Billing)
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(0), getTokenUsed(t, tokenID))
+}
+
+func TestPostTextConsumeQuotaUsesPromptCompletionWhenTotalTokensMissing(t *testing.T) {
+	truncate(t)
+	const userID = 8286
+	const tokenID = 8287
+	const planID = 8288
+	const subID = 8289
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-missing-total", 10_000)
+	seedDistributorPlan(t, planID, "plan-missing-total", 1_000)
+	seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-missing-total", "req-missing-total", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(6)
+	preConsumeForBillingTest(t, ctx, relayInfo, 6)
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 0}, nil))
+
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
+}
+
 func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFreeRequests(t *testing.T) {
 	truncate(t)
 	const userID = 8261
@@ -1214,6 +1345,46 @@ func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFr
 	setBoolFieldForTest(t, freeRequest, "CodexProServed", true)
 	require.NoError(t, SettleBillingWithInput(ctx, freeRequest, BillingSettleInput{WalletQuota: 0, SubscriptionTokens: 8}))
 	assert.Empty(t, freeRequest.SubscriptionPostDelta)
+}
+
+func TestSettleBillingWithInputFreeModelIgnoresNonZeroSubscriptionTokens(t *testing.T) {
+	truncate(t)
+	const userID = 8271
+	const tokenID = 8272
+	const planID = 8273
+	const subID = 8274
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-free-direct-settle", 10_000)
+	seedCodexProBillingPlan(t, planID, "codex-pro-free-direct-settle", 1_000, 100, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 1_000, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(time.Hour).Unix())
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-free-direct-settle", "req-free-direct-settle", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.FreeModel = true
+	preConsumeForBillingTest(t, ctx, relayInfo, 0)
+	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
+	relayInfo.SubscriptionId = subID
+	relayInfo.SubscriptionDistributorTokenBilling = true
+	relayInfo.Billing = &BillingSession{
+		relayInfo: relayInfo,
+		funding: &SubscriptionFunding{
+			requestId:               relayInfo.RequestId,
+			userId:                  relayInfo.UserId,
+			subscriptionId:          subID,
+			DistributorTokenBilling: true,
+			preConsumed:             0,
+			distributorAmount:       0,
+			amount:                  0,
+		},
+	}
+	assert.Equal(t, int64(0), codexProAdjustedSubscriptionTokens(relayInfo, 8, 0))
+
+	err := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{SubscriptionTokens: 8, ApiKeyTokens: 0, ResponseStarted: true})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(0), relayInfo.SubscriptionPostDelta)
 }
 
 func seedCodexProBillingPlan(t *testing.T, id int, code string, tokenLimit int64, price float64, isTrial bool, inviteTrial bool) {

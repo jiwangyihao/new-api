@@ -352,7 +352,8 @@ func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens in
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
 	originUsage := usage
 	usageEstimated := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
-	usageUnavailable := usage == nil || usageEstimated
+	rawMeteredTokens := SubscriptionMeteredTokens(usage)
+	usageUnavailable := usage == nil || usageEstimated || rawMeteredTokens <= 0
 	if usageUnavailable {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
@@ -362,9 +363,9 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	apiKeyTokens := SubscriptionMeteredTokens(usage)
+	apiKeyTokens := rawMeteredTokens
 	subscriptionTokens := apiKeyTokens
-	if usageUnavailable {
+	if usageUnavailable || (relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
 		summary.PromptTokens = 0
 		summary.CompletionTokens = 0
 		summary.TotalTokens = 0

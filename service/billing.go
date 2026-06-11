@@ -22,7 +22,9 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 	if apiErr != nil {
 		return apiErr
 	}
-	relayInfo.Billing = session
+	if session != nil {
+		relayInfo.Billing = session
+	}
 	return nil
 }
 
@@ -42,6 +44,9 @@ type BillingSettleInput struct {
 func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
 	if tokens <= 0 || relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription || !relayInfo.CodexProServed {
 		return tokens
+	}
+	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
+		return 0
 	}
 	switch relayInfo.CodexProUnavailableReason {
 	case "trial_subscription", "reward_subscription":
@@ -107,7 +112,8 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		apiKeyTokens = input.SubscriptionTokens
 	}
 	auditSettle := ShouldAuditTokenLimitSettle(ctx, relayInfo, input.ResponseStarted)
-	if relayInfo.TokenLimit != nil {
+	settleTokenLimit := relayInfo.TokenLimit != nil && (apiKeyTokens > 0 || relayInfo.TokenLimit.PreConsumedTokens() > 0)
+	if settleTokenLimit {
 		if auditSettle {
 			if err := relayInfo.TokenLimit.SettleForAudit(apiKeyTokens, "api_key_token_limit_settle_failed"); err != nil {
 				return err

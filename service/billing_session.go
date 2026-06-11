@@ -606,6 +606,23 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
+		hasSubscription, err := model.HasActiveUserSubscription(relayInfo.UserId)
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+		}
+		if !hasSubscription {
+			clearRelayBillingState(relayInfo)
+			return nil, newSubscriptionBillingError("active subscription is required")
+		}
+		relayInfo.FinalPreConsumedQuota = 0
+		relayInfo.SubscriptionPreConsumed = 0
+		relayInfo.BillingSource = BillingSourceSubscription
+		relayInfo.EstimatedRawTokens = int64(relayInfo.GetEstimatePromptTokens())
+		relayInfo.CodexProEligible = false
+		relayInfo.CodexProUnavailableReason = "free_model"
+		return nil, nil
+	}
 	if !distributorSubscriptionEligibleForBilling(relayInfo) {
 		clearRelayBillingState(relayInfo)
 		return nil, types.NewOpenAIError(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())

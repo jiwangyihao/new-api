@@ -20,7 +20,13 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, KeyRound, Settings2, Gauge, type LucideIcon } from 'lucide-react'
+import {
+  ChevronDown,
+  KeyRound,
+  Settings2,
+  Gauge,
+  type LucideIcon,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels } from '@/lib/api'
@@ -41,6 +47,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
   Sheet,
   SheetClose,
@@ -57,6 +64,7 @@ import { MultiSelect } from '@/components/multi-select'
 import { createApiKey, updateApiKey, getApiKey } from '../api'
 import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
+  API_KEY_CODEX_PRO_MODE_OPTIONS,
   apiKeyFormSchema,
   type ApiKeyFormValues,
   getApiKeyFormDefaultValues,
@@ -139,7 +147,6 @@ export function ApiKeysMutateDrawer({
       form.reset(getApiKeyFormDefaultValues())
     }
   }, [open, isUpdate, currentRow, form])
-
 
   const onSubmit = async (data: ApiKeyFormValues) => {
     setIsSubmitting(true)
@@ -262,7 +269,6 @@ export function ApiKeysMutateDrawer({
                 )}
               />
 
-
               <FormField
                 control={form.control}
                 name='expired_time'
@@ -350,6 +356,55 @@ export function ApiKeysMutateDrawer({
                   )}
                 />
               )}
+            </ApiKeyFormSection>
+
+            <ApiKeyFormSection
+              title={t('API Key Codex Pro Mode')}
+              description={t(
+                'Override Codex Pro behavior for this API key without bypassing subscription eligibility.'
+              )}
+              icon={Settings2}
+            >
+              <FormField
+                control={form.control}
+                name='codex_pro_mode'
+                render={({ field }) => {
+                  const selectedOption = API_KEY_CODEX_PRO_MODE_OPTIONS.find(
+                    (option) => option.value === field.value
+                  )
+                  return (
+                    <FormItem>
+                      <FormLabel>{t('Codex Pro')}</FormLabel>
+                      <FormControl>
+                        <NativeSelect
+                          className='w-full'
+                          value={field.value}
+                          onChange={(event) =>
+                            field.onChange(event.target.value)
+                          }
+                        >
+                          {API_KEY_CODEX_PRO_MODE_OPTIONS.map((option) => (
+                            <NativeSelectOption
+                              key={option.value}
+                              value={option.value}
+                            >
+                              {t(option.labelKey)}
+                            </NativeSelectOption>
+                          ))}
+                        </NativeSelect>
+                      </FormControl>
+                      <FormDescription>
+                        {selectedOption
+                          ? t(selectedOption.descriptionKey)
+                          : t(
+                              'Use the user-level Codex Pro setting for this API key.'
+                            )}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )
+                }}
+              />
             </ApiKeyFormSection>
 
             <ApiKeyFormSection

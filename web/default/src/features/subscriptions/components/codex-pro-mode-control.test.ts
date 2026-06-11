@@ -5,6 +5,7 @@ import type {
   CodexProUnavailableReason,
 } from '@/features/subscriptions/types'
 import {
+  CODEX_PRO_HELP_GUIDANCE_ITEMS,
   CODEX_PRO_MODE_OPTIONS,
   CODEX_PRO_MODE_TITLE_KEY,
   canUseCodexProModeControl,
@@ -30,6 +31,20 @@ describe('Codex Pro mode control contract', () => {
         'Only requests with X-NewAPI-Codex-Pro-Intent: codex-pro try Codex Pro in flexible mode.',
         'Codex Pro is disabled; eligible requests stay on the normal group.',
       ]
+    )
+  })
+
+  test('documents downstream harness guidance without treating internal headers as request guidance', () => {
+    const guidance = CODEX_PRO_HELP_GUIDANCE_ITEMS.join('\n')
+
+    assert.match(guidance, /X-NewAPI-Codex-Pro-Intent: codex-pro/)
+    assert.match(guidance, /newapi_billing/)
+    assert.match(guidance, /X-NewAPI-Pro-Served/)
+    assert.match(guidance, /Do not rely on X-NewAPI-Pro-Served/)
+    assert.match(guidance, /do not send internal X-NewAPI-Pro-Request/)
+    assert.doesNotMatch(
+      guidance,
+      /(?:^|\n|\. )send internal X-NewAPI-Pro-Request/
     )
   })
 

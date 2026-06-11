@@ -192,6 +192,12 @@ export interface LogOtherData {
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
+  billing_multiplier?: number
+  billing_multiplier_source?: string
+  metered_tokens?: number
+  billable_tokens?: number
+  codex_pro_requested?: boolean
+  codex_pro_served?: boolean
 }
 
 /**

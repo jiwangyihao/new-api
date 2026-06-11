@@ -17,25 +17,64 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
-import { type ApiKeyFormData, type ApiKey } from '../types'
+import {
+  apiKeyCodexProModeSchema,
+  type ApiKeyFormData,
+  type ApiKey,
+} from '../types'
 
 // ============================================================================
 // Form Schema
 // ============================================================================
+
+export const API_KEY_CODEX_PRO_MODE_OPTIONS = [
+  {
+    value: 'inherit',
+    labelKey: 'Inherit user setting',
+    descriptionKey: 'Use the user-level Codex Pro setting for this API key.',
+  },
+  {
+    value: 'all',
+    labelKey: 'All',
+    descriptionKey:
+      'All eligible GPT-family Responses requests try Codex Pro without requiring the intent header.',
+  },
+  {
+    value: 'flexible',
+    labelKey: 'Flexible',
+    descriptionKey:
+      'Only requests with X-NewAPI-Codex-Pro-Intent: codex-pro try Codex Pro in flexible mode.',
+  },
+  {
+    value: 'off',
+    labelKey: 'Off',
+    descriptionKey:
+      'Codex Pro is disabled; eligible requests stay on the normal group.',
+  },
+] as const
 
 export const apiKeyFormSchema = z
   .object({
     name: z.string().min(1, 'Name is required'),
     expired_time: z.date().optional(),
     token_limit_enabled: z.boolean(),
-    token_limit: z.custom<number | undefined>((value) => value === undefined || typeof value === 'number', 'Token limit must be greater than 0'),
+    token_limit: z.custom<number | undefined>(
+      (value) => value === undefined || typeof value === 'number',
+      'Token limit must be greater than 0'
+    ),
     model_limits: z.array(z.string()),
     allow_ips: z.string().optional(),
+    codex_pro_mode: apiKeyCodexProModeSchema,
     tokenCount: z.number().min(1).optional(),
   })
   .superRefine((value, ctx) => {
     if (!value.token_limit_enabled) return
-    if (value.token_limit == null || !Number.isFinite(value.token_limit) || !Number.isInteger(value.token_limit) || value.token_limit <= 0) {
+    if (
+      value.token_limit == null ||
+      !Number.isFinite(value.token_limit) ||
+      !Number.isInteger(value.token_limit) ||
+      value.token_limit <= 0
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['token_limit'],
@@ -57,6 +96,7 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   token_limit: undefined,
   model_limits: [],
   allow_ips: '',
+  codex_pro_mode: 'inherit',
   tokenCount: 1,
 }
 
@@ -84,6 +124,7 @@ export function transformFormDataToPayload(
     model_limits_enabled: data.model_limits.length > 0,
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
+    codex_pro_mode: data.codex_pro_mode,
   }
 }
 
@@ -105,6 +146,7 @@ export function transformApiKeyToFormDefaults(
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],
     allow_ips: apiKey.allow_ips || '',
+    codex_pro_mode: apiKey.codex_pro_mode ?? 'inherit',
     tokenCount: 1,
   }
 }

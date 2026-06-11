@@ -17,10 +17,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { z } from 'zod'
+import type { ApiKeyCodexProMode } from '@/features/subscriptions/types'
 
 // ============================================================================
 // API Key Schema & Types
 // ============================================================================
+
+export const apiKeyCodexProModeSchema = z.enum([
+  'inherit',
+  'all',
+  'flexible',
+  'off',
+])
+
+export type { ApiKeyCodexProMode }
 
 export const apiKeySchema = z.object({
   id: z.number(),
@@ -41,6 +51,7 @@ export const apiKeySchema = z.object({
   model_limits_enabled: z.boolean(),
   model_limits: z.string().nullish().default(''),
   allow_ips: z.string().nullish().default(''),
+  codex_pro_mode: apiKeyCodexProModeSchema.default('inherit'),
 })
 
 export type ApiKey = z.infer<typeof apiKeySchema>
@@ -86,6 +97,7 @@ export interface ApiKeyFormData {
   model_limits_enabled: boolean
   model_limits: string
   allow_ips: string
+  codex_pro_mode: ApiKeyCodexProMode
 }
 
 // ============================================================================

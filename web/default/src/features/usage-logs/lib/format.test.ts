@@ -18,9 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-
 import type { UsageLog } from '../data/schema'
 import {
+  getBillingMultiplierMeta,
   getLegacyPromptCompletionTokens,
   getLogTokenUsage,
   getLogTokenUsageColumnValue,
@@ -127,4 +127,30 @@ test('getLogTokenUsageColumnValue sorts by helper result instead of quota', () =
 
   assert.equal(getLogTokenUsageColumnValue(rows[0]), 15)
   assert.equal(getLogTokenUsageColumnValue(rows[1]), 1000)
+})
+
+test('getBillingMultiplierMeta formats Codex Pro trailer multiplier source', () => {
+  const meta = getBillingMultiplierMeta({
+    billing_multiplier: 2,
+    billing_multiplier_source: 'codex_pro_served_trailer',
+    metered_tokens: 1234,
+    billable_tokens: 2468,
+    codex_pro_requested: true,
+    codex_pro_served: true,
+  })
+
+  assert.equal(meta.text, '2x')
+  assert.equal(meta.sourceLabel, 'Codex Pro served trailer')
+  assert.equal(meta.meteredTokens, 1234)
+  assert.equal(meta.billableTokens, 2468)
+  assert.equal(meta.codexProRequested, true)
+  assert.equal(meta.codexProServed, true)
+})
+
+test('getBillingMultiplierMeta returns em dash without a finite multiplier', () => {
+  assert.equal(getBillingMultiplierMeta(null).text, '—')
+  assert.equal(
+    getBillingMultiplierMeta({ billing_multiplier: Number.NaN }).text,
+    '—'
+  )
 })

@@ -136,10 +136,39 @@ func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other map[string]inter
 	other["stream_status"] = streamInfo
 }
 
+func appendChannelTokenBillingSnapshotInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	other["channel_token_billing_multiplier"] = relayInfo.FrozenChannelTokenBillingMultiplier()
+	other["raw_metered_tokens"] = relayInfo.RawMeteredTokens
+	other["channel_billable_tokens"] = relayInfo.ChannelBillableTokens
+	other["api_key_billable_tokens"] = relayInfo.ApiKeyBillableTokens
+	other["subscription_billable_tokens"] = relayInfo.SubscriptionBillableTokens
+	other["estimated_raw_tokens"] = relayInfo.EstimatedRawTokens
+	other["initial_channel_id"] = relayInfo.InitialChannelId
+	other["initial_channel_type"] = relayInfo.InitialChannelType
+}
+
+func appendNewAPIBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if relayInfo == nil || other == nil {
+		return
+	}
+	billing := NewAPIBillingFromRelayInfo(relayInfo)
+	other["billing_multiplier"] = billing.BillingMultiplier
+	other["billing_multiplier_source"] = billing.BillingMultiplierSource
+	other["metered_tokens"] = billing.MeteredTokens
+	other["billable_tokens"] = billing.BillableTokens
+	other["codex_pro_requested"] = billing.CodexProRequested
+	other["codex_pro_served"] = billing.CodexProServed
+}
+
 func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if relayInfo == nil || other == nil {
 		return
 	}
+	appendChannelTokenBillingSnapshotInfo(relayInfo, other)
+	appendNewAPIBillingInfo(relayInfo, other)
 	// billing_source: "wallet" or "subscription"
 	if relayInfo.BillingSource != "" {
 		other["billing_source"] = relayInfo.BillingSource
@@ -194,7 +223,10 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 }
 
 func appendSubscriptionTokenInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
-	consumed := relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
+	consumed := relayInfo.SubscriptionBillableTokens
+	if consumed == 0 {
+		consumed = relayInfo.SubscriptionPreConsumed + relayInfo.SubscriptionPostDelta
+	}
 	if consumed < 0 {
 		consumed = 0
 	}

@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -151,6 +152,35 @@ func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing
 	assert.False(t, info.StreamStatus.HasErrors())
 }
 
+func TestOaiResponsesStreamHandlerPreservesUpstreamTotalTokens(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":9},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:  &relaycommon.ChannelMeta{},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.PromptTokens)
+	assert.Equal(t, 2, usage.CompletionTokens)
+	assert.Equal(t, 9, usage.TotalTokens)
+}
+
 func TestOaiResponsesStreamHandlerDoesNotEstimatePromptTokens(t *testing.T) {
 	t.Parallel()
 
@@ -231,6 +261,90 @@ func TestOaiResponsesHandlerCodexProServedAckRequiresTrailerAndSuccessfulUsage(t
 			require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
 		})
 	}
+}
+
+func TestOaiResponsesHandlerAddsNewAPIBillingForCodexProTrailerAck(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := newCodexProTrailerResponseForOpenAITest(`{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`, "codex-pro")
+
+	usage, apiErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	billing, ok := body["newapi_billing"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(5), billing["metered_tokens"])
+	assert.Equal(t, float64(10), billing["billable_tokens"])
+	assert.Equal(t, float64(2), billing["billing_multiplier"])
+	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, true, billing["codex_pro_requested"])
+	assert.Equal(t, true, billing["codex_pro_served"])
+	require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
+}
+
+func TestOaiResponsesHandlerOrdinaryHeaderAckAddsNormalBilling(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := newCodexProTrailerResponseForOpenAITest(`{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`, "")
+	resp.Header.Set("X-NewAPI-Pro-Served", "codex-pro")
+
+	usage, apiErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	billing, ok := body["newapi_billing"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(5), billing["metered_tokens"])
+	assert.Equal(t, float64(5), billing["billable_tokens"])
+	assert.Equal(t, float64(1), billing["billing_multiplier"])
+	assert.Equal(t, "normal", billing["billing_multiplier_source"])
+	assert.Equal(t, true, billing["codex_pro_requested"])
+	assert.Equal(t, false, billing["codex_pro_served"])
+	require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
+}
+
+func TestOaiResponsesCompactionHandlerAddsNewAPIBillingForCodexProTrailerAck(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	resp := newCodexProTrailerResponseForOpenAITest(`{"status":"completed","usage":{"input_tokens":4,"output_tokens":3,"total_tokens":7},"output":[]}`, "codex-pro")
+
+	usage, apiErr := OaiResponsesCompactionHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	billing, ok := body["newapi_billing"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(7), billing["metered_tokens"])
+	assert.Equal(t, float64(14), billing["billable_tokens"])
+	assert.Equal(t, float64(2), billing["billing_multiplier"])
+	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, true, billing["codex_pro_requested"])
+	assert.Equal(t, true, billing["codex_pro_served"])
 }
 
 func TestOaiResponsesCompactionHandlerCodexProServedAckRequiresTrailerAndSuccess(t *testing.T) {
@@ -481,6 +595,66 @@ func TestOaiResponsesStreamHandlerCodexProAckRequiresNoTimeoutAfterDone(t *testi
 	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
 	assert.False(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServedCandidate"))
 	assert.True(t, info.StreamStatus.HasErrors())
+}
+
+func TestOaiResponsesStreamHandlerFinalCompletedChunkAddsBillingAfterTrailerAck(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, StreamStatus: relaycommon.NewStreamStatus()}
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	resp := newCodexProTrailerResponseForOpenAITest(body, "codex-pro")
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.True(t, getCodexProBoolFieldForOpenAITest(t, info, "CodexProServed"))
+	output := recorder.Body.String()
+	completedIndex := strings.Index(output, `"type":"response.completed"`)
+	doneIndex := strings.Index(output, "data: [DONE]")
+	require.NotEqual(t, -1, completedIndex)
+	require.NotEqual(t, -1, doneIndex)
+	assert.Less(t, completedIndex, doneIndex)
+	completed := extractResponsesStreamEventForOpenAITest(t, output, "response.completed")
+	billing, ok := completed["newapi_billing"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, float64(5), billing["metered_tokens"])
+	assert.Equal(t, float64(10), billing["billable_tokens"])
+	assert.Equal(t, float64(2), billing["billing_multiplier"])
+	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, true, billing["codex_pro_requested"])
+	assert.Equal(t, true, billing["codex_pro_served"])
+}
+
+func extractResponsesStreamEventForOpenAITest(t *testing.T, body string, eventType string) map[string]any {
+	t.Helper()
+	for _, rawLine := range strings.Split(body, "\n") {
+		line := strings.TrimSpace(rawLine)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		require.NoError(t, json.Unmarshal([]byte(payload), &event))
+		if event["type"] == eventType {
+			return event
+		}
+	}
+	t.Fatalf("stream event %s not found in body: %s", eventType, body)
+	return nil
 }
 
 func markCodexProRequestSentForOpenAITest(t *testing.T, info *relaycommon.RelayInfo, enabled bool) {

@@ -66,10 +66,6 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		c.Set("image_generation_call_size", responsesResponse.GetSize())
 	}
 
-	// 写入新的 response body
-	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
-
-	// compute usage
 	usage := dto.Usage{}
 	if responsesResponse.Usage != nil {
 		usage.PromptTokens = responsesResponse.Usage.InputTokens
@@ -81,7 +77,31 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if writeOK && openAIResponsesCompletedWithUsage(&responsesResponse) && info != nil {
+	if openAIResponsesCompletedWithUsage(&responsesResponse) && info != nil {
+		markCodexProServedCandidateFromResponseTrailer(info, resp)
+		info.ConfirmCodexProServed()
+		if billing := service.NewAPIBillingFromUsage(info, &usage); billing != nil {
+			responsesResponse.NewAPIBilling = billing
+			service.SeedNewAPIBillingRelayInfo(info, *billing)
+			if responseBody, err = common.Marshal(responsesResponse); err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			}
+		}
+	}
+
+	// 写入新的 response body
+	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
+
+	if writeOK && responsesResponse.NewAPIBilling != nil && info != nil {
+		info.CodexProServed = responsesResponse.NewAPIBilling.CodexProServed
+	}
+	if !writeOK && info != nil {
+		info.ClearCodexProServedCandidate()
+		info.CodexProServed = false
+	}
+	relayBillingMetadataInjected := responsesResponse.NewAPIBilling != nil
+
+	if !relayBillingMetadataInjected && writeOK && openAIResponsesCompletedWithUsage(&responsesResponse) && info != nil {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
@@ -110,13 +130,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	var usage = &dto.Usage{}
 	completedWithUsage := false
+	var completedStreamResponse *dto.ResponsesStreamResponse
+	var completedStreamData string
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
+	doneBuffer := beginResponsesDoneBuffering(c)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-
-		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
 		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
@@ -135,7 +156,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				service.RecordGPTAbuseSignal(c, info, signal)
 			}
 		}
-		if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+
+		shouldDelayCompleted := streamResponse.Type == "response.completed" && openAIResponsesCompletedWithUsage(streamResponse.Response)
+		if shouldDelayCompleted {
+			completedCopy := streamResponse
+			completedStreamResponse = &completedCopy
+			completedStreamData = data
+		} else if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
 			sr.Stop(err)
 			return
 		}
@@ -191,12 +218,53 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if doneBuffer != nil {
+		c.Writer = doneBuffer.ResponseWriter
+	}
 	if completedWithUsage && info != nil && info.StreamStatus != nil && info.StreamStatus.Completed && info.StreamStatus.DrainedToEOF && !info.StreamStatus.HasErrors() {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
+	if completedStreamResponse != nil {
+		finalWriteOK := true
+		if billing := service.NewAPIBillingFromUsage(info, usage); billing != nil {
+			completedStreamResponse.NewAPIBilling = billing
+			if info != nil {
+				service.SeedNewAPIBillingRelayInfo(info, *billing)
+			}
+			if data, err := common.Marshal(completedStreamResponse); err == nil {
+				completedStreamData = string(data)
+			} else {
+				logger.LogError(c, "failed to marshal responses completed stream billing metadata: "+err.Error())
+			}
+		}
+		if err := sendResponsesStreamData(c, *completedStreamResponse, completedStreamData); err != nil {
+			finalWriteOK = false
+			if info != nil && info.StreamStatus != nil {
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+			}
+		}
+		if finalWriteOK && doneBuffer != nil {
+			if err := doneBuffer.flushBufferedDone(); err != nil {
+				finalWriteOK = false
+				if info != nil && info.StreamStatus != nil {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+				}
+			}
+		}
+		if !finalWriteOK && info != nil {
+			info.ClearCodexProServedCandidate()
+			info.CodexProServed = false
+		}
+	} else if doneBuffer != nil {
+		if err := doneBuffer.flushBufferedDone(); err != nil && info != nil && info.StreamStatus != nil {
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+		}
+	}
 
-	usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	if usage.TotalTokens <= 0 {
+		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
 
 	return usage, nil
 }

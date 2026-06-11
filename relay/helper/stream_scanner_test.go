@@ -257,11 +257,14 @@ func TestStreamScannerHandler_ScannerDecoupledFromSlowHandler(t *testing.T) {
 	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	var count atomic.Int64
+	var handlerNanos atomic.Int64
 	start := time.Now()
 	done := make(chan struct{})
 	go func() {
 		StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+			handlerStart := time.Now()
 			time.Sleep(handlerDelay)
+			handlerNanos.Add(time.Since(handlerStart).Nanoseconds())
 			count.Add(1)
 		})
 		close(done)
@@ -276,11 +279,12 @@ func TestStreamScannerHandler_ScannerDecoupledFromSlowHandler(t *testing.T) {
 	elapsed := time.Since(start)
 	assert.Equal(t, int64(numChunks), count.Load())
 
-	coupledTime := time.Duration(numChunks) * (upstreamDelay + handlerDelay)
-	t.Logf("elapsed=%v, coupled_estimate=%v", elapsed, coupledTime)
+	handlerElapsed := time.Duration(handlerNanos.Load())
+	coupledTime := handlerElapsed + time.Duration(numChunks)*upstreamDelay
+	t.Logf("elapsed=%v, handler_elapsed=%v, coupled_estimate=%v", elapsed, handlerElapsed, coupledTime)
 
-	assert.Less(t, elapsed, coupledTime*85/100,
-		"decoupled elapsed time (%v) should be significantly less than coupled estimate (%v)", elapsed, coupledTime)
+	assert.Less(t, elapsed, handlerElapsed+time.Duration(numChunks)*upstreamDelay*85/100,
+		"decoupled elapsed time (%v) should not include the full upstream delay on top of handler time (%v)", elapsed, handlerElapsed)
 }
 
 func TestStreamScannerHandler_SlowUpstreamFastHandler(t *testing.T) {

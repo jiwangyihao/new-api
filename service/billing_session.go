@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
@@ -471,7 +472,7 @@ func syncRelayCodexProEligibility(info *relaycommon.RelayInfo, sub *Subscription
 	if info == nil {
 		return
 	}
-	info.CodexProMode = common.NormalizeCodexProMode(info.UserSetting.CodexProMode)
+	info.CodexProMode = common.EffectiveCodexProMode(info.TokenCodexProMode, info.UserSetting.CodexProMode)
 	eligible, reason := codexProEligibilityFromSubscriptionFunding(sub)
 	info.CodexProEligible = eligible
 	info.CodexProUnavailableReason = reason
@@ -619,6 +620,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		relayInfo.SubscriptionPreConsumed = 0
 		relayInfo.BillingSource = BillingSourceSubscription
 		relayInfo.EstimatedRawTokens = int64(relayInfo.GetEstimatePromptTokens())
+		relayInfo.CodexProMode = common.EffectiveCodexProMode(relayInfo.TokenCodexProMode, relayInfo.UserSetting.CodexProMode)
 		relayInfo.CodexProEligible = false
 		relayInfo.CodexProUnavailableReason = "free_model"
 		return nil, nil
@@ -629,14 +631,19 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	}
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
-		distributorConsume := int64(relayInfo.GetEstimatePromptTokens())
-		if distributorConsume <= 0 {
-			distributorConsume = int64(preConsumedQuota)
+		distributorConsumeRaw := int64(relayInfo.GetEstimatePromptTokens())
+		if distributorConsumeRaw <= 0 {
+			distributorConsumeRaw = int64(preConsumedQuota)
 		}
-		if distributorConsume <= 0 {
-			distributorConsume = 1
+		if distributorConsumeRaw <= 0 {
+			distributorConsumeRaw = 1
 		}
-		legacyConsume := int64(preConsumedQuota)
+		distributorConsume, err := tokenbilling.ApplyMultiplier(distributorConsumeRaw, relayInfo.FrozenChannelTokenBillingMultiplier())
+		if err != nil {
+			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		}
+		relayInfo.EstimatedRawTokens = distributorConsumeRaw
+		legacyConsume := distributorConsume
 		session := &BillingSession{
 			relayInfo: relayInfo,
 			funding: &SubscriptionFunding{
@@ -647,8 +654,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 				distributorAmount: distributorConsume,
 			},
 		}
-		// preConsume 入参保留 wallet quota 口径兼容字段；SubscriptionFunding 使用构造时的订阅单位预扣。
-		if apiErr := session.preConsume(c, preConsumedQuota); apiErr != nil {
+		if apiErr := session.preConsume(c, int(distributorConsume)); apiErr != nil {
 			return nil, apiErr
 		}
 		return session, nil

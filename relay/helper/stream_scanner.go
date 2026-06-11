@@ -27,6 +27,11 @@ const (
 	DefaultPingInterval         = 10 * time.Second
 )
 
+type streamScannerItem struct {
+	data string
+	done bool
+}
+
 func getScannerBufferSize() int {
 	if constant.StreamScannerMaxBufferMB > 0 {
 		return constant.StreamScannerMaxBufferMB << 20
@@ -190,7 +195,7 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		})
 	}
 
-	dataChan := make(chan string, 10)
+	dataChan := make(chan streamScannerItem, 128)
 
 	wg.Add(1)
 	gopool.Go(func() {
@@ -204,10 +209,21 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			common.SafeSendBool(stopChan, true)
 		}()
 		sr := newStreamResult(info.StreamStatus)
-		for data := range dataChan {
+		for item := range dataChan {
+			if item.done {
+				writeMutex.Lock()
+				err := Done(c)
+				writeMutex.Unlock()
+				if err != nil {
+					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+					return
+				}
+				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+				continue
+			}
 			sr.reset()
 			writeMutex.Lock()
-			dataHandler(data, sr)
+			dataHandler(item.data, sr)
 			writeMutex.Unlock()
 			if sr.IsStopped() {
 				return
@@ -271,21 +287,20 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 				info.ReceivedResponseCount++
 
 				select {
-				case dataChan <- data:
+				case dataChan <- streamScannerItem{data: data}:
 				case <-ctx.Done():
 					return
 				case <-stopChan:
 					return
 				}
 			} else {
-				writeMutex.Lock()
-				if err := Done(c); err != nil {
-					writeMutex.Unlock()
-					info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
+				select {
+				case dataChan <- streamScannerItem{done: true}:
+				case <-ctx.Done():
+					return
+				case <-stopChan:
 					return
 				}
-				writeMutex.Unlock()
-				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
 				sawDone = true
 				if common.DebugEnabled {
 					println("received [DONE], draining stream for trailers")

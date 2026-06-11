@@ -108,6 +108,7 @@ func GetJsonString(data any) string {
 }
 
 const (
+	CodexProModeInherit  = "inherit"
 	CodexProModeAll      = "all"
 	CodexProModeFlexible = "flexible"
 	CodexProModeOff      = "off"
@@ -132,6 +133,37 @@ func ValidateCodexProModeForUpdate(mode string) error {
 	default:
 		return errors.New("invalid codex pro mode")
 	}
+}
+
+// NormalizeAPIKeyCodexProMode clamps API-key Codex Pro overrides to valid values.
+// Empty or unknown values inherit the user-level mode for compatibility with old rows.
+func NormalizeAPIKeyCodexProMode(mode string) string {
+	mode = strings.TrimSpace(mode)
+	switch mode {
+	case CodexProModeInherit, CodexProModeAll, CodexProModeFlexible, CodexProModeOff:
+		return mode
+	default:
+		return CodexProModeInherit
+	}
+}
+
+// ValidateAPIKeyCodexProModeForUpdate rejects empty or unknown API-key Codex Pro mode updates.
+func ValidateAPIKeyCodexProModeForUpdate(mode string) error {
+	switch strings.TrimSpace(mode) {
+	case CodexProModeInherit, CodexProModeAll, CodexProModeFlexible, CodexProModeOff:
+		return nil
+	default:
+		return errors.New("invalid api key codex pro mode")
+	}
+}
+
+// EffectiveCodexProMode resolves an API-key override against the user-level mode.
+func EffectiveCodexProMode(apiKeyMode string, userMode string) string {
+	mode := NormalizeAPIKeyCodexProMode(apiKeyMode)
+	if mode != CodexProModeInherit {
+		return mode
+	}
+	return NormalizeCodexProMode(userMode)
 }
 
 // NormalizeBillingPreference clamps the billing preference to valid values.

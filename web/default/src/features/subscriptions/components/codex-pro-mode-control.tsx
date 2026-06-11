@@ -16,8 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { HelpCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { StatusBadge } from '@/components/status-badge'
 import type {
   CodexProMode,
@@ -52,6 +62,67 @@ export const CODEX_PRO_MODE_OPTIONS = [
   descriptionKey: string
 }>
 
+export const CODEX_PRO_HELP_GUIDANCE_ITEMS = [
+  'All mode tries Codex Pro for every eligible GPT-family Responses request without requiring a header.',
+  'Flexible mode tries Codex Pro only when the downstream harness sends X-NewAPI-Codex-Pro-Intent: codex-pro.',
+  'Off mode keeps eligible requests on normal routing and billing.',
+  'Downstream relay guide: send X-NewAPI-Codex-Pro-Intent: codex-pro in Flexible mode; do not send internal X-NewAPI-Pro-Request.',
+  'Do not rely on X-NewAPI-Pro-Served; it is an internal upstream trailer and is not passed to downstream clients.',
+  'Read the response body top-level newapi_billing object for metered_tokens, billable_tokens, billing_multiplier, and Codex Pro served state.',
+] as const
+
+function CodexProHelpDialog() {
+  const { t } = useTranslation()
+
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={
+          <Button
+            type='button'
+            variant='ghost'
+            size='icon-sm'
+            aria-label={t('Codex Pro help')}
+          />
+        }
+      >
+        <HelpCircle className='size-4' aria-hidden='true' />
+      </DialogTrigger>
+      <DialogContent className='sm:max-w-xl'>
+        <DialogHeader>
+          <DialogTitle>{t('Codex Pro help')}</DialogTitle>
+          <DialogDescription>
+            {t(
+              'How Codex Pro mode affects routing, harness headers, and billing visibility.'
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <div className='space-y-4 text-sm'>
+          <div className='grid gap-2'>
+            {CODEX_PRO_MODE_OPTIONS.map((option) => (
+              <div key={option.value} className='rounded-lg border p-3'>
+                <div className='font-medium'>{t(option.labelKey)}</div>
+                <p className='text-muted-foreground mt-1 text-xs leading-relaxed'>
+                  {t(option.descriptionKey)}
+                </p>
+              </div>
+            ))}
+          </div>
+          <div className='space-y-2 rounded-lg border p-3'>
+            <div className='font-medium'>
+              {t('Harness and downstream relay guide')}
+            </div>
+            <ul className='text-muted-foreground list-disc space-y-1 pl-4 text-xs leading-relaxed'>
+              {CODEX_PRO_HELP_GUIDANCE_ITEMS.slice(3).map((item) => (
+                <li key={item}>{t(item)}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
 type CodexProModeControlData = Pick<
   SelfSubscriptionData,
   'codex_pro_mode' | 'codex_pro_eligible' | 'codex_pro_unavailable_reason'
@@ -118,7 +189,7 @@ export function getCodexProModeFailureRollback(input: {
 }
 
 export function normalizeCodexProMode(mode: string | undefined): CodexProMode {
-  if (mode === 'all' || mode === 'off') return mode
+  if (mode === 'all' || mode === 'flexible' || mode === 'off') return mode
   return 'flexible'
 }
 
@@ -136,6 +207,7 @@ export function CodexProModeControl(props: CodexProModeControlProps) {
         <span className='text-sm font-medium'>
           {t(CODEX_PRO_MODE_TITLE_KEY)}
         </span>
+        <CodexProHelpDialog />
         <StatusBadge
           label={available ? t('Available') : t('Not available')}
           variant={available ? 'success' : 'neutral'}

@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -251,6 +252,49 @@ func HandleFinalResponse(c *gin.Context, info *relaycommon.RelayInfo, lastStream
 		c.Render(-1, common.CustomEvent{Data: "data: " + string(geminiResponseStr)})
 		_ = helper.FlushWriter(c)
 	}
+}
+
+var responsesDoneFrame = []byte("data: [DONE]\n\n")
+
+type responsesDoneBufferingWriter struct {
+	gin.ResponseWriter
+	bufferedDone []byte
+}
+
+func beginResponsesDoneBuffering(c *gin.Context) *responsesDoneBufferingWriter {
+	if c == nil || c.Writer == nil {
+		return nil
+	}
+	writer := &responsesDoneBufferingWriter{ResponseWriter: c.Writer}
+	c.Writer = writer
+	return writer
+}
+
+func (w *responsesDoneBufferingWriter) Write(data []byte) (int, error) {
+	if bytes.Equal(data, responsesDoneFrame) {
+		w.bufferedDone = append(w.bufferedDone[:0], data...)
+		return len(data), nil
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *responsesDoneBufferingWriter) WriteString(data string) (int, error) {
+	if data == string(responsesDoneFrame) {
+		w.bufferedDone = append(w.bufferedDone[:0], responsesDoneFrame...)
+		return len(data), nil
+	}
+	return w.ResponseWriter.WriteString(data)
+}
+
+func (w *responsesDoneBufferingWriter) flushBufferedDone() error {
+	if w == nil || len(w.bufferedDone) == 0 {
+		return nil
+	}
+	_, err := w.ResponseWriter.Write(w.bufferedDone)
+	if err != nil {
+		return err
+	}
+	return helper.FlushWriter(&gin.Context{Writer: w.ResponseWriter})
 }
 
 func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {

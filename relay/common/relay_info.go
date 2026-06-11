@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -152,6 +153,7 @@ type RelayInfo struct {
 	// SubscriptionTrialMarker is set to "trial" when the actual billed subscription plan is trial.
 	SubscriptionTrialMarker   string
 	CodexProMode              string
+	TokenCodexProMode         string
 	CodexProEligible          bool
 	CodexProUnavailableReason string
 	CodexProRequestMarker     string
@@ -176,7 +178,17 @@ type RelayInfo struct {
 	UseRuntimeHeadersOverride            bool
 	ParamOverrideAudit                   []string
 
-	PriceData types.PriceData
+	// Channel token billing snapshot is frozen before pre-consume and must not be
+	// overwritten by retry/final channel metadata.
+	ChannelTokenBillingMultiplier float64
+	InitialChannelId              int
+	InitialChannelType            int
+	RawMeteredTokens              int64
+	ChannelBillableTokens         int64
+	SubscriptionBillableTokens    int64
+	ApiKeyBillableTokens          int64
+	EstimatedRawTokens            int64
+	PriceData                     types.PriceData
 
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
@@ -314,6 +326,49 @@ func (info *RelayInfo) hasCodexProIntentHeader() bool {
 		}
 	}
 	return false
+}
+
+func (info *RelayInfo) FreezeChannelTokenBillingSnapshot(c *gin.Context) error {
+	if info == nil {
+		return errors.New("relay info is nil")
+	}
+	multiplier := tokenbilling.DefaultMultiplier
+	if value, ok := common.GetContextKey(c, constant.ContextKeyChannelTokenBillingMultiplier); ok {
+		switch v := value.(type) {
+		case float64:
+			multiplier = v
+		case float32:
+			multiplier = float64(v)
+		case int:
+			multiplier = float64(v)
+		case int64:
+			multiplier = float64(v)
+		case int32:
+			multiplier = float64(v)
+		case uint:
+			multiplier = float64(v)
+		case uint64:
+			multiplier = float64(v)
+		case uint32:
+			multiplier = float64(v)
+		default:
+			return fmt.Errorf("invalid channel token billing multiplier type %T", value)
+		}
+	}
+	if err := tokenbilling.ValidateMultiplier(multiplier); err != nil {
+		return err
+	}
+	info.ChannelTokenBillingMultiplier = multiplier
+	info.InitialChannelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
+	info.InitialChannelType = common.GetContextKeyInt(c, constant.ContextKeyChannelType)
+	return nil
+}
+
+func (info *RelayInfo) FrozenChannelTokenBillingMultiplier() float64 {
+	if info == nil {
+		return tokenbilling.DefaultMultiplier
+	}
+	return tokenbilling.EffectiveMultiplier(info.ChannelTokenBillingMultiplier)
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
@@ -624,6 +679,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.RequestURLPath = "/v1" + info.RequestURLPath
 	}
 
+	info.TokenCodexProMode = common.GetContextKeyString(c, constant.ContextKeyTokenCodexProMode)
 	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
 	if ok {
 		info.UserSetting = userSetting

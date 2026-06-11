@@ -52,6 +52,14 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	defer s.mu.Unlock()
 
 	if s.EndReason != StreamEndReasonNone {
+		if s.EndReason == StreamEndReasonEOF && reason == StreamEndReasonHandlerStop {
+			if err != nil {
+				s.recordErrorLocked(err.Error())
+			}
+			s.EndReason = reason
+			s.EndError = err
+			return
+		}
 		if reason == StreamEndReasonDone {
 			s.Completed = true
 			if s.EndReason == StreamEndReasonEOF {

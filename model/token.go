@@ -32,6 +32,7 @@ type Token struct {
 	TokenLimitEnabled  bool           `json:"token_limit_enabled" gorm:"not null;default:false"`
 	TokenLimit         int64          `json:"token_limit" gorm:"type:bigint;not null;default:0"`
 	TokenUsed          int64          `json:"token_used" gorm:"type:bigint;not null;default:0"`
+	CodexProMode       string         `json:"codex_pro_mode" gorm:"type:varchar(16);not null;default:'inherit'"`
 	Group              string         `json:"-" gorm:"default:''"`
 	CrossGroupRetry    bool           `json:"-"` // legacy business-group compatibility only
 	DeletedAt          gorm.DeletedAt `json:"-" gorm:"index"`
@@ -341,7 +342,7 @@ func (token *Token) Update() (err error) {
 		}
 	}()
 	err = DB.Model(token).Select("name", "status", "expired_time", "remain_quota", "unlimited_quota",
-		"model_limits_enabled", "model_limits", "allow_ips", "token_limit_enabled", "token_limit").Updates(token).Error
+		"model_limits_enabled", "model_limits", "allow_ips", "token_limit_enabled", "token_limit", "codex_pro_mode").Updates(token).Error
 	return err
 }
 

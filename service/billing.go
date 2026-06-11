@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -39,6 +41,7 @@ type BillingSettleInput struct {
 	SubscriptionTokensCodexProAdjusted bool
 	ApiKeyTokens                       int64
 	ResponseStarted                    bool
+	SkipDefaultApiKeyTokens            bool
 }
 
 func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
@@ -60,6 +63,115 @@ func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens
 		return tokens
 	}
 	return tokens * 2
+}
+
+const (
+	BillingMultiplierSourceCodexProServedTrailer = "codex_pro_served_trailer"
+	BillingMultiplierSourceNormal                = "normal"
+	BillingMultiplierSourceFreeModel             = "free_model"
+	BillingMultiplierSourceUsageUnavailable      = "usage_unavailable"
+)
+
+func NewAPIBillingFromRelayInfo(relayInfo *relaycommon.RelayInfo) dto.NewAPIBilling {
+	if relayInfo == nil {
+		return dto.NewAPIBilling{BillingMultiplierSource: BillingMultiplierSourceUsageUnavailable}
+	}
+	meteredTokens := relayInfo.RawMeteredTokens
+	if meteredTokens < 0 {
+		meteredTokens = 0
+	}
+	billableTokens := relayInfo.SubscriptionBillableTokens
+	if billableTokens == 0 && relayInfo.BillingSource != BillingSourceSubscription {
+		billableTokens = relayInfo.ApiKeyBillableTokens
+	}
+	if billableTokens < 0 {
+		billableTokens = 0
+	}
+
+	multiplier := 0
+	source := BillingMultiplierSourceUsageUnavailable
+	channelBillableTokens := relayInfo.ChannelBillableTokens
+	if channelBillableTokens <= 0 {
+		channelBillableTokens = relayInfo.ApiKeyBillableTokens
+	}
+	if channelBillableTokens <= 0 {
+		channelBillableTokens = meteredTokens
+	}
+	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
+		billableTokens = 0
+		source = BillingMultiplierSourceFreeModel
+	} else if meteredTokens > 0 {
+		if relayInfo.CodexProServed && channelBillableTokens > 0 && billableTokens > channelBillableTokens {
+			multiplier = 2
+			source = BillingMultiplierSourceCodexProServedTrailer
+		} else {
+			multiplier = 1
+			source = BillingMultiplierSourceNormal
+		}
+	}
+
+	return dto.NewAPIBilling{
+		MeteredTokens:           meteredTokens,
+		BillableTokens:          billableTokens,
+		BillingMultiplier:       multiplier,
+		BillingMultiplierSource: source,
+		CodexProRequested:       relayInfo.CodexProRequestSent,
+		CodexProServed:          relayInfo.CodexProServed,
+	}
+}
+
+func NewAPIBillingFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) *dto.NewAPIBilling {
+	if usage == nil {
+		return nil
+	}
+	meteredTokens := SubscriptionMeteredTokens(usage)
+	if meteredTokens <= 0 {
+		return nil
+	}
+	channelBillableTokens := meteredTokens
+	if relayInfo != nil {
+		var err error
+		channelBillableTokens, err = tokenbilling.ApplyMultiplier(meteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
+		if err != nil {
+			return nil
+		}
+	}
+	billing := dto.NewAPIBilling{
+		MeteredTokens:           meteredTokens,
+		BillableTokens:          channelBillableTokens,
+		BillingMultiplier:       1,
+		BillingMultiplierSource: BillingMultiplierSourceNormal,
+	}
+	if relayInfo != nil {
+		billing.CodexProRequested = relayInfo.CodexProRequestSent
+		billing.CodexProServed = relayInfo.CodexProServed
+		if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
+			billing.BillableTokens = 0
+			billing.BillingMultiplier = 0
+			billing.BillingMultiplierSource = BillingMultiplierSourceFreeModel
+		} else if relayInfo.CodexProServed {
+			billing.BillableTokens = channelBillableTokens * 2
+			billing.BillingMultiplier = 2
+			billing.BillingMultiplierSource = BillingMultiplierSourceCodexProServedTrailer
+		}
+	}
+	return &billing
+}
+
+func SeedNewAPIBillingRelayInfo(relayInfo *relaycommon.RelayInfo, billing dto.NewAPIBilling) {
+	if relayInfo == nil {
+		return
+	}
+	channelBillableTokens := billing.MeteredTokens
+	var err error
+	channelBillableTokens, err = tokenbilling.ApplyMultiplier(billing.MeteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
+	if err != nil {
+		channelBillableTokens = billing.MeteredTokens
+	}
+	relayInfo.RawMeteredTokens = billing.MeteredTokens
+	relayInfo.SubscriptionBillableTokens = billing.BillableTokens
+	relayInfo.ApiKeyBillableTokens = channelBillableTokens
+	relayInfo.ChannelBillableTokens = channelBillableTokens
 }
 
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
@@ -108,7 +220,7 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 		input.SubscriptionTokensCodexProAdjusted = true
 	}
 	apiKeyTokens := input.ApiKeyTokens
-	if apiKeyTokens == 0 {
+	if apiKeyTokens == 0 && !input.SkipDefaultApiKeyTokens {
 		apiKeyTokens = input.SubscriptionTokens
 	}
 	auditSettle := ShouldAuditTokenLimitSettle(ctx, relayInfo, input.ResponseStarted)

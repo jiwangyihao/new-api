@@ -45,6 +45,7 @@ type tokenResponseItem struct {
 	TokenUsed         int64  `json:"token_used"`
 	TokenRemaining    int64  `json:"token_remaining"`
 	TokenUnlimited    bool   `json:"token_unlimited"`
+	CodexProMode      string `json:"codex_pro_mode"`
 }
 
 type tokenKeyResponse struct {
@@ -527,6 +528,79 @@ func TestAddTokenAcceptsTokenLimitFields(t *testing.T) {
 	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
 }
 
+func TestAddTokenAcceptsCodexProModeOverride(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name":           "codex-pro-key",
+		"expired_time":   -1,
+		"codex_pro_mode": "all",
+	}, 94002)
+
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	require.Equal(t, common.CodexProModeAll, data.CodexProMode)
+
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 94002, "codex-pro-key").First(&token).Error)
+	require.Equal(t, common.CodexProModeAll, token.CodexProMode)
+}
+
+func TestAddTokenDefaultsCodexProModeToInherit(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name":         "codex-pro-default",
+		"expired_time": -1,
+	}, 94003)
+
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	require.Equal(t, common.CodexProModeInherit, data.CodexProMode)
+
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 94003, "codex-pro-default").First(&token).Error)
+	require.Equal(t, common.CodexProModeInherit, token.CodexProMode)
+}
+
+func TestAddTokenBlankCodexProModeDefaultsToInherit(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name":           "codex-pro-blank",
+		"expired_time":   -1,
+		"codex_pro_mode": "   ",
+	}, 94005)
+
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	require.Equal(t, common.CodexProModeInherit, data.CodexProMode)
+
+	var token model.Token
+	require.NoError(t, db.Where("user_id = ? AND name = ?", 94005, "codex-pro-blank").First(&token).Error)
+	require.Equal(t, common.CodexProModeInherit, token.CodexProMode)
+}
+
+func TestAddTokenRejectsInvalidCodexProMode(t *testing.T) {
+	setupTokenControllerTestDB(t)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPost, "/api/token/", map[string]any{
+		"name":           "codex-pro-invalid",
+		"expired_time":   -1,
+		"codex_pro_mode": "legacy-pro",
+	}, 94004)
+
+	AddToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.False(t, response.Success)
+}
+
 func TestGetTokenReturnsTokenLimitFields(t *testing.T) {
 	db := setupTokenControllerTestDB(t)
 	token := seedToken(t, db, 94011, "limited-token", "limitfieldkey1234")
@@ -569,6 +643,68 @@ func TestGetTokenReturnsTokenLimitFields(t *testing.T) {
 	require.Len(t, page.Items, 1)
 	requireTokenLimitResponse(t, page.Items[0], true, 1000, 250, 750, false)
 	require.NotContains(t, recorder.Body.String(), token.GetFullKey())
+}
+
+func TestUpdateTokenCodexProModeValidationAndPreserve(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94502, "codex-pro-mode", "sk-codex-pro-mode")
+	require.NoError(t, db.Model(token).Update("codex_pro_mode", common.CodexProModeAll).Error)
+
+	omitCtx, omitRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "codex-pro-mode-updated", "expired_time": -1,
+	}, 94502)
+	UpdateToken(omitCtx)
+	omitResponse := decodeAPIResponse(t, omitRecorder)
+	require.True(t, omitResponse.Success, omitResponse.Message)
+	omitData := decodeTokenData(t, omitResponse)
+	require.Equal(t, common.CodexProModeAll, omitData.CodexProMode)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, common.CodexProModeAll, got.CodexProMode)
+
+	invalidCtx, invalidRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "codex-pro-mode-updated", "expired_time": -1, "codex_pro_mode": "legacy-pro",
+	}, 94502)
+	UpdateToken(invalidCtx)
+	invalidResponse := decodeAPIResponse(t, invalidRecorder)
+	require.False(t, invalidResponse.Success)
+
+	offCtx, offRecorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/", map[string]any{
+		"id": token.Id, "name": "codex-pro-mode-updated", "expired_time": -1, "codex_pro_mode": "off",
+	}, 94502)
+	UpdateToken(offCtx)
+	offResponse := decodeAPIResponse(t, offRecorder)
+	require.True(t, offResponse.Success, offResponse.Message)
+	offData := decodeTokenData(t, offResponse)
+	require.Equal(t, common.CodexProModeOff, offData.CodexProMode)
+
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, common.CodexProModeOff, got.CodexProMode)
+}
+
+func TestUpdateTokenStatusOnlyPreservesCodexProMode(t *testing.T) {
+	db := setupTokenControllerTestDB(t)
+	token := seedToken(t, db, 94503, "codex-pro-status-only", "sk-codex-pro-status-only")
+	require.NoError(t, db.Model(token).Updates(map[string]any{
+		"codex_pro_mode": common.CodexProModeAll,
+		"status":         common.TokenStatusExhausted,
+	}).Error)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/token/?status_only=true", map[string]any{
+		"id": token.Id, "status": common.TokenStatusEnabled,
+	}, 94503)
+	UpdateToken(ctx)
+
+	response := decodeAPIResponse(t, recorder)
+	require.True(t, response.Success, response.Message)
+	data := decodeTokenData(t, response)
+	require.Equal(t, common.CodexProModeAll, data.CodexProMode)
+
+	var got model.Token
+	require.NoError(t, db.First(&got, token.Id).Error)
+	require.Equal(t, common.TokenStatusEnabled, got.Status)
+	require.Equal(t, common.CodexProModeAll, got.CodexProMode)
 }
 
 func TestUpdateTokenLimitValidationAndStateSwitch(t *testing.T) {

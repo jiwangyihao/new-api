@@ -30,7 +30,8 @@ import {
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { getApiKeyStatusConfig, formatApiKeyTokenCount } from '../constants'
-import { type ApiKey } from '../types'
+import { API_KEY_CODEX_PRO_MODE_OPTIONS } from '../lib'
+import { type ApiKey, type ApiKeyCodexProMode } from '../types'
 import {
   ApiKeyCell,
   ModelLimitsCell,
@@ -44,6 +45,12 @@ function getTokenProgressColor(percentage: number): string {
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
 }
 
+function getApiKeyCodexProModeLabel(mode: ApiKeyCodexProMode): string {
+  return (
+    API_KEY_CODEX_PRO_MODE_OPTIONS.find((option) => option.value === mode)
+      ?.labelKey ?? 'Inherit user setting'
+  )
+}
 
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
@@ -156,7 +163,8 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
                   {t('Used:')} {formatApiKeyTokenCount(used, t('tokens'))}
                 </div>
                 <div>
-                  {t('Remaining:')} {formatApiKeyTokenCount(remaining, t('tokens'))} (
+                  {t('Remaining:')}{' '}
+                  {formatApiKeyTokenCount(remaining, t('tokens'))} (
                   {Math.max(100 - percentage, 0).toFixed(1)}%)
                 </div>
                 <div>
@@ -168,6 +176,35 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
         )
       },
       meta: { label: t('Token limit') },
+    },
+    {
+      id: 'codex_pro_mode',
+      accessorKey: 'codex_pro_mode',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Codex Pro')} />
+      ),
+      cell: ({ row }) => {
+        const mode = row.original.codex_pro_mode
+        if (!mode || mode === 'inherit') {
+          return (
+            <StatusBadge
+              label={t('Inherit user setting')}
+              variant='neutral'
+              showDot={false}
+              copyable={false}
+            />
+          )
+        }
+
+        return (
+          <StatusBadge
+            label={t(getApiKeyCodexProModeLabel(mode))}
+            variant={mode === 'off' ? 'neutral' : 'purple'}
+            copyable={false}
+          />
+        )
+      },
+      meta: { label: t('Codex Pro'), mobileHidden: true },
     },
     {
       id: 'model_limits',

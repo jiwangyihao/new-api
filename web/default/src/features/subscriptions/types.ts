@@ -22,6 +22,67 @@ import { z } from 'zod'
 // Subscription Plan Schema & Types
 // ============================================================================
 
+const channelEquivalentBaseSchema = z.object({
+  channel_type: z.number(),
+  channel_type_name: z.string(),
+  channel_type_label_key: z.string().optional(),
+})
+
+const planChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('single'),
+    variant_count: z.number(),
+    multiplier: z.number(),
+    equivalent_token_limit: z.number(),
+  }),
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('range'),
+    variant_count: z.number(),
+    min_multiplier: z.number(),
+    max_multiplier: z.number(),
+    equivalent_token_limit_min: z.number(),
+    equivalent_token_limit_max: z.number(),
+  }),
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('unlimited'),
+    variant_count: z.number(),
+    token_unlimited: z.literal(true),
+  }),
+])
+
+const subscriptionChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('single'),
+    variant_count: z.number(),
+    multiplier: z.number(),
+    equivalent_token_limit: z.number(),
+    equivalent_token_remaining: z.number(),
+  }),
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('range'),
+    variant_count: z.number(),
+    min_multiplier: z.number(),
+    max_multiplier: z.number(),
+    equivalent_token_limit_min: z.number(),
+    equivalent_token_limit_max: z.number(),
+    equivalent_token_remaining_min: z.number(),
+    equivalent_token_remaining_max: z.number(),
+  }),
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('unlimited'),
+    variant_count: z.number(),
+    token_unlimited: z.literal(true),
+  }),
+])
+
+export type PlanChannelTokenEquivalent = z.infer<
+  typeof planChannelTokenEquivalentSchema
+>
+
+export type SubscriptionChannelTokenEquivalent = z.infer<
+  typeof subscriptionChannelTokenEquivalentSchema
+>
+
 export const subscriptionPlanSchema = z.object({
   id: z.number(),
   title: z.string(),
@@ -50,9 +111,17 @@ export const subscriptionPlanSchema = z.object({
   trial_duration_hours: z.number().optional(),
   reward_eligible: z.boolean().optional(),
   business_code: z.string().optional(),
+  channel_token_equivalents: z
+    .array(planChannelTokenEquivalentSchema)
+    .default([]),
 })
 
-export type SubscriptionPlan = z.infer<typeof subscriptionPlanSchema>
+export type SubscriptionPlan = Omit<
+  z.infer<typeof subscriptionPlanSchema>,
+  'channel_token_equivalents'
+> & {
+  channel_token_equivalents?: PlanChannelTokenEquivalent[]
+}
 
 export interface PlanRecord {
   plan: SubscriptionPlan
@@ -76,6 +145,7 @@ export interface PublicSubscriptionPlan {
   enabled?: boolean
   is_trial?: boolean
   max_purchase_per_user?: number
+  channel_token_equivalents?: PlanChannelTokenEquivalent[]
 }
 
 export interface PublicPlanRecord {
@@ -128,13 +198,13 @@ export interface ApiResponse<T = unknown> {
 }
 
 export type CodexProMode = 'all' | 'flexible' | 'off'
+export type ApiKeyCodexProMode = 'inherit' | CodexProMode
 export type CodexProUnavailableReason =
   | ''
   | 'wallet_only'
   | 'trial_subscription'
   | 'reward_subscription'
   | 'no_paid_subscription'
-
 
 export interface UpdateCodexProModeRequest {
   mode: CodexProMode
@@ -244,6 +314,7 @@ export interface SelfSubscriptionSummary {
   gpt_abuse_limit_enabled: boolean
   next_reset_time?: number
   end_time?: number
+  channel_token_equivalents?: SubscriptionChannelTokenEquivalent[]
 }
 
 export interface SelfSubscriptionData {

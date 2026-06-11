@@ -49,8 +49,6 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
 
-	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
-
 	usage := dto.Usage{}
 	if compactResp.Usage != nil {
 		usage.PromptTokens = compactResp.Usage.InputTokens
@@ -60,9 +58,22 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
 		}
 	}
-	if writeOK && compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
+	if compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
+		if billing := service.NewAPIBillingFromUsage(info, &usage); billing != nil {
+			compactResp.NewAPIBilling = billing
+			service.SeedNewAPIBillingRelayInfo(info, *billing)
+			if responseBody, err = common.Marshal(compactResp); err != nil {
+				return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+			}
+		}
+	}
+
+	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
+	if !writeOK && info != nil {
+		info.ClearCodexProServedCandidate()
+		info.CodexProServed = false
 	}
 
 	return &usage, nil

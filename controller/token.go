@@ -39,6 +39,7 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	}
 	maskedToken := *token
 	maskedToken.Key = token.GetMaskedKey()
+	maskedToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(maskedToken.CodexProMode)
 	view := maskedToken.BuildTokenLimitView()
 	return &tokenResponse{
 		Token:             &maskedToken,
@@ -284,6 +285,14 @@ func AddToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	token.CodexProMode = strings.TrimSpace(token.CodexProMode)
+	if token.CodexProMode != "" {
+		if err := common.ValidateAPIKeyCodexProModeForUpdate(token.CodexProMode); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	token.CodexProMode = common.NormalizeAPIKeyCodexProMode(token.CodexProMode)
 	// 检查用户令牌数量是否已达上限
 	maxTokens := operation_setting.GetMaxUserTokens()
 	count, err := model.CountUserTokens(c.GetInt("id"))
@@ -319,6 +328,7 @@ func AddToken(c *gin.Context) {
 		TokenLimitEnabled:  token.TokenLimitEnabled,
 		TokenLimit:         token.TokenLimit,
 		TokenUsed:          0,
+		CodexProMode:       token.CodexProMode,
 	}
 	err = cleanToken.Insert()
 	if err != nil {
@@ -375,9 +385,17 @@ func UpdateToken(c *gin.Context) {
 	_, hasUnlimitedQuota := rawPayload["unlimited_quota"]
 	_, hasTokenLimitEnabled := rawPayload["token_limit_enabled"]
 	_, hasTokenLimit := rawPayload["token_limit"]
+	_, hasCodexProMode := rawPayload["codex_pro_mode"]
 	if hasRemainQuota && token.RemainQuota < 0 {
 		common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 		return
+	}
+	if hasCodexProMode {
+		token.CodexProMode = strings.TrimSpace(token.CodexProMode)
+		if err := common.ValidateAPIKeyCodexProModeForUpdate(token.CodexProMode); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	cleanToken, err := model.GetTokenByIds(token.Id, userId)
 	if err != nil {
@@ -417,8 +435,12 @@ func UpdateToken(c *gin.Context) {
 				return
 			}
 		}
+		if hasCodexProMode {
+			cleanToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(token.CodexProMode)
+		}
 
 	}
+	cleanToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(cleanToken.CodexProMode)
 	err = cleanToken.Update()
 	if err != nil {
 		common.ApiError(c, err)

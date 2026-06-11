@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -363,21 +364,37 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	apiKeyTokens := rawMeteredTokens
-	subscriptionTokens := apiKeyTokens
+	channelBillableTokens := int64(0)
+	var multiplierErr error
+	if !usageUnavailable && rawMeteredTokens > 0 {
+		channelBillableTokens, multiplierErr = tokenbilling.ApplyMultiplier(rawMeteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
+		if multiplierErr != nil {
+			return multiplierErr
+		}
+	}
+	apiKeyTokens := channelBillableTokens
+	subscriptionTokens := channelBillableTokens
 	if usageUnavailable || (relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
 		summary.PromptTokens = 0
 		summary.CompletionTokens = 0
 		summary.TotalTokens = 0
 		summary.Quota = 0
+		rawMeteredTokens = 0
+		channelBillableTokens = 0
 		apiKeyTokens = 0
 		subscriptionTokens = 0
 	}
 	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens, summary.Quota)
+	if relayInfo != nil {
+		relayInfo.RawMeteredTokens = rawMeteredTokens
+		relayInfo.ChannelBillableTokens = channelBillableTokens
+		relayInfo.ApiKeyBillableTokens = apiKeyTokens
+		relayInfo.SubscriptionBillableTokens = subscriptionTokens
+	}
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
-	if originUsage != nil && !usageUnavailable {
+	if originUsage != nil && !usageUnavailable && !(relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)

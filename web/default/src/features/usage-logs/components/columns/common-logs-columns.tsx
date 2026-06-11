@@ -40,6 +40,7 @@ import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
+  getBillingMultiplierMeta,
   getFirstResponseTimeColor,
   getResponseTimeColor,
   getTieredBillingSummary,
@@ -67,7 +68,6 @@ interface DetailSegment {
   muted?: boolean
   danger?: boolean
 }
-
 
 function buildDetailSegments(
   log: UsageLog,
@@ -218,8 +218,7 @@ function buildDetailSegments(
           })
         }
       }
-  }
-
+    }
   }
   if (other.is_system_prompt_overwritten) {
     segments.push({
@@ -596,7 +595,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     {
       accessorKey: 'prompt_tokens',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title='Tokens' />
+        <DataTableColumnHeader column={column} title={t('Tokens')} />
       ),
       cell: ({ row }) => {
         const log = row.original
@@ -641,7 +640,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           </div>
         )
       },
-      meta: { label: 'Tokens', mobileHidden: true },
+      meta: { label: t('Tokens'), mobileHidden: true },
     },
 
     {
@@ -675,8 +674,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 </TooltipTrigger>
                 <TooltipContent>
                   <span>
-                    {t('Deducted by subscription')}:{' '}
-                    {formatTokens(tokenUsage)}
+                    {t('Deducted by subscription')}: {formatTokens(tokenUsage)}
                   </span>
                 </TooltipContent>
               </Tooltip>
@@ -693,6 +691,70 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
         )
       },
       meta: { label: t('Token Usage') },
+    },
+
+    {
+      id: 'billing_multiplier',
+      accessorFn: (log) => parseLogOther(log.other)?.billing_multiplier ?? -1,
+      header: ({ column }) => (
+        <DataTableColumnHeader
+          column={column}
+          title={t('Consumption Multiplier')}
+        />
+      ),
+      cell: ({ row }) => {
+        const log = row.original
+        if (!isDisplayableLogType(log.type)) return null
+
+        const other = parseLogOther(log.other)
+        const meta = getBillingMultiplierMeta(other)
+
+        return (
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className='border-border/80 bg-muted/60 inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 font-mono text-xs font-semibold tabular-nums' />
+                }
+              >
+                {meta.text}
+              </TooltipTrigger>
+              <TooltipContent>
+                <div className='space-y-1 text-xs'>
+                  <div>
+                    {t('Multiplier source')}:{' '}
+                    {meta.sourceLabel ? t(meta.sourceLabel) : '—'}
+                  </div>
+                  {meta.meteredTokens != null && (
+                    <div>
+                      {t('Metered tokens')}: {formatTokens(meta.meteredTokens)}
+                    </div>
+                  )}
+                  {meta.billableTokens != null && (
+                    <div>
+                      {t('Billable tokens')}:{' '}
+                      {formatTokens(meta.billableTokens)}
+                    </div>
+                  )}
+                  {meta.codexProRequested != null && (
+                    <div>
+                      {t('Codex Pro requested')}:{' '}
+                      {meta.codexProRequested ? t('Yes') : t('No')}
+                    </div>
+                  )}
+                  {meta.codexProServed != null && (
+                    <div>
+                      {t('Codex Pro served')}:{' '}
+                      {meta.codexProServed ? t('Yes') : t('No')}
+                    </div>
+                  )}
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )
+      },
+      meta: { label: t('Consumption Multiplier'), mobileHidden: true },
     },
 
     {

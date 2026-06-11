@@ -100,9 +100,10 @@ function clampTokenCount(value: number): number {
 }
 
 export function getLegacyPromptCompletionTokens(log: UsageLog): number {
-  return clampTokenCount(log.prompt_tokens) + clampTokenCount(log.completion_tokens)
+  return (
+    clampTokenCount(log.prompt_tokens) + clampTokenCount(log.completion_tokens)
+  )
 }
-
 
 export function getTokenNameMeta(
   other: LogOtherData | null,
@@ -110,6 +111,57 @@ export function getTokenNameMeta(
 ): string[] {
   if (!showSensitive || !other) return []
   return []
+}
+
+export interface BillingMultiplierMeta {
+  text: string
+  sourceLabel?: string
+  source?: string
+  meteredTokens?: number
+  billableTokens?: number
+  codexProRequested?: boolean
+  codexProServed?: boolean
+}
+
+export function getBillingMultiplierSourceLabel(
+  source: string | undefined
+): string | undefined {
+  switch (source) {
+    case 'codex_pro_served_trailer':
+      return 'Codex Pro served trailer'
+    case 'normal':
+      return 'Normal billing multiplier'
+    case 'free_model':
+      return 'Free model'
+    case 'usage_unavailable':
+      return 'Usage unavailable'
+    case 'default':
+      return 'Default billing multiplier'
+    case 'none':
+      return 'No billing multiplier'
+    default:
+      return source || undefined
+  }
+}
+
+export function getBillingMultiplierMeta(
+  other: LogOtherData | null | undefined
+): BillingMultiplierMeta {
+  const multiplier = other?.billing_multiplier
+  const hasMultiplier =
+    typeof multiplier === 'number' && Number.isFinite(multiplier)
+
+  return {
+    text: hasMultiplier ? `${multiplier}x` : '—',
+    source: other?.billing_multiplier_source,
+    sourceLabel: getBillingMultiplierSourceLabel(
+      other?.billing_multiplier_source
+    ),
+    meteredTokens: other?.metered_tokens,
+    billableTokens: other?.billable_tokens,
+    codexProRequested: other?.codex_pro_requested,
+    codexProServed: other?.codex_pro_served,
+  }
 }
 
 export function getLogTokenUsage(

@@ -50,6 +50,7 @@ import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-p
 import type { UsageLog } from '../../data/schema'
 import {
   parseLogOther,
+  getBillingMultiplierMeta,
   getParamOverrideActionLabel,
   parseAuditLine,
   decodeBillingExprB64,
@@ -195,7 +196,6 @@ function BillingBreakdown(props: {
     }
   }
 
-
   if (!isTieredExpr && isClaude && hasAnyCacheTokens(other)) {
     if (other.cache_ratio != null && other.cache_ratio !== 1) {
       rows.push({
@@ -292,6 +292,39 @@ function BillingBreakdown(props: {
       value: other.admin_info.local_count_tokens
         ? t('Local Billing')
         : t('Upstream Response'),
+    })
+  }
+
+  const multiplierMeta = getBillingMultiplierMeta(other)
+  rows.push({ label: t('Consumption Multiplier'), value: multiplierMeta.text })
+  if (multiplierMeta.sourceLabel) {
+    rows.push({
+      label: t('Multiplier source'),
+      value: t(multiplierMeta.sourceLabel),
+    })
+  }
+  if (multiplierMeta.meteredTokens != null) {
+    rows.push({
+      label: t('Metered tokens'),
+      value: formatTokens(multiplierMeta.meteredTokens),
+    })
+  }
+  if (multiplierMeta.billableTokens != null) {
+    rows.push({
+      label: t('Billable tokens'),
+      value: formatTokens(multiplierMeta.billableTokens),
+    })
+  }
+  if (multiplierMeta.codexProRequested != null) {
+    rows.push({
+      label: t('Codex Pro requested'),
+      value: multiplierMeta.codexProRequested ? t('Yes') : t('No'),
+    })
+  }
+  if (multiplierMeta.codexProServed != null) {
+    rows.push({
+      label: t('Codex Pro served'),
+      value: multiplierMeta.codexProServed ? t('Yes') : t('No'),
     })
   }
 
@@ -542,7 +575,6 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   mono
                 />
               )}
-
 
               {showAdminIp && (
                 <DetailRow

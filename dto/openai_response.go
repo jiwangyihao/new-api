@@ -242,6 +242,15 @@ type Usage struct {
 	Cost any `json:"cost,omitempty"`
 }
 
+type NewAPIBilling struct {
+	MeteredTokens           int64  `json:"metered_tokens"`
+	BillableTokens          int64  `json:"billable_tokens"`
+	BillingMultiplier       int    `json:"billing_multiplier"`
+	BillingMultiplierSource string `json:"billing_multiplier_source"`
+	CodexProRequested       bool   `json:"codex_pro_requested"`
+	CodexProServed          bool   `json:"codex_pro_served"`
+}
+
 type OpenAIVideoResponse struct {
 	Id        string `json:"id" example:"file-abc123"`
 	Object    string `json:"object" example:"file"`
@@ -288,6 +297,7 @@ type OpenAIResponsesResponse struct {
 	TopP               float64            `json:"top_p"`
 	Truncation         json.RawMessage    `json:"truncation"`
 	Usage              *Usage             `json:"usage"`
+	NewAPIBilling      *NewAPIBilling     `json:"newapi_billing,omitempty"`
 	User               json.RawMessage    `json:"user"`
 	Metadata           json.RawMessage    `json:"metadata"`
 }
@@ -396,11 +406,12 @@ type ResponsesStreamResponse struct {
 	Item     *ResponsesOutput         `json:"item,omitempty"`
 	// - response.function_call_arguments.delta
 	// - response.function_call_arguments.done
-	OutputIndex  *int                           `json:"output_index,omitempty"`
-	ContentIndex *int                           `json:"content_index,omitempty"`
-	SummaryIndex *int                           `json:"summary_index,omitempty"`
-	ItemID       string                         `json:"item_id,omitempty"`
-	Part         *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+	OutputIndex   *int                           `json:"output_index,omitempty"`
+	ContentIndex  *int                           `json:"content_index,omitempty"`
+	SummaryIndex  *int                           `json:"summary_index,omitempty"`
+	ItemID        string                         `json:"item_id,omitempty"`
+	Part          *ResponsesReasoningSummaryPart `json:"part,omitempty"`
+	NewAPIBilling *NewAPIBilling                 `json:"newapi_billing,omitempty"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构

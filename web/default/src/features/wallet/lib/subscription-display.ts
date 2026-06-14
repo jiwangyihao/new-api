@@ -19,7 +19,9 @@ For commercial licensing, please contact support@quantumnous.com
 import { CHANNEL_TYPE_OPTIONS } from '@/features/channels/constants'
 import { formatFiniteTokenCount } from '@/features/subscriptions/lib/format'
 import type {
+  PlanChannelCreditEquivalent,
   PlanChannelTokenEquivalent,
+  SubscriptionChannelCreditEquivalent,
   SubscriptionChannelTokenEquivalent,
   UserSubscriptionRecord,
 } from '../../subscriptions/types'
@@ -30,15 +32,19 @@ function getNonBlank(value: string | undefined): string {
 
 type TranslationFn = (key: string, options?: Record<string, unknown>) => string
 
+type PlanEquivalent = PlanChannelCreditEquivalent | PlanChannelTokenEquivalent
+type SubscriptionEquivalent =
+  | SubscriptionChannelCreditEquivalent
+  | SubscriptionChannelTokenEquivalent
+
+type AnyEquivalent = PlanEquivalent | SubscriptionEquivalent
+
 export interface VisibleChannelEquivalents<T> {
   items: T[]
   hiddenCount: number
 }
 
-function getChannelTypeLabel(
-  item: PlanChannelTokenEquivalent | SubscriptionChannelTokenEquivalent,
-  t: TranslationFn
-): string {
+function getChannelTypeLabel(item: AnyEquivalent, t: TranslationFn): string {
   const labelKey = CHANNEL_TYPE_OPTIONS.find(
     (option) => option.value === item.channel_type
   )?.label
@@ -52,15 +58,62 @@ function formatAboutTokens(value: number, t: TranslationFn): string {
   return `${t('about')} ${formatFiniteTokenCount(value, t)}`
 }
 
+function formatRequestCount(value: number, t: TranslationFn): string {
+  const requests = Number(value || 0)
+  return t('{{count}} requests', { count: requests })
+}
+
+function isLegacyDefaultTokenEquivalent(item: AnyEquivalent): boolean {
+  return item.kind === 'single' && 'multiplier' in item && item.multiplier === 1
+}
+
+function isDefaultUsageCreditEquivalent(item: AnyEquivalent): boolean {
+  return (
+    item.kind === 'usage_tokens' &&
+    item.value_type === 'single' &&
+    'multiplier' in item &&
+    item.multiplier === 1
+  )
+}
+
+function usesEstimatedTokenEquivalent(item: AnyEquivalent): boolean {
+  return (
+    item.kind === 'usage_tokens' || item.kind === 'single' || item.kind === 'range'
+  )
+}
+
+function usesFixedRequestEquivalent(item: AnyEquivalent): boolean {
+  return item.kind === 'fixed_request'
+}
+
+export function getChannelEquivalentNotes(
+  items: readonly AnyEquivalent[] | undefined,
+  t: TranslationFn
+): string[] {
+  const safeItems = items ?? []
+  const notes: string[] = []
+  if (safeItems.some(usesEstimatedTokenEquivalent)) {
+    notes.push(
+      t(
+        'Estimated by current channel multiplier. Actual deduction depends on the channel used.'
+      )
+    )
+  }
+  if (safeItems.some(usesFixedRequestEquivalent)) {
+    notes.push(
+      t('Fixed-request channel equivalents show exact full requests available.')
+    )
+  }
+  return notes
+}
+
 export function shouldShowChannelEquivalents(
-  items:
-    | readonly PlanChannelTokenEquivalent[]
-    | readonly SubscriptionChannelTokenEquivalent[]
-    | undefined
+  items: readonly AnyEquivalent[] | undefined
 ): boolean {
   if (!items?.length) return false
   return !items.every(
-    (item) => item.kind === 'single' && item.multiplier === 1
+    (item) =>
+      isLegacyDefaultTokenEquivalent(item) || isDefaultUsageCreditEquivalent(item)
   )
 }
 
@@ -78,13 +131,38 @@ export function getVisibleChannelEquivalents<T>(
 }
 
 export function formatPlanChannelEquivalent(
-  item: PlanChannelTokenEquivalent,
+  item: PlanEquivalent,
   t: TranslationFn
 ): string {
   const label = getChannelTypeLabel(item, t)
 
   if (item.kind === 'unlimited') {
     return `${label}: ${t('Unlimited tokens')}`
+  }
+
+  if (item.kind === 'usage_tokens') {
+    if (item.value_type === 'range') {
+      return `${label}: ${formatAboutTokens(
+        item.equivalent_token_limit_min,
+        t
+      )} - ${formatFiniteTokenCount(item.equivalent_token_limit_max, t)}`
+    }
+    return `${label}: ${formatAboutTokens(item.equivalent_token_limit, t)}`
+  }
+
+  if (item.kind === 'fixed_request') {
+    if (item.value_type === 'range') {
+      return `${label}: ${formatRequestCount(
+        item.equivalent_request_limit_min,
+        t
+      )} - ${t('{{count}} requests', {
+        count: item.equivalent_request_limit_max,
+      })}`
+    }
+    return `${label}: ${formatRequestCount(
+      item.equivalent_request_limit,
+      t
+    )}`
   }
 
   if (item.kind === 'range') {
@@ -98,13 +176,38 @@ export function formatPlanChannelEquivalent(
 }
 
 export function formatSubscriptionChannelEquivalent(
-  item: SubscriptionChannelTokenEquivalent,
+  item: SubscriptionEquivalent,
   t: TranslationFn
 ): string {
   const label = getChannelTypeLabel(item, t)
 
   if (item.kind === 'unlimited') {
     return `${label}: ${t('Unlimited tokens')}`
+  }
+
+  if (item.kind === 'usage_tokens') {
+    if (item.value_type === 'range') {
+      return `${label}: ${formatAboutTokens(
+        item.equivalent_token_remaining_min,
+        t
+      )} - ${formatFiniteTokenCount(item.equivalent_token_remaining_max, t)}`
+    }
+    return `${label}: ${formatAboutTokens(item.equivalent_token_remaining, t)}`
+  }
+
+  if (item.kind === 'fixed_request') {
+    if (item.value_type === 'range') {
+      return `${label}: ${formatRequestCount(
+        item.equivalent_request_remaining_min,
+        t
+      )} - ${t('{{count}} requests', {
+        count: item.equivalent_request_remaining_max,
+      })}`
+    }
+    return `${label}: ${formatRequestCount(
+      item.equivalent_request_remaining,
+      t
+    )}`
   }
 
   if (item.kind === 'range') {

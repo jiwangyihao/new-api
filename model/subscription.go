@@ -204,9 +204,10 @@ type SubscriptionPlan struct {
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
 
-	CreatedAt               int64                        `json:"created_at" gorm:"bigint"`
-	UpdatedAt               int64                        `json:"updated_at" gorm:"bigint"`
-	ChannelTokenEquivalents []PlanChannelTokenEquivalent `json:"channel_token_equivalents" gorm:"-"`
+	CreatedAt                int64                         `json:"created_at" gorm:"bigint"`
+	UpdatedAt                int64                         `json:"updated_at" gorm:"bigint"`
+	ChannelCreditEquivalents []PlanChannelCreditEquivalent `json:"channel_credit_equivalents" gorm:"-"`
+	ChannelTokenEquivalents  []PlanChannelTokenEquivalent  `json:"channel_token_equivalents" gorm:"-"`
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
@@ -453,25 +454,26 @@ type PublicSubscriptionSummary struct {
 }
 
 type SelfSubscriptionSummary struct {
-	ActiveSubscriptionId     int                                  `json:"active_subscription_id,omitempty"`
-	ActiveCount              int                                  `json:"active_count"`
-	SubscriptionId           int                                  `json:"subscription_id"`
-	PlanId                   int                                  `json:"plan_id"`
-	PrimaryPlanTitle         string                               `json:"primary_plan_title"`
-	TokenLimit               int64                                `json:"token_limit"`
-	TokenUsed                int64                                `json:"token_used"`
-	TokenRemaining           int64                                `json:"token_remaining"`
-	TokenUnlimited           bool                                 `json:"token_unlimited"`
-	ConcurrencyLimit         int                                  `json:"concurrency_limit"`
-	QueueCapacity            int                                  `json:"queue_capacity"`
-	GPTAbuseWarningLimit     int                                  `json:"gpt_abuse_warning_limit"`
-	GPTAbuseWarningCount     int                                  `json:"gpt_abuse_warning_count"`
-	GPTAbuseWarningRemaining int                                  `json:"gpt_abuse_warning_remaining"`
-	GPTAbuseSuspendedUntil   int64                                `json:"gpt_abuse_suspended_until,omitempty"`
-	GPTAbuseLimitEnabled     bool                                 `json:"gpt_abuse_limit_enabled"`
-	NextResetTime            int64                                `json:"next_reset_time,omitempty"`
-	EndTime                  int64                                `json:"end_time,omitempty"`
-	ChannelTokenEquivalents  []SubscriptionChannelTokenEquivalent `json:"channel_token_equivalents" gorm:"-"`
+	ActiveSubscriptionId     int                                   `json:"active_subscription_id,omitempty"`
+	ActiveCount              int                                   `json:"active_count"`
+	SubscriptionId           int                                   `json:"subscription_id"`
+	PlanId                   int                                   `json:"plan_id"`
+	PrimaryPlanTitle         string                                `json:"primary_plan_title"`
+	TokenLimit               int64                                 `json:"token_limit"`
+	TokenUsed                int64                                 `json:"token_used"`
+	TokenRemaining           int64                                 `json:"token_remaining"`
+	TokenUnlimited           bool                                  `json:"token_unlimited"`
+	ConcurrencyLimit         int                                   `json:"concurrency_limit"`
+	QueueCapacity            int                                   `json:"queue_capacity"`
+	GPTAbuseWarningLimit     int                                   `json:"gpt_abuse_warning_limit"`
+	GPTAbuseWarningCount     int                                   `json:"gpt_abuse_warning_count"`
+	GPTAbuseWarningRemaining int                                   `json:"gpt_abuse_warning_remaining"`
+	GPTAbuseSuspendedUntil   int64                                 `json:"gpt_abuse_suspended_until,omitempty"`
+	GPTAbuseLimitEnabled     bool                                  `json:"gpt_abuse_limit_enabled"`
+	NextResetTime            int64                                 `json:"next_reset_time,omitempty"`
+	EndTime                  int64                                 `json:"end_time,omitempty"`
+	ChannelCreditEquivalents []SubscriptionChannelCreditEquivalent `json:"channel_credit_equivalents" gorm:"-"`
+	ChannelTokenEquivalents  []SubscriptionChannelTokenEquivalent  `json:"channel_token_equivalents" gorm:"-"`
 }
 
 func calcPlanEndTime(start time.Time, plan *SubscriptionPlan) (int64, error) {

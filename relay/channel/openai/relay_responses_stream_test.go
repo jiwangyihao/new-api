@@ -2,7 +2,6 @@ package openai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -279,13 +279,13 @@ func TestOaiResponsesHandlerAddsNewAPIBillingForCodexProTrailerAck(t *testing.T)
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 	var body map[string]any
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
 	billing, ok := body["newapi_billing"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(5), billing["metered_tokens"])
-	assert.Equal(t, float64(10), billing["billable_tokens"])
-	assert.Equal(t, float64(2), billing["billing_multiplier"])
-	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, float64(5), billing["billable_tokens"])
+	assert.Equal(t, float64(1), billing["billing_multiplier"])
+	assert.Equal(t, "default", billing["billing_multiplier_source"])
 	assert.Equal(t, true, billing["codex_pro_requested"])
 	assert.Equal(t, true, billing["codex_pro_served"])
 	require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
@@ -308,16 +308,40 @@ func TestOaiResponsesHandlerOrdinaryHeaderAckAddsNormalBilling(t *testing.T) {
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 	var body map[string]any
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
 	billing, ok := body["newapi_billing"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(5), billing["metered_tokens"])
 	assert.Equal(t, float64(5), billing["billable_tokens"])
 	assert.Equal(t, float64(1), billing["billing_multiplier"])
-	assert.Equal(t, "normal", billing["billing_multiplier_source"])
+	assert.Equal(t, "default", billing["billing_multiplier_source"])
 	assert.Equal(t, true, billing["codex_pro_requested"])
 	assert.Equal(t, false, billing["codex_pro_served"])
 	require.Empty(t, recorder.Header().Get("X-NewAPI-Pro-Served"))
+}
+
+func TestOaiResponsesHandlerDynamicBillingMultiplierEnabledFromTrailer(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}, DynamicBillingMultiplierEnabled: true}
+	resp := newCodexProTrailerResponseForOpenAITest(`{"status":"completed","usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}`, "")
+	resp.Trailer = http.Header{
+		relaycommon.DynamicBillingMultiplierSpecHeaderName:       []string{"1.75"},
+		relaycommon.DynamicBillingMultiplierSpecSourceHeaderName: []string{"trailer_priority"},
+	}
+
+	usage, apiErr := OaiResponsesHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 1.75, info.FrozenDynamicBillingMultiplier())
+	require.Equal(t, "trailer_priority", info.FrozenDynamicBillingMultiplierSource())
+	require.Empty(t, recorder.Header().Get(relaycommon.DynamicBillingMultiplierHeaderName))
+	require.Empty(t, recorder.Header().Get(relaycommon.DynamicBillingMultiplierSpecHeaderName))
 }
 
 func TestOaiResponsesCompactionHandlerAddsNewAPIBillingForCodexProTrailerAck(t *testing.T) {
@@ -336,13 +360,13 @@ func TestOaiResponsesCompactionHandlerAddsNewAPIBillingForCodexProTrailerAck(t *
 	require.Nil(t, apiErr)
 	require.NotNil(t, usage)
 	var body map[string]any
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
 	billing, ok := body["newapi_billing"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(7), billing["metered_tokens"])
-	assert.Equal(t, float64(14), billing["billable_tokens"])
-	assert.Equal(t, float64(2), billing["billing_multiplier"])
-	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, float64(7), billing["billable_tokens"])
+	assert.Equal(t, float64(1), billing["billing_multiplier"])
+	assert.Equal(t, "default", billing["billing_multiplier_source"])
 	assert.Equal(t, true, billing["codex_pro_requested"])
 	assert.Equal(t, true, billing["codex_pro_served"])
 }
@@ -629,9 +653,9 @@ func TestOaiResponsesStreamHandlerFinalCompletedChunkAddsBillingAfterTrailerAck(
 	billing, ok := completed["newapi_billing"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, float64(5), billing["metered_tokens"])
-	assert.Equal(t, float64(10), billing["billable_tokens"])
-	assert.Equal(t, float64(2), billing["billing_multiplier"])
-	assert.Equal(t, "codex_pro_served_trailer", billing["billing_multiplier_source"])
+	assert.Equal(t, float64(5), billing["billable_tokens"])
+	assert.Equal(t, float64(1), billing["billing_multiplier"])
+	assert.Equal(t, "default", billing["billing_multiplier_source"])
 	assert.Equal(t, true, billing["codex_pro_requested"])
 	assert.Equal(t, true, billing["codex_pro_served"])
 }
@@ -648,7 +672,7 @@ func extractResponsesStreamEventForOpenAITest(t *testing.T, body string, eventTy
 			continue
 		}
 		var event map[string]any
-		require.NoError(t, json.Unmarshal([]byte(payload), &event))
+		require.NoError(t, common.Unmarshal([]byte(payload), &event))
 		if event["type"] == eventType {
 			return event
 		}

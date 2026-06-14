@@ -118,7 +118,7 @@ export function LogStatCards(props: LogStatCardsProps) {
       return
     }
 
-    const previousMode = selfSubscriptionData.codex_pro_mode
+    const previousMode = normalizeCodexProMode(selfSubscriptionData.codex_pro_mode)
     if (previousMode === requestedMode) return
 
     setSavingCodexProMode(true)

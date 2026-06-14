@@ -316,11 +316,15 @@ func applyFreeSubscriptionUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) e
 	if log == nil || log.SubscriptionID == nil || *log.SubscriptionID <= 0 || log.SubscriptionTokensConsumed == nil || *log.SubscriptionTokensConsumed <= 0 {
 		return nil
 	}
-	if DB == nil {
+	businessDB := DB
+	if businessDB == nil {
 		return errors.New("business database is nil")
 	}
+	if businessDB == LOG_DB {
+		businessDB = tx
+	}
 	var sub UserSubscription
-	if err := DB.Where("id = ?", *log.SubscriptionID).First(&sub).Error; err != nil {
+	if err := businessDB.Where("id = ?", *log.SubscriptionID).First(&sub).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
@@ -330,14 +334,14 @@ func applyFreeSubscriptionUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) e
 		return nil
 	}
 	var user User
-	if err := DB.Select("id").Where("id = ?", sub.UserId).First(&user).Error; err != nil {
+	if err := businessDB.Select("id").Where("id = ?", sub.UserId).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}
 		return err
 	}
 	var plan SubscriptionPlan
-	if err := DB.Where("id = ?", sub.PlanId).First(&plan).Error; err != nil {
+	if err := businessDB.Where("id = ?", sub.PlanId).First(&plan).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil
 		}

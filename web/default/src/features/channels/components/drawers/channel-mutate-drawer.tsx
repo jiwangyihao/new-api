@@ -144,6 +144,7 @@ import {
   findMissingModelsInMapping,
   validateModelMappingJson,
   parseTokenBillingMultiplierInput,
+  parseFixedRequestCreditsInput,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -401,6 +402,7 @@ export function ChannelMutateDrawer({
   const multiKeyType = form.watch('multi_key_type')
   const keyMode = form.watch('key_mode')
   const currentType = form.watch('type')
+  const currentCreditBillingMode = form.watch('credit_billing_mode')
   const currentBaseUrl = form.watch('base_url')
   const currentModels = form.watch('models')
   const currentModelMapping = form.watch('model_mapping')
@@ -1232,10 +1234,114 @@ export function ChannelMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t(
-                          '1 means raw token deduction; 2 means each upstream token deducts 2 subscription tokens; 0.5 means each upstream token deducts 0.5 subscription tokens.'
+                          'In usage token mode, 1 means each upstream token deducts 1 credit; 2 deducts 2 credits; 0.5 deducts 0.5 credits.'
                         )}
                       </FormDescription>
                       <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                <div className='grid gap-4 sm:grid-cols-2'>
+                  <FormField
+                    control={form.control}
+                    name='credit_billing_mode'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Credit billing mode')}</FormLabel>
+                        <Select
+                          items={[
+                            {
+                              value: 'usage_tokens',
+                              label: t('Usage tokens'),
+                            },
+                            {
+                              value: 'fixed_request',
+                              label: t('Fixed request'),
+                            },
+                          ]}
+                          onValueChange={field.onChange}
+                          value={field.value}
+                        >
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent alignItemWithTrigger={false}>
+                            <SelectGroup>
+                              <SelectItem value='usage_tokens'>
+                                {t('Usage tokens')}
+                              </SelectItem>
+                              <SelectItem value='fixed_request'>
+                                {t('Fixed request')}
+                              </SelectItem>
+                            </SelectGroup>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          {t(
+                            'Usage tokens deduct credits by trusted upstream usage; fixed request deducts a configured credit amount once per trusted request.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name='fixed_request_credits'
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{t('Fixed request credits')}</FormLabel>
+                        <FormControl>
+                          <Input
+                            type='number'
+                            min='0'
+                            step='1'
+                            disabled={currentCreditBillingMode !== 'fixed_request'}
+                            {...field}
+                            onChange={(e) =>
+                              field.onChange(
+                                parseFixedRequestCreditsInput(
+                                  e.target.value,
+                                  e.target.valueAsNumber
+                                )
+                              )
+                            }
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          {t(
+                            'Required for fixed request mode. The amount is charged once per trusted request.'
+                          )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <FormField
+                  control={form.control}
+                  name='dynamic_billing_multiplier_enabled'
+                  render={({ field }) => (
+                    <FormItem className='flex items-center justify-between rounded-lg border px-4 py-3'>
+                      <div className='space-y-0.5'>
+                        <FormLabel>{t('Dynamic billing multiplier')}</FormLabel>
+                        <FormDescription className='text-xs'>
+                          {t(
+                            'Read a numeric upstream billing multiplier only for this channel and apply it during settlement.'
+                          )}
+                        </FormDescription>
+                      </div>
+                      <FormControl>
+                        <Switch
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
                     </FormItem>
                   )}
                 />

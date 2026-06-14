@@ -47,21 +47,22 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	require.Len(t, payload.Data, 2)
 
 	allowedPlanKeys := map[string]struct{}{
-		"id":                        {},
-		"title":                     {},
-		"subtitle":                  {},
-		"price_amount":              {},
-		"currency":                  {},
-		"duration_unit":             {},
-		"duration_value":            {},
-		"custom_seconds":            {},
-		"monthly_token_limit":       {},
-		"concurrency_limit":         {},
-		"queue_capacity":            {},
-		"public_visible":            {},
-		"gpt_abuse_warning_limit":   {},
-		"channel_token_equivalents": {},
-		"kyren_product_id":          {},
+		"id":                         {},
+		"title":                      {},
+		"subtitle":                   {},
+		"price_amount":               {},
+		"currency":                   {},
+		"duration_unit":              {},
+		"duration_value":             {},
+		"custom_seconds":             {},
+		"monthly_token_limit":        {},
+		"concurrency_limit":          {},
+		"queue_capacity":             {},
+		"public_visible":             {},
+		"gpt_abuse_warning_limit":    {},
+		"channel_token_equivalents":  {},
+		"channel_credit_equivalents": {},
+		"kyren_product_id":           {},
 	}
 
 	assert.Equal(t, "Public High", payload.Data[0].Plan["title"])
@@ -87,12 +88,13 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, kyrenProductByTitle[title], record.Plan["kyren_product_id"])
 
-		equivalents, ok := record.Plan["channel_token_equivalents"].([]any)
-		require.True(t, ok, "public plan channel_token_equivalents must be an array")
+		equivalents, ok := record.Plan["channel_credit_equivalents"].([]any)
+		require.True(t, ok, "public plan channel_credit_equivalents must be an array")
 		require.Len(t, equivalents, 1)
 		equivalent, ok := equivalents[0].(map[string]any)
 		require.True(t, ok)
-		assert.Equal(t, "single", equivalent["kind"])
+		assert.Equal(t, "usage_tokens", equivalent["kind"])
+		assert.Equal(t, "single", equivalent["value_type"])
 		assert.Equal(t, float64(constant.ChannelTypeOpenAI), equivalent["channel_type"])
 		assert.Equal(t, float64(2), equivalent["multiplier"])
 	}

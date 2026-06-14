@@ -2,7 +2,7 @@ package openai
 
 import (
 	"bytes"
-	"encoding/json"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -18,6 +18,21 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func applyDynamicBillingMultiplierFromHTTPResponse(info *relaycommon.RelayInfo, resp *http.Response, body []byte, bodySource string) {
+	if info == nil {
+		return
+	}
+	if resp != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
+	}
+	if len(bytes.TrimSpace(body)) > 0 {
+		info.ApplyDynamicBillingMultiplierFromBody(body, bodySource)
+	}
+	if resp != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+	}
+}
 
 // 辅助函数
 func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string, forceFormat bool, thinkToContent bool) error {
@@ -107,12 +122,12 @@ func processTokens(relayMode int, streamItems []string, responseTextBuilder *str
 
 func processChatCompletions(streamResp string, streamItems []string, responseTextBuilder *strings.Builder, toolCount *int) error {
 	var streamResponses []dto.ChatCompletionsStreamResponse
-	if err := json.Unmarshal(common.StringToByteSlice(streamResp), &streamResponses); err != nil {
+	if err := common.Unmarshal(common.StringToByteSlice(streamResp), &streamResponses); err != nil {
 		// 一次性解析失败，逐个解析
 		common.SysLog("error unmarshalling stream response: " + err.Error())
 		for _, item := range streamItems {
 			var streamResponse dto.ChatCompletionsStreamResponse
-			if err := json.Unmarshal(common.StringToByteSlice(item), &streamResponse); err != nil {
+			if err := common.Unmarshal(common.StringToByteSlice(item), &streamResponse); err != nil {
 				return err
 			}
 			if err := ProcessStreamResponse(streamResponse, responseTextBuilder, toolCount); err != nil {
@@ -143,12 +158,12 @@ func processChatCompletions(streamResp string, streamItems []string, responseTex
 
 func processCompletions(streamResp string, streamItems []string, responseTextBuilder *strings.Builder) error {
 	var streamResponses []dto.CompletionsStreamResponse
-	if err := json.Unmarshal(common.StringToByteSlice(streamResp), &streamResponses); err != nil {
+	if err := common.Unmarshal(common.StringToByteSlice(streamResp), &streamResponses); err != nil {
 		// 一次性解析失败，逐个解析
 		common.SysLog("error unmarshalling stream response: " + err.Error())
 		for _, item := range streamItems {
 			var streamResponse dto.CompletionsStreamResponse
-			if err := json.Unmarshal(common.StringToByteSlice(item), &streamResponse); err != nil {
+			if err := common.Unmarshal(common.StringToByteSlice(item), &streamResponse); err != nil {
 				continue
 			}
 			for _, choice := range streamResponse.Choices {
@@ -182,7 +197,7 @@ func handleLastResponse(lastStreamData string, responseId *string, createAt *int
 	*systemFingerprint = lastStreamResponse.GetSystemFingerprint()
 	*model = lastStreamResponse.Model
 
-	if service.ValidUsage(lastStreamResponse.Usage) {
+	if lastStreamResponse.Usage != nil {
 		*containStreamUsage = true
 		*usage = lastStreamResponse.Usage
 		if !info.ShouldIncludeUsage {

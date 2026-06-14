@@ -34,6 +34,15 @@ export function parseTokenBillingMultiplierInput(
   return valueAsNumber
 }
 
+export function parseFixedRequestCreditsInput(
+  value: string,
+  valueAsNumber: number
+): number | '' {
+  if (value === '' || !Number.isFinite(valueAsNumber)) return ''
+  return Math.trunc(valueAsNumber)
+}
+
+
 export function invalidateChannelTokenMultiplierRelatedQueries(
   queryClient: QueryClient
 ): void {
@@ -78,62 +87,87 @@ const tokenBillingMultiplierSchema = z.preprocess(
 // Form Validation Schema
 // ============================================================================
 
-export const channelFormSchema = z.object({
-  name: z.string().min(1, 'Channel name is required'),
-  type: z.number().min(0, 'Channel type is required'),
-  base_url: z.string().optional(),
-  key: z.string(),
-  openai_organization: z.string().optional(),
-  models: z.string().min(1, 'At least one model is required'),
-  model_mapping: z.string().optional(),
-  priority: z.number().optional(),
-  weight: z.number().optional(),
-  test_model: z.string().optional(),
-  auto_ban: z.number().optional(),
-  token_billing_multiplier: tokenBillingMultiplierSchema,
-  status: z.number(),
-  status_code_mapping: z.string().optional(),
-  tag: z.string().optional(),
-  remark: z
-    .string()
-    .max(255, 'Remark must be less than 255 characters')
-    .optional(),
-  setting: z.string().optional(),
-  param_override: z.string().optional(),
-  header_override: z.string().optional(),
-  settings: z.string().optional(),
-  other: z.string().optional(),
-  // Multi-key options (not sent to backend directly)
-  multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
-  multi_key_type: z.enum(['random', 'polling']).optional(),
-  batch_add_set_key_prefix_2_name: z.boolean().optional(),
-  key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
-  // Channel extra settings (stored in setting JSON, not sent directly)
-  force_format: z.boolean().optional(),
-  thinking_to_content: z.boolean().optional(),
-  proxy: z.string().optional(),
-  pass_through_body_enabled: z.boolean().optional(),
-  system_prompt: z.string().optional(),
-  system_prompt_override: z.boolean().optional(),
-  // Type-specific settings (stored in settings JSON)
-  is_enterprise_account: z.boolean().optional(), // OpenRouter specific
-  vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
-  aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
-  azure_responses_version: z.string().optional(), // Azure specific
-  supported_endpoint_types: z.array(z.string()).optional(), // Channel endpoint capabilities
-  // Field passthrough controls (stored in settings JSON)
-  allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
-  disable_store: z.boolean().optional(), // OpenAI only
-  allow_safety_identifier: z.boolean().optional(), // OpenAI only
-  allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
-  allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
-  allow_speed: z.boolean().optional(), // Anthropic: speed mode control
-  claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
-  // Upstream model update settings (stored in settings JSON)
-  upstream_model_update_check_enabled: z.boolean().optional(),
-  upstream_model_update_auto_sync_enabled: z.boolean().optional(),
-  upstream_model_update_ignored_models: z.string().optional(),
-})
+export const channelFormSchema = z
+  .object({
+    name: z.string().min(1, 'Channel name is required'),
+    type: z.number().min(0, 'Channel type is required'),
+    base_url: z.string().optional(),
+    key: z.string(),
+    openai_organization: z.string().optional(),
+    models: z.string().min(1, 'At least one model is required'),
+    model_mapping: z.string().optional(),
+    priority: z.number().optional(),
+    weight: z.number().optional(),
+    test_model: z.string().optional(),
+    auto_ban: z.number().optional(),
+    token_billing_multiplier: tokenBillingMultiplierSchema,
+    credit_billing_mode: z.enum(['usage_tokens', 'fixed_request']),
+    fixed_request_credits: z.preprocess(
+      (value) => {
+        if (value === '') return 0
+        const parsed = typeof value === 'string' ? Number(value) : value
+        return typeof parsed === 'number' && Number.isFinite(parsed)
+          ? Math.trunc(parsed)
+          : 0
+      },
+      z.number().min(0, 'Fixed request credits must be greater than 0')
+    ),
+    dynamic_billing_multiplier_enabled: z.boolean(),
+    status: z.number(),
+    status_code_mapping: z.string().optional(),
+    tag: z.string().optional(),
+    remark: z
+      .string()
+      .max(255, 'Remark must be less than 255 characters')
+      .optional(),
+    setting: z.string().optional(),
+    param_override: z.string().optional(),
+    header_override: z.string().optional(),
+    settings: z.string().optional(),
+    other: z.string().optional(),
+    // Multi-key options (not sent to backend directly)
+    multi_key_mode: z.enum(['single', 'batch', 'multi_to_single']).optional(),
+    multi_key_type: z.enum(['random', 'polling']).optional(),
+    batch_add_set_key_prefix_2_name: z.boolean().optional(),
+    key_mode: z.enum(['append', 'replace']).optional(), // For editing multi-key channels
+    // Channel extra settings (stored in setting JSON, not sent directly)
+    force_format: z.boolean().optional(),
+    thinking_to_content: z.boolean().optional(),
+    proxy: z.string().optional(),
+    pass_through_body_enabled: z.boolean().optional(),
+    system_prompt: z.string().optional(),
+    system_prompt_override: z.boolean().optional(),
+    // Type-specific settings (stored in settings JSON)
+    is_enterprise_account: z.boolean().optional(), // OpenRouter specific
+    vertex_key_type: z.enum(['json', 'api_key']).optional(), // Vertex AI specific
+    aws_key_type: z.enum(['ak_sk', 'api_key']).optional(), // AWS specific
+    azure_responses_version: z.string().optional(), // Azure specific
+    supported_endpoint_types: z.array(z.string()).optional(), // Channel endpoint capabilities
+    // Field passthrough controls (stored in settings JSON)
+    allow_service_tier: z.boolean().optional(), // OpenAI/Anthropic
+    disable_store: z.boolean().optional(), // OpenAI only
+    allow_safety_identifier: z.boolean().optional(), // OpenAI only
+    allow_include_obfuscation: z.boolean().optional(), // OpenAI: include usage obfuscation
+    allow_inference_geo: z.boolean().optional(), // OpenAI/Anthropic: inference geography
+    allow_speed: z.boolean().optional(), // Anthropic: speed mode control
+    claude_beta_query: z.boolean().optional(), // Anthropic: beta query passthrough
+    // Upstream model update settings (stored in settings JSON)
+    upstream_model_update_check_enabled: z.boolean().optional(),
+    upstream_model_update_auto_sync_enabled: z.boolean().optional(),
+    upstream_model_update_ignored_models: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (
+      value.credit_billing_mode === 'fixed_request' &&
+      value.fixed_request_credits <= 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['fixed_request_credits'],
+        message: 'Fixed request credits must be greater than 0',
+      })
+    }
+  })
 
 export type ChannelFormValues = z.infer<typeof channelFormSchema>
 
@@ -154,6 +188,9 @@ export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   test_model: '',
   auto_ban: 1,
   token_billing_multiplier: 1,
+  credit_billing_mode: 'usage_tokens',
+  fixed_request_credits: 0,
+  dynamic_billing_multiplier_enabled: false,
   status: CHANNEL_STATUS.ENABLED,
   status_code_mapping: '',
   tag: '',
@@ -294,6 +331,10 @@ export function transformChannelToFormDefaults(
     test_model: channel.test_model || '',
     auto_ban: channel.auto_ban ?? 1,
     token_billing_multiplier: channel.token_billing_multiplier ?? 1,
+    credit_billing_mode: channel.credit_billing_mode ?? 'usage_tokens',
+    fixed_request_credits: channel.fixed_request_credits ?? 0,
+    dynamic_billing_multiplier_enabled:
+      channel.dynamic_billing_multiplier_enabled ?? false,
     status: channel.status,
     status_code_mapping: channel.status_code_mapping || '',
     tag: channel.tag || '',
@@ -491,6 +532,13 @@ export function transformFormDataToCreatePayload(formData: ChannelFormValues): {
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     token_billing_multiplier: formData.token_billing_multiplier,
+    credit_billing_mode: formData.credit_billing_mode,
+    fixed_request_credits:
+      formData.credit_billing_mode === 'fixed_request'
+        ? formData.fixed_request_credits
+        : 0,
+    dynamic_billing_multiplier_enabled:
+      formData.dynamic_billing_multiplier_enabled,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,
@@ -539,6 +587,13 @@ export function transformFormDataToUpdatePayload(
     test_model: formData.test_model || null,
     auto_ban: formData.auto_ban ?? 1,
     token_billing_multiplier: formData.token_billing_multiplier,
+    credit_billing_mode: formData.credit_billing_mode,
+    fixed_request_credits:
+      formData.credit_billing_mode === 'fixed_request'
+        ? formData.fixed_request_credits
+        : 0,
+    dynamic_billing_multiplier_enabled:
+      formData.dynamic_billing_multiplier_enabled,
     status: formData.status,
     status_code_mapping: formData.status_code_mapping || null,
     tag: formData.tag || null,

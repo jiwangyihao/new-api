@@ -27,7 +27,7 @@ import {
   formatPlanPrice,
   formatDuration,
   formatResetPeriod,
-  formatTokenLimit,
+  formatCreditLimit,
 } from '../lib'
 import type { PlanRecord } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -103,9 +103,9 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
       },
       {
         id: 'reset',
-        meta: { label: t('Quota Reset'), mobileHidden: true },
+        meta: { label: t('Credit Reset'), mobileHidden: true },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} title={t('Quota Reset')} />
+          <DataTableColumnHeader column={column} title={t('Credit Reset')} />
         ),
         cell: ({ row }) => (
           <span className='text-muted-foreground'>
@@ -178,16 +178,13 @@ export function useSubscriptionsColumns(): ColumnDef<PlanRecord>[] {
       },
       {
         id: 'monthly_token_limit',
-        meta: { label: t('Monthly Token Limit'), mobileHidden: true },
+        meta: { label: t('Monthly Credits'), mobileHidden: true },
         header: ({ column }) => (
-          <DataTableColumnHeader
-            column={column}
-            title={t('Monthly Token Limit')}
-          />
+          <DataTableColumnHeader column={column} title={t('Monthly Credits')} />
         ),
         cell: ({ row }) => (
           <span className='text-muted-foreground'>
-            {formatTokenLimit(row.original.plan.monthly_token_limit, t)}
+            {formatCreditLimit(row.original.plan.monthly_token_limit, t)}
           </span>
         ),
         size: 140,

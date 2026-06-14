@@ -134,7 +134,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return newAPIError
 	}
 
-	usageDto := usage.(*dto.Usage)
+	usageDto, _ := usage.(*dto.Usage)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
 		originModelName := info.OriginModelName
 		originPriceData := info.PriceData
@@ -156,7 +156,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return nil
 	}
 
-	if strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") && info.BillingSource != service.BillingSourceSubscription {
+	if usageDto != nil && strings.HasPrefix(info.OriginModelName, "gpt-4o-audio") && info.BillingSource != service.BillingSourceSubscription {
 		service.PostAudioConsumeQuota(c, info, usageDto, "")
 	} else {
 		if err := service.PostTextConsumeQuota(c, info, usageDto, nil); err != nil {

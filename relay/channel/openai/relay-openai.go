@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -147,7 +148,7 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			Usage *dto.Usage `json:"usage"`
 		}
 		err := common.Unmarshal([]byte(secondLastStreamData), &streamResp)
-		if err == nil && streamResp.Usage != nil && service.ValidUsage(streamResp.Usage) {
+		if err == nil && streamResp.Usage != nil {
 			usage = streamResp.Usage
 			containStreamUsage = true
 
@@ -172,11 +173,27 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		}
 	}
 
-	applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, common.StringToByteSlice(lastStreamData), relaycommon.DynamicBillingMultiplierSourceSSE)
+	var settlementUsage *dto.Usage
+	if containStreamUsage {
+		applyUsagePostProcessing(info, usage, common.StringToByteSlice(lastStreamData))
+		settlementUsage = usage
+	}
+	var finalUsageContainsBilling bool
+	if billing := service.NewAPIBillingFromUsage(info, settlementUsage); billing != nil {
+		service.SeedNewAPIBillingRelayInfo(info, *billing)
+		if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && !containStreamUsage {
+			finalUsageContainsBilling = true
+			response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
+			response.SetSystemFingerprint(systemFingerprint)
+			response.NewAPIBilling = billing
+			helper.ObjectData(c, response)
+		}
+	}
 
-	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage)
+	HandleFinalResponse(c, info, lastStreamData, responseId, createAt, model, systemFingerprint, usage, containStreamUsage || finalUsageContainsBilling)
 
-	return usage, nil
+	return settlementUsage, nil
 }
 
 func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -227,22 +244,37 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		forceFormat = true
 	}
 
+	usage, hasUsage := usageFromResponseBody(responseBody)
 	usageModified := false
-	if simpleResponse.Usage.TotalTokens == 0 && (simpleResponse.Usage.PromptTokens != 0 || simpleResponse.Usage.CompletionTokens != 0) {
-		simpleResponse.Usage.TotalTokens = simpleResponse.Usage.PromptTokens + simpleResponse.Usage.CompletionTokens
-		usageModified = true
+	if hasUsage {
+		simpleResponse.Usage = *usage
+		if simpleResponse.Usage.TotalTokens == 0 && (simpleResponse.Usage.PromptTokens != 0 || simpleResponse.Usage.CompletionTokens != 0) {
+			simpleResponse.Usage.TotalTokens = simpleResponse.Usage.PromptTokens + simpleResponse.Usage.CompletionTokens
+			usageModified = true
+		}
+		applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
 	}
-	applyUsagePostProcessing(info, &simpleResponse.Usage, responseBody)
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, responseBody, relaycommon.DynamicBillingMultiplierSourceBody)
+	if hasUsage {
+		usage = &simpleResponse.Usage
+	}
+	if billing := service.NewAPIBillingFromUsage(info, usage); billing != nil {
+		simpleResponse.NewAPIBilling = billing
+		service.SeedNewAPIBillingRelayInfo(info, *billing)
+	}
 
 	switch info.RelayFormat {
 	case types.RelayFormatOpenAI:
-		if usageModified {
+		if usageModified || simpleResponse.NewAPIBilling != nil {
 			var bodyMap map[string]interface{}
 			err = common.Unmarshal(responseBody, &bodyMap)
 			if err != nil {
 				return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 			}
 			bodyMap["usage"] = simpleResponse.Usage
+			if simpleResponse.NewAPIBilling != nil {
+				bodyMap["newapi_billing"] = simpleResponse.NewAPIBilling
+			}
 			responseBody, _ = common.Marshal(bodyMap)
 		}
 		if forceFormat {
@@ -271,7 +303,7 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 
-	return &simpleResponse.Usage, nil
+	return usage, nil
 }
 
 func streamTTSResponse(c *gin.Context, resp *http.Response) {
@@ -412,6 +444,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 					errChan <- fmt.Errorf("error unmarshalling message: %v", err)
 					return
 				}
+				info.ApplyDynamicBillingMultiplierFromBody(message, relaycommon.DynamicBillingMultiplierSourceSSE)
 
 				if realtimeEvent.Type == dto.RealtimeEventTypeResponseDone {
 					realtimeUsage := realtimeEvent.Response.Usage
@@ -445,10 +478,12 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 						localUsage.InputTokens += textToken + audioToken
 						localUsage.InputTokenDetails.TextTokens += textToken
 						localUsage.InputTokenDetails.AudioTokens += audioToken
-						err = preConsumeUsage(c, info, localUsage, sumUsage)
-						if err != nil {
-							errChan <- err
-							return
+						if shouldTrustRealtimeLocalUsage(info) {
+							err = preConsumeUsage(c, info, localUsage, sumUsage)
+							if err != nil {
+								errChan <- err
+								return
+							}
 						}
 						// 本次计费完成，清除
 						localUsage = &dto.RealtimeUsage{}
@@ -497,7 +532,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 	case <-targetClosed:
 	case err := <-errChan:
 		logger.LogError(c, "realtime error: "+err.Error())
-		return realtimeErrorFromErrChan(err, sumUsage)
+		return realtimeErrorFromErrChan(err, info, sumUsage)
 	case <-c.Done():
 	}
 
@@ -507,26 +542,33 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 		}
 	}
 
-	if localUsage.TotalTokens != 0 {
+	if localUsage.TotalTokens != 0 && shouldTrustRealtimeLocalUsage(info) {
 		if err := preConsumeUsage(c, info, localUsage, sumUsage); err != nil {
 			return realtimePreConsumeErrorToAPIError(err), sumUsage
 		}
 	}
 
-	// check usage total tokens, if 0, use local usage
-
-	return nil, sumUsage
+	// Return aggregate usage only when a trusted upstream usage object or trusted usage-token fallback was consumed.
+	return nil, trustedRealtimeUsageOrNil(info, sumUsage)
 }
 
-func realtimeErrorFromErrChan(err error, sumUsage *dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {
+func shouldTrustRealtimeLocalUsage(info *relaycommon.RelayInfo) bool {
+	return info == nil || info.FrozenCreditBillingMode() != creditbilling.ModeFixedRequest
+}
+
+func realtimeErrorFromErrChan(err error, info *relaycommon.RelayInfo, usages ...*dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {
+	var sumUsage *dto.RealtimeUsage
+	if len(usages) > 0 {
+		sumUsage = usages[0]
+	}
 	var newAPIError *types.NewAPIError
 	if errors.As(err, &newAPIError) {
 		switch newAPIError.GetErrorCode() {
 		case types.ErrorCodeSubscriptionTokenExhausted, types.ErrorCodeAPIKeyTokenLimitExhausted:
-			return realtimePreConsumeErrorToAPIError(newAPIError), sumUsage
+			return realtimePreConsumeErrorToAPIError(newAPIError), trustedRealtimeUsageOrNil(info, sumUsage)
 		}
 	}
-	return types.NewError(err, types.ErrorCodeDoRequestFailed), sumUsage
+	return types.NewError(err, types.ErrorCodeDoRequestFailed), trustedRealtimeUsageOrNil(info, sumUsage)
 }
 
 func realtimePreConsumeErrorToAPIError(err error) *types.NewAPIError {
@@ -569,25 +611,54 @@ func OpenaiHandlerWithUsage(c *gin.Context, info *relaycommon.RelayInfo, resp *h
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
+	// Once we've written to the client, we should not return errors anymore
+	// because the upstream has already consumed resources and returned content.
+	// We should still perform billing even if parsing succeeds after response rewrite.
+	usage, hasUsage := usageFromResponseBody(responseBody)
+	if hasUsage {
+		usageResp.Usage = *usage
+		if usageResp.InputTokens > 0 {
+			usageResp.PromptTokens += usageResp.InputTokens
+		}
+		if usageResp.OutputTokens > 0 {
+			usageResp.CompletionTokens += usageResp.OutputTokens
+		}
+		if usageResp.InputTokensDetails != nil {
+			usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
+			usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
+		}
+		applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
+		usage = &usageResp.Usage
+	}
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, responseBody, relaycommon.DynamicBillingMultiplierSourceBody)
+	if billing := service.NewAPIBillingFromUsage(info, usage); billing != nil {
+		usageResp.NewAPIBilling = billing
+		service.SeedNewAPIBillingRelayInfo(info, *billing)
+		if responseBody, err = common.Marshal(usageResp); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		}
+	}
+
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
+	return usage, nil
+}
 
-	// Once we've written to the client, we should not return errors anymore
-	// because the upstream has already consumed resources and returned content
-	// We should still perform billing even if parsing fails
-	// format
-	if usageResp.InputTokens > 0 {
-		usageResp.PromptTokens += usageResp.InputTokens
+func usageFromResponseBody(responseBody []byte) (*dto.Usage, bool) {
+	var payload struct {
+		Usage *dto.Usage `json:"usage"`
 	}
-	if usageResp.OutputTokens > 0 {
-		usageResp.CompletionTokens += usageResp.OutputTokens
+	if err := common.Unmarshal(responseBody, &payload); err != nil || payload.Usage == nil {
+		return nil, false
 	}
-	if usageResp.InputTokensDetails != nil {
-		usageResp.PromptTokensDetails.ImageTokens += usageResp.InputTokensDetails.ImageTokens
-		usageResp.PromptTokensDetails.TextTokens += usageResp.InputTokensDetails.TextTokens
+	return payload.Usage, true
+}
+
+func trustedRealtimeUsageOrNil(info *relaycommon.RelayInfo, usage *dto.RealtimeUsage) *dto.RealtimeUsage {
+	if info == nil || usage == nil || !info.HasTrustedUsage {
+		return nil
 	}
-	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
-	return &usageResp.Usage, nil
+	return usage
 }
 
 func applyUsagePostProcessing(info *relaycommon.RelayInfo, usage *dto.Usage, responseBody []byte) {

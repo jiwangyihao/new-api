@@ -116,7 +116,7 @@ func TestPostTextConsumeQuotaChannelMultiplierRefundsWhenActualBillableBelowPrec
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	require.NotNil(t, log.MeteredTokens)
-	assert.Equal(t, 16, *log.MeteredTokens)
+	assert.Equal(t, 8, *log.MeteredTokens)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, float64(2), other["channel_token_billing_multiplier"])
@@ -124,6 +124,14 @@ func TestPostTextConsumeQuotaChannelMultiplierRefundsWhenActualBillableBelowPrec
 	assert.Equal(t, float64(16), other["channel_billable_tokens"])
 	assert.Equal(t, float64(16), other["api_key_billable_tokens"])
 	assert.Equal(t, float64(16), other["subscription_billable_tokens"])
+	assert.Equal(t, "usage_tokens", other["credit_billing_mode"])
+	assert.Equal(t, float64(0), other["fixed_request_credits"])
+	assert.Equal(t, float64(16), other["base_credits"])
+	assert.Equal(t, float64(16), other["api_key_credits"])
+	assert.Equal(t, float64(16), other["subscription_credits"])
+	assert.Equal(t, float64(16), other["final_credits"])
+	assert.Equal(t, float64(1), other["dynamic_billing_multiplier"])
+	assert.Equal(t, "default", other["dynamic_billing_multiplier_source"])
 	assert.Equal(t, float64(10), other["estimated_raw_tokens"])
 	assert.Equal(t, float64(channelID), other["initial_channel_id"])
 	assert.Equal(t, float64(constant.ChannelTypeOpenAI), other["initial_channel_type"])
@@ -157,12 +165,12 @@ func TestPostTextConsumeQuotaCodexProChannelMultiplierTokenLimitUsesChannelBilla
 	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}, nil))
 	model.FlushSubscriptionTokenDeltaUpdates()
 
-	assert.Equal(t, int64(32), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(16), getTokenUsed(t, tokenID))
 	record := getTokenLimitRecordForTest(t, "req-channel-multiplier-codex")
 	assert.Equal(t, int64(16), record.ActualTokens)
 	assert.Equal(t, int64(16), relayInfo.ApiKeyBillableTokens)
-	assert.Equal(t, int64(32), relayInfo.SubscriptionBillableTokens)
+	assert.Equal(t, int64(16), relayInfo.SubscriptionBillableTokens)
 }
 
 func TestUsageEstimatedSubscriptionWithChannelMultiplierDoesNotChargeAndRefundsPreconsume(t *testing.T) {
@@ -192,7 +200,7 @@ func TestUsageEstimatedSubscriptionWithChannelMultiplierDoesNotChargeAndRefundsP
 	assert.Equal(t, 0, *log.MeteredTokens)
 }
 
-func TestChannelMultiplierTotalTokensZeroSubscriptionDoesNotChargeAndRefundsPreconsume(t *testing.T) {
+func TestChannelMultiplierZeroUsageSubscriptionDoesNotChargeAndRefundsPreconsume(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subID, channelID = 97051, 97052, 97053, 97054, 97055
 	seedRuntimeDistributorBilling(t, userID, tokenID, planID, subID, "sk-channel-multiplier-zero", 1_000, 0)
@@ -231,7 +239,7 @@ func TestChannelMultiplierTotalTokensZeroSubscriptionDoesNotChargeAndRefundsPrec
 	assert.Equal(t, 0, *log.MeteredTokens)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
-	assert.Equal(t, true, other["usage_unavailable"])
+	assert.Nil(t, other["usage_unavailable"])
 	assert.Equal(t, float64(0), other["raw_metered_tokens"])
 	assert.Equal(t, float64(0), other["channel_billable_tokens"])
 }
@@ -253,12 +261,21 @@ func TestNewAPIBillingFromUsageAppliesChannelMultiplierToApiKeySnapshot(t *testi
 	assert.Equal(t, int64(16), relayInfo.SubscriptionBillableTokens)
 }
 
-func TestNewAPIBillingFromUsageTreatsZeroTotalTokensAsUnavailable(t *testing.T) {
+func TestNewAPIBillingFromUsageTreatsZeroUsageObjectAsTrustedZeroUsage(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
 
-	billing := NewAPIBillingFromUsage(relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 0})
+	billing := NewAPIBillingFromUsage(relayInfo, &dto.Usage{PromptTokens: 0, CompletionTokens: 0, TotalTokens: 0})
 
-	require.Nil(t, billing)
+	require.NotNil(t, billing)
+	assert.Equal(t, int64(0), billing.MeteredTokens)
+	assert.Equal(t, int64(0), billing.BillableTokens)
+	assert.Equal(t, float64(1), billing.BillingMultiplier)
+	assert.Equal(t, "default", billing.BillingMultiplierSource)
+	assert.True(t, relayInfo.HasTrustedUsage)
+	assert.Equal(t, int64(0), relayInfo.RawMeteredTokens)
+	assert.Equal(t, int64(0), relayInfo.ChannelBillableTokens)
+	assert.Equal(t, int64(0), relayInfo.ApiKeyBillableTokens)
+	assert.Equal(t, int64(0), relayInfo.SubscriptionBillableTokens)
 }
 
 func TestNewAPIBillingFromUsageKeepsCodexProOffApiKeySnapshot(t *testing.T) {
@@ -276,10 +293,10 @@ func TestNewAPIBillingFromUsageKeepsCodexProOffApiKeySnapshot(t *testing.T) {
 	SeedNewAPIBillingRelayInfo(relayInfo, *billing)
 
 	assert.Equal(t, int64(8), billing.MeteredTokens)
-	assert.Equal(t, int64(32), billing.BillableTokens)
+	assert.Equal(t, int64(16), billing.BillableTokens)
 	assert.Equal(t, int64(16), relayInfo.ChannelBillableTokens)
 	assert.Equal(t, int64(16), relayInfo.ApiKeyBillableTokens)
-	assert.Equal(t, int64(32), relayInfo.SubscriptionBillableTokens)
+	assert.Equal(t, int64(16), relayInfo.SubscriptionBillableTokens)
 }
 
 func TestWssChannelMultiplierIncrementAppliesOnce(t *testing.T) {
@@ -324,7 +341,7 @@ func TestWssChannelMultiplierIncrementAppliesOnce(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	require.NotNil(t, log.MeteredTokens)
-	assert.Equal(t, 8, *log.MeteredTokens)
+	assert.Equal(t, 4, *log.MeteredTokens)
 }
 
 func TestChannelTokenMultiplierEndToEndBillingLogSnapshotSurvivesChannelMultiplierChange(t *testing.T) {
@@ -370,7 +387,7 @@ func TestChannelTokenMultiplierEndToEndBillingLogSnapshotSurvivesChannelMultipli
 	require.NotNil(t, log)
 	require.NotNil(t, log.MeteredTokens)
 	assert.Equal(t, channelBID, log.ChannelId)
-	assert.Equal(t, 20_000, *log.MeteredTokens)
+	assert.Equal(t, 10_000, *log.MeteredTokens)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, float64(2), other["channel_token_billing_multiplier"])

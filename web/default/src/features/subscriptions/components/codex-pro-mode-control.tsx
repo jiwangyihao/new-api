@@ -198,7 +198,7 @@ export function CodexProModeControl(props: CodexProModeControlProps) {
   const available = canUseCodexProModeControl(props.data)
   const disabled = !available || props.saving === true
   const unavailableMessageKey = getCodexProUnavailableMessageKey(
-    props.data.codex_pro_unavailable_reason
+    props.data.codex_pro_unavailable_reason ?? ''
   )
 
   return (
@@ -219,10 +219,10 @@ export function CodexProModeControl(props: CodexProModeControlProps) {
         <p>{t('Only eligible GPT-family requests can try Codex Pro.')}</p>
         <p>
           {t(
-            'Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.'
+            'Codex Pro markers are logging signals only; credits use a numeric upstream multiplier only when the channel enables dynamic billing.'
           )}
         </p>
-        <p>{t('Fallback requests are billed at the normal rate.')}</p>
+		<p>{t('Without a valid dynamic multiplier, requests are billed at the normal credit rate.')}</p>
         <p>
           <code className='bg-muted text-foreground rounded px-1 py-0.5 font-mono text-[11px]'>
             X-NewAPI-Codex-Pro-Intent: codex-pro

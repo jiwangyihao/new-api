@@ -300,7 +300,7 @@ export function SubscriptionsMutateDrawer({
                   name='monthly_token_limit'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t('Monthly Token Limit')}</FormLabel>
+                      <FormLabel>{t('Monthly Credits')}</FormLabel>
                       <FormControl>
                         <Input
                           {...field}
@@ -312,7 +312,7 @@ export function SubscriptionsMutateDrawer({
                         />
                       </FormControl>
                       <FormDescription>
-                        {t('0 means unlimited tokens')}
+                        {t('0 means unlimited credits')}
                       </FormDescription>
                       <FormMessage />
                     </FormItem>
@@ -677,7 +677,7 @@ export function SubscriptionsMutateDrawer({
             <div className='space-y-4'>
               <h3 className='flex items-center gap-2 text-sm font-medium'>
                 <RefreshCw className='h-4 w-4' />
-                {t('Quota Reset')}
+                {t('Credit Reset')}
               </h3>
 
               <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>

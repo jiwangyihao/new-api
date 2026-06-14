@@ -141,10 +141,23 @@ func appendChannelTokenBillingSnapshotInfo(relayInfo *relaycommon.RelayInfo, oth
 		return
 	}
 	other["channel_token_billing_multiplier"] = relayInfo.FrozenChannelTokenBillingMultiplier()
+	other["credit_billing_mode"] = relayInfo.FrozenCreditBillingMode()
+	other["fixed_request_credits"] = relayInfo.FixedRequestCredits
+	other["dynamic_billing_multiplier_enabled"] = relayInfo.DynamicBillingMultiplierEnabled
+	other["has_trusted_usage"] = relayInfo.HasTrustedUsage
 	other["raw_metered_tokens"] = relayInfo.RawMeteredTokens
 	other["channel_billable_tokens"] = relayInfo.ChannelBillableTokens
 	other["api_key_billable_tokens"] = relayInfo.ApiKeyBillableTokens
 	other["subscription_billable_tokens"] = relayInfo.SubscriptionBillableTokens
+	other["base_credits"] = relayInfo.CreditBillingBaseCredits
+	other["api_key_credits"] = relayInfo.ApiKeyBillableTokens
+	other["subscription_credits"] = relayInfo.SubscriptionBillableTokens
+	other["final_credits"] = relayInfo.SubscriptionBillableTokens
+	other["api_key_credits_consumed"] = relayInfo.ApiKeyBillableTokens
+	other["subscription_credits_consumed"] = relayInfo.SubscriptionBillableTokens
+	if relayInfo.CreditBillingZeroReason != "" {
+		other["credit_billing_zero_reason"] = relayInfo.CreditBillingZeroReason
+	}
 	other["estimated_raw_tokens"] = relayInfo.EstimatedRawTokens
 	other["initial_channel_id"] = relayInfo.InitialChannelId
 	other["initial_channel_type"] = relayInfo.InitialChannelType
@@ -157,6 +170,11 @@ func appendNewAPIBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]
 	billing := NewAPIBillingFromRelayInfo(relayInfo)
 	other["billing_multiplier"] = billing.BillingMultiplier
 	other["billing_multiplier_source"] = billing.BillingMultiplierSource
+	other["dynamic_billing_multiplier"] = relayInfo.FrozenDynamicBillingMultiplier()
+	other["dynamic_billing_multiplier_source"] = relayInfo.FrozenDynamicBillingMultiplierSource()
+	if relayInfo.DynamicBillingMultiplierIgnoredReason != "" {
+		other["dynamic_billing_multiplier_ignored_reason"] = relayInfo.DynamicBillingMultiplierIgnoredReason
+	}
 	other["metered_tokens"] = billing.MeteredTokens
 	other["billable_tokens"] = billing.BillableTokens
 	other["codex_pro_requested"] = billing.CodexProRequested

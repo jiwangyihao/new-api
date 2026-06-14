@@ -52,6 +52,10 @@ func TestMain(m *testing.M) {
 		&model.TrialCode{},
 		&model.TrialRedemption{},
 		&model.OAuthProviderLock{},
+		&model.Ability{},
+		&model.LogAggregationEvent{},
+		&model.LogUsageHourly{},
+		&model.FreeSubscriptionUsageHourly{},
 		&model.InvitationMonthlyEntitlement{},
 	); err != nil {
 		panic("failed to migrate: " + err.Error())
@@ -77,6 +81,10 @@ func truncate(t *testing.T) {
 			"subscription_orders",
 			"user_subscriptions",
 			"subscription_plans",
+			"abilities",
+			"log_aggregation_events",
+			"log_usage_hourly",
+			"free_subscription_usage_hourly",
 			"trial_codes",
 			"trial_redemptions",
 			"oauth_provider_locks",

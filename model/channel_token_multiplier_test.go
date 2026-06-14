@@ -37,6 +37,71 @@ func seedChannelMultiplierSelectorTest(t *testing.T, id int, modelName string, p
 	}).Error)
 }
 
+func seedChannelBillingProfileSelectorTest(t *testing.T, id int, modelName string, priority int64, multiplier float64, mode string, fixedCredits int64, dynamicEnabled bool) {
+	t.Helper()
+	priorityPtr := priority
+	require.NoError(t, DB.Create(&Channel{
+		Id:                              id,
+		Name:                            "channel-billing-profile-selector",
+		Key:                             "sk-selector",
+		Status:                          common.ChannelStatusEnabled,
+		Models:                          modelName,
+		Type:                            constant.ChannelTypeOpenAI,
+		Priority:                        &priorityPtr,
+		TokenBillingMultiplier:          multiplier,
+		CreditBillingMode:               mode,
+		FixedRequestCredits:             fixedCredits,
+		DynamicBillingMultiplierEnabled: dynamicEnabled,
+	}).Error)
+	require.NoError(t, DB.Create(&Ability{
+		Group:     "default",
+		Model:     modelName,
+		ChannelId: id,
+		Enabled:   true,
+		Priority:  &priority,
+		Weight:    0,
+	}).Error)
+}
+
+func TestRetryBillingProfileMemoryCacheDoesNotCrossProfile(t *testing.T) {
+	ensureChannelMultiplierSelectorTables(t)
+	truncateTables(t)
+	oldMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = true
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemoryCache })
+	const modelName = "gpt-retry-billing-profile-memory"
+	seedChannelBillingProfileSelectorTest(t, 97301, modelName, 100, 2, "fixed_request", 80000, true)
+	seedChannelBillingProfileSelectorTest(t, 97302, modelName, 100, 2, "usage_tokens", 0, true)
+	seedChannelBillingProfileSelectorTest(t, 97303, modelName, 100, 2, "fixed_request", 80000, false)
+	seedChannelBillingProfileSelectorTest(t, 97304, modelName, 100, 2, "fixed_request", 80000, true)
+	InitChannelCache()
+
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97301}, 2, true, ChannelBillingProfile{CreditBillingMode: "fixed_request", FixedRequestCredits: 80000, TokenBillingMultiplier: 2, DynamicBillingMultiplierEnabled: true}, true)
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 97304, channel.Id)
+}
+
+func TestRetryBillingProfileDatabaseFallbackDoesNotCrossProfile(t *testing.T) {
+	ensureChannelMultiplierSelectorTables(t)
+	truncateTables(t)
+	oldMemoryCache := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemoryCache })
+	const modelName = "gpt-retry-billing-profile-db"
+	seedChannelBillingProfileSelectorTest(t, 97311, modelName, 100, 2, "fixed_request", 80000, true)
+	seedChannelBillingProfileSelectorTest(t, 97312, modelName, 100, 2, "usage_tokens", 0, true)
+	seedChannelBillingProfileSelectorTest(t, 97313, modelName, 100, 2, "fixed_request", 80000, false)
+	seedChannelBillingProfileSelectorTest(t, 97314, modelName, 100, 2, "fixed_request", 80000, true)
+
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97311}, 2, true, ChannelBillingProfile{CreditBillingMode: "fixed_request", FixedRequestCredits: 80000, TokenBillingMultiplier: 2, DynamicBillingMultiplierEnabled: true}, true)
+
+	require.NoError(t, err)
+	require.NotNil(t, channel)
+	assert.Equal(t, 97314, channel.Id)
+}
+
 func TestRetryChannelMultiplierMemoryCacheSelectsSameMultiplierUnusedCandidate(t *testing.T) {
 	ensureChannelMultiplierSelectorTables(t)
 	truncateTables(t)
@@ -49,7 +114,7 @@ func TestRetryChannelMultiplierMemoryCacheSelectsSameMultiplierUnusedCandidate(t
 	seedChannelMultiplierSelectorTest(t, 97103, modelName, 100, 2)
 	InitChannelCache()
 
-	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97101}, 2, true)
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97101}, 2, true, ChannelBillingProfile{}, false)
 
 	require.NoError(t, err)
 	require.NotNil(t, channel)
@@ -68,7 +133,7 @@ func TestRetryChannelMultiplierMemoryCacheNoSameMultiplierCandidateStopsRetry(t 
 	seedChannelMultiplierSelectorTest(t, 97112, modelName, 100, 1)
 	InitChannelCache()
 
-	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97111}, 2, true)
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97111}, 2, true, ChannelBillingProfile{}, false)
 
 	require.NoError(t, err)
 	assert.Nil(t, channel)
@@ -85,7 +150,7 @@ func TestAbilityRetryMultiplierDatabaseFallbackSelectsSameMultiplierUnusedCandid
 	seedChannelMultiplierSelectorTest(t, 97122, modelName, 100, 1)
 	seedChannelMultiplierSelectorTest(t, 97123, modelName, 100, 2)
 
-	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97121}, 2, true)
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 0, "", []int{97121}, 2, true, ChannelBillingProfile{}, false)
 
 	require.NoError(t, err)
 	require.NotNil(t, channel)
@@ -105,7 +170,7 @@ func TestRetryChannelMultiplierMemoryCacheFiltersBeforePrioritySelection(t *test
 	seedChannelMultiplierSelectorTest(t, 97133, modelName, 50, 2)
 	InitChannelCache()
 
-	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 1, "", []int{97131}, 2, true)
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 1, "", []int{97131}, 2, true, ChannelBillingProfile{}, false)
 
 	require.NoError(t, err)
 	require.NotNil(t, channel)
@@ -123,7 +188,7 @@ func TestAbilityRetryMultiplierDatabaseFallbackFiltersBeforePrioritySelection(t 
 	seedChannelMultiplierSelectorTest(t, 97142, modelName, 100, 2)
 	seedChannelMultiplierSelectorTest(t, 97143, modelName, 50, 2)
 
-	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 1, "", []int{97141}, 2, true)
+	channel, err := GetRandomSatisfiedChannelForEndpointWithRetryConstraints("default", modelName, 1, "", []int{97141}, 2, true, ChannelBillingProfile{}, false)
 
 	require.NoError(t, err)
 	require.NotNil(t, channel)

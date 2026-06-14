@@ -217,7 +217,7 @@ func channelIDSet(ids []int) map[int]struct{} {
 	return set
 }
 
-func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) []int {
+func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) []int {
 	if len(channels) == 0 {
 		return channels
 	}
@@ -234,13 +234,16 @@ func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []i
 		if requireSameMultiplier && !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
 			continue
 		}
+		if requireSameProfile && !SameChannelBillingProfile(channel.BillingProfile(), frozenProfile) {
+			continue
+		}
 		filtered = append(filtered, channelID)
 	}
 	return filtered
 }
 
-func retryIndexAfterRetryConstraints(retry int, usedChannelIDs []int, requireSameMultiplier bool) int {
-	if len(usedChannelIDs) > 0 || requireSameMultiplier {
+func retryIndexAfterRetryConstraints(retry int, usedChannelIDs []int, requireSameMultiplier bool, requireSameProfile bool) int {
+	if len(usedChannelIDs) > 0 || requireSameMultiplier || requireSameProfile {
 		return 0
 	}
 	return retry
@@ -306,9 +309,9 @@ func selectCachedChannelByPriority(channels []int, retry int, model string) (*Ch
 	return nil, errors.New("channel not found")
 }
 
-func GetRandomSatisfiedChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) (*Channel, error) {
+func GetRandomSatisfiedChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
-		return GetChannelForEndpointWithRetryConstraints(group, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
+		return GetChannelForEndpointWithRetryConstraints(group, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	}
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
@@ -326,8 +329,8 @@ func GetRandomSatisfiedChannelForEndpointWithRetryConstraints(group string, mode
 			return nil, err
 		}
 	}
-	channels = filterCachedChannelIDsByRetryConstraints(channels, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
-	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier)
+	channels = filterCachedChannelIDsByRetryConstraints(channels, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier, requireSameProfile)
 	return selectCachedChannelByPriority(channels, retry, model)
 }
 

@@ -79,24 +79,37 @@ func (token *Token) TokenLimitRemaining() int64 {
 }
 
 type TokenLimitView struct {
-	TokenLimitEnabled bool  `json:"token_limit_enabled"`
-	TokenLimit        int64 `json:"token_limit"`
-	TokenUsed         int64 `json:"token_used"`
-	TokenRemaining    int64 `json:"token_remaining"`
-	TokenUnlimited    bool  `json:"token_unlimited"`
+	TokenLimitEnabled  bool  `json:"token_limit_enabled"`
+	TokenLimit         int64 `json:"token_limit"`
+	TokenUsed          int64 `json:"token_used"`
+	TokenRemaining     int64 `json:"token_remaining"`
+	TokenUnlimited     bool  `json:"token_unlimited"`
+	CreditLimitEnabled bool  `json:"credit_limit_enabled"`
+	CreditLimit        int64 `json:"credit_limit"`
+	CreditUsed         int64 `json:"credit_used"`
+	CreditRemaining    int64 `json:"credit_remaining"`
+	CreditUnlimited    bool  `json:"credit_unlimited"`
+	CreditResetAt      int64 `json:"credit_reset_at"`
 }
 
 func (token *Token) BuildTokenLimitView() TokenLimitView {
 	if token == nil {
-		return TokenLimitView{TokenUnlimited: true}
+		return TokenLimitView{TokenUnlimited: true, CreditUnlimited: true}
 	}
-	return TokenLimitView{
+	view := TokenLimitView{
 		TokenLimitEnabled: token.TokenLimitEnabled,
 		TokenLimit:        token.TokenLimit,
 		TokenUsed:         token.TokenUsed,
 		TokenRemaining:    token.TokenLimitRemaining(),
 		TokenUnlimited:    token.TokenLimitUnlimited(),
+		CreditResetAt:     0,
 	}
+	view.CreditLimitEnabled = view.TokenLimitEnabled
+	view.CreditLimit = view.TokenLimit
+	view.CreditUsed = view.TokenUsed
+	view.CreditRemaining = view.TokenRemaining
+	view.CreditUnlimited = view.TokenUnlimited
+	return view
 }
 
 func (token *Token) GetIpLimits() []string {

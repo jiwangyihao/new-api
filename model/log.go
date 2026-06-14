@@ -297,6 +297,14 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 
 func normalizedMeteredTokens(promptTokens, completionTokens int, other map[string]interface{}) int {
 	if other != nil {
+		for _, key := range []string{"metered_tokens", "raw_metered_tokens"} {
+			if v, ok := intFromMapValue(other[key]); ok {
+				if v < 0 {
+					return 0
+				}
+				return v
+			}
+		}
 		if v, ok := intFromMapValue(other["subscription_tokens_consumed"]); ok {
 			if v < 0 {
 				return 0

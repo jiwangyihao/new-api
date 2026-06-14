@@ -181,7 +181,7 @@ export function DataTableRowActions<TData>({
     try {
       const result = await resetApiKeyTokenUsage(apiKey.id)
       if (result.success) {
-        toast.success(t('API key token usage reset'))
+        toast.success(t('API key credit usage reset'))
         if (result.data) {
           setCurrentRow((currentRow) =>
             currentRow?.id === apiKey.id ? result.data! : currentRow
@@ -307,7 +307,7 @@ export function DataTableRowActions<TData>({
               void handleResetTokenUsage()
             }}
           >
-            {t('Reset token usage')}
+            {t('Reset credit usage')}
             <DropdownMenuShortcut>
               {isResettingTokenUsage ? (
                 <Loader2 size={16} className='animate-spin' />

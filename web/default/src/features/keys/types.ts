@@ -45,6 +45,12 @@ export const apiKeySchema = z.object({
   token_used: z.number().default(0),
   token_remaining: z.number().default(0),
   token_unlimited: z.boolean().default(true),
+  credit_limit_enabled: z.boolean().optional(),
+  credit_limit: z.number().optional(),
+  credit_used: z.number().optional(),
+  credit_remaining: z.number().optional(),
+  credit_unlimited: z.boolean().optional(),
+  credit_reset_at: z.number().optional(),
   expired_time: z.number(), // -1 for never expires
   created_time: z.number(),
   accessed_time: z.number(),
@@ -94,6 +100,8 @@ export interface ApiKeyFormData {
   expired_time: number
   token_limit_enabled: boolean
   token_limit?: number
+  credit_limit_enabled?: boolean
+  credit_limit?: number
   model_limits_enabled: boolean
   model_limits: string
   allow_ips: string

@@ -18,19 +18,27 @@ import (
 
 type tokenPayload struct {
 	model.Token
-	Group           *string `json:"group"`
-	CrossGroupRetry *bool   `json:"cross_group_retry"`
+	Group              *string `json:"group"`
+	CrossGroupRetry    *bool   `json:"cross_group_retry"`
+	CreditLimitEnabled *bool   `json:"credit_limit_enabled"`
+	CreditLimit        *int64  `json:"credit_limit"`
 }
 
 const maxAPIKeyTokenLimit int64 = 10_000_000_000_000
 
 type tokenResponse struct {
 	*model.Token
-	TokenLimitEnabled bool  `json:"token_limit_enabled"`
-	TokenLimit        int64 `json:"token_limit"`
-	TokenUsed         int64 `json:"token_used"`
-	TokenRemaining    int64 `json:"token_remaining"`
-	TokenUnlimited    bool  `json:"token_unlimited"`
+	TokenLimitEnabled  bool  `json:"token_limit_enabled"`
+	TokenLimit         int64 `json:"token_limit"`
+	TokenUsed          int64 `json:"token_used"`
+	TokenRemaining     int64 `json:"token_remaining"`
+	TokenUnlimited     bool  `json:"token_unlimited"`
+	CreditLimitEnabled bool  `json:"credit_limit_enabled"`
+	CreditLimit        int64 `json:"credit_limit"`
+	CreditUsed         int64 `json:"credit_used"`
+	CreditRemaining    int64 `json:"credit_remaining"`
+	CreditUnlimited    bool  `json:"credit_unlimited"`
+	CreditResetAt      int64 `json:"credit_reset_at"`
 }
 
 func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
@@ -42,12 +50,18 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	maskedToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(maskedToken.CodexProMode)
 	view := maskedToken.BuildTokenLimitView()
 	return &tokenResponse{
-		Token:             &maskedToken,
-		TokenLimitEnabled: view.TokenLimitEnabled,
-		TokenLimit:        view.TokenLimit,
-		TokenUsed:         view.TokenUsed,
-		TokenRemaining:    view.TokenRemaining,
-		TokenUnlimited:    view.TokenUnlimited,
+		Token:              &maskedToken,
+		TokenLimitEnabled:  view.TokenLimitEnabled,
+		TokenLimit:         view.TokenLimit,
+		TokenUsed:          view.TokenUsed,
+		TokenRemaining:     view.TokenRemaining,
+		TokenUnlimited:     view.TokenUnlimited,
+		CreditLimitEnabled: view.CreditLimitEnabled,
+		CreditLimit:        view.CreditLimit,
+		CreditUsed:         view.CreditUsed,
+		CreditRemaining:    view.CreditRemaining,
+		CreditUnlimited:    view.CreditUnlimited,
+		CreditResetAt:      view.CreditResetAt,
 	}
 }
 
@@ -193,16 +207,22 @@ func GetTokenStatus(c *gin.Context) {
 	}
 	view := token.BuildTokenLimitView()
 	c.JSON(http.StatusOK, gin.H{
-		"object":              "credit_summary",
-		"total_granted":       token.RemainQuota,
-		"total_used":          token.UsedQuota,
-		"total_available":     token.RemainQuota,
-		"expires_at":          expiredAt * 1000,
-		"token_limit_enabled": view.TokenLimitEnabled,
-		"token_limit":         view.TokenLimit,
-		"token_used":          view.TokenUsed,
-		"token_remaining":     view.TokenRemaining,
-		"token_unlimited":     view.TokenUnlimited,
+		"object":               "credit_summary",
+		"total_granted":        token.RemainQuota,
+		"total_used":           token.UsedQuota,
+		"total_available":      token.RemainQuota,
+		"expires_at":           expiredAt * 1000,
+		"token_limit_enabled":  view.TokenLimitEnabled,
+		"token_limit":          view.TokenLimit,
+		"token_used":           view.TokenUsed,
+		"token_remaining":      view.TokenRemaining,
+		"token_unlimited":      view.TokenUnlimited,
+		"credit_limit_enabled": view.CreditLimitEnabled,
+		"credit_limit":         view.CreditLimit,
+		"credit_used":          view.CreditUsed,
+		"credit_remaining":     view.CreditRemaining,
+		"credit_unlimited":     view.CreditUnlimited,
+		"credit_reset_at":      view.CreditResetAt,
 	})
 }
 
@@ -261,17 +281,30 @@ func GetTokenUsage(c *gin.Context) {
 			"token_used":             view.TokenUsed,
 			"token_remaining":        view.TokenRemaining,
 			"token_unlimited":        view.TokenUnlimited,
+			"credit_limit_enabled":   view.CreditLimitEnabled,
+			"credit_limit":           view.CreditLimit,
+			"credit_used":            view.CreditUsed,
+			"credit_remaining":       view.CreditRemaining,
+			"credit_unlimited":       view.CreditUnlimited,
+			"credit_reset_at":        view.CreditResetAt,
 		},
 	})
 }
 
 func AddToken(c *gin.Context) {
-	token := model.Token{}
-	err := c.ShouldBindJSON(&token)
+	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	var req tokenPayload
+	err = common.Unmarshal(body, &req)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	token := req.Token
+	applyCreditLimitPayload(&token, req)
 	if len(token.Name) > 50 {
 		common.ApiErrorI18n(c, i18n.MsgTokenNameTooLong)
 		return
@@ -381,10 +414,15 @@ func UpdateToken(c *gin.Context) {
 		return
 	}
 	// Legacy quota fields are kept for compatibility only; API key token cap is validated separately.
+	applyCreditLimitPayload(&token, req)
 	_, hasRemainQuota := rawPayload["remain_quota"]
 	_, hasUnlimitedQuota := rawPayload["unlimited_quota"]
-	_, hasTokenLimitEnabled := rawPayload["token_limit_enabled"]
-	_, hasTokenLimit := rawPayload["token_limit"]
+	_, hasLegacyTokenLimitEnabled := rawPayload["token_limit_enabled"]
+	_, hasLegacyTokenLimit := rawPayload["token_limit"]
+	_, hasCreditLimitEnabled := rawPayload["credit_limit_enabled"]
+	_, hasCreditLimit := rawPayload["credit_limit"]
+	hasTokenLimitEnabled := hasLegacyTokenLimitEnabled || hasCreditLimitEnabled
+	hasTokenLimit := hasLegacyTokenLimit || hasCreditLimit
 	_, hasCodexProMode := rawPayload["codex_pro_mode"]
 	if hasRemainQuota && token.RemainQuota < 0 {
 		common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
@@ -451,6 +489,18 @@ func UpdateToken(c *gin.Context) {
 		"message": "",
 		"data":    buildMaskedTokenResponse(cleanToken),
 	})
+}
+
+func applyCreditLimitPayload(token *model.Token, req tokenPayload) {
+	if token == nil {
+		return
+	}
+	if req.CreditLimitEnabled != nil {
+		token.TokenLimitEnabled = *req.CreditLimitEnabled
+	}
+	if req.CreditLimit != nil {
+		token.TokenLimit = *req.CreditLimit
+	}
 }
 
 func ResetTokenUsage(c *gin.Context) {

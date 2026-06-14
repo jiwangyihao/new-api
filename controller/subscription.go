@@ -17,21 +17,22 @@ type SubscriptionPlanDTO struct {
 }
 
 type PublicSubscriptionPlan struct {
-	Id                      int                                `json:"id"`
-	Title                   string                             `json:"title"`
-	Subtitle                string                             `json:"subtitle"`
-	PriceAmount             float64                            `json:"price_amount"`
-	Currency                string                             `json:"currency"`
-	DurationUnit            string                             `json:"duration_unit"`
-	DurationValue           int                                `json:"duration_value"`
-	CustomSeconds           int64                              `json:"custom_seconds"`
-	MonthlyTokenLimit       int64                              `json:"monthly_token_limit"`
-	ConcurrencyLimit        int                                `json:"concurrency_limit"`
-	GPTAbuseWarningLimit    int                                `json:"gpt_abuse_warning_limit"`
-	PublicVisible           bool                               `json:"public_visible"`
-	QueueCapacity           int                                `json:"queue_capacity"`
-	KyrenProductId          string                             `json:"kyren_product_id"`
-	ChannelTokenEquivalents []model.PlanChannelTokenEquivalent `json:"channel_token_equivalents" gorm:"-"`
+	Id                       int                                 `json:"id"`
+	Title                    string                              `json:"title"`
+	Subtitle                 string                              `json:"subtitle"`
+	PriceAmount              float64                             `json:"price_amount"`
+	Currency                 string                              `json:"currency"`
+	DurationUnit             string                              `json:"duration_unit"`
+	DurationValue            int                                 `json:"duration_value"`
+	CustomSeconds            int64                               `json:"custom_seconds"`
+	MonthlyTokenLimit        int64                               `json:"monthly_token_limit"`
+	ConcurrencyLimit         int                                 `json:"concurrency_limit"`
+	GPTAbuseWarningLimit     int                                 `json:"gpt_abuse_warning_limit"`
+	PublicVisible            bool                                `json:"public_visible"`
+	QueueCapacity            int                                 `json:"queue_capacity"`
+	KyrenProductId           string                              `json:"kyren_product_id"`
+	ChannelCreditEquivalents []model.PlanChannelCreditEquivalent `json:"channel_credit_equivalents" gorm:"-"`
+	ChannelTokenEquivalents  []model.PlanChannelTokenEquivalent  `json:"channel_token_equivalents" gorm:"-"`
 }
 
 type PublicSubscriptionPlanDTO struct {
@@ -41,21 +42,22 @@ type PublicSubscriptionPlanDTO struct {
 func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDTO {
 	return PublicSubscriptionPlanDTO{
 		Plan: PublicSubscriptionPlan{
-			Id:                      p.Id,
-			Title:                   p.Title,
-			Subtitle:                p.Subtitle,
-			PriceAmount:             p.PriceAmount,
-			Currency:                p.Currency,
-			DurationUnit:            p.DurationUnit,
-			DurationValue:           p.DurationValue,
-			CustomSeconds:           p.CustomSeconds,
-			MonthlyTokenLimit:       p.MonthlyTokenLimit,
-			ConcurrencyLimit:        p.ConcurrencyLimit,
-			GPTAbuseWarningLimit:    p.GPTAbuseWarningLimit,
-			QueueCapacity:           p.QueueCapacity,
-			PublicVisible:           p.PublicVisible,
-			KyrenProductId:          p.KyrenProductId,
-			ChannelTokenEquivalents: p.ChannelTokenEquivalents,
+			Id:                       p.Id,
+			Title:                    p.Title,
+			Subtitle:                 p.Subtitle,
+			PriceAmount:              p.PriceAmount,
+			Currency:                 p.Currency,
+			DurationUnit:             p.DurationUnit,
+			DurationValue:            p.DurationValue,
+			CustomSeconds:            p.CustomSeconds,
+			MonthlyTokenLimit:        p.MonthlyTokenLimit,
+			ConcurrencyLimit:         p.ConcurrencyLimit,
+			GPTAbuseWarningLimit:     p.GPTAbuseWarningLimit,
+			QueueCapacity:            p.QueueCapacity,
+			PublicVisible:            p.PublicVisible,
+			KyrenProductId:           p.KyrenProductId,
+			ChannelCreditEquivalents: p.ChannelCreditEquivalents,
+			ChannelTokenEquivalents:  p.ChannelTokenEquivalents,
 		},
 	}
 }
@@ -151,16 +153,16 @@ func GetSubscriptionSelf(c *gin.Context) {
 		activeSubscriptions = []model.SubscriptionSummary{}
 	}
 
-	groups, err := model.ListEnabledChannelTokenBillingMultiplierGroups()
+	groups, err := model.ListEnabledChannelCreditBillingGroups()
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.PopulateSubscriptionSummaryPlanChannelTokenEquivalents(allSubscriptions, groups); err != nil {
+	if err := model.PopulateSubscriptionSummaryPlanChannelCreditEquivalents(allSubscriptions, groups); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.PopulateSubscriptionSummaryPlanChannelTokenEquivalents(activeSubscriptions, groups); err != nil {
+	if err := model.PopulateSubscriptionSummaryPlanChannelCreditEquivalents(activeSubscriptions, groups); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -170,12 +172,14 @@ func GetSubscriptionSelf(c *gin.Context) {
 		return
 	}
 	if summary.ActiveCount > 0 {
-		summary.ChannelTokenEquivalents, err = model.BuildSubscriptionChannelTokenEquivalents(summary.TokenLimit, summary.TokenUsed, summary.TokenUnlimited, groups)
+		summary.ChannelCreditEquivalents, err = model.BuildSubscriptionChannelCreditEquivalents(summary.TokenLimit, summary.TokenUsed, summary.TokenUnlimited, groups)
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
+		summary.ChannelTokenEquivalents = summary.ChannelCreditEquivalents
 	} else {
+		summary.ChannelCreditEquivalents = []model.SubscriptionChannelCreditEquivalent{}
 		summary.ChannelTokenEquivalents = []model.SubscriptionChannelTokenEquivalent{}
 	}
 
@@ -287,8 +291,17 @@ func AdminListSubscriptionPlans(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	groups, err := model.ListEnabledChannelCreditBillingGroups()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	result := make([]SubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
+		if err := model.PopulateSubscriptionPlanChannelCreditEquivalents(&p, groups); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 		result = append(result, SubscriptionPlanDTO{
 			Plan: p,
 		})

@@ -53,6 +53,9 @@ export const channelSchema = z.object({
   models: z.string().default(''),
   used_quota: z.number().default(0),
   token_billing_multiplier: z.number().default(1),
+  credit_billing_mode: z.enum(['usage_tokens', 'fixed_request']).default('usage_tokens'),
+  fixed_request_credits: z.number().default(0),
+  dynamic_billing_multiplier_enabled: z.boolean().default(false),
   model_mapping: z.string().nullish(),
   status_code_mapping: z.string().nullish(),
   priority: z.number().nullish(),
@@ -308,6 +311,9 @@ export interface ChannelFormData {
   auto_ban?: number
   status: number
   token_billing_multiplier: number
+  credit_billing_mode: 'usage_tokens' | 'fixed_request'
+  fixed_request_credits: number
+  dynamic_billing_multiplier_enabled: boolean
   status_code_mapping?: string
   tag?: string
   remark?: string

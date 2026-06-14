@@ -77,6 +77,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			usage.PromptTokensDetails.CachedTokens = responsesResponse.Usage.InputTokensDetails.CachedTokens
 		}
 	}
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, responseBody, relaycommon.DynamicBillingMultiplierSourceBody)
 	if openAIResponsesCompletedWithUsage(&responsesResponse) && info != nil {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
@@ -135,6 +136,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
+	if info != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
+	}
 	doneBuffer := beginResponsesDoneBuffering(c)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -178,6 +182,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		}
 		switch streamResponse.Type {
 		case "response.completed":
+			if info != nil {
+				info.ApplyDynamicBillingMultiplierFromBody(common.StringToByteSlice(data), relaycommon.DynamicBillingMultiplierSourceSSE)
+			}
 			completedWithUsage = openAIResponsesCompletedWithUsage(streamResponse.Response)
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
@@ -218,6 +225,9 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 	})
+	if info != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+	}
 	if doneBuffer != nil {
 		c.Writer = doneBuffer.ResponseWriter
 	}

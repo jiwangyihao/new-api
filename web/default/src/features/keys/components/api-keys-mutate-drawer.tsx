@@ -408,9 +408,9 @@ export function ApiKeysMutateDrawer({
             </ApiKeyFormSection>
 
             <ApiKeyFormSection
-              title={t('API Key Token Limit')}
+              title={t('API Key Credit Limit')}
               description={t(
-                'Limits only this API key. Requests still consume subscription tokens.'
+                'Limits only this API key. Requests still consume subscription credits.'
               )}
               icon={Gauge}
             >
@@ -420,7 +420,7 @@ export function ApiKeysMutateDrawer({
                   name='token_limit'
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>{t('Token limit')}</FormLabel>
+                      <FormLabel>{t('Credit limit')}</FormLabel>
                       <FormControl>
                         <Input
                           type='number'
@@ -428,7 +428,7 @@ export function ApiKeysMutateDrawer({
                           step='1'
                           inputMode='numeric'
                           value={field.value ?? ''}
-                          placeholder={t('Enter token limit')}
+                          placeholder={t('Enter credit limit')}
                           onChange={(e) => {
                             const value = e.target.value
                             field.onChange(
@@ -439,7 +439,7 @@ export function ApiKeysMutateDrawer({
                       </FormControl>
                       <FormDescription>
                         {t(
-                          'This API key uses the new token limit model. Historical quota limits were not migrated.'
+                          'This API key uses the credit limit model. Historical quota limits were not migrated.'
                         )}
                       </FormDescription>
                       <FormMessage />
@@ -456,12 +456,12 @@ export function ApiKeysMutateDrawer({
                     <div className='space-y-0.5'>
                       <FormLabel className='text-sm'>
                         {field.value
-                          ? t('Enable token limit')
-                          : t('No token limit for this API key')}
+                          ? t('Enable credit limit')
+                          : t('No credit limit for this API key')}
                       </FormLabel>
                       <FormDescription className='text-xs'>
                         {t(
-                          'Limits only this API key. Requests still consume subscription tokens.'
+                          'Limits only this API key. Requests still consume subscription credits.'
                         )}
                       </FormDescription>
                     </div>

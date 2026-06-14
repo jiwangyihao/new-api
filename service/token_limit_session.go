@@ -15,19 +15,20 @@ import (
 )
 
 type TokenLimitSession struct {
-	relayInfo    *relaycommon.RelayInfo
-	requestId    string
-	tokenId      int
-	userId       int
-	enabled      bool
-	preConsumed  int64
-	incrementSeq int64
-	settled      bool
-	refunded     bool
-	settleFailed bool
-	failureCode  string
-	actualTokens int64
-	mu           sync.Mutex
+	relayInfo           *relaycommon.RelayInfo
+	requestId           string
+	tokenId             int
+	userId              int
+	enabled             bool
+	preConsumed         int64
+	incrementSeq        int64
+	committedIncrements map[int64]bool
+	settled             bool
+	refunded            bool
+	settleFailed        bool
+	failureCode         string
+	actualTokens        int64
+	mu                  sync.Mutex
 }
 
 func NewTokenLimitSession(relayInfo *relaycommon.RelayInfo) *TokenLimitSession {
@@ -206,8 +207,29 @@ func (s *TokenLimitSession) ConsumeIncrement(tokens int64) (int64, *types.NewAPI
 	return sequence, nil
 }
 
+func (s *TokenLimitSession) CommitIncrement(sequence int64) {
+	if s == nil || !s.enabled || sequence <= 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.committedIncrements == nil {
+		s.committedIncrements = make(map[int64]bool, 1)
+	}
+	s.committedIncrements[sequence] = true
+	if sequence > s.incrementSeq {
+		s.incrementSeq = sequence
+	}
+}
+
 func (s *TokenLimitSession) RefundIncrement(sequence int64, reason string) {
 	if s == nil || !s.enabled || sequence <= 0 {
+		return
+	}
+	s.mu.Lock()
+	committed := s.committedIncrements[sequence]
+	s.mu.Unlock()
+	if committed {
 		return
 	}
 	if strings.TrimSpace(reason) == "" {

@@ -128,11 +128,12 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		}
 	}
 
-	if usage.(*dto.Usage).TotalTokens == 0 {
-		usage.(*dto.Usage).TotalTokens = 1
+	usageDto, _ := usage.(*dto.Usage)
+	if usageDto != nil && usageDto.TotalTokens == 0 {
+		usageDto.TotalTokens = 1
 	}
-	if usage.(*dto.Usage).PromptTokens == 0 {
-		usage.(*dto.Usage).PromptTokens = 1
+	if usageDto != nil && usageDto.PromptTokens == 0 {
+		usageDto.PromptTokens = 1
 	}
 
 	quality := "standard"
@@ -152,7 +153,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		logContent = append(logContent, fmt.Sprintf("生成数量 %d", imageN))
 	}
 
-	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), logContent); err != nil {
+	if err := service.PostTextConsumeQuota(c, info, usageDto, logContent); err != nil {
 		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil

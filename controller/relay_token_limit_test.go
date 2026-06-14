@@ -49,6 +49,7 @@ func (f *relayTokenLimitFake) ConsumeIncrement(tokens int64) (int64, *types.NewA
 	return 0, nil
 }
 func (f *relayTokenLimitFake) RefundIncrement(sequence int64, reason string) {}
+func (f *relayTokenLimitFake) CommitIncrement(sequence int64) {}
 func (f *relayTokenLimitFake) PreConsumedTokens() int64                      { return 10 }
 
 type relayBillingFake struct {

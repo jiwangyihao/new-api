@@ -55,7 +55,7 @@ import {
   API_KEY_STATUS_OPTIONS,
   getApiKeyStatusConfig,
   ERROR_MESSAGES,
-  formatApiKeyTokenCount,
+  formatApiKeyCreditCount,
 } from '../constants'
 import { type ApiKey } from '../types'
 import { ApiKeyCell } from './api-keys-cells'
@@ -166,18 +166,29 @@ function ApiKeysMobileList({
             </div>
 
             <div className='flex items-center justify-between gap-2 text-xs'>
-              <span className='text-muted-foreground'>{t('Token limit')}</span>
-              {!apiKey.token_limit_enabled || apiKey.token_unlimited ? (
+              <span className='text-muted-foreground'>{t('Credit limit')}</span>
+              {!(apiKey.credit_limit_enabled ?? apiKey.token_limit_enabled) ||
+              (apiKey.credit_unlimited ?? apiKey.token_unlimited) ? (
                 <span className='font-medium'>{t('No key limit')}</span>
               ) : (
                 <span className='font-medium tabular-nums'>
-                  {formatApiKeyTokenCount(apiKey.token_used, t('tokens'))}
+                  {formatApiKeyCreditCount(
+                    apiKey.credit_used ?? apiKey.token_used,
+                    t('credits')
+                  )}
                   <span className='text-muted-foreground font-normal'>
                     {' / '}
-                    {formatApiKeyTokenCount(apiKey.token_limit, t('tokens'))}
+                    {formatApiKeyCreditCount(
+                      apiKey.credit_limit ?? apiKey.token_limit,
+                      t('credits')
+                    )}
                   </span>
                   <span className='text-muted-foreground ml-1 font-normal'>
-                    ({t('Remaining:')} {formatApiKeyTokenCount(apiKey.token_remaining, t('tokens'))})
+                    ({t('Remaining:')}{' '}
+                    {formatApiKeyCreditCount(
+                      apiKey.credit_remaining ?? apiKey.token_remaining,
+                      t('credits')
+                    )})
                   </span>
                 </span>
               )}

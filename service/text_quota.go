@@ -12,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -350,11 +349,22 @@ func subscriptionTokensForTextSettle(relayInfo *relaycommon.RelayInfo, tokens in
 	return codexProAdjustedSubscriptionTokens(relayInfo, tokens, walletQuota)
 }
 
+func hasExplicitZeroUsage(usage *dto.Usage) bool {
+	if usage == nil {
+		return false
+	}
+	return usage.TotalTokens == 0
+}
+
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
 	originUsage := usage
 	usageEstimated := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
 	rawMeteredTokens := SubscriptionMeteredTokens(usage)
-	usageUnavailable := usage == nil || usageEstimated || usage.TotalTokens <= 0 || rawMeteredTokens <= 0
+	if hasExplicitZeroUsage(usage) {
+		rawMeteredTokens = 0
+	}
+	hasTrustedUsage := usage != nil && !usageEstimated
+	usageUnavailable := !hasTrustedUsage
 	if usageUnavailable {
 		extraContent = append(extraContent, "上游无计费信息")
 	}
@@ -364,37 +374,22 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 
 	adminRejectReason := common.GetContextKeyString(ctx, constant.ContextKeyAdminRejectReason)
 	summary := calculateTextQuotaSummary(ctx, relayInfo, usage)
-	channelBillableTokens := int64(0)
-	var multiplierErr error
-	if !usageUnavailable && rawMeteredTokens > 0 {
-		channelBillableTokens, multiplierErr = tokenbilling.ApplyMultiplier(rawMeteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
-		if multiplierErr != nil {
-			return multiplierErr
-		}
-	}
-	apiKeyTokens := channelBillableTokens
-	subscriptionTokens := channelBillableTokens
 	if usageUnavailable || (relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
 		summary.PromptTokens = 0
 		summary.CompletionTokens = 0
 		summary.TotalTokens = 0
 		summary.Quota = 0
 		rawMeteredTokens = 0
-		channelBillableTokens = 0
-		apiKeyTokens = 0
-		subscriptionTokens = 0
 	}
-	subscriptionTokens = subscriptionTokensForTextSettle(relayInfo, subscriptionTokens, summary.Quota)
-	if relayInfo != nil {
-		relayInfo.RawMeteredTokens = rawMeteredTokens
-		relayInfo.ChannelBillableTokens = channelBillableTokens
-		relayInfo.ApiKeyBillableTokens = apiKeyTokens
-		relayInfo.SubscriptionBillableTokens = subscriptionTokens
+	creditResult, err := calculateCreditBillingResult(relayInfo, hasTrustedUsage, rawMeteredTokens)
+	if err != nil {
+		return err
 	}
+	applyCreditBillingResultToRelayInfo(relayInfo, creditResult, rawMeteredTokens)
 
 	var tieredResult *billingexpr.TieredResult
 	tieredBillingApplied := false
-	if originUsage != nil && !usageUnavailable && !(relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
+	if originUsage != nil && hasTrustedUsage && !(relayInfo != nil && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel)) {
 		var tieredUsedVars map[string]bool
 		if snap := relayInfo.TieredBillingSnapshot; snap != nil {
 			tieredUsedVars = billingexpr.UsedVars(snap.ExprString)
@@ -405,6 +400,13 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 			tieredResult = tieredRes
 			summary.Quota = composeTieredTextQuota(summary, tieredQuota, tieredRes)
 		}
+	}
+	if tieredBillingApplied {
+		creditResult, err = calculateCreditBillingResult(relayInfo, hasTrustedUsage, int64(summary.Quota))
+		if err != nil {
+			return err
+		}
+		applyCreditBillingResultToRelayInfo(relayInfo, creditResult, rawMeteredTokens)
 	}
 
 	if summary.WebSearchCallCount > 0 {
@@ -423,15 +425,15 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		extraContent = append(extraContent, fmt.Sprintf("Image Generation Call 花费 %s", decimal.NewFromFloat(summary.ImageGenerationCallPrice).Mul(decimal.NewFromFloat(summary.QuotaMultiplier)).Mul(decimal.NewFromFloat(common.QuotaPerUnit)).String()))
 	}
 
-	if summary.TotalTokens == 0 {
+	if !hasTrustedUsage {
 		extraContent = append(extraContent, "上游没有返回计费信息，无法扣费（可能是上游超时）")
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
+		logger.LogError(ctx, fmt.Sprintf("trusted usage is missing, cannot consume quota, userId %d, channelId %d, tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, summary.ModelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, summary.Quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, summary.Quota)
 	}
 
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: summary.Quota, SubscriptionTokens: subscriptionTokens, ApiKeyTokens: apiKeyTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), UsageEstimated: usageEstimated, SubscriptionTokensCodexProAdjusted: true})
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), UsageEstimated: usageEstimated, UseCreditBilling: true, HasTrustedUsage: hasTrustedUsage, RawMeteredTokens: rawMeteredTokens, RawMeteredTokensSet: true})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

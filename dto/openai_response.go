@@ -13,8 +13,9 @@ const (
 )
 
 type SimpleResponse struct {
-	Usage `json:"usage"`
-	Error any `json:"error"`
+	Usage         `json:"usage"`
+	Error         any            `json:"error"`
+	NewAPIBilling *NewAPIBilling `json:"newapi_billing,omitempty"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -38,13 +39,14 @@ type OpenAITextResponseChoice struct {
 }
 
 type OpenAITextResponse struct {
-	Id      string                     `json:"id"`
-	Model   string                     `json:"model"`
-	Object  string                     `json:"object"`
-	Created any                        `json:"created"`
-	Choices []OpenAITextResponseChoice `json:"choices"`
-	Error   any                        `json:"error,omitempty"`
-	Usage   `json:"usage"`
+	Id            string                     `json:"id"`
+	Model         string                     `json:"model"`
+	Object        string                     `json:"object"`
+	Created       any                        `json:"created"`
+	Choices       []OpenAITextResponseChoice `json:"choices"`
+	Error         any                        `json:"error,omitempty"`
+	Usage         `json:"usage"`
+	NewAPIBilling *NewAPIBilling             `json:"newapi_billing,omitempty"`
 }
 
 // GetOpenAIError 从动态错误类型中提取OpenAIError结构
@@ -145,6 +147,7 @@ type ChatCompletionsStreamResponse struct {
 	Created           int64                                 `json:"created"`
 	Model             string                                `json:"model"`
 	SystemFingerprint *string                               `json:"system_fingerprint"`
+	NewAPIBilling     *NewAPIBilling                       `json:"newapi_billing,omitempty"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
 }
@@ -243,12 +246,12 @@ type Usage struct {
 }
 
 type NewAPIBilling struct {
-	MeteredTokens           int64  `json:"metered_tokens"`
-	BillableTokens          int64  `json:"billable_tokens"`
-	BillingMultiplier       int    `json:"billing_multiplier"`
-	BillingMultiplierSource string `json:"billing_multiplier_source"`
-	CodexProRequested       bool   `json:"codex_pro_requested"`
-	CodexProServed          bool   `json:"codex_pro_served"`
+	MeteredTokens           int64   `json:"metered_tokens"`
+	BillableTokens          int64   `json:"billable_tokens"`
+	BillingMultiplier       float64 `json:"billing_multiplier"`
+	BillingMultiplierSource string  `json:"billing_multiplier_source"`
+	CodexProRequested       bool    `json:"codex_pro_requested"`
+	CodexProServed          bool    `json:"codex_pro_served"`
 }
 
 type OpenAIVideoResponse struct {

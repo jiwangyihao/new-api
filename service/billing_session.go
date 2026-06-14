@@ -9,7 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/pkg/tokenbilling"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
@@ -59,9 +59,9 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 	}
 	fundingDelta := input.WalletQuota - s.preConsumedQuota
 	if s.funding.Source() == BillingSourceSubscription {
-		fundingDelta64 := input.SubscriptionTokens - s.preConsumedSubscription
+		fundingDelta64 := input.SubscriptionTokens - s.preConsumedSubscription - s.committedSubscriptionTokens
 		if fundingDelta64 > int64(^uint(0)>>1) || fundingDelta64 < -int64(^uint(0)>>1)-1 {
-			return fmt.Errorf("subscription token delta out of int range: %d", fundingDelta64)
+			return fmt.Errorf("subscription credit delta out of int range: %d", fundingDelta64)
 		}
 		fundingDelta = int(fundingDelta64)
 	}
@@ -571,6 +571,23 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.CodexProEligible = false
 	info.CodexProUnavailableReason = "no_paid_subscription"
 	info.ResetCodexProRuntimeState()
+	info.CreditBillingMode = ""
+	info.ChannelTokenBillingMultiplier = 0
+	info.FixedRequestCredits = 0
+	info.InitialChannelId = 0
+	info.InitialChannelType = 0
+	info.HasTrustedUsage = false
+	info.RawMeteredTokens = 0
+	info.ChannelBillableTokens = 0
+	info.SubscriptionBillableTokens = 0
+	info.ApiKeyBillableTokens = 0
+	info.CreditBillingBaseCredits = 0
+	info.CreditBillingZeroReason = ""
+	info.EstimatedRawTokens = 0
+	info.DynamicBillingMultiplierEnabled = false
+	info.DynamicBillingMultiplier = 0
+	info.DynamicBillingMultiplierSource = ""
+	info.DynamicBillingMultiplierIgnoredReason = ""
 }
 
 func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {
@@ -635,9 +652,18 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		if distributorConsumeRaw <= 0 {
 			distributorConsumeRaw = 1
 		}
-		distributorConsume, err := tokenbilling.ApplyMultiplier(distributorConsumeRaw, relayInfo.FrozenChannelTokenBillingMultiplier())
-		if err != nil {
-			return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+		distributorConsume := int64(0)
+		var err error
+		if relayInfo.FrozenCreditBillingMode() == creditbilling.ModeFixedRequest {
+			distributorConsume = relayInfo.FixedRequestCredits
+		} else {
+			distributorConsume, err = creditbilling.ApplyCreditMultiplier(distributorConsumeRaw, relayInfo.FrozenChannelTokenBillingMultiplier())
+			if err != nil {
+				return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
+		if distributorConsume > int64(^uint(0)>>1) {
+			return nil, types.NewError(fmt.Errorf("preconsume credits out of int range: %d", distributorConsume), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 		}
 		relayInfo.EstimatedRawTokens = distributorConsumeRaw
 		legacyConsume := distributorConsume

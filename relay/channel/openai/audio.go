@@ -35,6 +35,9 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	}
 	c.Writer.WriteHeader(resp.StatusCode)
 
+	if info != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
+	}
 	if info.IsStream {
 		helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 			if service.SundaySearch(data, "usage") {
@@ -52,6 +55,9 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 				sr.Error(err)
 			}
 		})
+		if info != nil {
+			info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+		}
 	} else {
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		// 读取响应体到缓冲区
@@ -61,6 +67,7 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			c.Writer.WriteHeaderNow()
 			return usage
 		}
+		applyDynamicBillingMultiplierFromHTTPResponse(info, resp, bodyBytes, relaycommon.DynamicBillingMultiplierSourceBody)
 
 		// 写入响应到客户端
 		c.Writer.WriteHeaderNow()
@@ -119,6 +126,7 @@ func OpenaiSTTHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 	if err != nil {
 		return types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError), nil
 	}
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, responseBody, relaycommon.DynamicBillingMultiplierSourceBody)
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 

@@ -53,7 +53,7 @@ const TOKEN_DEPRICING_I18N_KEYS = [
   'Subscription tokens remaining',
   'Tokens used this cycle',
   'Tokens used in the last 24 hours',
-  'Monitor subscription tokens and request volume',
+  'Monitor subscription credits and request volume',
   'Low token balance',
   'Tokens depleted',
   'Subscription required',

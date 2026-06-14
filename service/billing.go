@@ -6,7 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
-	"github.com/QuantumNous/new-api/pkg/tokenbilling"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -42,35 +42,88 @@ type BillingSettleInput struct {
 	ApiKeyTokens                       int64
 	ResponseStarted                    bool
 	SkipDefaultApiKeyTokens            bool
+	UseCreditBilling                   bool
+	HasTrustedUsage                    bool
+	RawMeteredTokens                   int64
+	RawMeteredTokensSet                bool
 }
 
 func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens int64, walletQuota int) int64 {
-	if tokens <= 0 || relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription || !relayInfo.CodexProServed {
+	if tokens <= 0 || relayInfo == nil || relayInfo.BillingSource != BillingSourceSubscription {
 		return tokens
 	}
 	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
 		return 0
 	}
-	switch relayInfo.CodexProUnavailableReason {
-	case "trial_subscription", "reward_subscription":
-		return tokens
-	}
-	session, ok := relayInfo.Billing.(*BillingSession)
-	if !ok || !session.IsDistributorTokenBilling() {
-		return tokens
-	}
-	if walletQuota < 0 {
-		return tokens
-	}
-	return tokens * 2
+	return tokens
 }
 
 const (
-	BillingMultiplierSourceCodexProServedTrailer = "codex_pro_served_trailer"
 	BillingMultiplierSourceNormal                = "normal"
 	BillingMultiplierSourceFreeModel             = "free_model"
 	BillingMultiplierSourceUsageUnavailable      = "usage_unavailable"
 )
+
+func creditBillingInputFromRelayInfo(relayInfo *relaycommon.RelayInfo, hasTrustedUsage bool, rawMeteredTokens int64) creditbilling.CreditBillingInput {
+	if rawMeteredTokens < 0 {
+		rawMeteredTokens = 0
+	}
+	dynamicMultiplier := float64(1)
+	dynamicSource := creditbilling.DynamicMultiplierDefaultSource
+	if relayInfo != nil && relayInfo.DynamicBillingMultiplierEnabled {
+		dynamicMultiplier = relayInfo.FrozenDynamicBillingMultiplier()
+		dynamicSource = relayInfo.FrozenDynamicBillingMultiplierSource()
+	}
+	input := creditbilling.CreditBillingInput{
+		Chargeable:                     false,
+		HasTrustedUsage:                hasTrustedUsage,
+		RawMeteredTokens:               rawMeteredTokens,
+		CreditBillingMode:              creditbilling.ModeUsageTokens,
+		FixedRequestCredits:            0,
+		ChannelTokenBillingMultiplier:  1,
+		DynamicBillingMultiplier:       dynamicMultiplier,
+		DynamicBillingMultiplierSource: dynamicSource,
+	}
+	if relayInfo == nil {
+		return input
+	}
+	input.Chargeable = !(relayInfo.FreeModel || relayInfo.PriceData.FreeModel)
+	input.CreditBillingMode = relayInfo.FrozenCreditBillingMode()
+	input.FixedRequestCredits = relayInfo.FixedRequestCredits
+	input.ChannelTokenBillingMultiplier = relayInfo.FrozenChannelTokenBillingMultiplier()
+	return input
+}
+
+func calculateCreditBillingResult(relayInfo *relaycommon.RelayInfo, hasTrustedUsage bool, rawMeteredTokens int64) (creditbilling.CreditBillingResult, error) {
+	return creditbilling.Calculate(creditBillingInputFromRelayInfo(relayInfo, hasTrustedUsage, rawMeteredTokens))
+}
+
+func applyCreditBillingResultToRelayInfo(relayInfo *relaycommon.RelayInfo, result creditbilling.CreditBillingResult, rawMeteredTokens int64) {
+	if relayInfo == nil {
+		return
+	}
+	if rawMeteredTokens < 0 || !result.HasTrustedUsage {
+		rawMeteredTokens = 0
+	}
+	relayInfo.HasTrustedUsage = result.HasTrustedUsage
+	relayInfo.RawMeteredTokens = rawMeteredTokens
+	relayInfo.CreditBillingMode = result.CreditBillingMode
+	relayInfo.CreditBillingBaseCredits = result.BaseCredits
+	relayInfo.CreditBillingZeroReason = result.ZeroReason
+	relayInfo.ChannelBillableTokens = result.BaseCredits
+	relayInfo.ApiKeyBillableTokens = result.APIKeyCredits
+	relayInfo.SubscriptionBillableTokens = result.SubscriptionCredits
+	if result.DynamicBillingMultiplierSource != "" && relayInfo.DynamicBillingMultiplierEnabled {
+		relayInfo.DynamicBillingMultiplierSource = result.DynamicBillingMultiplierSource
+	}
+}
+
+func int64ToIntCredit(value int64) (int, error) {
+	if value > int64(^uint(0)>>1) || value < -int64(^uint(0)>>1)-1 {
+		return 0, fmt.Errorf("credit billing result out of int range: %d", value)
+	}
+	return int(value), nil
+}
 
 func NewAPIBillingFromRelayInfo(relayInfo *relaycommon.RelayInfo) dto.NewAPIBilling {
 	if relayInfo == nil {
@@ -88,26 +141,14 @@ func NewAPIBillingFromRelayInfo(relayInfo *relaycommon.RelayInfo) dto.NewAPIBill
 		billableTokens = 0
 	}
 
-	multiplier := 0
+	multiplier := 0.0
 	source := BillingMultiplierSourceUsageUnavailable
-	channelBillableTokens := relayInfo.ChannelBillableTokens
-	if channelBillableTokens <= 0 {
-		channelBillableTokens = relayInfo.ApiKeyBillableTokens
-	}
-	if channelBillableTokens <= 0 {
-		channelBillableTokens = meteredTokens
-	}
 	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
 		billableTokens = 0
 		source = BillingMultiplierSourceFreeModel
-	} else if meteredTokens > 0 {
-		if relayInfo.CodexProServed && channelBillableTokens > 0 && billableTokens > channelBillableTokens {
-			multiplier = 2
-			source = BillingMultiplierSourceCodexProServedTrailer
-		} else {
-			multiplier = 1
-			source = BillingMultiplierSourceNormal
-		}
+	} else if relayInfo.HasTrustedUsage {
+		multiplier = relayInfo.FrozenDynamicBillingMultiplier()
+		source = relayInfo.FrozenDynamicBillingMultiplierSource()
 	}
 
 	return dto.NewAPIBilling{
@@ -121,26 +162,22 @@ func NewAPIBillingFromRelayInfo(relayInfo *relaycommon.RelayInfo) dto.NewAPIBill
 }
 
 func NewAPIBillingFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) *dto.NewAPIBilling {
-	if usage == nil || usage.TotalTokens <= 0 {
+	if usage == nil {
 		return nil
 	}
 	meteredTokens := SubscriptionMeteredTokens(usage)
-	if meteredTokens <= 0 {
+	result, err := calculateCreditBillingResult(relayInfo, true, meteredTokens)
+	if err != nil {
 		return nil
 	}
-	channelBillableTokens := meteredTokens
 	if relayInfo != nil {
-		var err error
-		channelBillableTokens, err = tokenbilling.ApplyMultiplier(meteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
-		if err != nil {
-			return nil
-		}
+		applyCreditBillingResultToRelayInfo(relayInfo, result, meteredTokens)
 	}
 	billing := dto.NewAPIBilling{
 		MeteredTokens:           meteredTokens,
-		BillableTokens:          channelBillableTokens,
-		BillingMultiplier:       1,
-		BillingMultiplierSource: BillingMultiplierSourceNormal,
+		BillableTokens:          result.APIKeyCredits,
+		BillingMultiplier:       result.DynamicBillingMultiplier,
+		BillingMultiplierSource: result.DynamicBillingMultiplierSource,
 	}
 	if relayInfo != nil {
 		billing.CodexProRequested = relayInfo.CodexProRequestSent
@@ -149,10 +186,6 @@ func NewAPIBillingFromUsage(relayInfo *relaycommon.RelayInfo, usage *dto.Usage) 
 			billing.BillableTokens = 0
 			billing.BillingMultiplier = 0
 			billing.BillingMultiplierSource = BillingMultiplierSourceFreeModel
-		} else if relayInfo.CodexProServed {
-			billing.BillableTokens = channelBillableTokens * 2
-			billing.BillingMultiplier = 2
-			billing.BillingMultiplierSource = BillingMultiplierSourceCodexProServedTrailer
 		}
 	}
 	return &billing
@@ -162,16 +195,16 @@ func SeedNewAPIBillingRelayInfo(relayInfo *relaycommon.RelayInfo, billing dto.Ne
 	if relayInfo == nil {
 		return
 	}
-	channelBillableTokens := billing.MeteredTokens
-	var err error
-	channelBillableTokens, err = tokenbilling.ApplyMultiplier(billing.MeteredTokens, relayInfo.FrozenChannelTokenBillingMultiplier())
+	result, err := calculateCreditBillingResult(relayInfo, true, billing.MeteredTokens)
 	if err != nil {
-		channelBillableTokens = billing.MeteredTokens
+		relayInfo.HasTrustedUsage = true
+		relayInfo.RawMeteredTokens = billing.MeteredTokens
+		relayInfo.ChannelBillableTokens = billing.BillableTokens
+		relayInfo.ApiKeyBillableTokens = billing.BillableTokens
+		relayInfo.SubscriptionBillableTokens = billing.BillableTokens
+		return
 	}
-	relayInfo.RawMeteredTokens = billing.MeteredTokens
-	relayInfo.SubscriptionBillableTokens = billing.BillableTokens
-	relayInfo.ApiKeyBillableTokens = channelBillableTokens
-	relayInfo.ChannelBillableTokens = channelBillableTokens
+	applyCreditBillingResultToRelayInfo(relayInfo, result, billing.MeteredTokens)
 }
 
 // SettleBilling 执行计费结算。如果 RelayInfo 上有 BillingSession 则通过 session 结算，
@@ -212,10 +245,28 @@ func SettleBillingWithInput(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, 
 	if relayInfo == nil {
 		return nil
 	}
-	if input.SubscriptionTokens < 0 {
-		input.SubscriptionTokens = 0
-	}
-	if !input.SubscriptionTokensCodexProAdjusted {
+	if input.UseCreditBilling {
+		rawMeteredTokens := input.RawMeteredTokens
+		if !input.RawMeteredTokensSet && rawMeteredTokens == 0 && input.HasTrustedUsage {
+			rawMeteredTokens = relayInfo.RawMeteredTokens
+		}
+		result, err := calculateCreditBillingResult(relayInfo, input.HasTrustedUsage, rawMeteredTokens)
+		if err != nil {
+			return err
+		}
+		applyCreditBillingResultToRelayInfo(relayInfo, result, rawMeteredTokens)
+		walletQuota, err := int64ToIntCredit(result.SubscriptionCredits)
+		if err != nil {
+			return err
+		}
+		input.WalletQuota = walletQuota
+		input.SubscriptionTokens = result.SubscriptionCredits
+		if !input.SkipDefaultApiKeyTokens {
+			input.ApiKeyTokens = result.APIKeyCredits
+		}
+		input.SkipDefaultApiKeyTokens = true
+		input.SubscriptionTokensCodexProAdjusted = true
+	} else if !input.SubscriptionTokensCodexProAdjusted {
 		input.SubscriptionTokens = codexProAdjustedSubscriptionTokens(relayInfo, input.SubscriptionTokens, input.WalletQuota)
 		input.SubscriptionTokensCodexProAdjusted = true
 	}

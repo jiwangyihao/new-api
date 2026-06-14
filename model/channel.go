@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	"github.com/QuantumNous/new-api/types"
 
@@ -36,11 +37,14 @@ type Channel struct {
 	Other                  string  `json:"other"`
 	Balance                float64 `json:"balance"` // in USD
 	BalanceUpdatedTime     int64   `json:"balance_updated_time" gorm:"bigint"`
-	Models                 string  `json:"models"`
-	Group                  string  `json:"-" gorm:"type:varchar(64)"`
-	UsedQuota              int64   `json:"used_quota" gorm:"bigint;default:0"`
-	TokenBillingMultiplier float64 `json:"token_billing_multiplier" gorm:"not null;default:1"`
-	ModelMapping           *string `json:"model_mapping" gorm:"type:text"`
+	Models                           string  `json:"models"`
+	Group                            string  `json:"-" gorm:"type:varchar(64)"`
+	UsedQuota                        int64   `json:"used_quota" gorm:"bigint;default:0"`
+	TokenBillingMultiplier           float64 `json:"token_billing_multiplier" gorm:"not null;default:1"`
+	CreditBillingMode                string  `json:"credit_billing_mode" gorm:"not null;default:'usage_tokens'"`
+	FixedRequestCredits              int64   `json:"fixed_request_credits" gorm:"not null;default:0"`
+	DynamicBillingMultiplierEnabled  bool    `json:"dynamic_billing_multiplier_enabled" gorm:"not null;default:false"`
+	ModelMapping                     *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
@@ -65,6 +69,72 @@ func (channel *Channel) GetTokenBillingMultiplier() float64 {
 		return tokenbilling.DefaultMultiplier
 	}
 	return tokenbilling.EffectiveMultiplier(channel.TokenBillingMultiplier)
+}
+
+type ChannelBillingProfile struct {
+	CreditBillingMode               string
+	FixedRequestCredits             int64
+	TokenBillingMultiplier          float64
+	DynamicBillingMultiplierEnabled bool
+}
+
+func DefaultChannelBillingProfile() ChannelBillingProfile {
+	return ChannelBillingProfile{
+		CreditBillingMode:      creditbilling.ModeUsageTokens,
+		TokenBillingMultiplier: tokenbilling.DefaultMultiplier,
+	}
+}
+
+func normalizeCreditBillingMode(mode string) string {
+	if mode == "" {
+		return creditbilling.ModeUsageTokens
+	}
+	return mode
+}
+
+func (profile ChannelBillingProfile) Normalize() ChannelBillingProfile {
+	profile.CreditBillingMode = normalizeCreditBillingMode(profile.CreditBillingMode)
+	profile.TokenBillingMultiplier = tokenbilling.EffectiveMultiplier(profile.TokenBillingMultiplier)
+	return profile
+}
+
+func SameChannelBillingProfile(a ChannelBillingProfile, b ChannelBillingProfile) bool {
+	a = a.Normalize()
+	b = b.Normalize()
+	return a.CreditBillingMode == b.CreditBillingMode &&
+		a.FixedRequestCredits == b.FixedRequestCredits &&
+		tokenbilling.SameMultiplier(a.TokenBillingMultiplier, b.TokenBillingMultiplier) &&
+		a.DynamicBillingMultiplierEnabled == b.DynamicBillingMultiplierEnabled
+}
+
+func (channel *Channel) ApplyBillingProfileDefaults() {
+	if channel == nil {
+		return
+	}
+	channel.CreditBillingMode = normalizeCreditBillingMode(channel.CreditBillingMode)
+}
+
+func (channel *Channel) ValidateBillingProfile() error {
+	if channel == nil {
+		return errors.New("channel cannot be empty")
+	}
+	channel.ApplyBillingProfileDefaults()
+	if err := creditbilling.ValidateBillingMode(channel.CreditBillingMode); err != nil {
+		return err
+	}
+	return creditbilling.ValidateFixedRequestCredits(channel.CreditBillingMode, channel.FixedRequestCredits)
+}
+
+func (channel *Channel) BillingProfile() ChannelBillingProfile {
+	if channel == nil {
+		return DefaultChannelBillingProfile()
+	}
+	return ChannelBillingProfile{
+		CreditBillingMode:               normalizeCreditBillingMode(channel.CreditBillingMode),
+		FixedRequestCredits:             channel.FixedRequestCredits,
+		TokenBillingMultiplier:          channel.GetTokenBillingMultiplier(),
+		DynamicBillingMultiplierEnabled: channel.DynamicBillingMultiplierEnabled,
+	}.Normalize()
 }
 
 type ChannelInfo struct {
@@ -293,7 +363,7 @@ func (channel *Channel) GetOtherInfo() map[string]interface{} {
 }
 
 func (channel *Channel) SetOtherInfo(otherInfo map[string]interface{}) {
-	otherInfoBytes, err := json.Marshal(otherInfo)
+	otherInfoBytes, err := common.Marshal(otherInfo)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to marshal other info: channel_id=%d, tag=%s, name=%s, error=%v", channel.Id, channel.GetTag(), channel.Name, err))
 		return
@@ -414,6 +484,12 @@ func BatchInsertChannels(channels []Channel) error {
 	}()
 
 	for _, chunk := range lo.Chunk(channels, 50) {
+		for i := range chunk {
+			if err := chunk[i].ValidateBillingProfile(); err != nil {
+				tx.Rollback()
+				return err
+			}
+		}
 		if err := tx.Create(&chunk).Error; err != nil {
 			tx.Rollback()
 			return err
@@ -490,6 +566,9 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	if err := channel.ValidateBillingProfile(); err != nil {
+		return err
+	}
 	var err error
 	err = DB.Create(channel).Error
 	if err != nil {
@@ -538,8 +617,14 @@ func (channel *Channel) Update() error {
 			}
 		}
 	}
+	if err := channel.ValidateBillingProfile(); err != nil {
+		return err
+	}
 	var err error
 	err = DB.Model(channel).Updates(channel).Error
+	if err == nil {
+		err = DB.Model(channel).Select("credit_billing_mode", "fixed_request_credits", "dynamic_billing_multiplier_enabled").Updates(channel).Error
+	}
 	if err != nil {
 		return err
 	}

@@ -42,18 +42,18 @@ const rowActionsSource = readKeysSource(
 const constantsSource = readKeysSource('./constants.ts')
 
 const requiredI18nKeys = [
-  'API Key Token Limit',
-  'No token limit for this API key',
-  'Token limit',
-  'Enter token limit',
-  'Limits only this API key. Requests still consume subscription tokens.',
+  'API Key Credit Limit',
+  'No credit limit for this API key',
+  'Credit limit',
+  'Enter credit limit',
+  'Limits only this API key. Requests still consume subscription credits.',
   'Exhausted',
-  'Token Limit Reached',
-  'Reset token usage',
-  'API key token usage reset',
-  'This API key uses the new token limit model. Historical quota limits were not migrated.',
+  'Credit Limit Reached',
+  'Reset credit usage',
+  'API key credit usage reset',
+  'This API key uses the credit limit model. Historical quota limits were not migrated.',
   'Name is required',
-  'Token limit must be greater than 0',
+  'Credit limit must be greater than 0',
   'API Key Codex Pro Mode',
   'Inherit user setting',
   'Use the user-level Codex Pro setting for this API key.',
@@ -109,14 +109,14 @@ describe('api key user-facing configuration form', () => {
     assert.doesNotMatch(tableSource, /formatQuota\(/)
   })
 
-  test('keeps legacy exhausted distinct from derived token limit reached status', () => {
+  test('keeps legacy exhausted distinct from derived credit limit reached status', () => {
     assert.match(constantsSource, /label:\s*'Exhausted'/)
-    assert.match(constantsSource, /label:\s*'Token Limit Reached'/)
+    assert.match(constantsSource, /label:\s*'Credit Limit Reached'/)
     assert.match(columnsSource, /getApiKeyStatusConfig\(row\.original\)/)
     assert.match(tableSource, /getApiKeyStatusConfig\(apiKey\)/)
   })
 
-  test('defaults to no token limit and validates enabled token limits', () => {
+  test('defaults to no credit limit and validates enabled credit limits', () => {
     assert.equal(API_KEY_FORM_DEFAULT_VALUES.token_limit_enabled, false)
     assert.equal(
       apiKeyFormSchema.safeParse({
@@ -143,7 +143,7 @@ describe('api key user-facing configuration form', () => {
     if (!zeroLimit.success) {
       assert.equal(
         zeroLimit.error.issues[0]?.message,
-        'Token limit must be greater than 0'
+        'Credit limit must be greater than 0'
       )
     }
     const decimalLimit = apiKeyFormSchema.safeParse({
@@ -156,7 +156,7 @@ describe('api key user-facing configuration form', () => {
     if (!decimalLimit.success) {
       assert.equal(
         decimalLimit.error.issues[0]?.message,
-        'Token limit must be greater than 0'
+        'Credit limit must be greater than 0'
       )
     }
     const nullLimit = apiKeyFormSchema.safeParse({
@@ -169,7 +169,7 @@ describe('api key user-facing configuration form', () => {
     if (!nullLimit.success) {
       assert.equal(
         nullLimit.error.issues[0]?.message,
-        'Token limit must be greater than 0'
+        'Credit limit must be greater than 0'
       )
     }
     const nanLimit = apiKeyFormSchema.safeParse({
@@ -182,7 +182,7 @@ describe('api key user-facing configuration form', () => {
     if (!nanLimit.success) {
       assert.equal(
         nanLimit.error.issues[0]?.message,
-        'Token limit must be greater than 0'
+        'Credit limit must be greater than 0'
       )
     }
     assert.equal(
@@ -337,7 +337,7 @@ describe('api key user-facing configuration form', () => {
   test('exposes reset token usage action and API client', () => {
     assert.match(apiSource, /resetApiKeyTokenUsage/)
     assert.match(apiSource, /\/api\/token\/\$\{id\}\/reset-token-usage/)
-    assert.match(rowActionsSource, /Reset token usage/)
+    assert.match(rowActionsSource, /Reset credit usage/)
     assert.match(rowActionsSource, /resetApiKeyTokenUsage\(apiKey\.id\)/)
     assert.match(rowActionsSource, /triggerRefresh\(\)/)
     assert.match(rowActionsSource, /toast\.success/)

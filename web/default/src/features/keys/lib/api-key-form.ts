@@ -60,7 +60,7 @@ export const apiKeyFormSchema = z
     token_limit_enabled: z.boolean(),
     token_limit: z.custom<number | undefined>(
       (value) => value === undefined || typeof value === 'number',
-      'Token limit must be greater than 0'
+      'Credit limit must be greater than 0'
     ),
     model_limits: z.array(z.string()),
     allow_ips: z.string().optional(),
@@ -78,7 +78,7 @@ export const apiKeyFormSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['token_limit'],
-        message: 'Token limit must be greater than 0',
+        message: 'Credit limit must be greater than 0',
       })
     }
   })
@@ -121,6 +121,8 @@ export function transformFormDataToPayload(
       : -1,
     token_limit_enabled: data.token_limit_enabled,
     token_limit: data.token_limit_enabled ? data.token_limit : 0,
+    credit_limit_enabled: data.token_limit_enabled,
+    credit_limit: data.token_limit_enabled ? data.token_limit : 0,
     model_limits_enabled: data.model_limits.length > 0,
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
@@ -140,8 +142,12 @@ export function transformApiKeyToFormDefaults(
       apiKey.expired_time > 0
         ? new Date(apiKey.expired_time * 1000)
         : undefined,
-    token_limit_enabled: apiKey.token_limit_enabled ?? false,
-    token_limit: apiKey.token_limit_enabled ? apiKey.token_limit : undefined,
+    token_limit_enabled:
+      apiKey.credit_limit_enabled ?? apiKey.token_limit_enabled ?? false,
+    token_limit:
+      (apiKey.credit_limit_enabled ?? apiKey.token_limit_enabled)
+        ? (apiKey.credit_limit ?? apiKey.token_limit)
+        : undefined,
     model_limits: apiKey.model_limits
       ? apiKey.model_limits.split(',').filter(Boolean)
       : [],

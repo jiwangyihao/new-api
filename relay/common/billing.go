@@ -38,5 +38,6 @@ type TokenLimitSettler interface {
 	Refund(reason string)
 	ConsumeIncrement(tokens int64) (int64, *types.NewAPIError)
 	RefundIncrement(sequence int64, reason string)
+	CommitIncrement(sequence int64)
 	PreConsumedTokens() int64
 }

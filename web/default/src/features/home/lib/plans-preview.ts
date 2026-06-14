@@ -61,7 +61,19 @@ export function renderHomePlanChannelEquivalentLabels(
   record: PublicPlanRecord,
   t: TranslationFn
 ): string[] {
-  const equivalents = record.plan.channel_token_equivalents ?? []
+  const equivalents = record.plan.channel_credit_equivalents ?? []
+  const legacyEquivalents = record.plan.channel_token_equivalents ?? []
+  if (equivalents.length === 0) {
+    if (!shouldShowChannelEquivalents(legacyEquivalents)) return []
+    const visible = getVisibleChannelEquivalents(legacyEquivalents, 2)
+    const labels = visible.items.map((item) =>
+      formatPlanChannelEquivalent(item, t)
+    )
+    if (visible.hiddenCount > 0) {
+      labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+    }
+    return labels
+  }
   if (!shouldShowChannelEquivalents(equivalents)) return []
 
   const visible = getVisibleChannelEquivalents(equivalents, 2)

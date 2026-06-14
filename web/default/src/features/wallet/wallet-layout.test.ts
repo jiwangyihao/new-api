@@ -180,13 +180,13 @@ describe('wallet page layout', () => {
     assert.match(source, /setActiveSubscription/)
     assert.match(source, /resetSubscriptionQuota/)
     assert.match(source, /Set as active/)
-    assert.match(source, /Reset quota/)
+    assert.match(source, /Reset credits/)
   })
 
-  test('subscription usage display formats used zero as numeric tokens', () => {
+  test('subscription usage display formats used zero as numeric credits', () => {
     const source = readSubscriptionPlansSource()
-    assert.match(source, /formatUsedTokenCount\(tokenUsed, t\)/)
-    assert.doesNotMatch(source, /formatTokenLimit\(tokenUsed, t\)/)
+    assert.match(source, /formatUsedCreditCount\(tokenUsed, t\)/)
+    assert.doesNotMatch(source, /formatCreditLimit\(tokenUsed, t\)/)
   })
 
   test('affiliate card documents invitation reward rules near referral link', () => {

@@ -204,7 +204,7 @@ export function SummaryCards() {
                 {t('Usage at a glance')}
               </h3>
               <p className='text-muted-foreground text-sm'>
-                {t('Monitor subscription tokens and request volume')}
+                {t('Monitor subscription credits and request volume')}
               </p>
             </div>
           </div>

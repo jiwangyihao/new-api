@@ -27,6 +27,7 @@ import {
   canResetSubscriptionQuotaFromRecord,
   getSubscriptionSourceLabel,
   renderPlanChannelEquivalentLabels,
+  renderPlanChannelEquivalentNotes,
   renderSubscriptionChannelEquivalentLabels,
   SubscriptionPlansCard,
 } from './subscription-plans-card'
@@ -296,6 +297,32 @@ describe('wallet channel token equivalent display', () => {
       formatPlanChannelEquivalent(unlimited, t),
       'OpenAI: Unlimited tokens'
     )
+  })
+
+  test('formats fixed-request equivalents as exact request counts', () => {
+    const fixed: PlanChannelTokenEquivalent = {
+      kind: 'fixed_request',
+      value_type: 'single',
+      channel_type: 1,
+      channel_type_name: 'OpenAI',
+      variant_count: 1,
+      fixed_request_credits: 80_000,
+      equivalent_request_limit: 12,
+    }
+    const plan = makeRecord(
+      {},
+      {
+        channel_credit_equivalents: [fixed],
+      }
+    ).plan!
+
+    assert.equal(formatPlanChannelEquivalent(fixed, t), 'OpenAI: 12 requests')
+    assert.deepEqual(renderPlanChannelEquivalentLabels(plan, t), [
+      'OpenAI: 12 requests',
+    ])
+    assert.deepEqual(renderPlanChannelEquivalentNotes(plan, t), [
+      'Fixed-request channel equivalents show exact full requests available.',
+    ])
   })
 
   test('formats static channel labels through translation before backend fallback', () => {

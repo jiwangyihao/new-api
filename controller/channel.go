@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
@@ -492,6 +493,9 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 		}
 	}
 
+	if err := channel.ValidateBillingProfile(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -534,15 +538,18 @@ type AddChannelRequest struct {
 	Channel                   *model.Channel        `json:"channel"`
 }
 
-type addChannelRawRequest struct {
-	Channel *struct {
-		TokenBillingMultiplier json.RawMessage `json:"token_billing_multiplier"`
-	} `json:"channel"`
+type channelBillingProfileRawFields struct {
+	TokenBillingMultiplier          json.RawMessage `json:"token_billing_multiplier"`
+	CreditBillingMode               json.RawMessage `json:"credit_billing_mode"`
+	FixedRequestCredits             json.RawMessage `json:"fixed_request_credits"`
+	DynamicBillingMultiplierEnabled json.RawMessage `json:"dynamic_billing_multiplier_enabled"`
 }
 
-type patchChannelRawRequest struct {
-	TokenBillingMultiplier json.RawMessage `json:"token_billing_multiplier"`
+type addChannelRawRequest struct {
+	Channel *channelBillingProfileRawFields `json:"channel"`
 }
+
+type patchChannelRawRequest channelBillingProfileRawFields
 
 func parseChannelTokenBillingMultiplier(raw json.RawMessage) (present bool, value float64, err error) {
 	if len(raw) == 0 {
@@ -555,6 +562,86 @@ func parseChannelTokenBillingMultiplier(raw json.RawMessage) (present bool, valu
 		return true, 0, err
 	}
 	return true, value, tokenbilling.ValidateMultiplier(value)
+}
+
+func parseChannelCreditBillingMode(raw json.RawMessage) (present bool, value string, err error) {
+	if len(raw) == 0 {
+		return false, "", nil
+	}
+	if common.GetJsonType(raw) != "string" {
+		return true, "", fmt.Errorf("credit billing mode must be a string")
+	}
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return true, "", err
+	}
+	return true, value, creditbilling.ValidateBillingMode(value)
+}
+
+func parseFixedRequestCredits(raw json.RawMessage) (present bool, value int64, err error) {
+	if len(raw) == 0 {
+		return false, 0, nil
+	}
+	if common.GetJsonType(raw) != "number" {
+		return true, 0, fmt.Errorf("fixed request credits must be an integer")
+	}
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return true, 0, err
+	}
+	return true, value, nil
+}
+
+func parseDynamicBillingMultiplierEnabled(raw json.RawMessage) (present bool, value bool, err error) {
+	if len(raw) == 0 {
+		return false, false, nil
+	}
+	if common.GetJsonType(raw) != "boolean" {
+		return true, false, fmt.Errorf("dynamic billing multiplier enabled must be a boolean")
+	}
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return true, false, err
+	}
+	return true, value, nil
+}
+
+func applyChannelBillingProfileRaw(channel *model.Channel, raw *channelBillingProfileRawFields, existing *model.Channel) error {
+	if channel == nil {
+		return nil
+	}
+	if existing != nil {
+		channel.TokenBillingMultiplier = existing.TokenBillingMultiplier
+		channel.CreditBillingMode = existing.CreditBillingMode
+		channel.FixedRequestCredits = existing.FixedRequestCredits
+		channel.DynamicBillingMultiplierEnabled = existing.DynamicBillingMultiplierEnabled
+	} else {
+		channel.TokenBillingMultiplier = tokenbilling.DefaultMultiplier
+		channel.CreditBillingMode = creditbilling.ModeUsageTokens
+		channel.FixedRequestCredits = 0
+		channel.DynamicBillingMultiplierEnabled = false
+	}
+	if raw == nil {
+		return nil
+	}
+	if present, value, err := parseChannelTokenBillingMultiplier(raw.TokenBillingMultiplier); err != nil {
+		return err
+	} else if present {
+		channel.TokenBillingMultiplier = value
+	}
+	if present, value, err := parseChannelCreditBillingMode(raw.CreditBillingMode); err != nil {
+		return err
+	} else if present {
+		channel.CreditBillingMode = value
+	}
+	if present, value, err := parseFixedRequestCredits(raw.FixedRequestCredits); err != nil {
+		return err
+	} else if present {
+		channel.FixedRequestCredits = value
+	}
+	if present, value, err := parseDynamicBillingMultiplierEnabled(raw.DynamicBillingMultiplierEnabled); err != nil {
+		return err
+	} else if present {
+		channel.DynamicBillingMultiplierEnabled = value
+	}
+	return nil
 }
 
 func getVertexArrayKeys(keys string) ([]string, error) {
@@ -573,7 +660,7 @@ func getVertexArrayKeys(keys string) ([]string, error) {
 		case string:
 			keyStr = strings.TrimSpace(v)
 		default:
-			bytes, err := json.Marshal(v)
+			bytes, err := common.Marshal(v)
 			if err != nil {
 				return nil, fmt.Errorf("Vertex AI key JSON 编码失败: %w", err)
 			}
@@ -605,23 +692,12 @@ func AddChannel(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if rawRequest.Channel != nil {
-		present, value, err := parseChannelTokenBillingMultiplier(rawRequest.Channel.TokenBillingMultiplier)
-		if err != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-			})
-			return
-		}
-		if present && addChannelRequest.Channel != nil {
-			addChannelRequest.Channel.TokenBillingMultiplier = value
-		}
-		if !present && addChannelRequest.Channel != nil {
-			addChannelRequest.Channel.TokenBillingMultiplier = tokenbilling.DefaultMultiplier
-		}
-	} else if addChannelRequest.Channel != nil {
-		addChannelRequest.Channel.TokenBillingMultiplier = tokenbilling.DefaultMultiplier
+	if err := applyChannelBillingProfileRaw(addChannelRequest.Channel, rawRequest.Channel, nil); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 
 	// 使用统一的校验函数
@@ -907,15 +983,6 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 
-	// 使用统一的校验函数
-	if err := validateChannel(&channel.Channel, false); err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
-		return
-	}
-	// Preserve existing ChannelInfo to ensure multi-key channels keep correct state even if the client does not send ChannelInfo in the request.
 	originChannel, err := model.GetChannelById(channel.Id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -924,23 +991,24 @@ func UpdateChannel(c *gin.Context) {
 		})
 		return
 	}
-	present, multiplier, err := parseChannelTokenBillingMultiplier(rawRequest.TokenBillingMultiplier)
-	if err != nil {
+	if err := applyChannelBillingProfileRaw(&channel.Channel, (*channelBillingProfileRawFields)(&rawRequest), originChannel); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": err.Error(),
 		})
 		return
 	}
-	if present {
-		channel.TokenBillingMultiplier = multiplier
-	} else {
-		channel.TokenBillingMultiplier = originChannel.TokenBillingMultiplier
+	// 使用统一的校验函数
+	if err := validateChannel(&channel.Channel, false); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
 	}
 
 	// Always copy the original ChannelInfo so that fields like IsMultiKey and MultiKeySize are retained.
 	channel.ChannelInfo = originChannel.ChannelInfo
-
 	channel.Group = originChannel.Group
 	// If the request explicitly specifies a new MultiKeyMode, apply it on top of the original info.
 	if channel.MultiKeyMode != nil && *channel.MultiKeyMode != "" {
@@ -1145,7 +1213,7 @@ func FetchModels(c *gin.Context) {
 		} `json:"data"`
 	}
 
-	if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+	if err := common.DecodeJson(response.Body, &result); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": err.Error(),
@@ -1891,7 +1959,7 @@ func OllamaPullModelStream(c *gin.Context) {
 
 	// 创建进度回调函数
 	progressCallback := func(progress ollama.OllamaPullResponse) {
-		data, _ := json.Marshal(progress)
+		data, _ := common.Marshal(progress)
 		fmt.Fprintf(c.Writer, "data: %s\n\n", string(data))
 		c.Writer.Flush()
 	}
@@ -1900,12 +1968,12 @@ func OllamaPullModelStream(c *gin.Context) {
 	err = ollama.PullOllamaModelStream(baseURL, key, req.ModelName, progressCallback)
 
 	if err != nil {
-		errorData, _ := json.Marshal(gin.H{
+		errorData, _ := common.Marshal(gin.H{
 			"error": err.Error(),
 		})
 		fmt.Fprintf(c.Writer, "data: %s\n\n", string(errorData))
 	} else {
-		successData, _ := json.Marshal(gin.H{
+		successData, _ := common.Marshal(gin.H{
 			"message": fmt.Sprintf("Model %s pulled successfully", req.ModelName),
 		})
 		fmt.Fprintf(c.Writer, "data: %s\n\n", string(successData))

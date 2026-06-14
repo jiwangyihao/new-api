@@ -26,54 +26,173 @@ const channelEquivalentBaseSchema = z.object({
   channel_type: z.number(),
   channel_type_name: z.string(),
   channel_type_label_key: z.string().optional(),
+  variant_count: z.number(),
 })
 
-const planChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
-  channelEquivalentBaseSchema.extend({
-    kind: z.literal('single'),
-    variant_count: z.number(),
-    multiplier: z.number(),
-    equivalent_token_limit: z.number(),
-  }),
-  channelEquivalentBaseSchema.extend({
-    kind: z.literal('range'),
-    variant_count: z.number(),
-    min_multiplier: z.number(),
-    max_multiplier: z.number(),
-    equivalent_token_limit_min: z.number(),
-    equivalent_token_limit_max: z.number(),
-  }),
-  channelEquivalentBaseSchema.extend({
-    kind: z.literal('unlimited'),
-    variant_count: z.number(),
-    token_unlimited: z.literal(true),
-  }),
+const usageTokenPlanSingleEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('usage_tokens'),
+  value_type: z.literal('single'),
+  multiplier: z.number(),
+  equivalent_token_limit: z.number(),
+})
+
+const usageTokenPlanRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('usage_tokens'),
+  value_type: z.literal('range'),
+  min_multiplier: z.number(),
+  max_multiplier: z.number(),
+  equivalent_token_limit_min: z.number(),
+  equivalent_token_limit_max: z.number(),
+})
+
+const fixedRequestPlanSingleEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('fixed_request'),
+  value_type: z.literal('single'),
+  fixed_request_credits: z.number(),
+  equivalent_request_limit: z.number(),
+})
+
+const fixedRequestPlanRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('fixed_request'),
+  value_type: z.literal('range'),
+  fixed_request_credits_min: z.number(),
+  fixed_request_credits_max: z.number(),
+  equivalent_request_limit_min: z.number(),
+  equivalent_request_limit_max: z.number(),
+})
+
+const unlimitedPlanEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('unlimited'),
+  value_type: z.literal('unlimited'),
+  credit_unlimited: z.literal(true).optional(),
+  token_unlimited: z.literal(true).optional(),
+})
+
+const planChannelCreditEquivalentSchema = z.union([
+  usageTokenPlanSingleEquivalentSchema,
+  usageTokenPlanRangeEquivalentSchema,
+  fixedRequestPlanSingleEquivalentSchema,
+  fixedRequestPlanRangeEquivalentSchema,
+  unlimitedPlanEquivalentSchema,
 ])
 
-const subscriptionChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
+const usageTokenSubscriptionSingleEquivalentSchema =
   channelEquivalentBaseSchema.extend({
-    kind: z.literal('single'),
-    variant_count: z.number(),
+    kind: z.literal('usage_tokens'),
+    value_type: z.literal('single'),
     multiplier: z.number(),
     equivalent_token_limit: z.number(),
     equivalent_token_remaining: z.number(),
+  })
+
+const usageTokenSubscriptionRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('usage_tokens'),
+  value_type: z.literal('range'),
+  min_multiplier: z.number(),
+  max_multiplier: z.number(),
+  equivalent_token_limit_min: z.number(),
+  equivalent_token_limit_max: z.number(),
+  equivalent_token_remaining_min: z.number(),
+  equivalent_token_remaining_max: z.number(),
+})
+
+const fixedRequestSubscriptionSingleEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('fixed_request'),
+    value_type: z.literal('single'),
+    fixed_request_credits: z.number(),
+    equivalent_request_limit: z.number(),
+    equivalent_request_remaining: z.number(),
+  })
+
+const fixedRequestSubscriptionRangeEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('fixed_request'),
+    value_type: z.literal('range'),
+    fixed_request_credits_min: z.number(),
+    fixed_request_credits_max: z.number(),
+    equivalent_request_limit_min: z.number(),
+    equivalent_request_limit_max: z.number(),
+    equivalent_request_remaining_min: z.number(),
+    equivalent_request_remaining_max: z.number(),
+  })
+
+const unlimitedSubscriptionEquivalentSchema = channelEquivalentBaseSchema.extend({
+  kind: z.literal('unlimited'),
+  value_type: z.literal('unlimited'),
+  credit_unlimited: z.literal(true).optional(),
+  token_unlimited: z.literal(true).optional(),
+})
+
+const subscriptionChannelCreditEquivalentSchema = z.union([
+  usageTokenSubscriptionSingleEquivalentSchema,
+  usageTokenSubscriptionRangeEquivalentSchema,
+  fixedRequestSubscriptionSingleEquivalentSchema,
+  fixedRequestSubscriptionRangeEquivalentSchema,
+  unlimitedSubscriptionEquivalentSchema,
+])
+
+const legacyPlanChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('single'),
+    multiplier: z.number(),
+    equivalent_token_limit: z.number(),
   }),
   channelEquivalentBaseSchema.extend({
     kind: z.literal('range'),
-    variant_count: z.number(),
     min_multiplier: z.number(),
     max_multiplier: z.number(),
     equivalent_token_limit_min: z.number(),
     equivalent_token_limit_max: z.number(),
-    equivalent_token_remaining_min: z.number(),
-    equivalent_token_remaining_max: z.number(),
   }),
   channelEquivalentBaseSchema.extend({
     kind: z.literal('unlimited'),
-    variant_count: z.number(),
     token_unlimited: z.literal(true),
   }),
 ])
+
+const legacySubscriptionChannelTokenEquivalentSchema = z.discriminatedUnion(
+  'kind',
+  [
+    channelEquivalentBaseSchema.extend({
+      kind: z.literal('single'),
+      multiplier: z.number(),
+      equivalent_token_limit: z.number(),
+      equivalent_token_remaining: z.number(),
+    }),
+    channelEquivalentBaseSchema.extend({
+      kind: z.literal('range'),
+      min_multiplier: z.number(),
+      max_multiplier: z.number(),
+      equivalent_token_limit_min: z.number(),
+      equivalent_token_limit_max: z.number(),
+      equivalent_token_remaining_min: z.number(),
+      equivalent_token_remaining_max: z.number(),
+    }),
+    channelEquivalentBaseSchema.extend({
+      kind: z.literal('unlimited'),
+      token_unlimited: z.literal(true),
+    }),
+  ]
+)
+
+const planChannelTokenEquivalentSchema = z.union([
+  legacyPlanChannelTokenEquivalentSchema,
+  planChannelCreditEquivalentSchema,
+])
+
+const subscriptionChannelTokenEquivalentSchema = z.union([
+  legacySubscriptionChannelTokenEquivalentSchema,
+  subscriptionChannelCreditEquivalentSchema,
+])
+
+export type PlanChannelCreditEquivalent = z.infer<
+  typeof planChannelCreditEquivalentSchema
+>
+
+export type SubscriptionChannelCreditEquivalent = z.infer<
+  typeof subscriptionChannelCreditEquivalentSchema
+>
 
 export type PlanChannelTokenEquivalent = z.infer<
   typeof planChannelTokenEquivalentSchema
@@ -111,6 +230,9 @@ export const subscriptionPlanSchema = z.object({
   trial_duration_hours: z.number().optional(),
   reward_eligible: z.boolean().optional(),
   business_code: z.string().optional(),
+  channel_credit_equivalents: z
+    .array(planChannelCreditEquivalentSchema)
+    .default([]),
   channel_token_equivalents: z
     .array(planChannelTokenEquivalentSchema)
     .default([]),
@@ -118,8 +240,9 @@ export const subscriptionPlanSchema = z.object({
 
 export type SubscriptionPlan = Omit<
   z.infer<typeof subscriptionPlanSchema>,
-  'channel_token_equivalents'
+  'channel_credit_equivalents' | 'channel_token_equivalents'
 > & {
+  channel_credit_equivalents?: PlanChannelCreditEquivalent[]
   channel_token_equivalents?: PlanChannelTokenEquivalent[]
 }
 
@@ -145,6 +268,7 @@ export interface PublicSubscriptionPlan {
   enabled?: boolean
   is_trial?: boolean
   max_purchase_per_user?: number
+  channel_credit_equivalents?: PlanChannelCreditEquivalent[]
   channel_token_equivalents?: PlanChannelTokenEquivalent[]
 }
 
@@ -183,8 +307,8 @@ export type UserSubscription = z.infer<typeof userSubscriptionSchema>
 
 export interface UserSubscriptionRecord {
   subscription: UserSubscription
-  plan?: SubscriptionPlan
   plan_title?: string
+  plan?: SubscriptionPlan
 }
 
 // ============================================================================
@@ -242,7 +366,8 @@ export interface SubscriptionKyrenProductStatus {
   currency_matches?: boolean
 }
 
-export interface SubscriptionKyrenProductSyncStatus extends SubscriptionKyrenProductStatus {
+export interface SubscriptionKyrenProductSyncStatus
+  extends SubscriptionKyrenProductStatus {
   synced?: boolean
   local_error?: string
 }
@@ -314,18 +439,19 @@ export interface SelfSubscriptionSummary {
   gpt_abuse_limit_enabled: boolean
   next_reset_time?: number
   end_time?: number
+  channel_credit_equivalents?: SubscriptionChannelCreditEquivalent[]
   channel_token_equivalents?: SubscriptionChannelTokenEquivalent[]
 }
 
 export interface SelfSubscriptionData {
-  billing_preference: string
-  codex_pro_mode: CodexProMode
-  codex_pro_eligible: boolean
-  codex_pro_unavailable_reason: CodexProUnavailableReason
+  active_subscription_id?: number
+  billing_preference?: string
+  codex_pro_mode?: CodexProMode
+  codex_pro_eligible?: boolean
+  codex_pro_unavailable_reason?: CodexProUnavailableReason
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
   summary: SelfSubscriptionSummary
-  active_subscription_id?: number
 }
 
 // ============================================================================

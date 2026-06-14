@@ -83,7 +83,8 @@ func EmbeddingHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
-	if err := service.PostTextConsumeQuota(c, info, usage.(*dto.Usage), nil); err != nil {
+	usageDto, _ := usage.(*dto.Usage)
+	if err := service.PostTextConsumeQuota(c, info, usageDto, nil); err != nil {
 		return service.PostSettleErrorToOpenAIError(info, err)
 	}
 	return nil

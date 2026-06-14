@@ -338,7 +338,7 @@ func TestSettleBillingWrapperDoesNotSynthesizeSubscriptionTokens(t *testing.T) {
 
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID), "legacy/non-text settlement wrapper must not synthesize distributor token usage from wallet quota")
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "subscription billing must not settle token key quota")
-	assert.Equal(t, int64(-10), relayInfo.SubscriptionPostDelta)
+	assert.Equal(t, -relayInfo.SubscriptionPreConsumed, relayInfo.SubscriptionPostDelta)
 }
 
 func TestSettleBillingWrapperRejectsLegacySubscriptionQuota(t *testing.T) {
@@ -572,6 +572,7 @@ func TestDistributorSubscriptionNotificationUsesTokenFormatting(t *testing.T) {
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-notify", "req-notify", "subscription_only")
+	relayInfo.SetEstimatePromptTokens(99)
 	preConsumeForBillingTest(t, ctx, relayInfo, 99)
 
 	remaining := relayInfo.SubscriptionAmountTotal - relayInfo.SubscriptionAmountUsedAfterPreConsume
@@ -1180,7 +1181,7 @@ func TestPreConsumeBillingCodexProUnavailableForExpiredExhaustedAndWalletOnly(t 
 	}
 }
 
-func TestSettleBillingWithInputCodexProServedDoublesSubscriptionTokensOnly(t *testing.T) {
+func TestSettleBillingWithInputCodexProServedDoesNotDoubleSubscriptionTokens(t *testing.T) {
 	truncate(t)
 	const userID = 8241
 	const tokenID = 8242
@@ -1194,19 +1195,20 @@ func TestSettleBillingWithInputCodexProServedDoublesSubscriptionTokensOnly(t *te
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-settle", "req-codex-pro-settle", "subscription_only")
 	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.SetEstimatePromptTokens(6)
 	preConsumeForBillingTest(t, ctx, relayInfo, 6)
 	setBoolFieldForTest(t, relayInfo, "CodexProServed", true)
 
 	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
 
-	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, int64(10), relayInfo.SubscriptionPostDelta, "2x settlement must add the extra subscription debit through the existing post-delta path")
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(2), relayInfo.SubscriptionPostDelta, "legacy Codex Pro served marker must not add an extra subscription debit")
 	assert.Equal(t, 10_000, getUserQuota(t, userID), "Codex Pro multiplier must not touch wallet quota")
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID), "Codex Pro multiplier must not touch token-key wallet quota")
 	assert.Equal(t, 0, getTokenUsedQuota(t, tokenID), "Codex Pro multiplier must not record wallet usage")
 }
 
-func TestSettleBillingWithInputUsesPreConsumeQuotaWhenEstimateMissing(t *testing.T) {
+func TestSettleBillingWithInputDoesNotUsePreConsumeQuotaWhenEstimateMissing(t *testing.T) {
 	truncate(t)
 	const userID = 8246
 	const tokenID = 8247
@@ -1224,7 +1226,7 @@ func TestSettleBillingWithInputUsesPreConsumeQuotaWhenEstimateMissing(t *testing
 	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
 
 	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
-	assert.Equal(t, int64(2), relayInfo.SubscriptionPostDelta)
+	assert.Equal(t, int64(7), relayInfo.SubscriptionPostDelta)
 }
 
 func TestSettleBillingWithInputCodexProUnavailableUsesSingleSubscriptionTokens(t *testing.T) {
@@ -1241,6 +1243,7 @@ func TestSettleBillingWithInputCodexProUnavailableUsesSingleSubscriptionTokens(t
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-single", "req-codex-pro-single", "subscription_only")
 	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.SetEstimatePromptTokens(6)
 	preConsumeForBillingTest(t, ctx, relayInfo, 6)
 
 	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: 999, SubscriptionTokens: 8}))
@@ -1279,7 +1282,7 @@ func TestPostTextConsumeQuotaCodexProServedDoesNotDoubleApiKeyTokenLimit(t *test
 
 	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{PromptTokens: 5, CompletionTokens: 3, TotalTokens: 8}, nil))
 
-	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID))
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(8), getTokenUsed(t, tokenID))
 	record := getTokenLimitRecordForTest(t, "req-codex-pro-token-limit")
 	assert.Equal(t, model.TokenLimitPreConsumeStatusSettled, record.Status)
@@ -1314,10 +1317,17 @@ func TestPostTextConsumeQuotaLogsNewAPIBillingForCodexProServed(t *testing.T) {
 	require.NotNil(t, log)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
-	assert.Equal(t, float64(2), other["billing_multiplier"])
-	assert.Equal(t, "codex_pro_served_trailer", other["billing_multiplier_source"])
+	assert.Equal(t, float64(1), other["billing_multiplier"])
+	assert.Equal(t, "default", other["billing_multiplier_source"])
+	assert.Equal(t, "usage_tokens", other["credit_billing_mode"])
+	assert.Equal(t, float64(8), other["base_credits"])
+	assert.Equal(t, float64(8), other["api_key_credits"])
+	assert.Equal(t, float64(8), other["subscription_credits"])
+	assert.Equal(t, float64(8), other["final_credits"])
+	assert.Equal(t, float64(1), other["dynamic_billing_multiplier"])
+	assert.Equal(t, "default", other["dynamic_billing_multiplier_source"])
 	assert.Equal(t, float64(8), other["metered_tokens"])
-	assert.Equal(t, float64(16), other["billable_tokens"])
+	assert.Equal(t, float64(8), other["billable_tokens"])
 	assert.Equal(t, true, other["codex_pro_requested"])
 	assert.Equal(t, true, other["codex_pro_served"])
 
@@ -1326,10 +1336,10 @@ func TestPostTextConsumeQuotaLogsNewAPIBillingForCodexProServed(t *testing.T) {
 	require.Len(t, logs, 1)
 	userOther, err := common.StrToMap(logs[0].Other)
 	require.NoError(t, err)
-	assert.Equal(t, "codex_pro_served_trailer", userOther["billing_multiplier_source"])
-	assert.Equal(t, float64(2), userOther["billing_multiplier"])
+	assert.Equal(t, "default", userOther["billing_multiplier_source"])
+	assert.Equal(t, float64(1), userOther["billing_multiplier"])
 	assert.Equal(t, float64(8), userOther["metered_tokens"])
-	assert.Equal(t, float64(16), userOther["billable_tokens"])
+	assert.Equal(t, float64(8), userOther["billable_tokens"])
 }
 
 func TestPostTextConsumeQuotaLogsCodexProSourceWithDiscountedChannelMultiplier(t *testing.T) {
@@ -1362,12 +1372,12 @@ func TestPostTextConsumeQuotaLogsCodexProSourceWithDiscountedChannelMultiplier(t
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
 	assert.Equal(t, float64(10), other["metered_tokens"])
-	assert.Equal(t, float64(10), other["billable_tokens"])
+	assert.Equal(t, float64(5), other["billable_tokens"])
 	assert.Equal(t, float64(5), other["channel_billable_tokens"])
 	assert.Equal(t, float64(5), other["api_key_billable_tokens"])
-	assert.Equal(t, float64(10), other["subscription_billable_tokens"])
-	assert.Equal(t, float64(2), other["billing_multiplier"])
-	assert.Equal(t, "codex_pro_served_trailer", other["billing_multiplier_source"])
+	assert.Equal(t, float64(5), other["subscription_billable_tokens"])
+	assert.Equal(t, float64(1), other["billing_multiplier"])
+	assert.Equal(t, "default", other["billing_multiplier_source"])
 }
 
 func TestPostTextConsumeQuotaLogsNewAPIBillingForFreeAndMissingUsage(t *testing.T) {
@@ -1489,7 +1499,7 @@ func TestPostTextConsumeQuotaFreeModelTokenLimitDoesNotSettleMissingPreconsume(t
 	assert.Equal(t, int64(0), relayInfo.SubscriptionBillableTokens)
 }
 
-func TestPostTextConsumeQuotaDoesNotChargeWhenTotalTokensZero(t *testing.T) {
+func TestPostTextConsumeQuotaDoesNotChargeUsageModeWhenUsageObjectHasZeroTokens(t *testing.T) {
 	truncate(t)
 	const userID = 8286
 	const tokenID = 8287
@@ -1510,14 +1520,16 @@ func TestPostTextConsumeQuotaDoesNotChargeWhenTotalTokensZero(t *testing.T) {
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(0), relayInfo.SubscriptionBillableTokens)
 	assert.Equal(t, int64(0), relayInfo.RawMeteredTokens)
+	assert.True(t, relayInfo.HasTrustedUsage)
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	other, err := common.StrToMap(log.Other)
 	require.NoError(t, err)
-	assert.Equal(t, true, other["usage_unavailable"])
+	assert.Nil(t, other["usage_unavailable"])
+	assert.Equal(t, true, other["has_trusted_usage"])
 }
 
-func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFreeRequests(t *testing.T) {
+func TestSettleBillingWithInputCodexProServedDoesNotDoubleWalletOnlyPreferenceOrFreeRequests(t *testing.T) {
 	truncate(t)
 	const userID = 8261
 	const tokenID = 8262
@@ -1533,7 +1545,7 @@ func TestSettleBillingWithInputCodexProServedDoublesWalletOnlyPreferenceButNotFr
 	preConsumeForBillingTest(t, ctx, walletOnly, 6)
 	setBoolFieldForTest(t, walletOnly, "CodexProServed", true)
 	require.NoError(t, SettleBillingWithInput(ctx, walletOnly, BillingSettleInput{WalletQuota: 8, SubscriptionTokens: 8}))
-	assert.Equal(t, int64(16), getSubscriptionTokenUsed(t, subID), "wallet-only preference is compatibility metadata; actual subscription-funded Codex Pro settlement still uses the 2x path")
+	assert.Equal(t, int64(8), getSubscriptionTokenUsed(t, subID), "wallet-only preference is compatibility metadata; Codex Pro served marker must not add an extra subscription debit")
 	assert.Equal(t, 10_000, getUserQuota(t, userID), "subscription settlement must not touch wallet quota")
 	assert.Equal(t, 10_000, getTokenRemainQuota(t, tokenID))
 

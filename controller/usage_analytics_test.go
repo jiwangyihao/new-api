@@ -47,6 +47,7 @@ func setupUsageAnalyticsControllerTestDBs(t *testing.T) usageAnalyticsController
 	model.LOG_DB = logDB
 	require.NoError(t, model.DB.AutoMigrate(&model.Token{}))
 	require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
+	model.ResetLogStatCacheForTest()
 
 	t.Cleanup(func() {
 		model.DB = oldDB
@@ -55,6 +56,7 @@ func setupUsageAnalyticsControllerTestDBs(t *testing.T) usageAnalyticsController
 		common.UsingMySQL = oldMySQL
 		common.UsingPostgreSQL = oldPostgres
 		common.RedisEnabled = oldRedis
+		model.ResetLogStatCacheForTest()
 		if sqlDB, err := businessDB.DB(); err == nil {
 			_ = sqlDB.Close()
 		}

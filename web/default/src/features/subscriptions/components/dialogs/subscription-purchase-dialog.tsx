@@ -48,7 +48,7 @@ import {
   formatConcurrencyLimit,
   formatPlanPrice,
   formatDuration,
-  formatTokenLimit,
+  formatCreditLimit,
   formatAccountBalanceForPlanPurchase,
   getAccountBalancePaymentState,
 } from '../../lib'
@@ -451,11 +451,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
             </div>
             <div className='flex items-center justify-between'>
               <span className='text-muted-foreground text-sm'>
-                {t('Monthly Token Limit')}
+                {t('Monthly Credits')}
               </span>
               <span className='flex items-center gap-1 text-sm'>
                 <Package className='h-3.5 w-3.5' />
-                {formatTokenLimit(plan.monthly_token_limit, t)}
+                {formatCreditLimit(plan.monthly_token_limit, t)}
               </span>
             </div>
             <div className='flex items-center justify-between'>

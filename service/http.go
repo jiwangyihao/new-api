@@ -38,6 +38,18 @@ func ShouldCopyUpstreamHeader(c *gin.Context, k string, v []string) bool {
 	if strings.EqualFold(k, "X-NewAPI-Pro-Request") {
 		return false
 	}
+	if strings.EqualFold(k, "X-NewAPI-Dynamic-Billing-Multiplier") {
+		return false
+	}
+	if strings.EqualFold(k, "X-NewAPI-Dynamic-Billing-Multiplier-Source") {
+		return false
+	}
+	if strings.EqualFold(k, "X-NewAPI-Billing-Multiplier") {
+		return false
+	}
+	if strings.EqualFold(k, "X-NewAPI-Billing-Multiplier-Source") {
+		return false
+	}
 	if strings.EqualFold(k, "Trailer") {
 		return false
 	}

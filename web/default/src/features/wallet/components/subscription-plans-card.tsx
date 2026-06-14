@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Crown, RefreshCw, Sparkles, Check } from 'lucide-react'
+import { Crown, RefreshCw, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -47,12 +47,12 @@ import {
 } from '@/features/subscriptions/api'
 import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
-import { formatFiniteTokenCount } from '@/features/subscriptions/lib/format'
 import {
   formatConcurrencyLimit,
   formatPlanPrice,
   formatDuration,
-  formatTokenLimit,
+  formatCreditLimit,
+  formatFiniteCreditCount,
 } from '@/features/subscriptions/lib'
 import type {
   PlanRecord,
@@ -62,6 +62,7 @@ import type {
 import {
   formatPlanChannelEquivalent,
   formatSubscriptionChannelEquivalent,
+  getChannelEquivalentNotes,
   getSubscriptionDisplayLabel,
   getVisibleChannelEquivalents,
   shouldShowChannelEquivalents,
@@ -150,9 +151,9 @@ export function canResetSubscriptionQuotaFromRecord(
   )
 }
 
-function formatUsedTokenCount(value: number, t: TranslationFn): string {
-  if (value <= 0) return `0 ${t('tokens')}`
-  return formatTokenLimit(value, t)
+function formatUsedCreditCount(value: number, t: TranslationFn): string {
+  if (value <= 0) return `0 ${t('credits')}`
+  return formatCreditLimit(value, t)
 }
 
 export function renderPlanChannelEquivalentLabels(
@@ -160,7 +161,19 @@ export function renderPlanChannelEquivalentLabels(
   t: TranslationFn,
   limit = 3
 ): string[] {
-  const equivalents = plan.channel_token_equivalents ?? []
+  const equivalents = plan.channel_credit_equivalents ?? []
+  const legacyEquivalents = plan.channel_token_equivalents ?? []
+  if (equivalents.length === 0) {
+    if (!shouldShowChannelEquivalents(legacyEquivalents)) return []
+    const visible = getVisibleChannelEquivalents(legacyEquivalents, limit)
+    const labels = visible.items.map((item) =>
+      formatPlanChannelEquivalent(item, t)
+    )
+    if (visible.hiddenCount > 0) {
+      labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+    }
+    return labels
+  }
   if (!shouldShowChannelEquivalents(equivalents)) return []
 
   const visible = getVisibleChannelEquivalents(equivalents, limit)
@@ -174,6 +187,18 @@ export function renderPlanChannelEquivalentLabels(
   return labels
 }
 
+export function renderPlanChannelEquivalentNotes(
+  plan: PlanRecord['plan'],
+  t: TranslationFn
+): string[] {
+  const equivalents = plan.channel_credit_equivalents ?? []
+  const legacyEquivalents = plan.channel_token_equivalents ?? []
+  const visibleEquivalents = equivalents.length > 0 ? equivalents : legacyEquivalents
+  if (!shouldShowChannelEquivalents(visibleEquivalents)) return []
+  return getChannelEquivalentNotes(visibleEquivalents, t)
+}
+
+
 export function renderSubscriptionChannelEquivalentLabels(
   data: Pick<SelfSubscriptionData, 'summary'> | null,
   isCurrentActive: boolean,
@@ -181,8 +206,22 @@ export function renderSubscriptionChannelEquivalentLabels(
   limit = 3
 ): string[] {
   const equivalents = isCurrentActive
+    ? (data?.summary?.channel_credit_equivalents ?? [])
+    : []
+  const legacyEquivalents = isCurrentActive
     ? (data?.summary?.channel_token_equivalents ?? [])
     : []
+  if (equivalents.length === 0) {
+    if (!shouldShowChannelEquivalents(legacyEquivalents)) return []
+    const visible = getVisibleChannelEquivalents(legacyEquivalents, limit)
+    const labels = visible.items.map((item) =>
+      formatSubscriptionChannelEquivalent(item, t)
+    )
+    if (visible.hiddenCount > 0) {
+      labels.push(t('+{{count}} more', { count: visible.hiddenCount }))
+    }
+    return labels
+  }
   if (!shouldShowChannelEquivalents(equivalents)) return []
 
   const visible = getVisibleChannelEquivalents(equivalents, limit)
@@ -194,6 +233,22 @@ export function renderSubscriptionChannelEquivalentLabels(
   }
 
   return labels
+}
+
+export function renderSubscriptionChannelEquivalentNotes(
+  data: Pick<SelfSubscriptionData, 'summary'> | null,
+  isCurrentActive: boolean,
+  t: TranslationFn
+): string[] {
+  const equivalents = isCurrentActive
+    ? (data?.summary?.channel_credit_equivalents ?? [])
+    : []
+  const legacyEquivalents = isCurrentActive
+    ? (data?.summary?.channel_token_equivalents ?? [])
+    : []
+  const visibleEquivalents = equivalents.length > 0 ? equivalents : legacyEquivalents
+  if (!shouldShowChannelEquivalents(visibleEquivalents)) return []
+  return getChannelEquivalentNotes(visibleEquivalents, t)
 }
 
 export function SubscriptionPlansCard({
@@ -413,7 +468,7 @@ export function SubscriptionPlansCard({
             <div className='flex w-full items-center justify-between gap-2 sm:w-auto sm:justify-end'>
               <p className='text-muted-foreground text-xs sm:max-w-xs sm:text-right'>
                 {t(
-                  'API requests consume tokens from your active subscription plan.'
+                  'API requests consume credits from your active subscription plan.'
                 )}
               </p>
               <Button
@@ -468,6 +523,12 @@ export function SubscriptionPlansCard({
                   const isResetting = resettingQuotaId === subscriptionId
                   const remainingEquivalentLabels =
                     renderSubscriptionChannelEquivalentLabels(
+                      selfSubscriptionData,
+                      isActive && isSelected,
+                      t
+                    )
+                  const remainingEquivalentNotes =
+                    renderSubscriptionChannelEquivalentNotes(
                       selfSubscriptionData,
                       isActive && isSelected,
                       t
@@ -536,7 +597,7 @@ export function SubscriptionPlansCard({
                                 onClick={() => setResetTarget(sub)}
                                 disabled={isResetting}
                               >
-                                {t('Reset quota')}
+                                {t('Reset credits')}
                               </Button>
                             )}
                           </div>
@@ -562,24 +623,24 @@ export function SubscriptionPlansCard({
                         </div>
                       )}
                       <div className='text-muted-foreground mt-1'>
-                        {t('Monthly Token Limit')}:{' '}
+                        {t('Monthly Credits')}:{' '}
                         {tokenLimit > 0 ? (
                           <Tooltip>
                             <TooltipTrigger
                               render={<span className='cursor-help' />}
                             >
-                              {formatUsedTokenCount(tokenUsed, t)}/
-                              {formatTokenLimit(tokenLimit, t)} ·{' '}
+                              {formatUsedCreditCount(tokenUsed, t)}/
+                              {formatCreditLimit(tokenLimit, t)} ·{' '}
                               {t('Remaining')}{' '}
-                              {formatFiniteTokenCount(remainTokens, t)}
+                              {formatFiniteCreditCount(remainTokens, t)}
                             </TooltipTrigger>
                             <TooltipContent>
-                              {t('Raw Tokens')}: {tokenUsed}/{tokenLimit} ·{' '}
+                              {t('Raw Credits')}: {tokenUsed}/{tokenLimit} ·{' '}
                               {t('Remaining')} {remainTokens}
                             </TooltipContent>
                           </Tooltip>
                         ) : (
-                          formatTokenLimit(0, t)
+                          formatCreditLimit(0, t)
                         )}
                         {tokenLimit > 0 && (
                           <span className='ml-2'>
@@ -593,11 +654,9 @@ export function SubscriptionPlansCard({
                           {remainingEquivalentLabels.map((label) => (
                             <div key={label}>{label}</div>
                           ))}
-                          <div>
-                            {t(
-                              'Estimated by current channel multiplier. Actual deduction depends on the channel used.'
-                            )}
-                          </div>
+                          {remainingEquivalentNotes.map((note) => (
+                            <div key={note}>{note}</div>
+                          ))}
                         </div>
                       )}
                       <div className='text-muted-foreground mt-1'>
@@ -638,10 +697,14 @@ export function SubscriptionPlansCard({
                 plan,
                 t
               )
+              const planEquivalentNotes = renderPlanChannelEquivalentNotes(
+                plan,
+                t
+              )
 
               const benefits = [
                 `${t('Validity Period')}: ${formatDuration(plan, t)}`,
-                `${t('Monthly Token Limit')}: ${formatTokenLimit(
+                `${t('Monthly Credits')}: ${formatCreditLimit(
                   plan.monthly_token_limit,
                   t
                 )}`,
@@ -674,13 +737,11 @@ export function SubscriptionPlansCard({
                       </div>
                       {isPopular && (
                         <StatusBadge
+                          label={t('Popular')}
                           variant='info'
                           copyable={false}
                           className='shrink-0'
-                        >
-                          <Sparkles className='h-3 w-3' />
-                          {t('Recommended')}
-                        </StatusBadge>
+                        />
                       )}
                     </div>
 
@@ -706,11 +767,9 @@ export function SubscriptionPlansCard({
                           {planEquivalentLabels.map((label) => (
                             <div key={label}>{label}</div>
                           ))}
-                          <div>
-                            {t(
-                              'Estimated by current channel multiplier. Actual deduction depends on the channel used.'
-                            )}
-                          </div>
+                          {planEquivalentNotes.map((note) => (
+                            <div key={note}>{note}</div>
+                          ))}
                         </div>
                       )}
                     </div>
@@ -785,11 +844,11 @@ export function SubscriptionPlansCard({
         onOpenChange={(open) => {
           if (!open) setResetTarget(null)
         }}
-        title={t('Reset subscription quota')}
+        title={t('Reset subscription credits')}
         desc={t(
-          'Quota reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
+          'Credit reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
         )}
-        confirmText={t('Reset quota')}
+        confirmText={t('Reset credits')}
         isLoading={resettingQuotaId === resetTarget?.subscription?.id}
         handleConfirm={handleConfirmResetQuota}
       />

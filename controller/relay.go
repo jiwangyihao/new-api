@@ -195,8 +195,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Retry:                             common.GetPointer(0),
 		EndpointType:                      relayInfo.EndpointType(),
 		FrozenTokenBillingMultiplier:      relayInfo.FrozenChannelTokenBillingMultiplier(),
+		FrozenBillingProfile:              relayInfoBillingProfile(relayInfo),
 		UsedChannelIds:                    usedChannelIds(c),
 		RequireSameTokenBillingMultiplier: shouldRequireSameTokenBillingMultiplier(relayInfo),
+		RequireSameBillingProfile:         shouldRequireSameBillingProfile(relayInfo),
 	}
 	relayInfo.RetryIndex = 0
 	relayInfo.LastError = nil
@@ -443,6 +445,25 @@ func shouldRequireSameTokenBillingMultiplier(info *relaycommon.RelayInfo) bool {
 	return info.ChannelTokenBillingMultiplier > 0 && info.BillingSource == service.BillingSourceSubscription && info.SubscriptionDistributorTokenBilling
 }
 
+func relayInfoBillingProfile(info *relaycommon.RelayInfo) model.ChannelBillingProfile {
+	if info == nil {
+		return model.DefaultChannelBillingProfile()
+	}
+	return model.ChannelBillingProfile{
+		CreditBillingMode:               info.CreditBillingMode,
+		FixedRequestCredits:             info.FixedRequestCredits,
+		TokenBillingMultiplier:          info.FrozenChannelTokenBillingMultiplier(),
+		DynamicBillingMultiplierEnabled: info.DynamicBillingMultiplierEnabled,
+	}.Normalize()
+}
+
+func shouldRequireSameBillingProfile(info *relaycommon.RelayInfo) bool {
+	if info == nil || info.RelayFormat == types.RelayFormatTask {
+		return false
+	}
+	return true
+}
+
 func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service.RetryParam) (*model.Channel, *types.NewAPIError) {
 	if info.ChannelMeta == nil {
 		autoBan := c.GetBool("auto_ban")
@@ -458,8 +479,10 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		}, nil
 	}
 	retryParam.FrozenTokenBillingMultiplier = info.FrozenChannelTokenBillingMultiplier()
+	retryParam.FrozenBillingProfile = relayInfoBillingProfile(info)
 	retryParam.UsedChannelIds = usedChannelIds(c)
 	retryParam.RequireSameTokenBillingMultiplier = shouldRequireSameTokenBillingMultiplier(info)
+	retryParam.RequireSameBillingProfile = shouldRequireSameBillingProfile(info)
 	channel, _, err := service.CacheGetRandomSatisfiedChannel(retryParam)
 
 	info.PriceData.QuotaMultiplierInfo = helper.HandleQuotaMultiplier(c, info)
@@ -479,7 +502,7 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 }
 
 func retryChannelSelectionErrorForResponse(info *relaycommon.RelayInfo, channelErr *types.NewAPIError) *types.NewAPIError {
-	if info != nil && shouldRequireSameTokenBillingMultiplier(info) && info.LastError != nil && channelErr != nil && channelErr.GetErrorCode() == types.ErrorCodeGetChannelFailed {
+	if info != nil && shouldRequireSameBillingProfile(info) && info.LastError != nil && channelErr != nil && channelErr.GetErrorCode() == types.ErrorCodeGetChannelFailed {
 		return info.LastError
 	}
 	return channelErr

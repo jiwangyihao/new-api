@@ -37,6 +37,26 @@ func TestShouldCopyUpstreamHeaderFiltersCodexProServedAck(t *testing.T) {
 	require.False(t, ShouldCopyUpstreamHeader(ctx, "Trailer", []string{"X-NewAPI-Pro-Served"}))
 }
 
+func TestShouldCopyUpstreamHeaderFiltersDynamicBillingMultiplier(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := &gin.Context{}
+
+	for _, name := range []string{
+		"X-NewAPI-Dynamic-Billing-Multiplier",
+		"x-newapi-dynamic-billing-multiplier",
+		"X-NewAPI-Dynamic-Billing-Multiplier-Source",
+		"x-newapi-dynamic-billing-multiplier-source",
+		"X-NewAPI-Billing-Multiplier",
+		"x-newapi-billing-multiplier",
+		"X-NewAPI-Billing-Multiplier-Source",
+		"x-newapi-billing-multiplier-source",
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.False(t, ShouldCopyUpstreamHeader(ctx, name, []string{"1.5"}))
+		})
+	}
+}
+
 func TestIOCopyBytesGracefullyDoesNotExposeCodexProServedAck(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

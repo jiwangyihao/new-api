@@ -34,7 +34,8 @@ type RealtimeEvent struct {
 }
 
 type RealtimeResponse struct {
-	Usage *RealtimeUsage `json:"usage"`
+	Usage         *RealtimeUsage `json:"usage"`
+	NewAPIBilling *NewAPIBilling `json:"newapi_billing,omitempty"`
 }
 
 type RealtimeUsage struct {

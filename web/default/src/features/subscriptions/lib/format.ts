@@ -95,6 +95,34 @@ export function formatFiniteTokenCount(
   return formatTokenLimit(tokens, t)
 }
 
+export function formatCreditLimit(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const credits = Number(value || 0)
+  if (credits <= 0) return t('Unlimited credits')
+
+  if (credits >= 1_000_000_000) {
+    return `${formatCompactNumber(credits / 1_000_000_000)}B ${t('credits')}`
+  }
+  if (credits >= 1_000_000) {
+    return `${formatCompactNumber(credits / 1_000_000)}M ${t('credits')}`
+  }
+  if (credits >= 1_000) {
+    return `${formatCompactNumber(credits / 1_000)}K ${t('credits')}`
+  }
+  return `${credits} ${t('credits')}`
+}
+
+export function formatFiniteCreditCount(
+  value: number | null | undefined,
+  t: TranslationFn
+): string {
+  const credits = Number(value || 0)
+  if (!Number.isFinite(credits) || credits <= 0) return `0 ${t('credits')}`
+  return formatCreditLimit(credits, t)
+}
+
 export function formatConcurrencyLimit(
   value: number | null | undefined,
   t: TranslationFn

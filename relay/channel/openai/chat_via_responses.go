@@ -81,6 +81,15 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		usage = &dto.Usage{}
 		chatResp.Usage = *usage
 	}
+	settlementUsage := usage
+	if responsesResp.Usage == nil {
+		settlementUsage = nil
+	}
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, body, relaycommon.DynamicBillingMultiplierSourceBody)
+	if billing := service.NewAPIBillingFromUsage(info, settlementUsage); billing != nil {
+		chatResp.NewAPIBilling = billing
+		service.SeedNewAPIBillingRelayInfo(info, *billing)
+	}
 
 	var responseBody []byte
 	switch info.RelayFormat {
@@ -98,7 +107,7 @@ func OaiResponsesToChatHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
-	return usage, nil
+	return settlementUsage, nil
 }
 
 func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -110,19 +119,23 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
+	if info != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
+	}
 
 	responseId := helper.GetResponseID(c)
 	createAt := time.Now().Unix()
 	model := info.UpstreamModelName
 
 	var (
-		usage       = &dto.Usage{}
-		outputText  strings.Builder
-		usageText   strings.Builder
-		sentStart   bool
-		sentStop    bool
-		sawToolCall bool
-		streamErr   *types.NewAPIError
+		usage              = &dto.Usage{}
+		outputText         strings.Builder
+		usageText          strings.Builder
+		sentStart          bool
+		sentStop           bool
+		sawToolCall        bool
+		streamErr          *types.NewAPIError
+		containStreamUsage bool
 	)
 
 	toolCallIndexByID := make(map[string]int)
@@ -469,6 +482,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		case "response.function_call_arguments.done":
 
 		case "response.completed":
+			if info != nil {
+				info.ApplyDynamicBillingMultiplierFromBody(common.StringToByteSlice(data), relaycommon.DynamicBillingMultiplierSourceSSE)
+			}
 			if streamResp.Response != nil {
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
@@ -477,6 +493,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
 				if streamResp.Response.Usage != nil {
+					containStreamUsage = true
 					if streamResp.Response.Usage.InputTokens != 0 {
 						usage.PromptTokens = streamResp.Response.Usage.InputTokens
 						usage.InputTokens = streamResp.Response.Usage.InputTokens
@@ -537,6 +554,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 	})
 
+	if info != nil {
+		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+	}
 	if streamErr != nil {
 		return nil, streamErr
 	}
@@ -559,8 +579,18 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return nil, streamErr
 		}
 	}
+
+	settlementUsage := usage
+	if !containStreamUsage {
+		settlementUsage = nil
+	}
 	if info.RelayFormat == types.RelayFormatOpenAI && info.ShouldIncludeUsage && usage != nil {
-		if err := helper.ObjectData(c, helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)); err != nil {
+		response := helper.GenerateFinalUsageResponse(responseId, createAt, model, *usage)
+		if billing := service.NewAPIBillingFromUsage(info, settlementUsage); billing != nil {
+			response.NewAPIBilling = billing
+			service.SeedNewAPIBillingRelayInfo(info, *billing)
+		}
+		if err := helper.ObjectData(c, response); err != nil {
 			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 		}
 	}
@@ -568,5 +598,5 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		helper.Done(c)
 	}
-	return usage, nil
+	return settlementUsage, nil
 }

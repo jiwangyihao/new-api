@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -132,7 +134,7 @@ type RelayInfo struct {
 	// 必须在提交前锁定全额。
 	ForcePreConsume bool
 	// FreeModel 表示当前请求模型价格为免费。免费请求仍可做订阅存在性校验，
-	// 但不应产生订阅 token 结算或 Codex Pro 2x 扣减。
+	// 但不应产生订阅 token 结算；Codex Pro served marker 也不得隐式放大扣费。
 	FreeModel bool
 	// Billing 是计费会话，封装了预扣费/结算/退款的统一生命周期。
 	// 免费模型时为 nil。
@@ -178,17 +180,27 @@ type RelayInfo struct {
 	UseRuntimeHeadersOverride            bool
 	ParamOverrideAudit                   []string
 
-	// Channel token billing snapshot is frozen before pre-consume and must not be
+	// Channel billing profile snapshot is frozen before pre-consume and must not be
 	// overwritten by retry/final channel metadata.
-	ChannelTokenBillingMultiplier float64
-	InitialChannelId              int
-	InitialChannelType            int
-	RawMeteredTokens              int64
-	ChannelBillableTokens         int64
-	SubscriptionBillableTokens    int64
-	ApiKeyBillableTokens          int64
-	EstimatedRawTokens            int64
-	PriceData                     types.PriceData
+	CreditBillingMode               string
+	ChannelTokenBillingMultiplier   float64
+	FixedRequestCredits             int64
+	InitialChannelId                int
+	InitialChannelType              int
+	HasTrustedUsage                 bool
+	RawMeteredTokens                int64
+	ChannelBillableTokens           int64
+	SubscriptionBillableTokens      int64
+	ApiKeyBillableTokens            int64
+	CreditBillingBaseCredits        int64
+	CreditBillingZeroReason         string
+	EstimatedRawTokens              int64
+	DynamicBillingMultiplierEnabled bool
+	DynamicBillingMultiplier        float64
+	DynamicBillingMultiplierSource  string
+	// DynamicBillingMultiplierIgnoredReason records why an upstream multiplier was not applied.
+	DynamicBillingMultiplierIgnoredReason string
+	PriceData                             types.PriceData
 
 	// TieredBillingSnapshot is a frozen snapshot of tiered billing rules
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
@@ -328,6 +340,42 @@ func (info *RelayInfo) hasCodexProIntentHeader() bool {
 	return false
 }
 
+func contextInt64(c *gin.Context, key constant.ContextKey) (int64, error) {
+	value, ok := common.GetContextKey(c, key)
+	if !ok {
+		return 0, nil
+	}
+	switch v := value.(type) {
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case int32:
+		return int64(v), nil
+	case uint:
+		return int64(v), nil
+	case uint64:
+		const maxInt64AsUint64 = uint64(1<<63 - 1)
+		if v > maxInt64AsUint64 {
+			return 0, fmt.Errorf("invalid %s value %d", key, v)
+		}
+		return int64(v), nil
+	case uint32:
+		return int64(v), nil
+	case float64:
+		if v != float64(int64(v)) {
+			return 0, fmt.Errorf("invalid %s value %v", key, v)
+		}
+		return int64(v), nil
+	case float32:
+		if v != float32(int64(v)) {
+			return 0, fmt.Errorf("invalid %s value %v", key, v)
+		}
+		return int64(v), nil
+	default:
+		return 0, fmt.Errorf("invalid %s type %T", key, value)
+	}
+}
 func (info *RelayInfo) FreezeChannelTokenBillingSnapshot(c *gin.Context) error {
 	if info == nil {
 		return errors.New("relay info is nil")
@@ -358,7 +406,34 @@ func (info *RelayInfo) FreezeChannelTokenBillingSnapshot(c *gin.Context) error {
 	if err := tokenbilling.ValidateMultiplier(multiplier); err != nil {
 		return err
 	}
+	mode := common.GetContextKeyString(c, constant.ContextKeyChannelCreditBillingMode)
+	if mode == "" {
+		mode = creditbilling.ModeUsageTokens
+	}
+	fixedCredits, err := contextInt64(c, constant.ContextKeyChannelFixedRequestCredits)
+	if err != nil {
+		return err
+	}
+	if err := creditbilling.ValidateBillingMode(mode); err != nil {
+		return err
+	}
+	if err := creditbilling.ValidateFixedRequestCredits(mode, fixedCredits); err != nil {
+		return err
+	}
+	info.CreditBillingMode = mode
 	info.ChannelTokenBillingMultiplier = multiplier
+	info.FixedRequestCredits = fixedCredits
+	info.DynamicBillingMultiplierEnabled = common.GetContextKeyBool(c, constant.ContextKeyChannelDynamicBillingMultiplierEnabled)
+	info.DynamicBillingMultiplier = 0
+	info.DynamicBillingMultiplierSource = creditbilling.DynamicMultiplierDefaultSource
+	info.DynamicBillingMultiplierIgnoredReason = ""
+	info.HasTrustedUsage = false
+	info.RawMeteredTokens = 0
+	info.ChannelBillableTokens = 0
+	info.SubscriptionBillableTokens = 0
+	info.ApiKeyBillableTokens = 0
+	info.CreditBillingBaseCredits = 0
+	info.CreditBillingZeroReason = ""
 	info.InitialChannelId = common.GetContextKeyInt(c, constant.ContextKeyChannelId)
 	info.InitialChannelType = common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	return nil
@@ -369,6 +444,196 @@ func (info *RelayInfo) FrozenChannelTokenBillingMultiplier() float64 {
 		return tokenbilling.DefaultMultiplier
 	}
 	return tokenbilling.EffectiveMultiplier(info.ChannelTokenBillingMultiplier)
+}
+
+func (info *RelayInfo) FrozenCreditBillingMode() string {
+	if info == nil || strings.TrimSpace(info.CreditBillingMode) == "" {
+		return creditbilling.ModeUsageTokens
+	}
+	return info.CreditBillingMode
+}
+
+const (
+	DynamicBillingMultiplierHeaderName           = "X-NewAPI-Dynamic-Billing-Multiplier"
+	DynamicBillingMultiplierSourceHeaderName     = "X-NewAPI-Dynamic-Billing-Multiplier-Source"
+	DynamicBillingMultiplierSpecHeaderName       = "X-NewAPI-Billing-Multiplier"
+	DynamicBillingMultiplierSpecSourceHeaderName = "X-NewAPI-Billing-Multiplier-Source"
+	DynamicBillingMultiplierSourceHeader         = "upstream_header"
+	DynamicBillingMultiplierSourceTrailer        = "upstream_trailer"
+	DynamicBillingMultiplierSourceBody           = "upstream_newapi_billing"
+	DynamicBillingMultiplierSourceSSE            = "upstream_sse_newapi_billing"
+
+	DynamicBillingMultiplierIgnoredReasonDisabled = "dynamic_billing_multiplier_disabled"
+	DynamicBillingMultiplierIgnoredReasonInvalid  = "invalid_dynamic_billing_multiplier"
+)
+
+type dynamicBillingMetadata struct {
+	BillingMultiplier       json.RawMessage `json:"billing_multiplier"`
+	BillingMultiplierSource string          `json:"billing_multiplier_source"`
+}
+
+func (info *RelayInfo) FrozenDynamicBillingMultiplier() float64 {
+	if info == nil || !info.DynamicBillingMultiplierEnabled || info.DynamicBillingMultiplier == 0 {
+		return tokenbilling.DefaultMultiplier
+	}
+	if err := tokenbilling.ValidateMultiplier(info.DynamicBillingMultiplier); err != nil {
+		return tokenbilling.DefaultMultiplier
+	}
+	return info.DynamicBillingMultiplier
+}
+
+func (info *RelayInfo) FrozenDynamicBillingMultiplierSource() string {
+	if info == nil || !info.DynamicBillingMultiplierEnabled || strings.TrimSpace(info.DynamicBillingMultiplierSource) == "" {
+		return creditbilling.DynamicMultiplierDefaultSource
+	}
+	return info.DynamicBillingMultiplierSource
+}
+
+func (info *RelayInfo) SetDynamicBillingMultiplier(multiplier float64, source string) bool {
+	if info == nil {
+		return false
+	}
+	if !info.DynamicBillingMultiplierEnabled {
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonDisabled
+		return false
+	}
+	if err := tokenbilling.ValidateMultiplier(multiplier); err != nil {
+		if info.DynamicBillingMultiplier == 0 {
+			info.DynamicBillingMultiplierSource = creditbilling.DynamicMultiplierDefaultSource
+		}
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonInvalid
+		return false
+	}
+	info.DynamicBillingMultiplier = multiplier
+	info.DynamicBillingMultiplierSource = strings.TrimSpace(source)
+	if info.DynamicBillingMultiplierSource == "" {
+		info.DynamicBillingMultiplierSource = DynamicBillingMultiplierSourceBody
+	}
+	info.DynamicBillingMultiplierIgnoredReason = ""
+	return true
+}
+
+func (info *RelayInfo) ApplyDynamicBillingMultiplierFromHeaders(headers http.Header, source string) bool {
+	if info == nil || headers == nil {
+		return false
+	}
+	value, sourceHeaderName := dynamicBillingMultiplierHeaderValue(headers)
+	if value == "" {
+		return false
+	}
+	if !info.DynamicBillingMultiplierEnabled {
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonDisabled
+		return false
+	}
+	multiplier, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		if info.DynamicBillingMultiplier == 0 {
+			info.DynamicBillingMultiplierSource = creditbilling.DynamicMultiplierDefaultSource
+		}
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonInvalid
+		return false
+	}
+	if strings.TrimSpace(source) == "" {
+		source = DynamicBillingMultiplierSourceHeader
+	}
+	if upstreamSource := firstHeaderValue(headers, sourceHeaderName); upstreamSource != "" {
+		source = upstreamSource
+	}
+	return info.SetDynamicBillingMultiplier(multiplier, source)
+}
+
+func dynamicBillingMultiplierHeaderValue(headers http.Header) (string, string) {
+	if headers == nil {
+		return "", ""
+	}
+	if value := firstHeaderValue(headers, DynamicBillingMultiplierHeaderName); value != "" {
+		return value, DynamicBillingMultiplierSourceHeaderName
+	}
+	if value := firstHeaderValue(headers, DynamicBillingMultiplierSpecHeaderName); value != "" {
+		return value, DynamicBillingMultiplierSpecSourceHeaderName
+	}
+	return "", ""
+}
+
+func firstHeaderValue(headers http.Header, name string) string {
+	if value := strings.TrimSpace(headers.Get(name)); value != "" {
+		return value
+	}
+	for key, values := range headers {
+		if !strings.EqualFold(key, name) {
+			continue
+		}
+		for _, value := range values {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func (info *RelayInfo) ApplyDynamicBillingMultiplierFromBody(body []byte, fallbackSource string) bool {
+	if info == nil || len(bytes.TrimSpace(body)) == 0 {
+		return false
+	}
+	metadata, ok := dynamicBillingMetadataFromBody(body)
+	if !ok || len(bytes.TrimSpace(metadata.BillingMultiplier)) == 0 {
+		return false
+	}
+	if !info.DynamicBillingMultiplierEnabled {
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonDisabled
+		return false
+	}
+	multiplier, ok := dynamicBillingMultiplierValue(metadata.BillingMultiplier)
+	if !ok {
+		if info.DynamicBillingMultiplier == 0 {
+			info.DynamicBillingMultiplierSource = creditbilling.DynamicMultiplierDefaultSource
+		}
+		info.DynamicBillingMultiplierIgnoredReason = DynamicBillingMultiplierIgnoredReasonInvalid
+		return false
+	}
+	source := strings.TrimSpace(metadata.BillingMultiplierSource)
+	if source == "" {
+		source = fallbackSource
+	}
+	return info.SetDynamicBillingMultiplier(multiplier, source)
+}
+
+func dynamicBillingMetadataFromBody(body []byte) (dynamicBillingMetadata, bool) {
+	var envelope struct {
+		NewAPIBilling *dynamicBillingMetadata `json:"newapi_billing"`
+		Response      *struct {
+			NewAPIBilling *dynamicBillingMetadata `json:"newapi_billing"`
+		} `json:"response"`
+	}
+	if err := common.Unmarshal(body, &envelope); err != nil {
+		return dynamicBillingMetadata{}, false
+	}
+	if envelope.NewAPIBilling != nil {
+		return *envelope.NewAPIBilling, true
+	}
+	if envelope.Response != nil && envelope.Response.NewAPIBilling != nil {
+		return *envelope.Response.NewAPIBilling, true
+	}
+	return dynamicBillingMetadata{}, false
+}
+
+func dynamicBillingMultiplierValue(raw json.RawMessage) (float64, bool) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return 0, false
+	}
+	if trimmed[0] == '"' {
+		return 0, false
+	}
+	var multiplier float64
+	if err := common.Unmarshal(trimmed, &multiplier); err != nil {
+		return 0, false
+	}
+	if err := tokenbilling.ValidateMultiplier(multiplier); err != nil {
+		return 0, false
+	}
+	return multiplier, true
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {

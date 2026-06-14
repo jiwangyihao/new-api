@@ -124,7 +124,7 @@ func GetChannel(model string, retry int) (*Channel, error) {
 	return &channel, err
 }
 
-func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) ([]Ability, error) {
+func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) ([]Ability, error) {
 	if len(abilities) == 0 {
 		return abilities, nil
 	}
@@ -134,12 +134,15 @@ func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int
 		if _, ok := used[ability.ChannelId]; ok {
 			continue
 		}
-		if requireSameMultiplier {
+		if requireSameMultiplier || requireSameProfile {
 			channel := Channel{}
 			if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil {
 				return nil, err
 			}
-			if !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
+			if requireSameMultiplier && !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
+				continue
+			}
+			if requireSameProfile && !SameChannelBillingProfile(channel.BillingProfile(), frozenProfile) {
 				continue
 			}
 		}
@@ -168,7 +171,7 @@ func GetChannelForEndpoint(group string, model string, retry int, endpointType c
 	return selectChannelFromEndpointFilteredAbilities(abilities, retry)
 }
 
-func GetChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool) (*Channel, error) {
+func GetChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
 	var abilities []Ability
 	var err error
 	if endpointType == "" {
@@ -191,11 +194,11 @@ func GetChannelForEndpointWithRetryConstraints(group string, model string, retry
 			}
 		}
 	}
-	abilities, err = filterAbilitiesByRetryConstraints(abilities, usedChannelIDs, frozenMultiplier, requireSameMultiplier)
+	abilities, err = filterAbilitiesByRetryConstraints(abilities, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	if err != nil {
 		return nil, err
 	}
-	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier)
+	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier, requireSameProfile)
 	return selectChannelFromEndpointFilteredAbilities(abilities, retry)
 }
 

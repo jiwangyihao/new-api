@@ -12,7 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
-	"github.com/QuantumNous/new-api/pkg/tokenbilling"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -93,14 +93,20 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		rawTokens = usage.InputTokens + usage.OutputTokens
 	}
 	if rawTokens <= 0 {
+		relayInfo.HasTrustedUsage = true
 		return nil
 	}
-	billableTokens, err := tokenbilling.ApplyMultiplier(int64(rawTokens), relayInfo.FrozenChannelTokenBillingMultiplier())
-	if err != nil {
-		return err
+	billableTokens := int64(0)
+	var err error
+	if relayInfo.FrozenCreditBillingMode() != creditbilling.ModeFixedRequest {
+		result, calcErr := calculateCreditBillingResult(relayInfo, true, int64(rawTokens))
+		if calcErr != nil {
+			return calcErr
+		}
+		billableTokens = result.SubscriptionCredits
 	}
 	var sequence int64
-	if relayInfo.TokenLimit != nil {
+	if relayInfo.TokenLimit != nil && billableTokens > 0 {
 		var apiErr *types.NewAPIError
 		sequence, apiErr = relayInfo.TokenLimit.ConsumeIncrement(billableTokens)
 		if apiErr != nil {
@@ -114,23 +120,38 @@ func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usag
 		}
 		return errors.New("subscription billing session is missing for realtime billing")
 	}
-	if err := session.SettleSubscriptionIncrement(billableTokens); err != nil {
-		if relayInfo.TokenLimit != nil && sequence > 0 {
-			relayInfo.TokenLimit.RefundIncrement(sequence, "subscription_increment_failed")
+	if billableTokens > 0 {
+		if err = session.SettleSubscriptionIncrement(billableTokens); err != nil {
+			if relayInfo.TokenLimit != nil && sequence > 0 {
+				relayInfo.TokenLimit.RefundIncrement(sequence, "subscription_increment_failed")
+			}
+			return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
-		return types.NewOpenAIError(err, types.ErrorCodeSubscriptionTokenExhausted, 403, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
+	if relayInfo.TokenLimit != nil && sequence > 0 {
+		relayInfo.TokenLimit.CommitIncrement(sequence)
+	}
+	relayInfo.HasTrustedUsage = true
 	relayInfo.RawMeteredTokens += int64(rawTokens)
-	relayInfo.ChannelBillableTokens += billableTokens
-	relayInfo.ApiKeyBillableTokens += billableTokens
-	relayInfo.SubscriptionBillableTokens += billableTokens
-	logger.LogInfo(ctx, "realtime streaming consume subscription tokens success, tokens: "+fmt.Sprintf("%d", billableTokens))
+	if relayInfo.FrozenCreditBillingMode() == creditbilling.ModeFixedRequest {
+		relayInfo.CreditBillingBaseCredits = 0
+		relayInfo.CreditBillingZeroReason = ""
+	} else {
+		relayInfo.ChannelBillableTokens += billableTokens
+		relayInfo.ApiKeyBillableTokens += billableTokens
+		relayInfo.SubscriptionBillableTokens += billableTokens
+	}
+	logger.LogInfo(ctx, "realtime streaming consume subscription credits success, credits: "+fmt.Sprintf("%d", billableTokens))
 	return nil
 }
 
 func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelName string,
 	usage *dto.RealtimeUsage, extraContent string) error {
 
+	hasTrustedUsage := usage != nil
+	if usage == nil {
+		usage = &dto.RealtimeUsage{}
+	}
 	var tieredResult *billingexpr.TieredResult
 	tieredOk, tieredQuota, tieredRes := TryTieredSettle(relayInfo, billingexpr.TokenParams{
 		P:   float64(usage.InputTokens),
@@ -176,7 +197,6 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		quota = tieredQuota
 	}
 
-	totalTokens := usage.TotalTokens
 	var logContent string
 	if !usePrice {
 		logContent = fmt.Sprintf("模型倍率 %.2f，补全倍率 %.2f，音频倍率 %.2f，音频补全倍率 %.2f",
@@ -186,30 +206,25 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 	}
 
 	// record all the consume log even if quota is 0
-	if totalTokens == 0 {
-		// in this case, must be some error happened
-		// we cannot just return, because we may have to return the pre-consumed quota
+	if !hasTrustedUsage {
 		quota = 0
 		logContent += "（可能是上游超时）"
-		logger.LogError(ctx, fmt.Sprintf("total tokens is 0, cannot consume quota, userId %d, channelId %d, "+
+		logger.LogError(ctx, fmt.Sprintf("trusted usage is missing, cannot consume quota, userId %d, channelId %d, "+
 			"tokenId %d, model %s， pre-consumed quota %d", relayInfo.UserId, relayInfo.ChannelId, relayInfo.TokenId, modelName, relayInfo.FinalPreConsumedQuota))
 	} else {
 		model.UpdateUserUsedQuotaAndRequestCount(relayInfo.UserId, quota)
 		model.UpdateChannelUsedQuota(relayInfo.ChannelId, quota)
 	}
 
-	skipDefaultApiKeyTokens := false
-	subscriptionTokens := int64(0)
-	if session, ok := relayInfo.Billing.(*BillingSession); ok && relayInfo.BillingSource == BillingSourceSubscription {
-		skipDefaultApiKeyTokens = true
-		subscriptionTokens = session.RealtimeSubscriptionTokens()
-		if subscriptionTokens > 0 {
-			subscriptionTokens -= relayInfo.SubscriptionPostDelta
+	rawMeteredTokens := relayInfo.RawMeteredTokens
+	if rawMeteredTokens <= 0 && hasTrustedUsage {
+		rawMeteredTokens = int64(usage.TotalTokens)
+		if rawMeteredTokens <= 0 {
+			rawMeteredTokens = int64(usage.InputTokens + usage.OutputTokens)
 		}
-	} else if totalTokens > 0 {
-		subscriptionTokens = int64(totalTokens)
 	}
-	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{WalletQuota: quota, SubscriptionTokens: subscriptionTokens, ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), SubscriptionTokensCodexProAdjusted: true, SkipDefaultApiKeyTokens: skipDefaultApiKeyTokens})
+	skipDefaultApiKeyTokens := relayInfo.FrozenCreditBillingMode() != creditbilling.ModeFixedRequest
+	settleErr := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{ResponseStarted: ResponseAlreadyWritten(ctx, relayInfo, false), UseCreditBilling: true, HasTrustedUsage: hasTrustedUsage, RawMeteredTokens: rawMeteredTokens, RawMeteredTokensSet: true, SkipDefaultApiKeyTokens: skipDefaultApiKeyTokens})
 	if settleErr != nil {
 		logger.LogError(ctx, "error settling billing: "+settleErr.Error())
 	}

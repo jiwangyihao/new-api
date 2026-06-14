@@ -247,7 +247,7 @@ export function UserSubscriptionsDialog(props: Props) {
                     <TableHead>{t('Plan')}</TableHead>
                     <TableHead>{t('Status')}</TableHead>
                     <TableHead>{t('Validity')}</TableHead>
-                    <TableHead>{t('Total Quota')}</TableHead>
+                    <TableHead>{t('Total Credits')}</TableHead>
                     <TableHead className='text-right'>{t('Actions')}</TableHead>
                   </TableRow>
                 </TableHeader>

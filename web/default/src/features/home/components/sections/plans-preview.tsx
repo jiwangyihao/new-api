@@ -28,7 +28,7 @@ import {
   formatConcurrencyLimit,
   formatDuration,
   formatPlanPrice,
-  formatTokenLimit,
+  formatCreditLimit,
 } from '@/features/subscriptions/lib'
 import type { PublicPlanRecord } from '@/features/subscriptions/types'
 import {
@@ -138,8 +138,8 @@ function PlanCard(props: { record: PublicPlanRecord }) {
             value={formatDuration(plan, t)}
           />
           <PlanMetric
-            label={t('Monthly Token Limit')}
-            value={formatTokenLimit(plan.monthly_token_limit, t)}
+            label={t('Monthly Credits')}
+            value={formatCreditLimit(plan.monthly_token_limit, t)}
           />
           {channelEquivalentLabels.length > 0 && (
             <div className='text-muted-foreground ml-5 space-y-1 text-xs'>

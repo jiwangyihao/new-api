@@ -46,6 +46,12 @@ func TestRealtimeAPIKeyTokenLimitExhaustedPreservesAPIKeyCode(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
 }
 
+func TestRealtimeFixedRequestDoesNotTrustLocalUsageFallback(t *testing.T) {
+	assert.False(t, shouldTrustRealtimeLocalUsage(&relaycommon.RelayInfo{CreditBillingMode: "fixed_request"}))
+	assert.True(t, shouldTrustRealtimeLocalUsage(&relaycommon.RelayInfo{CreditBillingMode: "usage_tokens"}))
+	assert.True(t, shouldTrustRealtimeLocalUsage(nil))
+}
+
 func TestOpenaiRealtimeAPIKeyTokenLimitExhaustedWrapPreservesAPIKeyCode(t *testing.T) {
 	origin := types.NewOpenAIError(errors.New("api key token limit exhausted"), types.ErrorCodeAPIKeyTokenLimitExhausted, http.StatusTooManyRequests, types.ErrOptionWithSkipRetry())
 

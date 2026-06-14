@@ -483,7 +483,7 @@ export function AffiliateRewardsCard(props: AffiliateRewardsCardProps) {
                 </li>
                 <li>
                   {t(
-                    'Quota reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
+                    'Credit reset consumes one month from a paid plan and cannot be paid by invitation rewards.'
                   )}
                 </li>
               </ul>

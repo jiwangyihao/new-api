@@ -68,7 +68,7 @@ const API_KEY_TOKEN_LIMIT_REACHED_STATUS: Pick<StatusBadgeProps, 'variant' | 'sh
   label: string
   value: number
 } = {
-  label: 'Token Limit Reached',
+  label: 'Credit Limit Reached',
   variant: 'danger',
   value: API_KEY_STATUS.ENABLED,
   showDot: true,
@@ -80,28 +80,40 @@ type ApiKeyStatusSource = {
   token_limit?: number
   token_used?: number
   token_unlimited?: boolean
+  credit_limit_enabled?: boolean
+  credit_limit?: number
+  credit_used?: number
+  credit_unlimited?: boolean
 }
 
 export function getApiKeyStatusConfig(apiKey: ApiKeyStatusSource) {
+  const limitEnabled =
+    apiKey.credit_limit_enabled ?? apiKey.token_limit_enabled ?? false
+  const unlimited = apiKey.credit_unlimited ?? apiKey.token_unlimited ?? true
+  const limit = apiKey.credit_limit ?? apiKey.token_limit ?? 0
+  const used = apiKey.credit_used ?? apiKey.token_used ?? 0
+
   if (
     apiKey.status === API_KEY_STATUS.ENABLED &&
-    apiKey.token_limit_enabled &&
-    !apiKey.token_unlimited &&
-    (apiKey.token_limit ?? 0) > 0 &&
-    (apiKey.token_used ?? 0) >= (apiKey.token_limit ?? 0)
+    limitEnabled &&
+    !unlimited &&
+    limit > 0 &&
+    used >= limit
   ) {
     return API_KEY_TOKEN_LIMIT_REACHED_STATUS
   }
   return API_KEY_STATUSES[apiKey.status]
 }
 
-export function formatApiKeyTokenCount(tokens: number, unit?: string): string {
-  if (tokens === 0) return unit ? `0 ${unit}` : '0'
-  const formatted = formatTokens(tokens)
+export function formatApiKeyCreditCount(credits: number, unit?: string): string {
+  if (credits === 0) return unit ? `0 ${unit}` : '0'
+  const formatted = formatTokens(credits)
   if (formatted === '-') return unit ? `0 ${unit}` : '0'
-  if (tokens > 0 && tokens < 1000 && unit) return `${formatted} ${unit}`
+  if (credits > 0 && credits < 1000 && unit) return `${formatted} ${unit}`
   return formatted
 }
+
+export const formatApiKeyTokenCount = formatApiKeyCreditCount
 
 export const API_KEY_STATUS_OPTIONS = Object.values(API_KEY_STATUSES).map(
   (config) => ({

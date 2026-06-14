@@ -58,6 +58,7 @@ func OaiResponsesCompactionHandler(c *gin.Context, args ...any) (*dto.Usage, *ty
 			usage.PromptTokensDetails.CachedTokens = compactResp.Usage.InputTokensDetails.CachedTokens
 		}
 	}
+	applyDynamicBillingMultiplierFromHTTPResponse(info, resp, responseBody, relaycommon.DynamicBillingMultiplierSourceBody)
 	if compactResp.Usage != nil && info != nil && openAIResponseStatusCompleted(compactResp.Status) {
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()

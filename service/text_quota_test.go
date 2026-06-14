@@ -441,7 +441,7 @@ func TestComposeTieredTextQuotaErrorFallbackUsesPreConsumedQuota(t *testing.T) {
 	require.Equal(t, 12000, quota)
 }
 
-func TestSubscriptionTokensForTextSettleCodexProServedDoublesSubscriptionTokens(t *testing.T) {
+func TestSubscriptionTokensForTextSettleCodexProServedDoesNotDoubleSubscriptionTokens(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		BillingSource: BillingSourceSubscription,
 		Billing: &BillingSession{funding: &SubscriptionFunding{
@@ -453,7 +453,7 @@ func TestSubscriptionTokensForTextSettleCodexProServedDoublesSubscriptionTokens(
 
 	actual := subscriptionTokensForTextSettle(relayInfo, 11, 999)
 
-	require.Equal(t, int64(22), actual)
+	require.Equal(t, int64(11), actual)
 }
 
 func TestSubscriptionTokensForTextSettleCodexProUnavailableKeepsSingleSubscriptionTokens(t *testing.T) {

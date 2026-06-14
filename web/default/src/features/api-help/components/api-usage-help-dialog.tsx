@@ -709,10 +709,10 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                     </li>
                     <li>
                       {t(
-                        'Only requests acknowledged by the upstream Codex Pro response trailer and completed successfully consume 2x subscription tokens.'
+                        'Codex Pro markers are logging signals only; credits use a numeric upstream multiplier only when the channel enables dynamic billing.'
                       )}
                     </li>
-                    <li>{t('Fallback requests are billed at the normal rate.')}</li>
+                    <li>{t('Without a valid dynamic multiplier, requests are billed at the normal credit rate.')}</li>
                   </ul>
                   <ConfigFileList files={codexHarnessFiles} />
                   {unverifiedCodexHarnessNotices.map((item) => (

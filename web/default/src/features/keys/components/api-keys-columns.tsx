@@ -29,7 +29,7 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
-import { getApiKeyStatusConfig, formatApiKeyTokenCount } from '../constants'
+import { getApiKeyStatusConfig, formatApiKeyCreditCount } from '../constants'
 import { API_KEY_CODEX_PRO_MODE_OPTIONS } from '../lib'
 import { type ApiKey, type ApiKeyCodexProMode } from '../types'
 import {
@@ -39,7 +39,7 @@ import {
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
 
-function getTokenProgressColor(percentage: number): string {
+function getCreditProgressColor(percentage: number): string {
   if (percentage >= 90) return '[&_[data-slot=progress-indicator]]:bg-rose-500'
   if (percentage >= 70) return '[&_[data-slot=progress-indicator]]:bg-amber-500'
   return '[&_[data-slot=progress-indicator]]:bg-emerald-500'
@@ -119,14 +119,17 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       meta: { label: t('API Key') },
     },
     {
-      id: 'token_limit',
-      accessorKey: 'token_limit',
+      id: 'credit_limit',
+      accessorKey: 'credit_limit',
       header: ({ column }) => (
-        <DataTableColumnHeader column={column} title={t('Token limit')} />
+        <DataTableColumnHeader column={column} title={t('Credit limit')} />
       ),
       cell: ({ row }) => {
         const apiKey = row.original
-        if (!apiKey.token_limit_enabled || apiKey.token_unlimited) {
+        const limitEnabled =
+          apiKey.credit_limit_enabled ?? apiKey.token_limit_enabled
+        const unlimited = apiKey.credit_unlimited ?? apiKey.token_unlimited
+        if (!limitEnabled || unlimited) {
           return (
             <StatusBadge
               label={t('Unlimited')}
@@ -136,9 +139,9 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
           )
         }
 
-        const used = apiKey.token_used
-        const limit = apiKey.token_limit
-        const remaining = apiKey.token_remaining
+        const used = apiKey.credit_used ?? apiKey.token_used
+        const limit = apiKey.credit_limit ?? apiKey.token_limit
+        const remaining = apiKey.credit_remaining ?? apiKey.token_remaining
         const percentage = limit > 0 ? Math.min((used / limit) * 100, 100) : 0
 
         return (
@@ -146,36 +149,36 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
             <TooltipTrigger render={<div className='w-[150px] space-y-1' />}>
               <div className='flex justify-between text-xs'>
                 <span className='font-medium tabular-nums'>
-                  {formatApiKeyTokenCount(used, t('tokens'))}
+                  {formatApiKeyCreditCount(used, t('credits'))}
                 </span>
                 <span className='text-muted-foreground tabular-nums'>
-                  {formatApiKeyTokenCount(limit, t('tokens'))}
+                  {formatApiKeyCreditCount(limit, t('credits'))}
                 </span>
               </div>
               <Progress
                 value={percentage}
-                className={cn('h-1.5', getTokenProgressColor(percentage))}
+                className={cn('h-1.5', getCreditProgressColor(percentage))}
               />
             </TooltipTrigger>
             <TooltipContent>
               <div className='space-y-1 text-xs'>
                 <div>
-                  {t('Used:')} {formatApiKeyTokenCount(used, t('tokens'))}
+                  {t('Used:')} {formatApiKeyCreditCount(used, t('credits'))}
                 </div>
                 <div>
                   {t('Remaining:')}{' '}
-                  {formatApiKeyTokenCount(remaining, t('tokens'))} (
+                  {formatApiKeyCreditCount(remaining, t('credits'))} (
                   {Math.max(100 - percentage, 0).toFixed(1)}%)
                 </div>
                 <div>
-                  {t('Total:')} {formatApiKeyTokenCount(limit, t('tokens'))}
+                  {t('Total:')} {formatApiKeyCreditCount(limit, t('credits'))}
                 </div>
               </div>
             </TooltipContent>
           </Tooltip>
         )
       },
-      meta: { label: t('Token limit') },
+      meta: { label: t('Credit limit') },
     },
     {
       id: 'codex_pro_mode',

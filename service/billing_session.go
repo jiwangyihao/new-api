@@ -468,8 +468,22 @@ func codexProRewardSubscriptionSource(value string) bool {
 	return strings.TrimSpace(value) == model.SubscriptionGrantMonthlyInviteEntitlement
 }
 
+func applyCodexProFeaturesHidden(info *relaycommon.RelayInfo) bool {
+	if info == nil || !common.CodexProFeaturesHidden {
+		return false
+	}
+	info.CodexProMode = common.CodexProModeOff
+	info.CodexProEligible = false
+	info.CodexProUnavailableReason = common.CodexProUnavailableReasonFeaturesHidden
+	info.ResetCodexProRuntimeState()
+	return true
+}
+
 func syncRelayCodexProEligibility(info *relaycommon.RelayInfo, sub *SubscriptionFunding) {
 	if info == nil {
+		return
+	}
+	if applyCodexProFeaturesHidden(info) {
 		return
 	}
 	info.CodexProMode = common.EffectiveCodexProMode(info.TokenCodexProMode, info.UserSetting.CodexProMode)
@@ -638,6 +652,9 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		relayInfo.BillingSource = BillingSourceSubscription
 		relayInfo.EstimatedRawTokens = int64(relayInfo.GetEstimatePromptTokens())
 		relayInfo.CodexProMode = common.EffectiveCodexProMode(relayInfo.TokenCodexProMode, relayInfo.UserSetting.CodexProMode)
+		if applyCodexProFeaturesHidden(relayInfo) {
+			return nil, nil
+		}
 		relayInfo.CodexProEligible = false
 		relayInfo.CodexProUnavailableReason = "free_model"
 		return nil, nil

@@ -70,6 +70,7 @@ var DataExportInterval = 5         // unit: minute
 var DataExportDefaultTime = "hour" // unit: minute
 var DefaultCollapseSidebar = false // default value of collapse sidebar
 
+var CodexProFeaturesHidden = false
 var GPTAbuseLimitEnabled = false
 var GPTAbuseDefaultWarningLimit = 5
 

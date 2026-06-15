@@ -114,6 +114,8 @@ const (
 	CodexProModeOff      = "off"
 )
 
+const CodexProUnavailableReasonFeaturesHidden = "features_hidden"
+
 // NormalizeCodexProMode clamps persisted Codex Pro mode values to valid modes.
 func NormalizeCodexProMode(mode string) string {
 	mode = strings.TrimSpace(mode)

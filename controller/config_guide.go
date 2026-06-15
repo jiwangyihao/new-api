@@ -594,6 +594,16 @@ func renderConfigGuideOMPModels(baseURL string, apiKey string, models map[string
 		return "", fmt.Errorf("required OMP models missing")
 	}
 
+	if common.CodexProFeaturesHidden {
+		return fmt.Sprintf(`providers:
+  %s:
+    api: openai-responses
+    baseUrl: %s
+    apiKey: %s
+    models:
+%s`, configGuideProviderID, configGuideYAMLDoubleQuotedScalar(baseURL), configGuideYAMLDoubleQuotedScalar(apiKey), strings.Join(selected, "\n")), nil
+	}
+
 	return fmt.Sprintf(`providers:
   %s:
     api: openai-responses
@@ -839,8 +849,12 @@ func normalizeConfigGuideOpenCodeModel(id string, model service.OpenCodeOpenAIMo
 		config["release_date"] = model.ReleaseDate
 	}
 	headers := cloneStringAnyMapFromString(model.Headers)
-	headers[configGuideCodexProIntentHeaderName] = configGuideCodexProIntentHeaderValue
-	config["headers"] = headers
+	if !common.CodexProFeaturesHidden {
+		headers[configGuideCodexProIntentHeaderName] = configGuideCodexProIntentHeaderValue
+	}
+	if len(headers) > 0 {
+		config["headers"] = headers
+	}
 	return config
 }
 

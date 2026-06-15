@@ -257,6 +257,12 @@ func (info *RelayInfo) FinalizeCodexProRequestMarker() {
 		return
 	}
 	info.ResetCodexProRuntimeState()
+	if common.CodexProFeaturesHidden {
+		info.CodexProMode = common.CodexProModeOff
+		info.CodexProEligible = false
+		info.CodexProUnavailableReason = common.CodexProUnavailableReasonFeaturesHidden
+		return
+	}
 	if info.CodexProRequestDisabled || !info.CodexProEligible || !info.isCodexProSupportedChannel() {
 		return
 	}

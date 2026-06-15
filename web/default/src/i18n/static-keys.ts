@@ -113,6 +113,7 @@ export const STATIC_I18N_KEYS = [
   'No recent token usage',
   'Subscription resets at',
   'Subscription expires at',
+  'Codex Pro features are hidden by the administrator.',
   'GPT safety warnings',
   'Warnings triggered today against your daily limit',
   'GPT safety warnings are observation only',

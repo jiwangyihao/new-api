@@ -19,6 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { type ColumnDef } from '@tanstack/react-table'
 import { useTranslation } from 'react-i18next'
 import { formatTimestampToDate } from '@/lib/format'
+import { useStatus } from '@/hooks/use-status'
 import { cn } from '@/lib/utils'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Progress } from '@/components/ui/progress'
@@ -54,7 +55,9 @@ function getApiKeyCodexProModeLabel(mode: ApiKeyCodexProMode): string {
 
 export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
   const { t } = useTranslation()
-  return [
+  const { status } = useStatus()
+  const codexProFeaturesHidden = status?.codex_pro_features_hidden === true
+  const columns: ColumnDef<ApiKey>[] = [
     {
       id: 'select',
       header: ({ table }) => (
@@ -296,4 +299,8 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       size: 88,
     },
   ]
+
+  return codexProFeaturesHidden
+    ? columns.filter((column) => column.id !== 'codex_pro_mode')
+    : columns
 }

@@ -125,7 +125,7 @@ function CodexProHelpDialog() {
 }
 type CodexProModeControlData = Pick<
   SelfSubscriptionData,
-  'codex_pro_mode' | 'codex_pro_eligible' | 'codex_pro_unavailable_reason'
+  'codex_pro_mode' | 'codex_pro_eligible' | 'codex_pro_unavailable_reason' | 'codex_pro_features_hidden'
 >
 
 export interface CodexProModeControlProps {
@@ -137,9 +137,10 @@ export interface CodexProModeControlProps {
 export function canUseCodexProModeControl<
   T extends {
     codex_pro_eligible?: boolean
+    codex_pro_features_hidden?: boolean
   },
 >(data: T): boolean {
-  return data.codex_pro_eligible === true
+  return data.codex_pro_features_hidden !== true && data.codex_pro_eligible === true
 }
 
 export function normalizeCodexProUnavailableReason(
@@ -151,6 +152,7 @@ export function normalizeCodexProUnavailableReason(
     case 'trial_subscription':
     case 'reward_subscription':
     case 'no_paid_subscription':
+    case 'features_hidden':
       return reason
     default:
       return 'no_paid_subscription'
@@ -169,6 +171,8 @@ export function getCodexProUnavailableMessageKey(reason: string): string {
       return 'Trial subscriptions do not support Codex Pro.'
     case 'reward_subscription':
       return 'Invitation reward subscriptions do not support Codex Pro.'
+    case 'features_hidden':
+		return 'Codex Pro features are hidden by the administrator.'
     case 'no_paid_subscription':
     default:
       return 'Please purchase an eligible paid subscription first.'

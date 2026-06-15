@@ -30,6 +30,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels } from '@/lib/api'
+import { useStatus } from '@/hooks/use-status'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -117,6 +118,8 @@ export function ApiKeysMutateDrawer({
 }: ApiKeyMutateDrawerProps) {
   const { t } = useTranslation()
   const isUpdate = !!currentRow
+  const { status } = useStatus()
+  const codexProFeaturesHidden = status?.codex_pro_features_hidden === true
   const { triggerRefresh } = useApiKeys()
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -358,54 +361,56 @@ export function ApiKeysMutateDrawer({
               )}
             </ApiKeyFormSection>
 
-            <ApiKeyFormSection
-              title={t('API Key Codex Pro Mode')}
-              description={t(
-                'Override Codex Pro behavior for this API key without bypassing subscription eligibility.'
-              )}
-              icon={Settings2}
-            >
-              <FormField
-                control={form.control}
-                name='codex_pro_mode'
-                render={({ field }) => {
-                  const selectedOption = API_KEY_CODEX_PRO_MODE_OPTIONS.find(
-                    (option) => option.value === field.value
-                  )
-                  return (
-                    <FormItem>
-                      <FormLabel>{t('Codex Pro')}</FormLabel>
-                      <FormControl>
-                        <NativeSelect
-                          className='w-full'
-                          value={field.value}
-                          onChange={(event) =>
-                            field.onChange(event.target.value)
-                          }
-                        >
-                          {API_KEY_CODEX_PRO_MODE_OPTIONS.map((option) => (
-                            <NativeSelectOption
-                              key={option.value}
-                              value={option.value}
-                            >
-                              {t(option.labelKey)}
-                            </NativeSelectOption>
-                          ))}
-                        </NativeSelect>
-                      </FormControl>
-                      <FormDescription>
-                        {selectedOption
-                          ? t(selectedOption.descriptionKey)
-                          : t(
-                              'Use the user-level Codex Pro setting for this API key.'
-                            )}
-                      </FormDescription>
-                      <FormMessage />
-                    </FormItem>
-                  )
-                }}
-              />
-            </ApiKeyFormSection>
+            {!codexProFeaturesHidden && (
+              <ApiKeyFormSection
+                title={t('API Key Codex Pro Mode')}
+                description={t(
+                  'Override Codex Pro behavior for this API key without bypassing subscription eligibility.'
+                )}
+                icon={Settings2}
+              >
+                <FormField
+                  control={form.control}
+                  name='codex_pro_mode'
+                  render={({ field }) => {
+                    const selectedOption = API_KEY_CODEX_PRO_MODE_OPTIONS.find(
+                      (option) => option.value === field.value
+                    )
+                    return (
+                      <FormItem>
+                        <FormLabel>{t('Codex Pro')}</FormLabel>
+                        <FormControl>
+                          <NativeSelect
+                            className='w-full'
+                            value={field.value}
+                            onChange={(event) =>
+                              field.onChange(event.target.value)
+                            }
+                          >
+                            {API_KEY_CODEX_PRO_MODE_OPTIONS.map((option) => (
+                              <NativeSelectOption
+                                key={option.value}
+                                value={option.value}
+                              >
+                                {t(option.labelKey)}
+                              </NativeSelectOption>
+                            ))}
+                          </NativeSelect>
+                        </FormControl>
+                        <FormDescription>
+                          {selectedOption
+                            ? t(selectedOption.descriptionKey)
+                            : t(
+                                'Use the user-level Codex Pro setting for this API key.'
+                              )}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )
+                  }}
+                />
+              </ApiKeyFormSection>
+            )}
 
             <ApiKeyFormSection
               title={t('API Key Credit Limit')}

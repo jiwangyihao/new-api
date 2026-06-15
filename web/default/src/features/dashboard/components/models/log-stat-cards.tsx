@@ -138,6 +138,7 @@ export function LogStatCards(props: LogStatCardsProps) {
             codex_pro_mode: updated.codex_pro_mode,
             codex_pro_eligible: updated.codex_pro_eligible,
             codex_pro_unavailable_reason: updated.codex_pro_unavailable_reason,
+            codex_pro_features_hidden: updated.codex_pro_features_hidden,
           })
         })
         toast.success(t('Setting saved'))
@@ -266,7 +267,7 @@ export function LogStatCards(props: LogStatCardsProps) {
           )
         })}
       </div>
-      {selfSubscriptionData && (
+      {selfSubscriptionData?.codex_pro_features_hidden !== true && selfSubscriptionData && (
         <div className='border-t p-3 sm:p-4'>
           <CodexProModeControl
             data={selfSubscriptionData}

@@ -1077,6 +1077,36 @@ func TestPreConsumeBillingInheritsUserCodexProModeWhenAPIKeyInherits(t *testing.
 	assert.Equal(t, common.CodexProModeAll, relayInfo.CodexProMode)
 }
 
+func TestPreConsumeBillingGlobalCodexProHiddenDisablesRelayPro(t *testing.T) {
+	truncate(t)
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	const userID = 8295
+	const tokenID = 8296
+	const planID = 8297
+	const subID = 8298
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-codex-pro-hidden", 10_000)
+	seedCodexProBillingPlan(t, planID, "codex-pro-hidden", 100, 80, false, false)
+	seedCodexProBillingSubscription(t, subID, userID, planID, 100, 0, model.SubscriptionGrantOrder, model.SubscriptionGrantOrder, "active", time.Now().Add(24*time.Hour).Unix())
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-codex-pro-hidden", "req-codex-pro-hidden", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeResponses
+	relayInfo.TokenCodexProMode = common.CodexProModeAll
+	relayInfo.UserSetting.CodexProMode = common.CodexProModeAll
+	relayInfo.SetEstimatePromptTokens(10)
+
+	apiErr := PreConsumeBilling(ctx, 10, relayInfo)
+
+	require.Nil(t, apiErr)
+	assert.Equal(t, common.CodexProModeOff, relayInfo.CodexProMode)
+	assert.Equal(t, false, relayInfo.CodexProEligible)
+	assert.Equal(t, "features_hidden", relayInfo.CodexProUnavailableReason)
+	assert.False(t, relayInfo.CodexProRequestSent)
+}
+
 func TestPreConsumeBillingWalletOnlySettingWithPaidSubscriptionStillCodexProEligible(t *testing.T) {
 	truncate(t)
 	const userID = 8265

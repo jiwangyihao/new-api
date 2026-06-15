@@ -329,7 +329,7 @@ export type CodexProUnavailableReason =
   | 'trial_subscription'
   | 'reward_subscription'
   | 'no_paid_subscription'
-
+  | 'features_hidden'
 export interface UpdateCodexProModeRequest {
   mode: CodexProMode
 }
@@ -338,6 +338,7 @@ export interface UpdateCodexProModeResponse {
   codex_pro_mode: CodexProMode
   codex_pro_eligible: boolean
   codex_pro_unavailable_reason: CodexProUnavailableReason
+  codex_pro_features_hidden?: boolean
 }
 
 export interface PlanPayload {
@@ -449,6 +450,7 @@ export interface SelfSubscriptionData {
   codex_pro_mode?: CodexProMode
   codex_pro_eligible?: boolean
   codex_pro_unavailable_reason?: CodexProUnavailableReason
+  codex_pro_features_hidden?: boolean
   subscriptions: UserSubscriptionRecord[]
   all_subscriptions: UserSubscriptionRecord[]
   summary: SelfSubscriptionSummary

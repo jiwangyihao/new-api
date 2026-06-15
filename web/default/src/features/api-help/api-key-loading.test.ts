@@ -83,4 +83,10 @@ describe('api help key loading', () => {
     assert.match(source, /OpenClaw/)
     assert.match(source, /X-NewAPI-Codex-Pro-Intent/)
   })
+
+  test('hides Codex Pro guidance when the global feature switch is enabled', () => {
+    assert.match(source, /codexProFeaturesHidden/)
+    assert.match(source, /!codexProFeaturesHidden[\s\S]*<TabsTrigger value='codex-pro'>/)
+    assert.match(source, /!codexProFeaturesHidden[\s\S]*<TabsContent value='codex-pro'/)
+  })
 })

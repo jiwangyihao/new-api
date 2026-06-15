@@ -59,6 +59,18 @@ describe('Codex Pro mode control contract', () => {
     )
   })
 
+  test('hides mode control when global Codex Pro features are hidden', () => {
+    assert.equal(
+      canUseCodexProModeControl({
+        codex_pro_mode: 'all',
+        codex_pro_eligible: true,
+        codex_pro_unavailable_reason: '',
+        codex_pro_features_hidden: true,
+      }),
+      false
+    )
+  })
+
   test('maps ineligible reasons to action-oriented copy instead of raw enums', () => {
     const cases: Array<[CodexProUnavailableReason, string]> = [
       [

@@ -30,6 +30,7 @@ const codexProUnavailableReasons = [
   'trial_subscription',
   'reward_subscription',
   'no_paid_subscription',
+  'features_hidden',
 ] as const satisfies readonly CodexProUnavailableReason[]
 const codexProUnavailableReasonContract: Expect<
   Equal<CodexProUnavailableReason, (typeof codexProUnavailableReasons)[number]>
@@ -39,6 +40,7 @@ const updateResponse: UpdateCodexProModeResponse = {
   codex_pro_mode: 'off',
   codex_pro_eligible: true,
   codex_pro_unavailable_reason: '',
+  codex_pro_features_hidden: true,
 }
 const selfSubscriptionData: SelfSubscriptionData = {
   billing_preference: 'subscription_first',
@@ -58,7 +60,8 @@ const selfSubscriptionData: SelfSubscriptionData = {
   },
   codex_pro_mode: 'flexible',
   codex_pro_eligible: false,
-  codex_pro_unavailable_reason: 'no_paid_subscription',
+  codex_pro_unavailable_reason: 'features_hidden',
+  codex_pro_features_hidden: true,
 }
 const responseContract: ApiResponse<UpdateCodexProModeResponse> = {
   success: true,

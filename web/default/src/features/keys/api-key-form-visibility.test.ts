@@ -275,6 +275,13 @@ describe('api key user-facing configuration form', () => {
     assert.match(columnsSource, /inherit/)
   })
 
+  test('gates API key Codex Pro UI behind the global hidden flag', () => {
+    assert.match(drawerSource, /codexProFeaturesHidden/)
+    assert.match(drawerSource, /!codexProFeaturesHidden/)
+    assert.match(columnsSource, /codexProFeaturesHidden/)
+    assert.match(columnsSource, /filter\(\(column\) => column\.id !== 'codex_pro_mode'\)/)
+  })
+
   test('does not migrate historical quota fields into token limit defaults', () => {
     const defaults = transformApiKeyToFormDefaults({
       id: 1,

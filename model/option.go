@@ -176,6 +176,7 @@ func InitOptionMap() {
 	common.OptionMap["DataExportInterval"] = strconv.Itoa(common.DataExportInterval)
 	common.OptionMap["DataExportDefaultTime"] = common.DataExportDefaultTime
 	common.OptionMap["DefaultCollapseSidebar"] = strconv.FormatBool(common.DefaultCollapseSidebar)
+	common.OptionMap["CodexProFeaturesHidden"] = strconv.FormatBool(common.CodexProFeaturesHidden)
 	common.OptionMap["MjNotifyEnabled"] = strconv.FormatBool(setting.MjNotifyEnabled)
 	common.OptionMap["MjAccountFilterEnabled"] = strconv.FormatBool(setting.MjAccountFilterEnabled)
 	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
@@ -393,7 +394,7 @@ func updateOptionMap(key string, value string) (err error) {
 			common.ImageDownloadPermission = intValue
 		}
 	}
-	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SubscriptionConcurrencyFailOpen" || key == "SubscriptionConcurrencyRequireRedis" {
+	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SubscriptionConcurrencyFailOpen" || key == "SubscriptionConcurrencyRequireRedis" || key == "CodexProFeaturesHidden" {
 		boolValue := value == "true"
 		switch key {
 		case "PasswordRegisterEnabled":
@@ -428,6 +429,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.LogConsumeEnabled = boolValue
 		case "SubscriptionConcurrencyFailOpen":
 			common.SubscriptionConcurrencyFailOpen = boolValue
+		case "CodexProFeaturesHidden":
+			common.CodexProFeaturesHidden = boolValue
 		case "SubscriptionConcurrencyRequireRedis":
 			common.SubscriptionConcurrencyRequireRedis = boolValue
 		case "GPTAbuseLimitEnabled":

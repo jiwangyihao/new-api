@@ -381,6 +381,7 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
   const [selectedKeyId, setSelectedKeyId] = useState('')
   const userId = useAuthStore((state) => state.auth.user?.id)
   const { status } = useStatus()
+  const codexProFeaturesHidden = status?.codex_pro_features_hidden === true
   const serverAddress = useMemo(() => extractServerAddress(status), [status])
   const apiKeysQuery = useQuery({
     queryKey: ['api-help', 'api-keys', userId],
@@ -633,9 +634,11 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                       <Settings2 className='size-4' />
                       OMP
                     </TabsTrigger>
-                    <TabsTrigger value='codex-pro'>
-                      {t('Codex Pro')}
-                    </TabsTrigger>
+                    {!codexProFeaturesHidden && (
+                      <TabsTrigger value='codex-pro'>
+                        {t('Codex Pro')}
+                      </TabsTrigger>
+                    )}
                     <TabsTrigger value='generic'>{t('Generic')}</TabsTrigger>
                     <TabsTrigger value='apps'>{t('Common Apps')}</TabsTrigger>
                   </TabsList>
@@ -694,35 +697,37 @@ export function ApiUsageHelpDialog(props: ApiUsageHelpDialogProps) {
                   <ConfigFileList files={ompFiles} />
                 </TabsContent>
 
-                <TabsContent value='codex-pro' className='space-y-3'>
-                  <p className='text-muted-foreground text-sm'>
-                    {t(
-                      'Use Codex Pro in flexible mode by adding the intent header where the client supports custom headers.'
-                    )}{' '}
-                    <code>X-NewAPI-Codex-Pro-Intent</code>
-                  </p>
-                  <ul className='text-muted-foreground list-disc space-y-1 pl-5 text-sm'>
-                    <li>
+                {!codexProFeaturesHidden && (
+                  <TabsContent value='codex-pro' className='space-y-3'>
+                    <p className='text-muted-foreground text-sm'>
                       {t(
-                        'The Codex Pro intent header only enables flexible-mode routing; it does not guarantee Pro service and is not a billing credential.'
-                      )}
-                    </li>
-                    <li>
-                      {t(
-                        'Codex Pro markers are logging signals only; credits use a numeric upstream multiplier only when the channel enables dynamic billing.'
-                      )}
-                    </li>
-                    <li>{t('Without a valid dynamic multiplier, requests are billed at the normal credit rate.')}</li>
-                  </ul>
-                  <ConfigFileList files={codexHarnessFiles} />
-                  {unverifiedCodexHarnessNotices.map((item) => (
-                    <Alert key={item.client}>
-                      <AlertDescription>
-                        <span className='font-medium'>{t(item.client)}</span>: {t(item.notice)}
-                      </AlertDescription>
-                    </Alert>
-                  ))}
-                </TabsContent>
+                        'Use Codex Pro in flexible mode by adding the intent header where the client supports custom headers.'
+                      )}{' '}
+                      <code>X-NewAPI-Codex-Pro-Intent</code>
+                    </p>
+                    <ul className='text-muted-foreground list-disc space-y-1 pl-5 text-sm'>
+                      <li>
+                        {t(
+                          'The Codex Pro intent header only enables flexible-mode routing; it does not guarantee Pro service and is not a billing credential.'
+                        )}
+                      </li>
+                      <li>
+                        {t(
+                          'Codex Pro markers are logging signals only; credits use a numeric upstream multiplier only when the channel enables dynamic billing.'
+                        )}
+                      </li>
+                      <li>{t('Without a valid dynamic multiplier, requests are billed at the normal credit rate.')}</li>
+                    </ul>
+                    <ConfigFileList files={codexHarnessFiles} />
+                    {unverifiedCodexHarnessNotices.map((item) => (
+                      <Alert key={item.client}>
+                        <AlertDescription>
+                          <span className='font-medium'>{t(item.client)}</span>: {t(item.notice)}
+                        </AlertDescription>
+                      </Alert>
+                    ))}
+                  </TabsContent>
+                )}
 
                 <TabsContent value='generic' className='space-y-3'>
                   <p className='text-muted-foreground text-sm'>

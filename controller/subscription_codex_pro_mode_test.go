@@ -132,6 +132,25 @@ func TestGetSubscriptionSelfReturnsDefaultCodexProModeAndEligibilityFields(t *te
 	assert.Equal(t, "", data["codex_pro_unavailable_reason"])
 }
 
+func TestGetSubscriptionSelfHidesCodexProWhenGloballyDisabled(t *testing.T) {
+	setupSubscriptionSelfSummaryTestDB(t)
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	const userID = 9961
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "codex_pro_hidden", Status: common.UserStatusEnabled, Setting: userSettingWithCodexProMode(t, "all")}).Error)
+	seedCodexProPaidSubscription(t, userID, 9962, 9963)
+
+	recorder := performGetSubscriptionSelfSummaryRequest(t, userID)
+
+	data := subscriptionSelfSummaryData(t, recorder)
+	assert.Equal(t, true, data["codex_pro_features_hidden"])
+	assert.Equal(t, "off", data["codex_pro_mode"])
+	assert.Equal(t, false, data["codex_pro_eligible"])
+	assert.Equal(t, "features_hidden", data["codex_pro_unavailable_reason"])
+	assert.Equal(t, "all", requireRawUserSetting(t, userID)["codex_pro_mode"])
+}
+
 func TestGetSubscriptionSelfCodexProEligibilityDoesNotDependOnOffMode(t *testing.T) {
 	setupSubscriptionSelfSummaryTestDB(t)
 	const userID = 9864
@@ -258,6 +277,44 @@ func TestUpdateCodexProModeAllowsSavingModeWhenUserIsNotEligible(t *testing.T) {
 	assert.Equal(t, "all", data["codex_pro_mode"])
 	assert.Equal(t, false, data["codex_pro_eligible"])
 	assert.Equal(t, "no_paid_subscription", data["codex_pro_unavailable_reason"])
+	assert.Equal(t, "all", requireRawUserSetting(t, userID)["codex_pro_mode"])
+}
+
+func TestUpdateCodexProModeReturnsOffWhenGloballyDisabled(t *testing.T) {
+	setupSubscriptionSelfSummaryTestDB(t)
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	const userID = 9971
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "codex_pro_update_hidden", Status: common.UserStatusEnabled, Setting: userSettingWithCodexProModeAndBillingPreference(t, "all", "wallet_first")}).Error)
+	seedCodexProPaidSubscription(t, userID, 9972, 9973)
+
+	recorder := performUpdateCodexProModeRequest(t, userID, `{"mode":"flexible"}`)
+
+	data := subscriptionCodexProData(t, recorder)
+	assert.Equal(t, "off", data["codex_pro_mode"])
+	assert.Equal(t, false, data["codex_pro_eligible"])
+	assert.Equal(t, "features_hidden", data["codex_pro_unavailable_reason"])
+	setting := requireRawUserSetting(t, userID)
+	assert.Equal(t, "all", setting["codex_pro_mode"])
+	assert.Equal(t, "wallet_first", setting["billing_preference"])
+}
+
+func TestUpdateCodexProModeHiddenShortCircuitsInvalidMode(t *testing.T) {
+	setupSubscriptionSelfSummaryTestDB(t)
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	const userID = 9974
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "codex_pro_update_hidden_invalid", Status: common.UserStatusEnabled, Setting: userSettingWithCodexProMode(t, "all")}).Error)
+
+	recorder := performUpdateCodexProModeRequest(t, userID, `{"mode":"codex-pro"}`)
+
+	data := subscriptionCodexProData(t, recorder)
+	assert.Equal(t, "off", data["codex_pro_mode"])
+	assert.Equal(t, false, data["codex_pro_eligible"])
+	assert.Equal(t, "features_hidden", data["codex_pro_unavailable_reason"])
+	assert.Equal(t, true, data["codex_pro_features_hidden"])
 	assert.Equal(t, "all", requireRawUserSetting(t, userID)["codex_pro_mode"])
 }
 

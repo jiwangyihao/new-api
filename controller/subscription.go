@@ -136,6 +136,11 @@ func GetSubscriptionSelf(c *gin.Context) {
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
 	mode := common.NormalizeCodexProMode(settingMap.CodexProMode)
 	codexProEligible, codexProUnavailableReason, err := model.GetCodexProEligibility(userId, settingMap)
+	if common.CodexProFeaturesHidden {
+		mode = common.CodexProModeOff
+		codexProEligible = false
+		codexProUnavailableReason = common.CodexProUnavailableReasonFeaturesHidden
+	}
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -188,6 +193,7 @@ func GetSubscriptionSelf(c *gin.Context) {
 		"billing_preference":           pref,
 		"codex_pro_mode":               mode,
 		"codex_pro_eligible":           codexProEligible,
+		"codex_pro_features_hidden":    common.CodexProFeaturesHidden,
 		"codex_pro_unavailable_reason": codexProUnavailableReason,
 		"subscriptions":                model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId), // all active subscriptions
 		"all_subscriptions":            model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),    // all subscriptions including expired
@@ -239,6 +245,15 @@ func UpdateCodexProMode(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	if common.CodexProFeaturesHidden {
+		common.ApiSuccess(c, gin.H{
+			"codex_pro_mode":               common.CodexProModeOff,
+			"codex_pro_eligible":           false,
+			"codex_pro_unavailable_reason": common.CodexProUnavailableReasonFeaturesHidden,
+			"codex_pro_features_hidden":    true,
+		})
+		return
+	}
 	if err := common.ValidateCodexProModeForUpdate(req.Mode); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
 		return
@@ -265,6 +280,7 @@ func UpdateCodexProMode(c *gin.Context) {
 		"codex_pro_mode":               mode,
 		"codex_pro_eligible":           codexProEligible,
 		"codex_pro_unavailable_reason": codexProUnavailableReason,
+		"codex_pro_features_hidden":    false,
 	})
 }
 

@@ -279,6 +279,39 @@ func TestConfigGuideOpenCodeCodexProAddsIntentHeaderOnlyToModels(t *testing.T) {
 	}
 }
 
+func TestConfigGuideOpenCodeHidesCodexProHeadersWhenGloballyDisabled(t *testing.T) {
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	sourceModels := configGuideTestModels()
+	modelWithHeader := sourceModels["gpt-5.5"]
+	modelWithHeader.Headers = map[string]string{"X-Provider-Feature": "stable"}
+	sourceModels["gpt-5.5"] = modelWithHeader
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: sourceModels})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/opencode-openai/opencode.json?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
+	GetOpenCodeConfigGuideJSON(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var config map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &config))
+	provider := config["provider"].(map[string]any)["new-api"].(map[string]any)
+	renderedModels := provider["models"].(map[string]any)
+	require.NotEmpty(t, renderedModels)
+	for modelID, rawModel := range renderedModels {
+		modelConfig := rawModel.(map[string]any)
+		headers, ok := modelConfig["headers"].(map[string]any)
+		if modelID == "gpt-5.5" {
+			require.True(t, ok, "model %s must keep non-Codex headers when hidden", modelID)
+			require.Equal(t, "stable", headers["X-Provider-Feature"])
+			require.NotContains(t, headers, "X-NewAPI-Codex-Pro-Intent")
+			continue
+		}
+		require.False(t, ok, "model %s must not carry empty headers when hidden", modelID)
+	}
+}
+
 func TestConfigGuideOMPCodexProAddsHeadersWithoutChangingProviderShape(t *testing.T) {
 	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
 	seedValidConfigGuideFixture(t)
@@ -309,6 +342,23 @@ func TestConfigGuideOMPCodexProAddsHeadersWithoutChangingProviderShape(t *testin
 	require.Equal(t, map[string]any{
 		"X-NewAPI-Codex-Pro-Intent": "codex-pro",
 	}, provider["headers"])
+}
+
+func TestConfigGuideOMPHidesCodexProHeadersWhenGloballyDisabled(t *testing.T) {
+	oldHidden := common.CodexProFeaturesHidden
+	common.CodexProFeaturesHidden = true
+	t.Cleanup(func() { common.CodexProFeaturesHidden = oldHidden })
+	withStubOpenCodeMetadataProvider(t, stubOpenCodeMetadataProvider{models: configGuideTestModels()})
+	seedValidConfigGuideFixture(t)
+
+	ctx, recorder := newAuthenticatedContext(t, http.MethodGet, "/config-guides/omp-openai/models.yml?api_key=sk-livetoken&base_url=https://api.example.com/v1", nil, 1)
+	GetOMPConfigGuideModels(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	body := recorder.Body.String()
+	require.Contains(t, body, "providers:")
+	require.NotContains(t, body, "X-NewAPI-Codex-Pro-Intent")
+	require.NotContains(t, body, `"codex-pro"`)
 }
 
 func TestOpenCodeConfigGuideJSONDoesNotEmitProviderNativeTools(t *testing.T) {

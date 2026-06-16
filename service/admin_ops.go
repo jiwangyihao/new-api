@@ -149,9 +149,10 @@ func GetAdminOpsConcurrency(ctx context.Context, query AdminOpsConcurrencyQuery)
 	if err != nil {
 		return nil, err
 	}
-	response.Summary = buildAdminOpsConcurrencySummary(users)
+	filteredUsers := filterAdminOpsConcurrencyUsers(users, query)
+	response.Summary = buildAdminOpsConcurrencySummary(filteredUsers)
 	if query.IncludeUsers {
-		response.Users = limitAdminOpsConcurrencyUsers(filterAdminOpsConcurrencyUsers(users, query), query.Limit)
+		response.Users = limitAdminOpsConcurrencyUsers(filteredUsers, query.Limit)
 	}
 	return response, nil
 }

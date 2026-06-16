@@ -1,7 +1,9 @@
 package service
 
 import (
+	"context"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -101,6 +103,45 @@ func TestBuildAdminOpsConcurrencySummaryUsesAllUsersBeforeDetailLimit(t *testing
 	assert.EqualValues(t, 1, summary.QueuedUsers)
 	assert.EqualValues(t, 1, summary.SaturatedUsers)
 	assert.InDelta(t, 1.0, summary.QueuePressure, 0.0001)
+}
+
+func TestAdminOpsConcurrencySummaryUsesFilteredUsersBeforeDetailLimit(t *testing.T) {
+	users := []dto.AdminOpsConcurrencyUser{
+		{UserID: 1, PlanID: 10, Active: 3, Limit: 3, Queued: 0, QueueCapacity: 5, Status: "saturated"},
+		{UserID: 2, PlanID: 11, Active: 0, Limit: 3, Queued: 5, QueueCapacity: 5, Status: "queued"},
+		{UserID: 3, PlanID: 10, Active: 1, Limit: 3, Queued: 0, QueueCapacity: 5, Status: "normal"},
+	}
+
+	filtered := filterAdminOpsConcurrencyUsers(users, AdminOpsConcurrencyQuery{PlanID: 10, MinActiveOrQueued: 1})
+	detail := limitAdminOpsConcurrencyUsers(filtered, 1)
+	assert.Len(t, detail, 1)
+
+	summary := buildAdminOpsConcurrencySummary(filtered)
+	assert.EqualValues(t, 4, summary.TotalActive)
+	assert.EqualValues(t, 0, summary.TotalQueued)
+	assert.EqualValues(t, 2, summary.ActiveUsers)
+	assert.EqualValues(t, 0, summary.QueuedUsers)
+	assert.EqualValues(t, 1, summary.SaturatedUsers)
+}
+
+func TestGetAdminOpsConcurrencySummaryMatchesFilteredUsers(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	now := time.Now().Unix()
+	subscriptionConcurrencyMemory.mu.Lock()
+	subscriptionConcurrencyMemory.requests[1] = map[string]struct{}{"active-one": {}}
+	subscriptionConcurrencyMemory.requests[2] = map[string]struct{}{"active-two": {}}
+	subscriptionConcurrencyMemory.waiting[2] = []memorySubscriptionConcurrencyWaiter{{queuedAt: now - 10}}
+	subscriptionConcurrencyMemory.mu.Unlock()
+
+	response, err := GetAdminOpsConcurrency(context.Background(), AdminOpsConcurrencyQuery{Limit: 20, IncludeUsers: true, Status: "queued", MinActiveOrQueued: 1})
+
+	assert.NoError(t, err)
+	assert.Len(t, response.Users, 1)
+	assert.Equal(t, 2, response.Users[0].UserID)
+	assert.EqualValues(t, 1, response.Summary.TotalActive)
+	assert.EqualValues(t, 1, response.Summary.TotalQueued)
+	assert.EqualValues(t, 1, response.Summary.ActiveUsers)
+	assert.EqualValues(t, 1, response.Summary.QueuedUsers)
 }
 
 func TestFilterAdminOpsConcurrencyUsersByPlanAndStatus(t *testing.T) {

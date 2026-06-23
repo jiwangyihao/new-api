@@ -57,6 +57,10 @@ const createEmailSchema = (t: (key: string) => string) =>
     SMTPToken: z.string(),
     SMTPSSLEnabled: z.boolean(),
     SMTPForceAuthLogin: z.boolean(),
+    SMTPOAuthEnabled: z.boolean(),
+    SMTPOAuthClientId: z.string(),
+    SMTPOAuthTenantId: z.string(),
+    SMTPOAuthRefreshToken: z.string(),
   })
 
 type EmailFormValues = z.infer<ReturnType<typeof createEmailSchema>>
@@ -88,6 +92,10 @@ export function EmailSettingsSection({
       SMTPToken: values.SMTPToken.trim(),
       SMTPSSLEnabled: values.SMTPSSLEnabled,
       SMTPForceAuthLogin: values.SMTPForceAuthLogin,
+      SMTPOAuthEnabled: values.SMTPOAuthEnabled,
+      SMTPOAuthClientId: values.SMTPOAuthClientId.trim(),
+      SMTPOAuthTenantId: values.SMTPOAuthTenantId.trim(),
+      SMTPOAuthRefreshToken: values.SMTPOAuthRefreshToken.trim(),
     }
 
     const initial = {
@@ -98,6 +106,10 @@ export function EmailSettingsSection({
       SMTPToken: defaultValues.SMTPToken.trim(),
       SMTPSSLEnabled: defaultValues.SMTPSSLEnabled,
       SMTPForceAuthLogin: defaultValues.SMTPForceAuthLogin,
+      SMTPOAuthEnabled: defaultValues.SMTPOAuthEnabled,
+      SMTPOAuthClientId: defaultValues.SMTPOAuthClientId.trim(),
+      SMTPOAuthTenantId: defaultValues.SMTPOAuthTenantId.trim(),
+      SMTPOAuthRefreshToken: defaultValues.SMTPOAuthRefreshToken.trim(),
     }
 
     const updates: Array<{ key: string; value: string | boolean }> = []
@@ -133,6 +145,37 @@ export function EmailSettingsSection({
       updates.push({
         key: 'SMTPForceAuthLogin',
         value: sanitized.SMTPForceAuthLogin,
+      })
+    }
+
+    if (sanitized.SMTPOAuthEnabled !== initial.SMTPOAuthEnabled) {
+      updates.push({
+        key: 'SMTPOAuthEnabled',
+        value: sanitized.SMTPOAuthEnabled,
+      })
+    }
+
+    if (sanitized.SMTPOAuthClientId !== initial.SMTPOAuthClientId) {
+      updates.push({
+        key: 'SMTPOAuthClientId',
+        value: sanitized.SMTPOAuthClientId,
+      })
+    }
+
+    if (sanitized.SMTPOAuthTenantId !== initial.SMTPOAuthTenantId) {
+      updates.push({
+        key: 'SMTPOAuthTenantId',
+        value: sanitized.SMTPOAuthTenantId,
+      })
+    }
+
+    if (
+      sanitized.SMTPOAuthRefreshToken &&
+      sanitized.SMTPOAuthRefreshToken !== initial.SMTPOAuthRefreshToken
+    ) {
+      updates.push({
+        key: 'SMTPOAuthRefreshToken',
+        value: sanitized.SMTPOAuthRefreshToken,
       })
     }
 
@@ -315,6 +358,102 @@ export function EmailSettingsSection({
                 </FormControl>
                 <FormDescription>
                   {t('Leave blank to keep the existing credential')}
+                </FormDescription>
+                <FormMessage />
+              </FormItem>
+            )}
+          />
+
+          <FormField
+            control={form.control}
+            name='SMTPOAuthEnabled'
+            render={({ field }) => (
+              <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
+                <div className='space-y-0.5'>
+                  <FormLabel className='text-base'>
+                    {t('Use OAuth2 (XOAUTH2)')}
+                  </FormLabel>
+                  <FormDescription>
+                    {t(
+                      'Authenticate via OAuth2 bearer token (required for Microsoft 365). When enabled, the password field is ignored.',
+                    )}
+                  </FormDescription>
+                </div>
+                <FormControl>
+                  <Switch
+                    checked={field.value}
+                    onCheckedChange={field.onChange}
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+
+          <div className='grid gap-6 md:grid-cols-2'>
+            <FormField
+              control={form.control}
+              name='SMTPOAuthClientId'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('OAuth Client ID')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      autoComplete='off'
+                      placeholder={t('Entra application (client) ID')}
+                      {...field}
+                      onChange={(event) => field.onChange(event.target.value)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Azure AD / Entra app registration client ID')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name='SMTPOAuthTenantId'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('OAuth Tenant ID')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      autoComplete='off'
+                      placeholder='common'
+                      {...field}
+                      onChange={(event) => field.onChange(event.target.value)}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t('Directory (tenant) ID, or "common" for multi-tenant')}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          <FormField
+            control={form.control}
+            name='SMTPOAuthRefreshToken'
+            render={({ field }) => (
+              <FormItem>
+                <FormLabel>{t('OAuth Refresh Token')}</FormLabel>
+                <FormControl>
+                  <Input
+                    autoComplete='off'
+                    type='password'
+                    placeholder={t('Enter new refresh token to update')}
+                    {...field}
+                    onChange={(event) => field.onChange(event.target.value)}
+                  />
+                </FormControl>
+                <FormDescription>
+                  {t(
+                    'Obtained via the device-code login flow. Leave blank to keep the existing token.',
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>

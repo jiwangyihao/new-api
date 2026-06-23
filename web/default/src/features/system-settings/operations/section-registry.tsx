@@ -80,6 +80,10 @@ const OPERATIONS_SECTIONS = [
           SMTPToken: settings.SMTPToken,
           SMTPSSLEnabled: settings.SMTPSSLEnabled,
           SMTPForceAuthLogin: settings.SMTPForceAuthLogin,
+          SMTPOAuthEnabled: settings.SMTPOAuthEnabled,
+          SMTPOAuthClientId: settings.SMTPOAuthClientId,
+          SMTPOAuthTenantId: settings.SMTPOAuthTenantId,
+          SMTPOAuthRefreshToken: settings.SMTPOAuthRefreshToken,
         }}
       />
     ),

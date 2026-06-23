@@ -299,6 +299,10 @@ export type OperationsSettings = {
   SMTPToken: string
   SMTPSSLEnabled: boolean
   SMTPForceAuthLogin: boolean
+  SMTPOAuthEnabled: boolean
+  SMTPOAuthClientId: string
+  SMTPOAuthTenantId: string
+  SMTPOAuthRefreshToken: string
   WorkerUrl: string
   WorkerValidKey: string
   WorkerAllowHttpImageRequestEnabled: boolean

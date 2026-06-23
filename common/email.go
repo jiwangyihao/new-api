@@ -26,11 +26,18 @@ func shouldUseSMTPLoginAuth() bool {
 	return isOutlookServer(SMTPAccount) || slices.Contains(EmailLoginAuthServerList, SMTPServer)
 }
 
-func getSMTPAuth() smtp.Auth {
-	if shouldUseSMTPLoginAuth() {
-		return LoginAuth(SMTPAccount, SMTPToken)
+func getSMTPAuth() (smtp.Auth, error) {
+	if SMTPOAuthEnabled {
+		token, err := getSMTPOAuthAccessToken()
+		if err != nil {
+			return nil, err
+		}
+		return XOAuth2Auth(SMTPAccount, token), nil
 	}
-	return smtp.PlainAuth("", SMTPAccount, SMTPToken, SMTPServer)
+	if shouldUseSMTPLoginAuth() {
+		return LoginAuth(SMTPAccount, SMTPToken), nil
+	}
+	return smtp.PlainAuth("", SMTPAccount, SMTPToken, SMTPServer), nil
 }
 
 func SendEmail(subject string, receiver string, content string) error {
@@ -52,10 +59,12 @@ func SendEmail(subject string, receiver string, content string) error {
 		"Message-ID: %s\r\n"+ // 添加 Message-ID 头
 		"Content-Type: text/html; charset=UTF-8\r\n\r\n%s\r\n",
 		receiver, SystemName, SMTPFrom, encodedSubject, time.Now().Format(time.RFC1123Z), id, content))
-	auth := getSMTPAuth()
+	auth, err := getSMTPAuth()
+	if err != nil {
+		return err
+	}
 	addr := fmt.Sprintf("%s:%d", SMTPServer, SMTPPort)
 	to := strings.Split(receiver, ";")
-	var err error
 	if SMTPPort == 465 || SMTPSSLEnabled {
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: true,

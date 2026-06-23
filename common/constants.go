@@ -134,6 +134,17 @@ var SMTPAccount = ""
 var SMTPFrom = ""
 var SMTPToken = ""
 
+// SMTP OAuth2 (XOAUTH2) settings, used for providers like Microsoft 365 that
+// no longer accept basic auth / app passwords over SMTP.
+var SMTPOAuthEnabled = false
+var SMTPOAuthClientId = ""
+var SMTPOAuthTenantId = "common"
+var SMTPOAuthRefreshToken = ""
+// SMTPOAuthAccessToken / SMTPOAuthAccessExpiry cache the short-lived access
+// token in memory so we don't refresh on every send. Not persisted as options.
+var SMTPOAuthAccessToken = ""
+var SMTPOAuthAccessExpiry int64 = 0
+
 var GitHubClientId = ""
 var GitHubClientSecret = ""
 var LinuxDOClientId = ""

@@ -78,6 +78,10 @@ func InitOptionMap() {
 	common.OptionMap["SMTPToken"] = ""
 	common.OptionMap["SMTPSSLEnabled"] = strconv.FormatBool(common.SMTPSSLEnabled)
 	common.OptionMap["SMTPForceAuthLogin"] = strconv.FormatBool(common.SMTPForceAuthLogin)
+	common.OptionMap["SMTPOAuthEnabled"] = strconv.FormatBool(common.SMTPOAuthEnabled)
+	common.OptionMap["SMTPOAuthClientId"] = ""
+	common.OptionMap["SMTPOAuthTenantId"] = common.SMTPOAuthTenantId
+	common.OptionMap["SMTPOAuthRefreshToken"] = ""
 	common.OptionMap["Notice"] = ""
 	common.OptionMap["About"] = ""
 	common.OptionMap["HomePageContent"] = ""
@@ -237,6 +241,13 @@ func UpdateOption(key string, value string) error {
 	DB.Save(&option)
 	// Update OptionMap
 	return updateOptionMap(key, value)
+}
+func init() {
+	// Wire the SMTP OAuth refresh-token persistence hook so common can persist
+	// a rotated refresh token without importing model (avoids an import cycle).
+	common.SetPersistSMTPRefreshTokenHook(func(token string) error {
+		return UpdateOption("SMTPOAuthRefreshToken", token)
+	})
 }
 
 func UpdateOptionChecked(key string, value string) error {
@@ -481,6 +492,8 @@ func updateOptionMap(key string, value string) (err error) {
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPForceAuthLogin":
 			common.SMTPForceAuthLogin = boolValue
+		case "SMTPOAuthEnabled":
+			common.SMTPOAuthEnabled = boolValue
 		case "WorkerAllowHttpImageRequestEnabled":
 			system_setting.WorkerAllowHttpImageRequestEnabled = boolValue
 		case "DefaultUseAutoGroup":
@@ -503,6 +516,15 @@ func updateOptionMap(key string, value string) (err error) {
 		common.SMTPFrom = value
 	case "SMTPToken":
 		common.SMTPToken = value
+	case "SMTPOAuthClientId":
+		common.SMTPOAuthClientId = value
+	case "SMTPOAuthTenantId":
+		common.SMTPOAuthTenantId = value
+	case "SMTPOAuthRefreshToken":
+		common.SMTPOAuthRefreshToken = value
+		// A new refresh token invalidates any cached access token.
+		common.SMTPOAuthAccessToken = ""
+		common.SMTPOAuthAccessExpiry = 0
 	case "ServerAddress":
 		system_setting.ServerAddress = value
 	case "WorkerUrl":

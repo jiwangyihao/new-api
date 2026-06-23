@@ -143,15 +143,19 @@ func refreshSMTPOAuthToken() error {
 		}
 		return fmt.Errorf("刷新 OAuth token 失败: HTTP %d", resp.StatusCode)
 	}
-	SMTPOAuthAccessToken = tok.AccessToken
-	// Refresh ~2 minutes before the real expiry to avoid edge races.
-	SMTPOAuthAccessExpiry = time.Now().Unix() + tok.ExpiresIn - 120
+	accessToken := tok.AccessToken
+	expiry := time.Now().Unix() + tok.ExpiresIn - 120
 	if tok.RefreshToken != "" && tok.RefreshToken != SMTPOAuthRefreshToken {
 		SMTPOAuthRefreshToken = tok.RefreshToken
+		// Persisting the rotated refresh token runs through the option map,
+		// which clears the cached access token/expiry. Persist FIRST, then
+		// publish the freshly obtained access token so it isn't wiped.
 		if err := persistSMTPRefreshToken(tok.RefreshToken); err != nil {
 			SysError(fmt.Sprintf("持久化 SMTP OAuth refresh token 失败: %v", err))
 		}
 	}
+	SMTPOAuthAccessToken = accessToken
+	SMTPOAuthAccessExpiry = expiry
 	return nil
 }
 

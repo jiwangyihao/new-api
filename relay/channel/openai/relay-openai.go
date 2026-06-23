@@ -121,11 +121,31 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 	var usage = &dto.Usage{}
 	var lastStreamData string
 	var secondLastStreamData string // 存储倒数第二个stream data，用于音频模型
+	var streamErr *types.NewAPIError
 
 	// 检查是否为音频模型
 	isAudioModel := strings.Contains(strings.ToLower(model), "audio")
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
+		// An HTTP-200 streaming response can still fail mid-stream: the upstream
+		// (and this router) signals it with a top-level `data: {"error": {...}}`
+		// chunk and then closes. The chat.completion.chunk shape has no formal
+		// terminal-error event, so without this check the error chunk is stored
+		// as ordinary content and surfaces downstream as a false success. Detect
+		// it, classify it, and stop — matching the Responses path's handling of
+		// response.failed/response.error.
+		var probe dto.ChatCompletionsStreamResponse
+		if err := common.UnmarshalJsonStr(data, &probe); err == nil {
+			if oaiErr := probe.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
+				streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
+				sr.Stop(streamErr)
+				return
+			}
+		}
 		if lastStreamData != "" {
 			if err := HandleStreamFormat(c, info, lastStreamData, info.ChannelSetting.ForceFormat, info.ChannelSetting.ThinkingToContent); err != nil {
 				common.SysLog("error handling stream format: " + err.Error())
@@ -141,6 +161,10 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 			lastStreamData = data
 		}
 	})
+
+	if streamErr != nil {
+		return nil, streamErr
+	}
 
 	// 对音频模型，从倒数第二个stream data中提取usage信息
 	if isAudioModel && secondLastStreamData != "" {

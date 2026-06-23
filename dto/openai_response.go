@@ -147,9 +147,22 @@ type ChatCompletionsStreamResponse struct {
 	Created           int64                                 `json:"created"`
 	Model             string                                `json:"model"`
 	SystemFingerprint *string                               `json:"system_fingerprint"`
-	NewAPIBilling     *NewAPIBilling                       `json:"newapi_billing,omitempty"`
+	NewAPIBilling     *NewAPIBilling                        `json:"newapi_billing,omitempty"`
 	Choices           []ChatCompletionsStreamResponseChoice `json:"choices"`
 	Usage             *Usage                                `json:"usage"`
+	// Error carries a top-level error object on an HTTP-200 streaming response
+	// that failed mid-stream. The Chat Completions wire format has no formal
+	// terminal-error event, but the de-facto convention (and what this router
+	// emits) is `data: {"error": {...}}` followed by stream close. Without this
+	// field the handler treats the error chunk as ordinary content and reports a
+	// false success. Mirrors OpenAITextResponse.Error / ResponsesStreamResponse.
+	Error any `json:"error,omitempty"`
+}
+
+// GetOpenAIError extracts an OpenAIError from a streaming chunk's top-level
+// `error` field, if present. Returns nil for normal content chunks.
+func (c *ChatCompletionsStreamResponse) GetOpenAIError() *types.OpenAIError {
+	return GetOpenAIError(c.Error)
 }
 
 func (c *ChatCompletionsStreamResponse) IsFinished() bool {

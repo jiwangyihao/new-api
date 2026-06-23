@@ -251,6 +251,35 @@ func TestMemorySubscriptionConcurrencySnapshotReportsActiveAndQueued(t *testing.
 	require.NoError(t, lease.Release(ctx))
 }
 
+func TestMemorySubscriptionConcurrencyUnlimitedStillTracksActive(t *testing.T) {
+	resetSubscriptionConcurrencyStatsForTest()
+	limiter := newMemorySubscriptionConcurrencyLimiter()
+	ctx := context.Background()
+
+	leaseA, err := limiter.Acquire(ctx, 4001, "req-a", 0, 0)
+	require.NoError(t, err)
+	leaseB, err := limiter.Acquire(ctx, 4001, "req-b", 0, 0)
+	require.NoError(t, err)
+	leaseC, err := limiter.Acquire(ctx, 4001, "req-c", 0, 0)
+	require.NoError(t, err)
+
+	rows := limiter.Snapshot(time.Now())
+	require.Len(t, rows, 1)
+	assert.Equal(t, 4001, rows[0].UserID)
+	assert.EqualValues(t, 3, rows[0].Active)
+	assert.EqualValues(t, 0, rows[0].Queued)
+	assert.EqualValues(t, 3, SubscriptionConcurrencyCountersSnapshot().AcquiredTotal)
+	assert.EqualValues(t, 0, SubscriptionConcurrencyCountersSnapshot().QueueFullRejectionsTotal)
+
+	require.NoError(t, leaseA.Release(ctx))
+	require.NoError(t, leaseB.Release(ctx))
+	rows = limiter.Snapshot(time.Now())
+	require.Len(t, rows, 1)
+	assert.EqualValues(t, 1, rows[0].Active)
+	require.NoError(t, leaseC.Release(ctx))
+	assert.Empty(t, limiter.Snapshot(time.Now()))
+}
+
 func TestSubscriptionConcurrencyCountersTrackQueueRejection(t *testing.T) {
 	resetSubscriptionConcurrencyStatsForTest()
 	oldRedisEnabled := common.RedisEnabled

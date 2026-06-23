@@ -181,9 +181,6 @@ func (m *memorySubscriptionConcurrencyLimiter) Snapshot(now time.Time) []Subscri
 }
 
 func (m *memorySubscriptionConcurrencyLimiter) Acquire(ctx context.Context, userId int, requestId string, limit int, queueCapacity int) (ConcurrencyLease, error) {
-	if limit <= 0 {
-		return noopConcurrencyLease{}, nil
-	}
 	m.mu.Lock()
 	active := m.requests[userId]
 	if active == nil {
@@ -194,7 +191,7 @@ func (m *memorySubscriptionConcurrencyLimiter) Acquire(ctx context.Context, user
 		m.mu.Unlock()
 		return &memorySubscriptionConcurrencyLease{limiter: m, userId: userId, requestId: requestId}, nil
 	}
-	if len(active) < limit {
+	if limit <= 0 || len(active) < limit {
 		active[requestId] = struct{}{}
 		m.mu.Unlock()
 		recordSubscriptionConcurrencyAcquired()
@@ -308,11 +305,14 @@ local ttl = tonumber(ARGV[3])
 local expired_before = tonumber(ARGV[4])
 local now = tonumber(ARGV[5])
 local queue_capacity = tonumber(ARGV[6])
-if limit <= 0 then
-  return 1
-end
 redis.call('ZREMRANGEBYSCORE', active_key, '-inf', expired_before)
 if redis.call('ZSCORE', active_key, request_id) then
+  redis.call('EXPIRE', active_key, ttl)
+  return 1
+end
+if limit <= 0 then
+  redis.call('ZADD', active_key, now, request_id)
+  redis.call('ZREM', queue_key, request_id)
   redis.call('EXPIRE', active_key, ttl)
   return 1
 end
@@ -354,7 +354,7 @@ func AcquireUserConcurrencyWithQueueCapacity(ctx context.Context, userId int, re
 }
 
 func acquireUserConcurrency(ctx context.Context, userId int, requestId string, limit int, queueCapacity int) (ConcurrencyLease, error) {
-	if limit <= 0 || userId <= 0 || requestId == "" {
+	if userId <= 0 || requestId == "" {
 		return noopConcurrencyLease{}, nil
 	}
 	queueCapacity = effectiveSubscriptionConcurrencyQueueCapacity(queueCapacity)
@@ -726,9 +726,6 @@ func AcquireSubscriptionConcurrency(ctx context.Context, relayInfo *relaycommon.
 		return noopConcurrencyLease{}, nil
 	}
 	limit := session.SubscriptionConcurrencyLimit()
-	if limit <= 0 {
-		return noopConcurrencyLease{}, nil
-	}
 	lease, err := AcquireUserConcurrencyWithQueueCapacity(ctx, relayInfo.UserId, relayInfo.RequestId, limit, session.SubscriptionQueueCapacity())
 	if err == nil {
 		return lease, nil

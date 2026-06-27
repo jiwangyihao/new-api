@@ -94,6 +94,7 @@ type RelayInfo struct {
 	UserId   int
 	// Legacy group fields remain for older call sites; GenRelayInfo no longer assigns business groups.
 	TokenGroup        string
+	TokenGroups       []string
 	UsingGroup        string
 	UserGroup         string
 	BillingModelName  string
@@ -951,6 +952,11 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	}
 
 	info.TokenCodexProMode = common.GetContextKeyString(c, constant.ContextKeyTokenCodexProMode)
+	if raw, ok := common.GetContextKey(c, constant.ContextKeyTokenGroups); ok {
+		if groups, ok := raw.([]string); ok {
+			info.TokenGroups = groups
+		}
+	}
 	userSetting, ok := common.GetContextKeyType[dto.UserSetting](c, constant.ContextKeyUserSetting)
 	if ok {
 		info.UserSetting = userSetting

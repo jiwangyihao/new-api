@@ -22,23 +22,26 @@ type tokenPayload struct {
 	CrossGroupRetry    *bool   `json:"cross_group_retry"`
 	CreditLimitEnabled *bool   `json:"credit_limit_enabled"`
 	CreditLimit        *int64  `json:"credit_limit"`
+	GroupIds           *[]int  `json:"group_ids"`
 }
 
 const maxAPIKeyTokenLimit int64 = 10_000_000_000_000
 
 type tokenResponse struct {
 	*model.Token
-	TokenLimitEnabled  bool  `json:"token_limit_enabled"`
-	TokenLimit         int64 `json:"token_limit"`
-	TokenUsed          int64 `json:"token_used"`
-	TokenRemaining     int64 `json:"token_remaining"`
-	TokenUnlimited     bool  `json:"token_unlimited"`
-	CreditLimitEnabled bool  `json:"credit_limit_enabled"`
-	CreditLimit        int64 `json:"credit_limit"`
-	CreditUsed         int64 `json:"credit_used"`
-	CreditRemaining    int64 `json:"credit_remaining"`
-	CreditUnlimited    bool  `json:"credit_unlimited"`
-	CreditResetAt      int64 `json:"credit_reset_at"`
+	TokenLimitEnabled  bool     `json:"token_limit_enabled"`
+	TokenLimit         int64    `json:"token_limit"`
+	TokenUsed          int64    `json:"token_used"`
+	TokenRemaining     int64    `json:"token_remaining"`
+	TokenUnlimited     bool     `json:"token_unlimited"`
+	CreditLimitEnabled bool     `json:"credit_limit_enabled"`
+	CreditLimit        int64    `json:"credit_limit"`
+	CreditUsed         int64    `json:"credit_used"`
+	CreditRemaining    int64    `json:"credit_remaining"`
+	CreditUnlimited    bool     `json:"credit_unlimited"`
+	CreditResetAt      int64    `json:"credit_reset_at"`
+	GroupIds           []int    `json:"group_ids"`
+	GroupNames         []string `json:"group_names"`
 }
 
 func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
@@ -49,7 +52,7 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 	maskedToken.Key = token.GetMaskedKey()
 	maskedToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(maskedToken.CodexProMode)
 	view := maskedToken.BuildTokenLimitView()
-	return &tokenResponse{
+	resp := &tokenResponse{
 		Token:              &maskedToken,
 		TokenLimitEnabled:  view.TokenLimitEnabled,
 		TokenLimit:         view.TokenLimit,
@@ -62,7 +65,17 @@ func buildMaskedTokenResponse(token *model.Token) *tokenResponse {
 		CreditRemaining:    view.CreditRemaining,
 		CreditUnlimited:    view.CreditUnlimited,
 		CreditResetAt:      view.CreditResetAt,
+		GroupIds:           []int{},
+		GroupNames:         []string{},
 	}
+	if token.Id > 0 {
+		ids, names, err := model.GetTokenGroupView(token.Id)
+		if err == nil {
+			resp.GroupIds = ids
+			resp.GroupNames = names
+		}
+	}
+	return resp
 }
 
 func buildMaskedTokenResponses(tokens []*model.Token) []*tokenResponse {
@@ -363,10 +376,22 @@ func AddToken(c *gin.Context) {
 		TokenUsed:          0,
 		CodexProMode:       token.CodexProMode,
 	}
+	if req.GroupIds != nil {
+		if err := model.ValidateChannelGroupIds(*req.GroupIds); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
 	err = cleanToken.Insert()
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if req.GroupIds != nil {
+		if err := model.SetTokenGroupBindings(cleanToken.Id, *req.GroupIds); err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -476,7 +501,16 @@ func UpdateToken(c *gin.Context) {
 		if hasCodexProMode {
 			cleanToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(token.CodexProMode)
 		}
-
+		if req.GroupIds != nil {
+			if err := model.ValidateChannelGroupIds(*req.GroupIds); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if err := model.SetTokenGroupBindings(cleanToken.Id, *req.GroupIds); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
 	}
 	cleanToken.CodexProMode = common.NormalizeAPIKeyCodexProMode(cleanToken.CodexProMode)
 	err = cleanToken.Update()

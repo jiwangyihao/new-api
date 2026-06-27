@@ -386,6 +386,11 @@ func (token *Token) Delete() (err error) {
 		}
 	}()
 	err = DB.Delete(token).Error
+	if err == nil && token.Id > 0 {
+		if bindErr := DB.Where("token_id = ?", token.Id).Delete(&TokenGroupBinding{}).Error; bindErr != nil {
+			common.SysLog("failed to delete token group bindings: " + bindErr.Error())
+		}
+	}
 	return err
 }
 

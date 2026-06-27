@@ -406,3 +406,101 @@ func LoadChannelGroupMembership() (map[int][]string, bool, error) {
 	}
 	return membership, defaultHasExplicit, nil
 }
+
+// GetTokenGroupView 返回某 API Key 绑定分组的脱敏视图（ids + names），绝不含渠道信息。
+func GetTokenGroupView(tokenId int) ([]int, []string, error) {
+	ids, err := GetGroupIdsByToken(tokenId)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(ids) == 0 {
+		return []int{}, []string{}, nil
+	}
+	groups, err := GetChannelGroupsByIDs(ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	outIds := make([]int, 0, len(groups))
+	names := make([]string, 0, len(groups))
+	for _, g := range groups {
+		outIds = append(outIds, g.Id)
+		names = append(names, g.Name)
+	}
+	return outIds, names, nil
+}
+
+// ValidateChannelGroupIds 确认所有 id 均指向存在的分组。
+func ValidateChannelGroupIds(ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	groups, err := GetChannelGroupsByIDs(ids)
+	if err != nil {
+		return err
+	}
+	if len(groups) != len(lo.Uniq(ids)) {
+		return errors.New("one or more channel group ids do not exist")
+	}
+	return nil
+}
+
+// ResolveEffectiveGroupForChannel 在 API Key 所选分组中，找出选中渠道实际命中的“生效分组”。
+// 规则：生效分组 = 渠道所属 ∩ token 所选分组；优先非默认分组，再按 id 升序；都不匹配则回落默认分组。
+// 用于决定本次请求使用哪个分组的计费 profile（inherit 时回落渠道）。
+func ResolveEffectiveGroupForChannel(tokenGroupNames []string, channelId int) (*ChannelGroup, error) {
+	if len(tokenGroupNames) == 0 {
+		tokenGroupNames = []string{DefaultChannelGroupName}
+	}
+	// 渠道生效所属分组名（含默认分组特判）。
+	channelGroupNames, err := GetGroupNamesByChannel(channelId)
+	if err != nil {
+		return nil, err
+	}
+	channelSet := make(map[string]struct{}, len(channelGroupNames))
+	for _, n := range channelGroupNames {
+		channelSet[n] = struct{}{}
+	}
+	// token 所选 ∩ 渠道所属。
+	candidates := make([]string, 0, len(tokenGroupNames))
+	for _, n := range tokenGroupNames {
+		if _, ok := channelSet[n]; ok {
+			candidates = append(candidates, n)
+		}
+	}
+	if len(candidates) == 0 {
+		// 渠道不在 token 任何分组内（理论上不应发生，因为选择已过滤）；回落默认分组。
+		candidates = []string{DefaultChannelGroupName}
+	}
+	groups, err := loadChannelGroupsByNames(candidates)
+	if err != nil {
+		return nil, err
+	}
+	if len(groups) == 0 {
+		return GetChannelGroupByName(DefaultChannelGroupName)
+	}
+	// 优先非默认分组，再按 id 升序。
+	var chosen *ChannelGroup
+	for _, g := range groups {
+		if g.IsDefault() {
+			continue
+		}
+		if chosen == nil || g.Id < chosen.Id {
+			chosen = g
+		}
+	}
+	if chosen != nil {
+		return chosen, nil
+	}
+	return GetChannelGroupByName(DefaultChannelGroupName)
+}
+
+func loadChannelGroupsByNames(names []string) ([]*ChannelGroup, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var groups []*ChannelGroup
+	if err := DB.Where("name IN ?", names).Find(&groups).Error; err != nil {
+		return nil, err
+	}
+	return groups, nil
+}

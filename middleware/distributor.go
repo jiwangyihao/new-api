@@ -42,6 +42,17 @@ func endpointTypeFromRequest(c *gin.Context) (constant.EndpointType, bool) {
 	}
 }
 
+// tokenGroupsFromContext 读取当前 API Key 生效的分组名集合（auth 阶段写入）。
+// 未设置时回落默认分组，保证升级后无绑定 token 行为与升级前一致。
+func tokenGroupsFromContext(c *gin.Context) []string {
+	if raw, ok := common.GetContextKey(c, constant.ContextKeyTokenGroups); ok {
+		if groups, ok := raw.([]string); ok && len(groups) > 0 {
+			return groups
+		}
+	}
+	return []string{model.DefaultChannelGroupName}
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		var channel *model.Channel
@@ -99,7 +110,7 @@ func Distribute() func(c *gin.Context) {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorModelNameRequired))
 					return
 				}
-				// Legacy playground group field is accepted by DTO parsing but ignored.
+				tokenGroups := tokenGroupsFromContext(c)
 
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, ""); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
@@ -109,7 +120,7 @@ func Distribute() func(c *gin.Context) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
-						} else if model.IsChannelEnabledForGroupModel("", modelRequest.Model, preferred.Id) && (!hasEndpointType || model.ChannelSupportsEndpoint(preferred, modelRequest.Model, endpointType)) {
+						} else if model.IsChannelEnabledForAnyGroupModel(tokenGroups, modelRequest.Model, preferred.Id) && (!hasEndpointType || model.ChannelSupportsEndpoint(preferred, modelRequest.Model, endpointType)) {
 							channel = preferred
 							service.MarkChannelAffinityUsed(c, "", preferred.Id)
 						}
@@ -119,6 +130,7 @@ func Distribute() func(c *gin.Context) {
 				if channel == nil {
 					channel, _, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
 						Ctx:          c,
+						TokenGroups:  tokenGroups,
 						ModelName:    modelRequest.Model,
 						Retry:        common.GetPointer(0),
 						EndpointType: endpointType,
@@ -325,8 +337,12 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelId, channel.Id)
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
-	common.SetContextKey(c, constant.ContextKeyChannelTokenBillingMultiplier, channel.GetTokenBillingMultiplier())
+	// 解析生效计费 profile：生效分组覆盖渠道；分组 inherit（未配置）时回落渠道。
 	profile := channel.BillingProfile()
+	if group, err := model.ResolveEffectiveGroupForChannel(tokenGroupsFromContext(c), channel.Id); err == nil {
+		profile = model.ResolveEffectiveBillingProfile(group, channel)
+	}
+	common.SetContextKey(c, constant.ContextKeyChannelTokenBillingMultiplier, profile.TokenBillingMultiplier)
 	common.SetContextKey(c, constant.ContextKeyChannelCreditBillingMode, profile.CreditBillingMode)
 	common.SetContextKey(c, constant.ContextKeyChannelFixedRequestCredits, profile.FixedRequestCredits)
 	common.SetContextKey(c, constant.ContextKeyChannelDynamicBillingMultiplierEnabled, profile.DynamicBillingMultiplierEnabled)

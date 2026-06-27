@@ -182,3 +182,43 @@ func TestGetEffectiveGroupNamesByTokenReturnsBoundEnabledGroups(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"bound"}, names)
 }
+
+func TestResolveEffectiveGroupPrefersNonDefault(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-eff"
+	seedSelectionChannel(t, db, 6001, model)
+	g := makeGroup(t, "paid", []int{6001})
+	g.CreditBillingMode = "fixed_request"
+	g.FixedRequestCredits = 80_000
+	require.NoError(t, g.Update())
+	InitChannelCache()
+
+	// token selected both default and paid; channel 6001 in paid → effective = paid (non-default).
+	eff, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName, "paid"}, 6001)
+	require.NoError(t, err)
+	require.NotNil(t, eff)
+	assert.Equal(t, "paid", eff.Name)
+	channel := &Channel{Id: 6001, CreditBillingMode: "usage_tokens", TokenBillingMultiplier: 1}
+	profile := ResolveEffectiveBillingProfile(eff, channel)
+	assert.Equal(t, "fixed_request", profile.CreditBillingMode)
+	assert.Equal(t, int64(80_000), profile.FixedRequestCredits)
+}
+
+func TestResolveEffectiveGroupInheritFallsBackToChannelProfile(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-eff-inherit"
+	seedSelectionChannel(t, db, 6101, model)
+	makeGroup(t, "inheritgrp", []int{6101}) // inherit (empty mode)
+	InitChannelCache()
+
+	eff, err := ResolveEffectiveGroupForChannel([]string{"inheritgrp"}, 6101)
+	require.NoError(t, err)
+	require.NotNil(t, eff)
+	assert.Equal(t, GroupCreditBillingModeInherit, eff.CreditBillingMode)
+
+	channel := &Channel{Id: 6101, CreditBillingMode: "fixed_request", FixedRequestCredits: 12345, TokenBillingMultiplier: 1}
+	profile := ResolveEffectiveBillingProfile(eff, channel)
+	// inherit group → channel profile wins.
+	assert.Equal(t, "fixed_request", profile.CreditBillingMode)
+	assert.Equal(t, int64(12345), profile.FixedRequestCredits)
+}

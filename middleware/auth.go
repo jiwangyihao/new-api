@@ -392,6 +392,9 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	c.Set("token_key", token.Key)
 	c.Set("token_name", token.Name)
 	c.Set("token_unlimited_quota", token.UnlimitedQuota)
+	if groups, err := model.GetEffectiveGroupNamesByToken(token.Id); err == nil {
+		common.SetContextKey(c, constant.ContextKeyTokenGroups, groups)
+	}
 	c.Set(string(constant.ContextKeyTokenCodexProMode), common.NormalizeAPIKeyCodexProMode(token.CodexProMode))
 	if !token.UnlimitedQuota {
 		c.Set("token_quota", token.RemainQuota)

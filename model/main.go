@@ -294,6 +294,9 @@ func migrateDB() error {
 		&GPTAbuseWarningReset{},
 		&GPTAbuseRepeatBlockLog{},
 		&PerfMetric{},
+		&ChannelGroup{},
+		&ChannelGroupChannel{},
+		&TokenGroupBinding{},
 	)
 	if err != nil {
 		return err
@@ -319,6 +322,9 @@ func migrateDB() error {
 		return err
 	}
 	if err := backfillLegacyInvitationRewardEventsAfterMigration(); err != nil {
+		return err
+	}
+	if err := ensureDefaultChannelGroup(); err != nil {
 		return err
 	}
 	return nil
@@ -370,6 +376,9 @@ func migrateDBFast() error {
 		{&GPTAbuseWarningReset{}, "GPTAbuseWarningReset"},
 		{&GPTAbuseRepeatBlockLog{}, "GPTAbuseRepeatBlockLog"},
 		{&PerfMetric{}, "PerfMetric"},
+		{&ChannelGroup{}, "ChannelGroup"},
+		{&ChannelGroupChannel{}, "ChannelGroupChannel"},
+		{&TokenGroupBinding{}, "TokenGroupBinding"},
 	}
 	// 动态计算migration数量，确保errChan缓冲区足够大
 	errChan := make(chan error, len(migrations))
@@ -415,6 +424,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := backfillLegacyInvitationRewardEventsAfterMigration(); err != nil {
+		return err
+	}
+	if err := ensureDefaultChannelGroup(); err != nil {
 		return err
 	}
 	common.SysLog("database migrated")

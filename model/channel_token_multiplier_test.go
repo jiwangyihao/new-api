@@ -11,7 +11,7 @@ import (
 
 func ensureChannelMultiplierSelectorTables(t *testing.T) {
 	t.Helper()
-	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}))
+	require.NoError(t, DB.AutoMigrate(&Channel{}, &Ability{}, &ChannelGroup{}, &ChannelGroupChannel{}, &TokenGroupBinding{}))
 }
 
 func seedChannelMultiplierSelectorTest(t *testing.T, id int, modelName string, priority int64, multiplier float64) {

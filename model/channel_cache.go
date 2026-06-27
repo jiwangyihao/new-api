@@ -58,38 +58,36 @@ func InitChannelCache() {
 		newModel2channels[model] = channels
 	}
 
-	// build group -> model -> channels using explicit membership; default group with no explicit
-	// members is handled at selection time as "all channels for model".
-	membership, defaultHasExplicit, membershipErr := LoadChannelGroupMembership()
-	newGroupModel2channels := make(map[string]map[string][]int)
+	// build group -> model -> channels from the abilities table (source of truth: it encodes
+	// (group, model, channel) including per-group rows and legacy group strings). Default group
+	// with no explicit members is handled at selection time as "all channels for model".
+	_, defaultHasExplicit, membershipErr := LoadChannelGroupMembership()
 	if membershipErr != nil {
 		common.SysLog("failed to load channel group membership: " + membershipErr.Error())
+	}
+	newGroupModel2channels := make(map[string]map[string][]int)
+	var groupAbilities []Ability
+	if err := DB.Where("enabled = ? and `group` <> ''", true).Find(&groupAbilities).Error; err != nil {
+		common.SysLog("failed to load group abilities for cache: " + err.Error())
 	} else {
-		for _, channel := range channels {
-			if channel.Status != common.ChannelStatusEnabled {
+		seen := make(map[string]map[string]map[int]struct{})
+		for _, ab := range groupAbilities {
+			channel, ok := newChannelId2channel[ab.ChannelId]
+			if !ok || channel.Status != common.ChannelStatusEnabled {
 				continue
 			}
-			groupNames := membership[channel.Id]
-			if len(groupNames) == 0 {
+			if newGroupModel2channels[ab.Group] == nil {
+				newGroupModel2channels[ab.Group] = make(map[string][]int)
+				seen[ab.Group] = make(map[string]map[int]struct{})
+			}
+			if seen[ab.Group][ab.Model] == nil {
+				seen[ab.Group][ab.Model] = make(map[int]struct{})
+			}
+			if _, dup := seen[ab.Group][ab.Model][ab.ChannelId]; dup {
 				continue
 			}
-			seenModels := make(map[string]struct{})
-			for _, model := range strings.Split(channel.Models, ",") {
-				model = strings.TrimSpace(model)
-				if model == "" {
-					continue
-				}
-				if _, ok := seenModels[model]; ok {
-					continue
-				}
-				seenModels[model] = struct{}{}
-				for _, g := range groupNames {
-					if newGroupModel2channels[g] == nil {
-						newGroupModel2channels[g] = make(map[string][]int)
-					}
-					newGroupModel2channels[g][model] = append(newGroupModel2channels[g][model], channel.Id)
-				}
-			}
+			seen[ab.Group][ab.Model][ab.ChannelId] = struct{}{}
+			newGroupModel2channels[ab.Group][ab.Model] = append(newGroupModel2channels[ab.Group][ab.Model], ab.ChannelId)
 		}
 		for _, modelMap := range newGroupModel2channels {
 			for model, ids := range modelMap {
@@ -527,6 +525,17 @@ func CacheUpdateChannelStatus(id int, status int) {
 				if channelId == id {
 					model2channels[model] = append(channels[:i], channels[i+1:]...)
 					break
+				}
+			}
+		}
+		// also purge from the per-group cache so group-based selection stops routing here.
+		for _, modelMap := range groupModel2channels {
+			for model, channels := range modelMap {
+				for i, channelId := range channels {
+					if channelId == id {
+						modelMap[model] = append(channels[:i], channels[i+1:]...)
+						break
+					}
 				}
 			}
 		}

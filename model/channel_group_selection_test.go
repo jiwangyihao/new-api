@@ -70,6 +70,9 @@ func makeGroup(t *testing.T, name string, channelIds []int) *ChannelGroup {
 	g := &ChannelGroup{Name: name, Enabled: true, CreditBillingMode: GroupCreditBillingModeInherit}
 	require.NoError(t, g.Insert())
 	require.NoError(t, SetChannelGroupChannels(g.Id, channelIds))
+	// 重建 abilities，使 InitChannelCache 能从 abilities 表读到 (group, model, channel) 行。
+	_, _, err := FixAbility()
+	require.NoError(t, err)
 	return g
 }
 
@@ -144,6 +147,9 @@ func TestDefaultGroupWithExplicitMembersNarrowsChannels(t *testing.T) {
 	defGroup, err := GetChannelGroupByName(DefaultChannelGroupName)
 	require.NoError(t, err)
 	require.NoError(t, SetChannelGroupChannels(defGroup.Id, []int{5301}))
+	// 默认分组改为显式成员后，重建 abilities 使 cache 反映收窄。
+	_, _, err = FixAbility()
+	require.NoError(t, err)
 	InitChannelCache()
 
 	for i := 0; i < 30; i++ {

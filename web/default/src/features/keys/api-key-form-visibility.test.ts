@@ -89,12 +89,14 @@ describe('api key user-facing configuration form', () => {
     assert.doesNotMatch(drawerSource, /user-groups/)
   })
 
-  test('does not depend on user-edited group fields in API key payloads', () => {
-    assert.doesNotMatch(formSource, /data\.group/)
+  test('does not depend on legacy single-group fields in API key payloads', () => {
+    // Legacy playground single-group fields are gone; the channel-group binding
+    // (group_ids / channel_groups) is a separate, intentional feature.
+    assert.doesNotMatch(formSource, /data\.group\b(?!_ids)/)
     assert.doesNotMatch(formSource, /data\.cross_group_retry/)
-    assert.doesNotMatch(formSource, /group:\s*/)
+    assert.doesNotMatch(formSource, /\bgroup:\s*/)
     assert.doesNotMatch(formSource, /cross_group_retry:\s*/)
-    assert.doesNotMatch(formSource, /apiKey\.group/)
+    assert.doesNotMatch(formSource, /apiKey\.group\b(?!_ids)/)
     assert.doesNotMatch(formSource, /apiKey\.cross_group_retry/)
   })
 
@@ -279,7 +281,10 @@ describe('api key user-facing configuration form', () => {
     assert.match(drawerSource, /codexProFeaturesHidden/)
     assert.match(drawerSource, /!codexProFeaturesHidden/)
     assert.match(columnsSource, /codexProFeaturesHidden/)
-    assert.match(columnsSource, /filter\(\(column\) => column\.id !== 'codex_pro_mode'\)/)
+    assert.match(
+      columnsSource,
+      /filter\(\(column\) => column\.id !== 'codex_pro_mode'\)/
+    )
   })
 
   test('does not migrate historical quota fields into token limit defaults', () => {

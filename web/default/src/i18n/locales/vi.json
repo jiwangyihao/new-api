@@ -5505,6 +5505,9 @@
     "{{value}}s": "{{value}} s",
     "| Based on": "| Dựa trên",
     "© 2025 Your Company. All rights reserved.": "© 2025 Công ty của bạn. Mọi quyền được bảo lưu.",
-    "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT cung cấp dịch vụ GPT ổn định với giá siêu thấp. Đăng ký bằng liên kết giới thiệu của tôi để dùng thử miễn phí 1 ngày với token không giới hạn:"
+    "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT cung cấp dịch vụ GPT ổn định với giá siêu thấp. Đăng ký bằng liên kết giới thiệu của tôi để dùng thử miễn phí 1 ngày với token không giới hạn:",
+    "Channel Groups": "Nhóm kênh",
+    "Select channel groups (empty uses the default group)": "Chọn nhóm kênh (để trống sẽ dùng nhóm mặc định)",
+    "Choose which channel groups serve this API key. You only see groups, not upstream channels.": "Chọn nhóm kênh nào phục vụ API key này. Bạn chỉ thấy nhóm, không thấy kênh thượng nguồn."
   }
 }

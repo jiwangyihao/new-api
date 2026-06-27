@@ -65,6 +65,7 @@ export const apiKeyFormSchema = z
     model_limits: z.array(z.string()),
     allow_ips: z.string().optional(),
     codex_pro_mode: apiKeyCodexProModeSchema,
+    channel_groups: z.array(z.number()),
     tokenCount: z.number().min(1).optional(),
   })
   .superRefine((value, ctx) => {
@@ -97,6 +98,7 @@ export const API_KEY_FORM_DEFAULT_VALUES: ApiKeyFormValues = {
   model_limits: [],
   allow_ips: '',
   codex_pro_mode: 'inherit',
+  channel_groups: [],
   tokenCount: 1,
 }
 
@@ -127,6 +129,7 @@ export function transformFormDataToPayload(
     model_limits: data.model_limits.join(','),
     allow_ips: data.allow_ips || '',
     codex_pro_mode: data.codex_pro_mode,
+    group_ids: data.channel_groups,
   }
 }
 
@@ -153,6 +156,7 @@ export function transformApiKeyToFormDefaults(
       : [],
     allow_ips: apiKey.allow_ips || '',
     codex_pro_mode: apiKey.codex_pro_mode ?? 'inherit',
+    channel_groups: apiKey.group_ids ?? [],
     tokenCount: 1,
   }
 }

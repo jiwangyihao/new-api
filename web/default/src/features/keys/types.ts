@@ -58,6 +58,8 @@ export const apiKeySchema = z.object({
   model_limits: z.string().nullish().default(''),
   allow_ips: z.string().nullish().default(''),
   codex_pro_mode: apiKeyCodexProModeSchema.default('inherit'),
+  group_ids: z.array(z.number()).optional(),
+  group_names: z.array(z.string()).optional(),
 })
 
 export type ApiKey = z.infer<typeof apiKeySchema>
@@ -106,6 +108,7 @@ export interface ApiKeyFormData {
   model_limits: string
   allow_ips: string
   codex_pro_mode: ApiKeyCodexProMode
+  group_ids?: number[]
 }
 
 // ============================================================================

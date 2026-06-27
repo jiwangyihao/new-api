@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import type { OpenCodeOpenAIModelsResponse } from '@/features/api-help/lib/usage-config'
 import type {
   ApiKey,
   ApiResponse,
@@ -25,7 +26,6 @@ import type {
   SearchApiKeysParams,
   ApiKeyFormData,
 } from './types'
-import type { OpenCodeOpenAIModelsResponse } from '@/features/api-help/lib/usage-config'
 
 // ============================================================================
 // API Key Management
@@ -132,11 +132,25 @@ export async function getOpenCodeOpenAIModels(tokenId: number): Promise<{
 }> {
   const params = new URLSearchParams()
   params.set('token_id', String(tokenId))
-  const res = await api.get(`/api/token/opencode/openai-models?${params.toString()}`)
+  const res = await api.get(
+    `/api/token/opencode/openai-models?${params.toString()}`
+  )
   return res.data
 }
 
 export async function fetchAgentConfigArtifact(path: string): Promise<string> {
   const res = await api.get(path, { responseType: 'text' })
-  return typeof res.data === 'string' ? res.data : JSON.stringify(res.data, null, 2)
+  return typeof res.data === 'string'
+    ? res.data
+    : JSON.stringify(res.data, null, 2)
+}
+
+// Fetch channel groups available to the current user (desensitized: id/name/description only).
+export async function getAvailableChannelGroups(): Promise<{
+  success: boolean
+  message?: string
+  data?: Array<{ id: number; name: string; description: string }>
+}> {
+  const res = await api.get('/api/channel_group/available')
+  return res.data
 }

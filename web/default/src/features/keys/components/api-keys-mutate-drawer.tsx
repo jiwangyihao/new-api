@@ -30,8 +30,8 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getUserModels } from '@/lib/api'
-import { useStatus } from '@/hooks/use-status'
 import { cn } from '@/lib/utils'
+import { useStatus } from '@/hooks/use-status'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -62,7 +62,12 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { DateTimePicker } from '@/components/datetime-picker'
 import { MultiSelect } from '@/components/multi-select'
-import { createApiKey, updateApiKey, getApiKey } from '../api'
+import {
+  createApiKey,
+  updateApiKey,
+  getApiKey,
+  getAvailableChannelGroups,
+} from '../api'
 import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
 import {
   API_KEY_CODEX_PRO_MODE_OPTIONS,
@@ -132,6 +137,15 @@ export function ApiKeysMutateDrawer({
   })
 
   const models = modelsData?.data || []
+
+  // Fetch channel groups available to this user (desensitized: id/name/description only)
+  const { data: channelGroupsData } = useQuery({
+    queryKey: ['available-channel-groups'],
+    queryFn: getAvailableChannelGroups,
+    staleTime: 5 * 60 * 1000,
+  })
+
+  const channelGroups = channelGroupsData?.data || []
 
   const form = useForm<ApiKeyFormValues>({
     resolver: zodResolver(apiKeyFormSchema),
@@ -532,6 +546,41 @@ export function ApiKeysMutateDrawer({
                           </FormControl>
                           <FormDescription>
                             {t('Limit which models can be used with this key')}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name='channel_groups'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Channel Groups')}</FormLabel>
+                          <FormControl>
+                            <MultiSelect
+                              options={channelGroups.map((g) => ({
+                                label: g.name,
+                                value: String(g.id),
+                              }))}
+                              selected={field.value.map((id) => String(id))}
+                              onChange={(values) =>
+                                field.onChange(
+                                  values
+                                    .map((v) => Number(v))
+                                    .filter((n) => Number.isFinite(n))
+                                )
+                              }
+                              placeholder={t(
+                                'Select channel groups (empty uses the default group)'
+                              )}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {t(
+                              'Choose which channel groups serve this API key. You only see groups, not upstream channels.'
+                            )}
                           </FormDescription>
                           <FormMessage />
                         </FormItem>

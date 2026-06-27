@@ -5505,6 +5505,9 @@
     "{{value}}s": "{{value}} 秒",
     "| Based on": "| 基于",
     "© 2025 Your Company. All rights reserved.": "© 2025 您的公司。保留所有权利。",
-    "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token："
+    "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：",
+    "Channel Groups": "渠道分组",
+    "Select channel groups (empty uses the default group)": "选择渠道分组（留空使用默认分组）",
+    "Choose which channel groups serve this API key. You only see groups, not upstream channels.": "选择由哪些渠道分组为该 API Key 提供服务。你只能看到分组，看不到上游渠道。"
   }
 }

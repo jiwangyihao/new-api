@@ -30,6 +30,7 @@ import {
   User,
   Command,
   Radio,
+  Layers,
   FlaskConical,
   MessageSquare,
   ShieldAlert,
@@ -133,6 +134,11 @@ export function useSidebarData(): SidebarData {
             title: t('Channels'),
             url: '/channels',
             icon: Radio,
+          },
+          {
+            title: t('Channel Groups'),
+            url: '/channel-groups',
+            icon: Layers,
           },
           {
             title: t('Models'),

@@ -444,6 +444,16 @@ func SetApiRouter(router *gin.Engine) {
 			prefillGroupRoute.DELETE("/:id", controller.DeletePrefillGroup)
 		}
 
+		apiRouter.GET("/channel_group/available", middleware.UserAuth(), controller.GetAvailableChannelGroups)
+		channelGroupRoute := apiRouter.Group("/channel_group")
+		channelGroupRoute.Use(middleware.AdminAuth())
+		{
+			channelGroupRoute.GET("/", controller.GetChannelGroups)
+			channelGroupRoute.POST("/", controller.CreateChannelGroup)
+			channelGroupRoute.PUT("/", controller.UpdateChannelGroup)
+			channelGroupRoute.DELETE("/:id", controller.DeleteChannelGroup)
+		}
+
 		mjRoute := apiRouter.Group("/mj")
 		mjRoute.GET("/self", middleware.UserAuth(), controller.GetUserMidjourney)
 		mjRoute.GET("/", middleware.AdminAuth(), controller.GetAllMidjourney)

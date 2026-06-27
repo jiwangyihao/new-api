@@ -15,8 +15,10 @@ import (
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 )
 
-var model2channels map[string][]int // enabled channel ids keyed by model
-var channelsIDM map[int]*Channel    // all channels include disabled
+var model2channels map[string][]int                 // enabled channel ids keyed by model (union of all groups)
+var groupModel2channels map[string]map[string][]int // group -> model -> enabled channel ids
+var defaultGroupHasExplicitMembersCache bool        // whether default group has explicit member rows
+var channelsIDM map[int]*Channel                    // all channels include disabled
 var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
@@ -56,8 +58,53 @@ func InitChannelCache() {
 		newModel2channels[model] = channels
 	}
 
+	// build group -> model -> channels using explicit membership; default group with no explicit
+	// members is handled at selection time as "all channels for model".
+	membership, defaultHasExplicit, membershipErr := LoadChannelGroupMembership()
+	newGroupModel2channels := make(map[string]map[string][]int)
+	if membershipErr != nil {
+		common.SysLog("failed to load channel group membership: " + membershipErr.Error())
+	} else {
+		for _, channel := range channels {
+			if channel.Status != common.ChannelStatusEnabled {
+				continue
+			}
+			groupNames := membership[channel.Id]
+			if len(groupNames) == 0 {
+				continue
+			}
+			seenModels := make(map[string]struct{})
+			for _, model := range strings.Split(channel.Models, ",") {
+				model = strings.TrimSpace(model)
+				if model == "" {
+					continue
+				}
+				if _, ok := seenModels[model]; ok {
+					continue
+				}
+				seenModels[model] = struct{}{}
+				for _, g := range groupNames {
+					if newGroupModel2channels[g] == nil {
+						newGroupModel2channels[g] = make(map[string][]int)
+					}
+					newGroupModel2channels[g][model] = append(newGroupModel2channels[g][model], channel.Id)
+				}
+			}
+		}
+		for _, modelMap := range newGroupModel2channels {
+			for model, ids := range modelMap {
+				sort.Slice(ids, func(i, j int) bool {
+					return newChannelId2channel[ids[i]].GetPriority() > newChannelId2channel[ids[j]].GetPriority()
+				})
+				modelMap[model] = ids
+			}
+		}
+	}
+
 	channelSyncLock.Lock()
 	model2channels = newModel2channels
+	groupModel2channels = newGroupModel2channels
+	defaultGroupHasExplicitMembersCache = defaultHasExplicit
 	//channelsIDM = newChannelId2channel
 	for i, channel := range newChannelId2channel {
 		if channel.ChannelInfo.IsMultiKey {
@@ -83,6 +130,63 @@ func SyncChannelCache(frequency int) {
 		common.SysLog("syncing channels from database")
 		InitChannelCache()
 	}
+}
+
+// candidateChannelIDsForModelLocked 返回某 model 的全部启用渠道（按 priority 已排序）。调用者须持有 channelSyncLock。
+func candidateChannelIDsForModelLocked(model string) []int {
+	channels := model2channels[model]
+	if len(channels) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		channels = model2channels[normalizedModel]
+	}
+	return channels
+}
+
+// candidateChannelIDsForGroupModelLocked 返回单个分组在某 model 下的候选渠道 id。
+// 默认分组无显式成员时语义为“全部渠道”，回落 model2channels。调用者须持有 channelSyncLock。
+func candidateChannelIDsForGroupModelLocked(group string, model string) []int {
+	if group == DefaultChannelGroupName && !defaultGroupHasExplicitMembersCache {
+		return candidateChannelIDsForModelLocked(model)
+	}
+	modelMap := groupModel2channels[group]
+	if modelMap == nil {
+		return nil
+	}
+	channels := modelMap[model]
+	if len(channels) == 0 {
+		normalizedModel := ratio_setting.FormatMatchingModelName(model)
+		channels = modelMap[normalizedModel]
+	}
+	return channels
+}
+
+// candidateChannelIDsForGroupsLocked 返回多个分组在某 model 下候选渠道 id 的并集（去重，保留 priority 排序）。
+// groups 为空时回落全部渠道。调用者须持有 channelSyncLock。
+func candidateChannelIDsForGroupsLocked(groups []string, model string) []int {
+	if len(groups) == 0 {
+		return candidateChannelIDsForModelLocked(model)
+	}
+	seen := make(map[int]struct{})
+	union := make([]int, 0)
+	for _, g := range groups {
+		for _, id := range candidateChannelIDsForGroupModelLocked(g, model) {
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			union = append(union, id)
+		}
+	}
+	// 并集后按 priority 重新排序，保证 selectCachedChannelByPriority 分桶正确。
+	sort.Slice(union, func(i, j int) bool {
+		ci, oki := channelsIDM[union[i]]
+		cj, okj := channelsIDM[union[j]]
+		if !oki || !okj {
+			return false
+		}
+		return ci.GetPriority() > cj.GetPriority()
+	})
+	return union
 }
 
 func GetRandomSatisfiedChannel(model string, retry int) (*Channel, error) {
@@ -310,28 +414,53 @@ func selectCachedChannelByPriority(channels []int, retry int, model string) (*Ch
 }
 
 func GetRandomSatisfiedChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
+	var groups []string
+	if group != "" {
+		groups = []string{group}
+	}
+	return GetRandomSatisfiedChannelForEndpointWithGroups(groups, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+}
+
+// GetRandomSatisfiedChannelForEndpointWithGroups 在所选分组并集内选择渠道；groups 为空时回落全部渠道。
+func GetRandomSatisfiedChannelForEndpointWithGroups(groups []string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
 	if !common.MemoryCacheEnabled {
-		return GetChannelForEndpointWithRetryConstraints(group, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+		return GetChannelForEndpointWithGroups(groups, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	}
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 	var channels []int
 	var err error
 	if endpointType == "" {
-		channels = model2channels[model]
-		if len(channels) == 0 {
-			normalizedModel := ratio_setting.FormatMatchingModelName(model)
-			channels = model2channels[normalizedModel]
-		}
+		channels = candidateChannelIDsForGroupsLocked(groups, model)
 	} else {
 		channels, err = getCachedChannelIDsForEndpoint(model, endpointType)
 		if err != nil {
 			return nil, err
 		}
+		channels = intersectWithGroupCandidatesLocked(channels, groups, model)
 	}
 	channels = filterCachedChannelIDsByRetryConstraints(channels, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier, requireSameProfile)
 	return selectCachedChannelByPriority(channels, retry, model)
+}
+
+// intersectWithGroupCandidatesLocked 把 endpoint 过滤后的渠道集合再按分组候选集求交。
+// groups 为空（无分组限制）时不过滤。调用者须持有 channelSyncLock。
+func intersectWithGroupCandidatesLocked(channels []int, groups []string, model string) []int {
+	if len(groups) == 0 {
+		return channels
+	}
+	allowed := make(map[int]struct{})
+	for _, id := range candidateChannelIDsForGroupsLocked(groups, model) {
+		allowed[id] = struct{}{}
+	}
+	filtered := make([]int, 0, len(channels))
+	for _, id := range channels {
+		if _, ok := allowed[id]; ok {
+			filtered = append(filtered, id)
+		}
+	}
+	return filtered
 }
 
 func GetRandomSatisfiedChannelForEndpoint(group string, model string, retry int, endpointType constant.EndpointType) (*Channel, error) {

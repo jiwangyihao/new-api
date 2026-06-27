@@ -45,7 +45,12 @@ func GetAllEnableAbilityWithChannels() ([]AbilityWithChannel, error) {
 }
 
 func GetGroupEnabledModels(group string) []string {
-	return GetEnabledModels()
+	if group == "" {
+		return GetEnabledModels()
+	}
+	var models []string
+	DB.Table("abilities").Where("enabled = ? and `group` = ?", true, group).Distinct("model").Pluck("model", &models)
+	return models
 }
 
 func GetEnabledModels() []string {
@@ -172,22 +177,39 @@ func GetChannelForEndpoint(group string, model string, retry int, endpointType c
 }
 
 func GetChannelForEndpointWithRetryConstraints(group string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
+	var groups []string
+	if group != "" {
+		groups = []string{group}
+	}
+	return GetChannelForEndpointWithGroups(groups, model, retry, endpointType, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+}
+
+// GetChannelForEndpointWithGroups 是 DB 路径的分组并集选择。groups 为空时不按分组过滤（全部渠道）。
+// abilities 已按分组名编码（含默认分组特判写入的行），故直接以 abilities.group IN (?) 过滤即可。
+func GetChannelForEndpointWithGroups(groups []string, model string, retry int, endpointType constant.EndpointType, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) (*Channel, error) {
 	var abilities []Ability
 	var err error
+	groupFilter := func(tx *gorm.DB) *gorm.DB {
+		if len(groups) == 0 {
+			return tx
+		}
+		return tx.Where("`group` IN ?", groups)
+	}
 	if endpointType == "" {
-		if err = DB.Where("model = ? and enabled = ?", model, true).Find(&abilities).Error; err != nil {
+		query := groupFilter(DB.Where("model = ? and enabled = ?", model, true))
+		if err = query.Find(&abilities).Error; err != nil {
 			return nil, err
 		}
 		abilities = uniqueAbilitiesByChannelID(abilities)
 	} else {
-		abilities, err = getEndpointFilteredAbilities(model, endpointType)
+		abilities, err = getEndpointFilteredAbilitiesForGroups(groups, model, endpointType)
 		if err != nil {
 			return nil, err
 		}
 		if len(abilities) == 0 {
 			normalizedModel := ratio_setting.FormatMatchingModelName(model)
 			if normalizedModel != "" && normalizedModel != model {
-				abilities, err = getEndpointFilteredAbilities(normalizedModel, endpointType)
+				abilities, err = getEndpointFilteredAbilitiesForGroups(groups, normalizedModel, endpointType)
 				if err != nil {
 					return nil, err
 				}
@@ -203,8 +225,16 @@ func GetChannelForEndpointWithRetryConstraints(group string, model string, retry
 }
 
 func getEndpointFilteredAbilities(model string, endpointType constant.EndpointType) ([]Ability, error) {
+	return getEndpointFilteredAbilitiesForGroups(nil, model, endpointType)
+}
+
+func getEndpointFilteredAbilitiesForGroups(groups []string, model string, endpointType constant.EndpointType) ([]Ability, error) {
 	var abilities []Ability
-	if err := DB.Where("model = ? and enabled = ?", model, true).Find(&abilities).Error; err != nil {
+	query := DB.Where("model = ? and enabled = ?", model, true)
+	if len(groups) > 0 {
+		query = query.Where("`group` IN ?", groups)
+	}
+	if err := query.Find(&abilities).Error; err != nil {
 		return nil, err
 	}
 	abilities = uniqueAbilitiesByChannelID(abilities)
@@ -286,30 +316,52 @@ func uniqueAbilitiesByChannelID(abilities []Ability) []Ability {
 	return unique
 }
 
-func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+// channelAbilityGroups 返回该渠道重建 abilities 时应写入的分组名集合。
+// 复用 GetGroupNamesByChannel（含默认分组特判）；无任何分组时回落 legacy 空串，保证升级前行为。
+func (channel *Channel) channelAbilityGroups() []string {
+	names, err := GetGroupNamesByChannel(channel.Id)
+	if err != nil || len(names) == 0 {
+		return []string{legacyAbilityGroup}
+	}
+	return names
+}
+
+// buildChannelAbilities 为该渠道按 (分组 × 模型) 生成 ability 行。
+func (channel *Channel) buildChannelAbilities(groups []string) []Ability {
 	models_ := strings.Split(channel.Models, ",")
-	abilitySet := make(map[string]struct{})
-	abilities := make([]Ability, 0, len(models_))
+	seenModels := make(map[string]struct{}, len(models_))
+	uniqueModels := make([]string, 0, len(models_))
 	for _, model := range models_ {
 		model = strings.TrimSpace(model)
 		if model == "" {
 			continue
 		}
-		if _, exists := abilitySet[model]; exists {
+		if _, exists := seenModels[model]; exists {
 			continue
 		}
-		abilitySet[model] = struct{}{}
-		ability := Ability{
-			Group:     legacyAbilityGroup,
-			Model:     model,
-			ChannelId: channel.Id,
-			Enabled:   channel.Status == common.ChannelStatusEnabled,
-			Priority:  channel.Priority,
-			Weight:    uint(channel.GetWeight()),
-			Tag:       channel.Tag,
-		}
-		abilities = append(abilities, ability)
+		seenModels[model] = struct{}{}
+		uniqueModels = append(uniqueModels, model)
 	}
+	enabled := channel.Status == common.ChannelStatusEnabled
+	abilities := make([]Ability, 0, len(uniqueModels)*len(groups))
+	for _, group := range groups {
+		for _, model := range uniqueModels {
+			abilities = append(abilities, Ability{
+				Group:     group,
+				Model:     model,
+				ChannelId: channel.Id,
+				Enabled:   enabled,
+				Priority:  channel.Priority,
+				Weight:    uint(channel.GetWeight()),
+				Tag:       channel.Tag,
+			})
+		}
+	}
+	return abilities
+}
+
+func (channel *Channel) AddAbilities(tx *gorm.DB) error {
+	abilities := channel.buildChannelAbilities(channel.channelAbilityGroups())
 	if len(abilities) == 0 {
 		return nil
 	}
@@ -358,31 +410,8 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 		return err
 	}
 
-	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
-	abilitySet := make(map[string]struct{})
-	abilities := make([]Ability, 0, len(models_))
-	for _, model := range models_ {
-		model = strings.TrimSpace(model)
-		if model == "" {
-			continue
-		}
-		if _, exists := abilitySet[model]; exists {
-			continue
-		}
-		abilitySet[model] = struct{}{}
-		ability := Ability{
-			Group:     legacyAbilityGroup,
-			Model:     model,
-			ChannelId: channel.Id,
-			Enabled:   channel.Status == common.ChannelStatusEnabled,
-			Priority:  channel.Priority,
-			Weight:    uint(channel.GetWeight()),
-			Tag:       channel.Tag,
-		}
-		abilities = append(abilities, ability)
-	}
-
+	// Then add new abilities (per group × model)
+	abilities := channel.buildChannelAbilities(channel.channelAbilityGroups())
 	if len(abilities) > 0 {
 		for _, chunk := range lo.Chunk(abilities, 50) {
 			err = tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&chunk).Error

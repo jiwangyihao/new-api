@@ -6,51 +6,49 @@ import (
 )
 
 func IsChannelEnabledForGroupModel(group string, modelName string, channelID int) bool {
+	var groups []string
+	if group != "" {
+		groups = []string{group}
+	}
+	return IsChannelEnabledForAnyGroupModel(groups, modelName, channelID)
+}
+
+func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channelID int) bool {
 	if modelName == "" || channelID <= 0 {
 		return false
 	}
 	if !common.MemoryCacheEnabled {
-		return isChannelEnabledForGroupModelDB(modelName, channelID)
+		return isChannelEnabledForGroupModelDB(groups, modelName, channelID)
 	}
 
 	channelSyncLock.RLock()
 	defer channelSyncLock.RUnlock()
 
-	if model2channels == nil {
-		return false
-	}
-
-	if isChannelIDInList(model2channels[modelName], channelID) {
-		return true
-	}
-	normalized := ratio_setting.FormatMatchingModelName(modelName)
-	if normalized != "" && normalized != modelName {
-		return isChannelIDInList(model2channels[normalized], channelID)
-	}
-	return false
+	candidates := candidateChannelIDsForGroupsLocked(groups, modelName)
+	return isChannelIDInList(candidates, channelID)
 }
 
-func IsChannelEnabledForAnyGroupModel(groups []string, modelName string, channelID int) bool {
-	return IsChannelEnabledForGroupModel("", modelName, channelID)
-}
-
-func isChannelEnabledForGroupModelDB(modelName string, channelID int) bool {
-	var count int64
-	err := DB.Model(&Ability{}).
-		Where("model = ? and channel_id = ? and enabled = ?", modelName, channelID, true).
-		Count(&count).Error
-	if err == nil && count > 0 {
+func isChannelEnabledForGroupModelDB(groups []string, modelName string, channelID int) bool {
+	countFor := func(model string) int64 {
+		var count int64
+		query := DB.Model(&Ability{}).
+			Where("model = ? and channel_id = ? and enabled = ?", model, channelID, true)
+		if len(groups) > 0 {
+			query = query.Where("`group` IN ?", groups)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			return 0
+		}
+		return count
+	}
+	if countFor(modelName) > 0 {
 		return true
 	}
 	normalized := ratio_setting.FormatMatchingModelName(modelName)
 	if normalized == "" || normalized == modelName {
 		return false
 	}
-	count = 0
-	err = DB.Model(&Ability{}).
-		Where("model = ? and channel_id = ? and enabled = ?", normalized, channelID, true).
-		Count(&count).Error
-	return err == nil && count > 0
+	return countFor(normalized) > 0
 }
 
 func isChannelIDInList(list []int, channelID int) bool {

@@ -6,10 +6,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-
 type RetryParam struct {
 	Ctx                               *gin.Context
 	TokenGroup                        string
+	TokenGroups                       []string
 	ModelName                         string
 	Retry                             *int
 	resetNextTry                      bool
@@ -53,6 +53,10 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	if param == nil {
 		return nil, "", nil
 	}
-	channel, err := model.GetRandomSatisfiedChannelForEndpointWithRetryConstraints(param.TokenGroup, param.ModelName, param.GetRetry(), param.EndpointType, param.UsedChannelIds, param.FrozenTokenBillingMultiplier, param.RequireSameTokenBillingMultiplier, param.FrozenBillingProfile, param.RequireSameBillingProfile)
+	groups := param.TokenGroups
+	if len(groups) == 0 && param.TokenGroup != "" {
+		groups = []string{param.TokenGroup}
+	}
+	channel, err := model.GetRandomSatisfiedChannelForEndpointWithGroups(groups, param.ModelName, param.GetRetry(), param.EndpointType, param.UsedChannelIds, param.FrozenTokenBillingMultiplier, param.RequireSameTokenBillingMultiplier, param.FrozenBillingProfile, param.RequireSameBillingProfile)
 	return channel, "default", err
 }

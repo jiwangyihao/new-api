@@ -372,3 +372,37 @@ func ensureDefaultChannelGroup() error {
 	}
 	return DB.Create(&group).Error
 }
+
+// LoadChannelGroupMembership 批量加载渠道↔分组名映射，用于缓存重建。
+// 返回 channelId -> 显式所属分组名集合，以及默认分组是否有显式成员。
+func LoadChannelGroupMembership() (map[int][]string, bool, error) {
+	var rows []ChannelGroupChannel
+	if err := DB.Find(&rows).Error; err != nil {
+		return nil, false, err
+	}
+	groups, err := GetAllChannelGroups()
+	if err != nil {
+		return nil, false, err
+	}
+	idToName := make(map[int]string, len(groups))
+	defaultGroupId := 0
+	for _, g := range groups {
+		idToName[g.Id] = g.Name
+		if g.Name == DefaultChannelGroupName {
+			defaultGroupId = g.Id
+		}
+	}
+	membership := make(map[int][]string)
+	defaultHasExplicit := false
+	for _, r := range rows {
+		name, ok := idToName[r.ChannelGroupId]
+		if !ok {
+			continue
+		}
+		if defaultGroupId != 0 && r.ChannelGroupId == defaultGroupId {
+			defaultHasExplicit = true
+		}
+		membership[r.ChannelId] = append(membership[r.ChannelId], name)
+	}
+	return membership, defaultHasExplicit, nil
+}

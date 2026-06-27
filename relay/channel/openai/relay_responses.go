@@ -32,6 +32,11 @@ func openAIResponsesCompletedWithUsage(resp *dto.OpenAIResponsesResponse) bool {
 	return resp != nil && resp.Usage != nil && openAIResponseStatusCompleted(resp.Status)
 }
 
+// responsesSoftErrorMinOutputTokens 是软错误结束时仍然计费所需的最小输出 token 数。
+// 上游建立连接后以软错误（response.error/failed/incomplete/cancelled 等）结束，
+// 且观察到的输出 token 低于该阈值时，视为未产生有效输出，不进行计费。
+const responsesSoftErrorMinOutputTokens = 20
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 	// read response body
@@ -274,6 +279,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	if usage.TotalTokens <= 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+	}
+
+	// 软错误结束且未观察到有效输出（输出 token < responsesSoftErrorMinOutputTokens）时不计费：
+	// 返回 nil usage，使结算层将其视为无可信 usage，fixed_request 退预扣、usage-token 扣 0，且不注入 NewAPIBilling。
+	if info != nil && info.StreamStatus != nil && info.StreamStatus.HasErrors() && usage.OutputTokens < responsesSoftErrorMinOutputTokens {
+		return nil, nil
 	}
 
 	return usage, nil

@@ -152,6 +152,65 @@ func TestOaiResponsesStreamHandler_ResponseCompletedEOFMarksNormalEnd(t *testing
 	assert.False(t, info.StreamStatus.HasErrors())
 }
 
+func TestOaiResponsesStreamHandlerSoftErrorLowOutputSkipsBilling(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"hi"}`,
+		`data: {"type":"response.failed","response":{"error":{"type":"server_error","message":"upstream failed"}}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:  &relaycommon.ChannelMeta{},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, info.StreamStatus)
+	assert.True(t, info.StreamStatus.HasErrors())
+	// 软错误结束且输出 token < 20：返回 nil usage，结算层视为无可信 usage，不计费。
+	assert.Nil(t, usage)
+}
+
+func TestOaiResponsesStreamHandlerSoftErrorHighOutputStillBills(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":40,"total_tokens":43},"output":[]}}`,
+		`data: {"type":"response.error","response":{"error":{"type":"server_error","message":"late soft error"}}}`,
+		"data: [DONE]",
+		"",
+	}, "\n")
+	recorder := flushableRecorder{ResponseRecorder: httptest.NewRecorder()}
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:  &relaycommon.ChannelMeta{},
+		StreamStatus: relaycommon.NewStreamStatus(),
+	}
+
+	usage, apiErr := OaiResponsesStreamHandler(c, info, resp)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, info.StreamStatus)
+	assert.True(t, info.StreamStatus.HasErrors())
+	// 软错误结束但已观察到 >= 20 输出 token：仍返回 usage 用于计费。
+	require.NotNil(t, usage)
+	assert.Equal(t, 40, usage.OutputTokens)
+}
+
 func TestOaiResponsesStreamHandlerPreservesUpstreamTotalTokens(t *testing.T) {
 	t.Parallel()
 

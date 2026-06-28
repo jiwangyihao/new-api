@@ -213,3 +213,37 @@ export function IpRestrictionsCell({ apiKey }: { apiKey: ApiKey }) {
     </Tooltip>
   )
 }
+
+export function GroupsCell({ apiKey }: { apiKey: ApiKey }) {
+  const { t } = useTranslation()
+  const groupNames = (apiKey.group_names ?? []).filter(Boolean)
+
+  if (groupNames.length === 0) {
+    return (
+      <StatusBadge
+        label={t('Default group')}
+        variant='neutral'
+        copyable={false}
+      />
+    )
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span />}>
+        <StatusBadge
+          label={t('{{count}} group(s)', { count: groupNames.length })}
+          variant='neutral'
+          copyable={false}
+        />
+      </TooltipTrigger>
+      <TooltipContent side='top' className='max-w-xs'>
+        <div className='max-h-[200px] space-y-0.5 overflow-y-auto text-xs'>
+          {groupNames.map((name) => (
+            <div key={name}>{name}</div>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  )
+}

@@ -288,6 +288,41 @@ export function ApiKeysMutateDrawer({
 
               <FormField
                 control={form.control}
+                name='channel_groups'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Channel Groups')}</FormLabel>
+                    <FormControl>
+                      <MultiSelect
+                        options={channelGroups.map((g) => ({
+                          label: g.name,
+                          value: String(g.id),
+                        }))}
+                        selected={field.value.map((id) => String(id))}
+                        onChange={(values) =>
+                          field.onChange(
+                            values
+                              .map((v) => Number(v))
+                              .filter((n) => Number.isFinite(n))
+                          )
+                        }
+                        placeholder={t(
+                          'Select channel groups (empty uses the default group)'
+                        )}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Choose which channel groups serve this API key. You only see groups, not upstream channels.'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
                 name='expired_time'
                 render={({ field }) => (
                   <FormItem>
@@ -546,41 +581,6 @@ export function ApiKeysMutateDrawer({
                           </FormControl>
                           <FormDescription>
                             {t('Limit which models can be used with this key')}
-                          </FormDescription>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-
-                    <FormField
-                      control={form.control}
-                      name='channel_groups'
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>{t('Channel Groups')}</FormLabel>
-                          <FormControl>
-                            <MultiSelect
-                              options={channelGroups.map((g) => ({
-                                label: g.name,
-                                value: String(g.id),
-                              }))}
-                              selected={field.value.map((id) => String(id))}
-                              onChange={(values) =>
-                                field.onChange(
-                                  values
-                                    .map((v) => Number(v))
-                                    .filter((n) => Number.isFinite(n))
-                                )
-                              }
-                              placeholder={t(
-                                'Select channel groups (empty uses the default group)'
-                              )}
-                            />
-                          </FormControl>
-                          <FormDescription>
-                            {t(
-                              'Choose which channel groups serve this API key. You only see groups, not upstream channels.'
-                            )}
                           </FormDescription>
                           <FormMessage />
                         </FormItem>

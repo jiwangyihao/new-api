@@ -37,6 +37,7 @@ import {
   ApiKeyCell,
   ModelLimitsCell,
   IpRestrictionsCell,
+  GroupsCell,
 } from './api-keys-cells'
 import { DataTableRowActions } from './data-table-row-actions'
 
@@ -231,6 +232,16 @@ export function useApiKeysColumns(): ColumnDef<ApiKey>[] {
       cell: ({ row }) => <IpRestrictionsCell apiKey={row.original} />,
       enableSorting: false,
       meta: { label: t('IP Restriction'), mobileHidden: true },
+    },
+    {
+      id: 'channel_groups',
+      accessorKey: 'group_names',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Channel Groups')} />
+      ),
+      cell: ({ row }) => <GroupsCell apiKey={row.original} />,
+      enableSorting: false,
+      meta: { label: t('Channel Groups'), mobileHidden: true },
     },
     {
       accessorKey: 'created_time',

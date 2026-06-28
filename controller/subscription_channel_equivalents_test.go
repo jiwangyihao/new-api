@@ -29,6 +29,7 @@ func setupSubscriptionChannelEquivalentsTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}))
+	require.NoError(t, db.AutoMigrate(&model.ChannelGroup{}, &model.ChannelGroupChannel{}, &model.TokenGroupBinding{}))
 }
 
 func seedSubscriptionEquivalentPlan(t *testing.T, id int, title string, tokenLimit int64) {

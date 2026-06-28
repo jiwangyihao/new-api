@@ -99,6 +99,7 @@ type ChannelCreditBillingGroup struct {
 type ChannelTokenBillingMultiplierGroup = ChannelCreditBillingGroup
 
 type channelCreditBillingRow struct {
+	Id                     int
 	Type                   int
 	TokenBillingMultiplier float64
 	CreditBillingMode      string
@@ -108,7 +109,7 @@ type channelCreditBillingRow struct {
 func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error) {
 	var rows []channelCreditBillingRow
 	if err := DB.Model(&Channel{}).
-		Select("type", "token_billing_multiplier", "credit_billing_mode", "fixed_request_credits").
+		Select("id", "type", "token_billing_multiplier", "credit_billing_mode", "fixed_request_credits").
 		Where("status = ?", common.ChannelStatusEnabled).
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -117,19 +118,34 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 		return []ChannelCreditBillingGroup{}, nil
 	}
 
+	// 钱包页套餐可用量按渠道折算时，渠道若归属某个覆盖计费的非默认分组，应按该分组的生效计费
+	// profile 折算，而不是渠道自身 profile。预先解析每个启用渠道的覆盖分组 profile。
+	overrideByChannel, err := channelGroupBillingOverrides()
+	if err != nil {
+		return nil, err
+	}
+
 	groupsByKey := make(map[struct {
 		channelType int
 		kind        string
 	}]*ChannelCreditBillingGroup)
 	for _, row := range rows {
-		kind := row.CreditBillingMode
+		mode := row.CreditBillingMode
+		multiplier := row.TokenBillingMultiplier
+		fixedCredits := row.FixedRequestCredits
+		if profile, ok := overrideByChannel[row.Id]; ok {
+			mode = profile.CreditBillingMode
+			multiplier = profile.TokenBillingMultiplier
+			fixedCredits = profile.FixedRequestCredits
+		}
+		kind := mode
 		if kind == "" {
 			kind = creditbilling.ModeUsageTokens
 		}
 		if err := creditbilling.ValidateBillingMode(kind); err != nil {
 			continue
 		}
-		if err := creditbilling.ValidateFixedRequestCredits(kind, row.FixedRequestCredits); err != nil {
+		if err := creditbilling.ValidateFixedRequestCredits(kind, fixedCredits); err != nil {
 			continue
 		}
 		key := struct {
@@ -146,10 +162,10 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 			groupsByKey[key] = group
 		}
 		if kind == creditbilling.ModeFixedRequest {
-			addFixedCreditsToGroup(group, row.FixedRequestCredits)
+			addFixedCreditsToGroup(group, fixedCredits)
 			continue
 		}
-		addMultiplierToGroup(group, tokenbilling.EffectiveMultiplier(row.TokenBillingMultiplier))
+		addMultiplierToGroup(group, tokenbilling.EffectiveMultiplier(multiplier))
 	}
 
 	groups := make([]ChannelCreditBillingGroup, 0, len(groupsByKey))
@@ -176,6 +192,54 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 		return groups[i].ChannelTypeName < groups[j].ChannelTypeName
 	})
 	return groups, nil
+}
+
+// channelGroupBillingOverrides 返回每个渠道（按渠道 id）的覆盖计费 profile。
+// 仅当渠道归属某个覆盖计费（非 inherit）的非默认分组时才返回；与 ResolveEffectiveGroupForChannel
+// 一致，多个候选分组时优先 id 最小的非默认分组。默认分组永远不参与覆盖。
+func channelGroupBillingOverrides() (map[int]ChannelBillingProfile, error) {
+	groups, err := GetAllChannelGroups()
+	if err != nil {
+		return nil, err
+	}
+	// 仅保留覆盖计费的非默认分组，按 id 升序，便于“优先 id 最小”。
+	overriding := make([]*ChannelGroup, 0, len(groups))
+	for _, g := range groups {
+		if g.IsDefault() || !g.OverridesBilling() {
+			continue
+		}
+		overriding = append(overriding, g)
+	}
+	if len(overriding) == 0 {
+		return map[int]ChannelBillingProfile{}, nil
+	}
+	sort.Slice(overriding, func(i, j int) bool { return overriding[i].Id < overriding[j].Id })
+
+	groupIds := make([]int, 0, len(overriding))
+	for _, g := range overriding {
+		groupIds = append(groupIds, g.Id)
+	}
+	var members []ChannelGroupChannel
+	if err := DB.Where("channel_group_id IN ?", groupIds).Find(&members).Error; err != nil {
+		return nil, err
+	}
+
+	profileByGroup := make(map[int]ChannelBillingProfile, len(overriding))
+	for _, g := range overriding {
+		profileByGroup[g.Id] = g.BillingProfile()
+	}
+	// channelId -> 命中的最小 id 覆盖分组。
+	chosenGroup := make(map[int]int)
+	for _, m := range members {
+		if existing, ok := chosenGroup[m.ChannelId]; !ok || m.ChannelGroupId < existing {
+			chosenGroup[m.ChannelId] = m.ChannelGroupId
+		}
+	}
+	overrides := make(map[int]ChannelBillingProfile, len(chosenGroup))
+	for channelId, groupId := range chosenGroup {
+		overrides[channelId] = profileByGroup[groupId]
+	}
+	return overrides, nil
 }
 
 func ListEnabledChannelTokenBillingMultiplierGroups() ([]ChannelTokenBillingMultiplierGroup, error) {

@@ -34,6 +34,7 @@ func setupSubscriptionSelfSummaryTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &gptAbuseWarningResetTableForSubscriptionSelfTest{}))
+	require.NoError(t, db.AutoMigrate(&model.ChannelGroup{}, &model.ChannelGroupChannel{}, &model.TokenGroupBinding{}))
 }
 
 func performGetSubscriptionSelfSummaryRequest(t *testing.T, userID int) *httptest.ResponseRecorder {

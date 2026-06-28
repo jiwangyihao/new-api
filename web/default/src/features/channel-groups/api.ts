@@ -56,7 +56,7 @@ export async function deleteChannelGroup(
 
 // Channel options for the member picker (id + name only).
 export async function getChannelOptions(): Promise<ChannelOption[]> {
-  const res = await api.get('/api/channel', { params: { p: 1, size: 1000 } })
+  const res = await api.get('/api/channel/', { params: { p: 1, size: 1000 } })
   const items: Array<{ id: number; name: string }> = res.data?.data?.items ?? []
   return items.map((c) => ({ id: c.id, name: c.name }))
 }

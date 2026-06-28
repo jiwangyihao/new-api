@@ -49,7 +49,7 @@ func GetGroupEnabledModels(group string) []string {
 		return GetEnabledModels()
 	}
 	var models []string
-	DB.Table("abilities").Where("enabled = ? and `group` = ?", true, group).Distinct("model").Pluck("model", &models)
+	DB.Table("abilities").Where(commonGroupCol+" = ? AND enabled = ?", group, true).Distinct("model").Pluck("model", &models)
 	return models
 }
 
@@ -203,7 +203,7 @@ func GetChannelForEndpointWithGroups(groups []string, model string, retry int, e
 		if onlyDefaultGroupWithoutExplicitMembers(groups) {
 			return tx
 		}
-		return tx.Where("`group` IN ?", groups)
+		return tx.Where(commonGroupCol+" IN ?", groups)
 	}
 	if endpointType == "" {
 		query := groupFilter(DB.Where("model = ? and enabled = ?", model, true))
@@ -241,8 +241,8 @@ func getEndpointFilteredAbilities(model string, endpointType constant.EndpointTy
 func getEndpointFilteredAbilitiesForGroups(groups []string, model string, endpointType constant.EndpointType) ([]Ability, error) {
 	var abilities []Ability
 	query := DB.Where("model = ? and enabled = ?", model, true)
-	if len(groups) > 0 {
-		query = query.Where("`group` IN ?", groups)
+	if len(groups) > 0 && !onlyDefaultGroupWithoutExplicitMembers(groups) {
+		query = query.Where(commonGroupCol+" IN ?", groups)
 	}
 	if err := query.Find(&abilities).Error; err != nil {
 		return nil, err

@@ -10,6 +10,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
@@ -223,6 +224,85 @@ func TestGroupSelectionDisabledSentinelDeniesAllChannels(t *testing.T) {
 	ch, err = GetChannelForEndpointWithGroups([]string{DisabledTokenGroupSentinel}, model, 0, "", nil, 0, false, ChannelBillingProfile{}, false)
 	require.NoError(t, err)
 	assert.Nil(t, ch, "disabled sentinel must not widen to any channel via DB path")
+}
+
+func TestDefaultGroupWithoutExplicitMembersDBEndpointUsesLegacyAbilityRows(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const modelName = "gpt-default-db-endpoint"
+	priority := int64(0)
+	channel := &Channel{Id: 7301, Type: constant.ChannelTypeCodex, Key: "sk-test", Status: common.ChannelStatusEnabled, Name: "legacy-default", Models: modelName, Priority: &priority}
+	require.NoError(t, db.Create(channel).Error)
+	require.NoError(t, db.Create(&Ability{Group: legacyAbilityGroup, Model: modelName, ChannelId: channel.Id, Enabled: true, Priority: &priority}).Error)
+
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+
+	names, err := GetEffectiveGroupNamesByToken(99999)
+	require.NoError(t, err)
+	require.Equal(t, []string{DefaultChannelGroupName}, names)
+
+	selected, err := GetRandomSatisfiedChannelForEndpointWithGroups(names, modelName, 0, constant.EndpointTypeOpenAIResponse, nil, 0, false, ChannelBillingProfile{}, false)
+	require.NoError(t, err)
+	require.NotNil(t, selected)
+	assert.Equal(t, channel.Id, selected.Id)
+	assert.True(t, IsChannelEnabledForAnyGroupModel(names, modelName, channel.Id))
+}
+
+func TestChannelGroupQueriesQuoteReservedGroupColumnForPostgres(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+
+	baseDB := DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldMemoryCache := common.MemoryCacheEnabled
+	oldModel2channels := model2channels
+	oldGroupModel2channels := groupModel2channels
+	oldChannelsIDM := channelsIDM
+	oldDefaultExplicit := defaultGroupHasExplicitMembersCache
+
+	baseStmt := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]Ability{}).Statement
+	capture := &sqlCaptureLogger{}
+	pgDB, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+		PreferSimpleProtocol: true,
+		Conn:                 baseStmt.ConnPool,
+	}), &gorm.Config{DryRun: true, Logger: capture})
+	require.NoError(t, err)
+
+	common.UsingSQLite = false
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = true
+	common.MemoryCacheEnabled = true
+	initCol()
+	DB = pgDB
+	model2channels = nil
+	groupModel2channels = nil
+	channelsIDM = nil
+	defaultGroupHasExplicitMembersCache = false
+	t.Cleanup(func() {
+		DB = baseDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.MemoryCacheEnabled = oldMemoryCache
+		model2channels = oldModel2channels
+		groupModel2channels = oldGroupModel2channels
+		channelsIDM = oldChannelsIDM
+		defaultGroupHasExplicitMembersCache = oldDefaultExplicit
+		initCol()
+	})
+
+	InitChannelCache()
+	common.MemoryCacheEnabled = false
+	_, err = GetRandomSatisfiedChannelForEndpointWithGroups([]string{"GitLab"}, "claude-opus-4-8", 0, "", nil, 0, false, ChannelBillingProfile{}, false)
+	require.NoError(t, err)
+	assert.False(t, IsChannelEnabledForAnyGroupModel([]string{"GitLab"}, "claude-opus-4-8", 9))
+
+	sql := strings.Join(capture.statements, "\n")
+	require.Contains(t, sql, `"group"`)
+	require.NotContains(t, sql, "`group`")
 }
 
 func TestResolveEffectiveGroupPrefersNonDefault(t *testing.T) {

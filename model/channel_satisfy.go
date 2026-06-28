@@ -33,8 +33,8 @@ func isChannelEnabledForGroupModelDB(groups []string, modelName string, channelI
 		var count int64
 		query := DB.Model(&Ability{}).
 			Where("model = ? and channel_id = ? and enabled = ?", model, channelID, true)
-		if len(groups) > 0 {
-			query = query.Where("`group` IN ?", groups)
+		if len(groups) > 0 && !onlyDefaultGroupWithoutExplicitMembers(groups) {
+			query = query.Where(commonGroupCol+" IN ?", groups)
 		}
 		if err := query.Count(&count).Error; err != nil {
 			return 0

@@ -67,7 +67,7 @@ func InitChannelCache() {
 	}
 	newGroupModel2channels := make(map[string]map[string][]int)
 	var groupAbilities []Ability
-	if err := DB.Where("enabled = ? and `group` <> ''", true).Find(&groupAbilities).Error; err != nil {
+	if err := DB.Where("enabled = ? AND "+commonGroupCol+" <> ''", true).Find(&groupAbilities).Error; err != nil {
 		common.SysLog("failed to load group abilities for cache: " + err.Error())
 	} else {
 		seen := make(map[string]map[string]map[int]struct{})

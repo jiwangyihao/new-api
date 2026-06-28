@@ -189,6 +189,42 @@ func TestGetEffectiveGroupNamesByTokenReturnsBoundEnabledGroups(t *testing.T) {
 	assert.Equal(t, []string{"bound"}, names)
 }
 
+func TestGetEffectiveGroupNamesByTokenDisabledBindingsReturnSentinel(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+	g := makeGroup(t, "soon-disabled", nil)
+	g.Enabled = false
+	require.NoError(t, g.Update())
+	require.NoError(t, SetTokenGroupBindings(7101, []int{g.Id}))
+
+	names, err := GetEffectiveGroupNamesByToken(7101)
+	require.NoError(t, err)
+	// 已绑定但全部禁用：返回哨兵分组（拒绝），绝不回落默认分组。
+	assert.Equal(t, []string{DisabledTokenGroupSentinel}, names)
+	assert.NotContains(t, names, DefaultChannelGroupName)
+}
+
+func TestGroupSelectionDisabledSentinelDeniesAllChannels(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-disabled-deny"
+	seedSelectionChannel(t, db, 7201, model)
+	seedSelectionChannel(t, db, 7202, model)
+	makeGroup(t, "served", []int{7201, 7202})
+	InitChannelCache()
+
+	// 哨兵分组不匹配任何渠道：缓存路径拒绝。
+	ch, err := GetRandomSatisfiedChannelForEndpointWithGroups([]string{DisabledTokenGroupSentinel}, model, 0, "", nil, 0, false, ChannelBillingProfile{}, false)
+	require.NoError(t, err)
+	assert.Nil(t, ch, "disabled sentinel must not widen to any channel via cache path")
+
+	// DB 路径同样拒绝。
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+	ch, err = GetChannelForEndpointWithGroups([]string{DisabledTokenGroupSentinel}, model, 0, "", nil, 0, false, ChannelBillingProfile{}, false)
+	require.NoError(t, err)
+	assert.Nil(t, ch, "disabled sentinel must not widen to any channel via DB path")
+}
+
 func TestResolveEffectiveGroupPrefersNonDefault(t *testing.T) {
 	db := setupChannelGroupSelectionTestDB(t)
 	const model = "gpt-eff"
@@ -227,4 +263,69 @@ func TestResolveEffectiveGroupInheritFallsBackToChannelProfile(t *testing.T) {
 	// inherit group → channel profile wins.
 	assert.Equal(t, "fixed_request", profile.CreditBillingMode)
 	assert.Equal(t, int64(12345), profile.FixedRequestCredits)
+}
+
+func seedSelectionChannelWithProfile(t *testing.T, db *gorm.DB, id int, model string, mode string, fixedCredits int64, multiplier float64) {
+	t.Helper()
+	priority := int64(0)
+	channel := &Channel{
+		Id:                     id,
+		Type:                   constant.ChannelTypeOpenAI,
+		Key:                    "sk-test",
+		Status:                 common.ChannelStatusEnabled,
+		Name:                   fmt.Sprintf("ch-%d", id),
+		Models:                 model,
+		Priority:               &priority,
+		CreditBillingMode:      mode,
+		FixedRequestCredits:    fixedCredits,
+		TokenBillingMultiplier: multiplier,
+	}
+	require.NoError(t, db.Create(channel).Error)
+}
+
+// 验收标准 7：分组覆盖计费时，retry same-profile 过滤必须比较候选渠道的“生效分组 profile”，
+// 而非渠道自身 profile，否则同分组内的可用渠道会被误排除导致 failover 失败。
+func TestRetrySameProfileUsesEffectiveGroupBillingMemoryCache(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-grp-retry-effective"
+	// 两个成员渠道都保持 usage_tokens（渠道自身 profile），分组覆盖成 fixed_request 80000。
+	seedSelectionChannelWithProfile(t, db, 8801, model, "usage_tokens", 0, 1)
+	seedSelectionChannelWithProfile(t, db, 8802, model, "usage_tokens", 0, 1)
+	g := makeGroup(t, "paid-retry", []int{8801, 8802})
+	g.CreditBillingMode = "fixed_request"
+	g.FixedRequestCredits = 80_000
+	require.NoError(t, g.Update())
+	_, _, err := FixAbility()
+	require.NoError(t, err)
+	InitChannelCache()
+
+	frozen := ChannelBillingProfile{CreditBillingMode: "fixed_request", FixedRequestCredits: 80_000, TokenBillingMultiplier: 1}
+	// 第一个渠道 8801 已用过；retry 必须仍选到同分组的 8802（其生效分组 profile 与冻结 profile 相同）。
+	ch, err := GetRandomSatisfiedChannelForEndpointWithGroups([]string{"paid-retry"}, model, 0, "", []int{8801}, 1, false, frozen, true)
+	require.NoError(t, err)
+	require.NotNil(t, ch, "retry must select the other group member whose effective group billing matches")
+	assert.Equal(t, 8802, ch.Id)
+}
+
+func TestRetrySameProfileUsesEffectiveGroupBillingDatabaseFallback(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-grp-retry-effective-db"
+	seedSelectionChannelWithProfile(t, db, 8811, model, "usage_tokens", 0, 1)
+	seedSelectionChannelWithProfile(t, db, 8812, model, "usage_tokens", 0, 1)
+	g := makeGroup(t, "paid-retry-db", []int{8811, 8812})
+	g.CreditBillingMode = "fixed_request"
+	g.FixedRequestCredits = 80_000
+	require.NoError(t, g.Update())
+	_, _, err := FixAbility()
+	require.NoError(t, err)
+
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+
+	frozen := ChannelBillingProfile{CreditBillingMode: "fixed_request", FixedRequestCredits: 80_000, TokenBillingMultiplier: 1}
+	ch, err := GetChannelForEndpointWithGroups([]string{"paid-retry-db"}, model, 0, "", []int{8811}, 1, false, frozen, true)
+	require.NoError(t, err)
+	require.NotNil(t, ch, "DB retry must select the other group member whose effective group billing matches")
+	assert.Equal(t, 8812, ch.Id)
 }

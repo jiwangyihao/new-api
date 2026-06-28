@@ -179,6 +179,12 @@ retry 一致性：`RequireSameBillingProfile` 已存在；生效 profile 作为 
 - 现有渠道计费 profile 不变；分组 inherit 时行为与改造前完全一致（回落渠道）。
 - 迁移：新表 `channel_groups` / `channel_group_channels` / `token_group_bindings` 加入 `migrateDB()` 与 `migrateDBFast()` 的 `AutoMigrate`；`ensureDefaultChannelGroup()` 在迁移后执行。
 - 现有部署升级后：所有 token 无绑定 → 默认分组 → 默认分组无显式成员 → 全部渠道 → 行为与升级前一致。
+- 边界语义（复审补强）：
+  - **已绑定但全部禁用**：API Key 已绑定分组、但所有绑定分组都被管理员禁用时，生效分组返回保留哨兵 `__disabled__`（非空但不匹配任何渠道），请求被拒绝；绝不回落默认分组扩大渠道范围。仅“未绑定任何分组”才回落默认分组。
+  - **升级 DB 选择路径**：默认分组无显式成员时语义为“全部渠道”，DB 选择路径（`group IN (?)`）对 `[__default__]` 跳过分组过滤，使升级前的 legacy ability 行（`group=""`）仍可命中，非 memory-cache 部署不回归。
+  - **retry 同 profile 一致性**：分组覆盖计费时，retry same-profile 过滤按候选渠道的“生效分组 profile”（`ResolveEffectiveGroupForChannel` + `ResolveEffectiveBillingProfile`）比较，而非渠道自身 profile，避免同分组内可用渠道被误排除导致 failover 失败。
+  - **用户日志脱敏**：用户侧日志（`GetUserLogsWithFilter` / `GetLogByTokenId`）经 `formatUserLogs` 同时清空 `ChannelName` 与 `ChannelId`（`json:"channel"`），不泄露上游渠道身份。
+  - **分组成员变更失败上报**：管理端 CRUD 后重建 abilities（`FixAbility`）失败必须返回错误，不得在重建失败时误报成功。
 
 ## 约束
 

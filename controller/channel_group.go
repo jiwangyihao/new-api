@@ -90,7 +90,10 @@ func CreateChannelGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	rebuildChannelGroupCaches()
+	if err := rebuildChannelGroupCaches(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	dto, err := buildChannelGroupDTO(&group)
 	if err != nil {
 		common.ApiError(c, err)
@@ -145,7 +148,10 @@ func UpdateChannelGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	rebuildChannelGroupCaches()
+	if err := rebuildChannelGroupCaches(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	dto, err := buildChannelGroupDTO(&group)
 	if err != nil {
 		common.ApiError(c, err)
@@ -165,7 +171,10 @@ func DeleteChannelGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	rebuildChannelGroupCaches()
+	if err := rebuildChannelGroupCaches(); err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	common.ApiSuccess(c, nil)
 }
 
@@ -187,7 +196,9 @@ func GetAvailableChannelGroups(c *gin.Context) {
 }
 
 // rebuildChannelGroupCaches 在分组成员变化后重建 abilities 与渠道缓存。
-// 分组成员属低频管理操作，全量重建简单且正确。
-func rebuildChannelGroupCaches() {
-	_, _, _ = model.FixAbility()
+// 分组成员属低频管理操作，全量重建简单且正确。重建失败必须上报，否则渠道选择会继续使用旧 ability 行
+// （新增成员选不到新渠道、收窄成员旧渠道仍可被选），管理操作却误报成功。
+func rebuildChannelGroupCaches() error {
+	_, _, err := model.FixAbility()
+	return err
 }

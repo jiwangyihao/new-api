@@ -129,7 +129,7 @@ func GetChannel(model string, retry int) (*Channel, error) {
 	return &channel, err
 }
 
-func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) ([]Ability, error) {
+func filterAbilitiesByRetryConstraints(abilities []Ability, groups []string, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) ([]Ability, error) {
 	if len(abilities) == 0 {
 		return abilities, nil
 	}
@@ -147,7 +147,11 @@ func filterAbilitiesByRetryConstraints(abilities []Ability, usedChannelIDs []int
 			if requireSameMultiplier && !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
 				continue
 			}
-			if requireSameProfile && !SameChannelBillingProfile(channel.BillingProfile(), frozenProfile) {
+			effectiveProfile, perr := effectiveBillingProfileForChannel(groups, &channel)
+			if perr != nil {
+				return nil, perr
+			}
+			if requireSameProfile && !SameChannelBillingProfile(effectiveProfile, frozenProfile) {
 				continue
 			}
 		}
@@ -193,6 +197,12 @@ func GetChannelForEndpointWithGroups(groups []string, model string, retry int, e
 		if len(groups) == 0 {
 			return tx
 		}
+		// 默认分组无显式成员时语义为“全部渠道”；此时既有 legacy ability 行（group 空串）
+		// 不会匹配 group IN ("__default__")，必须跳过分组过滤，否则未绑定分组的既有 API Key
+		// 在非 memory-cache 部署下查不到任何渠道（升级回归）。
+		if onlyDefaultGroupWithoutExplicitMembers(groups) {
+			return tx
+		}
 		return tx.Where("`group` IN ?", groups)
 	}
 	if endpointType == "" {
@@ -216,7 +226,7 @@ func GetChannelForEndpointWithGroups(groups []string, model string, retry int, e
 			}
 		}
 	}
-	abilities, err = filterAbilitiesByRetryConstraints(abilities, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+	abilities, err = filterAbilitiesByRetryConstraints(abilities, groups, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	if err != nil {
 		return nil, err
 	}

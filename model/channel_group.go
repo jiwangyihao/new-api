@@ -17,6 +17,12 @@ import (
 // 该分组不可删除、不可改名、不可禁用；管理员可编辑其计费 profile 与成员。
 const DefaultChannelGroupName = "__default__"
 
+// DisabledTokenGroupSentinel 是一个保留分组名，绝不对应任何真实分组或渠道。
+// 当 API Key 已绑定分组但所有绑定分组都被禁用时，GetEffectiveGroupNamesByToken 返回它，
+// 使渠道选择在并集 / abilities 过滤中匹配到空集合（拒绝），从而不会回落到默认分组而扩大渠道范围。
+// 它必须是非空集合（区别于“未绑定 = 回落默认分组”），但又不匹配任何渠道。
+const DisabledTokenGroupSentinel = "__disabled__"
+
 // GroupCreditBillingModeInherit 表示分组未配置计费方式（第三态，空串），结算时回落到具体渠道。
 const GroupCreditBillingModeInherit = ""
 
@@ -121,6 +127,40 @@ func ResolveEffectiveBillingProfile(group *ChannelGroup, channel *Channel) Chann
 		return channel.BillingProfile()
 	}
 	return group.BillingProfile()
+}
+
+// effectiveBillingProfileForChannel 在 token 所选分组语境下解析候选渠道的生效计费 profile。
+// 用于 retry same-profile 过滤：必须按候选渠道的生效分组（而非渠道自身 profile）比较，
+// 否则分组级覆盖计费时 failover 会因渠道 profile 不匹配而误排除同分组内的可用渠道。
+func effectiveBillingProfileForChannel(groups []string, channel *Channel) (ChannelBillingProfile, error) {
+	if channel == nil {
+		return DefaultChannelBillingProfile(), nil
+	}
+	group, err := ResolveEffectiveGroupForChannel(groups, channel.Id)
+	if err != nil {
+		// 生效分组无法解析（如默认分组行缺失）等价于 inherit：回落渠道自身计费 profile，
+		// 绝不因此让 retry same-profile 过滤报错而中断 failover。
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return channel.BillingProfile(), nil
+		}
+		return ChannelBillingProfile{}, err
+	}
+	return ResolveEffectiveBillingProfile(group, channel), nil
+}
+
+// onlyDefaultGroupWithoutExplicitMembers 判断所选分组是否仅为默认分组且默认分组无显式成员。
+// 此时默认分组语义为“全部渠道”，DB 选择路径必须跳过 group IN (?) 过滤——否则升级前已有的
+// legacy ability 行（group 空串）匹配不到 "__default__"，未绑定分组的既有 API Key 在
+// 非 memory-cache 部署下查不到任何渠道（升级回归）。
+func onlyDefaultGroupWithoutExplicitMembers(groups []string) bool {
+	if len(groups) != 1 || groups[0] != DefaultChannelGroupName {
+		return false
+	}
+	hasExplicit, err := DefaultGroupHasExplicitMembers()
+	if err != nil {
+		return false
+	}
+	return !hasExplicit
 }
 
 // ---- CRUD ----
@@ -327,7 +367,7 @@ func GetGroupIdsByToken(tokenId int) ([]int, error) {
 }
 
 // GetEffectiveGroupNamesByToken 返回 API Key 生效的分组名集合（用于渠道选择）。
-// 未绑定任何分组时回落默认分组。仅返回 enabled 分组；若全部被禁用则回落默认分组。
+// 未绑定任何分组时回落默认分组。仅返回 enabled 分组；已绑定但全部被禁用时返回禁用哨兵分组（拒绝），绝不回落默认分组以免扩大渠道范围。
 func GetEffectiveGroupNamesByToken(tokenId int) ([]string, error) {
 	ids, err := GetGroupIdsByToken(tokenId)
 	if err != nil {
@@ -347,7 +387,9 @@ func GetEffectiveGroupNamesByToken(tokenId int) ([]string, error) {
 		}
 	}
 	if len(names) == 0 {
-		return []string{DefaultChannelGroupName}, nil
+		// 已绑定分组但全部被禁用：返回禁用哨兵（非空但不匹配任何渠道），渠道选择据此拒绝服务，
+		// 绝不回落默认分组以免把范围扩大到全部渠道。
+		return []string{DisabledTokenGroupSentinel}, nil
 	}
 	return lo.Uniq(names), nil
 }

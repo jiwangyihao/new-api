@@ -319,7 +319,7 @@ func channelIDSet(ids []int) map[int]struct{} {
 	return set
 }
 
-func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) []int {
+func filterCachedChannelIDsByRetryConstraints(channels []int, groups []string, usedChannelIDs []int, frozenMultiplier float64, requireSameMultiplier bool, frozenProfile ChannelBillingProfile, requireSameProfile bool) []int {
 	if len(channels) == 0 {
 		return channels
 	}
@@ -336,8 +336,14 @@ func filterCachedChannelIDsByRetryConstraints(channels []int, usedChannelIDs []i
 		if requireSameMultiplier && !tokenbilling.SameMultiplier(channel.GetTokenBillingMultiplier(), tokenbilling.EffectiveMultiplier(frozenMultiplier)) {
 			continue
 		}
-		if requireSameProfile && !SameChannelBillingProfile(channel.BillingProfile(), frozenProfile) {
-			continue
+		if requireSameProfile {
+			effectiveProfile, perr := effectiveBillingProfileForChannel(groups, channel)
+			if perr != nil {
+				continue
+			}
+			if !SameChannelBillingProfile(effectiveProfile, frozenProfile) {
+				continue
+			}
 		}
 		filtered = append(filtered, channelID)
 	}
@@ -437,7 +443,7 @@ func GetRandomSatisfiedChannelForEndpointWithGroups(groups []string, model strin
 		}
 		channels = intersectWithGroupCandidatesLocked(channels, groups, model)
 	}
-	channels = filterCachedChannelIDsByRetryConstraints(channels, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
+	channels = filterCachedChannelIDsByRetryConstraints(channels, groups, usedChannelIDs, frozenMultiplier, requireSameMultiplier, frozenProfile, requireSameProfile)
 	retry = retryIndexAfterRetryConstraints(retry, usedChannelIDs, requireSameMultiplier, requireSameProfile)
 	return selectCachedChannelByPriority(channels, retry, model)
 }

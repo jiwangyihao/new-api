@@ -48,7 +48,18 @@ func seedSubscriptionEquivalentPlan(t *testing.T, id int, title string, tokenLim
 	require.NoError(t, model.DB.Create(plan).Error)
 }
 
-func seedSubscriptionEquivalentChannel(t *testing.T, id int, channelType int, multiplier float64, enabled bool) {
+func seedSubscriptionEquivalentGroup(t *testing.T, id int, name string, mode string, fixedCredits int64) {
+	t.Helper()
+	require.NoError(t, model.DB.Create(&model.ChannelGroup{
+		Id:                  id,
+		Name:                name,
+		Enabled:             true,
+		CreditBillingMode:   mode,
+		FixedRequestCredits: fixedCredits,
+	}).Error)
+}
+
+func seedSubscriptionEquivalentChannel(t *testing.T, id int, channelType int, multiplier float64, enabled bool, groupId int) {
 	t.Helper()
 	status := common.ChannelStatusManuallyDisabled
 	if enabled {
@@ -63,6 +74,12 @@ func seedSubscriptionEquivalentChannel(t *testing.T, id int, channelType int, mu
 		Models:                 "gpt-test",
 		TokenBillingMultiplier: multiplier,
 	}).Error)
+	if groupId > 0 {
+		require.NoError(t, model.DB.Create(&model.ChannelGroupChannel{
+			ChannelGroupId: groupId,
+			ChannelId:      id,
+		}).Error)
+	}
 }
 
 func performSubscriptionPlansForEquivalentTest(t *testing.T) *httptest.ResponseRecorder {
@@ -118,41 +135,44 @@ func requireFloat64PtrValue(t *testing.T, ptr *float64, want float64) {
 func TestSubscriptionPlansChannelTokenEquivalentsSingleAndRange(t *testing.T) {
 	setupSubscriptionChannelEquivalentsTestDB(t)
 	seedSubscriptionEquivalentPlan(t, 99101, "Equivalent Basic", 1_000_000)
-	seedSubscriptionEquivalentChannel(t, 99111, constant.ChannelTypeOpenAI, 1, true)
-	seedSubscriptionEquivalentChannel(t, 99112, constant.ChannelTypeGemini, 2, true)
-	seedSubscriptionEquivalentChannel(t, 99113, constant.ChannelTypeAnthropic, 0.5, true)
-	seedSubscriptionEquivalentChannel(t, 99114, constant.ChannelTypeAzure, 1.5, true)
-	seedSubscriptionEquivalentChannel(t, 99115, constant.ChannelTypeAzure, 2, true)
-	seedSubscriptionEquivalentChannel(t, 99116, constant.ChannelTypeCohere, 3, false)
+	// 三个非默认分组（inherit 计费，回落渠道倍率）。
+	seedSubscriptionEquivalentGroup(t, 91, "gpt", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentGroup(t, 92, "gemini-grp", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentGroup(t, 93, "azure-grp", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentChannel(t, 99111, constant.ChannelTypeOpenAI, 1, true, 91)
+	seedSubscriptionEquivalentChannel(t, 99112, constant.ChannelTypeGemini, 2, true, 92)
+	// azure-grp 两个成员、不同倍率 → range。
+	seedSubscriptionEquivalentChannel(t, 99114, constant.ChannelTypeAzure, 1.5, true, 93)
+	seedSubscriptionEquivalentChannel(t, 99115, constant.ChannelTypeAzure, 2, true, 93)
+	// 仅属默认分组的渠道不参与展示。
+	seedSubscriptionEquivalentChannel(t, 99113, constant.ChannelTypeAnthropic, 0.5, true, 0)
+	// 禁用渠道不参与。
+	seedSubscriptionEquivalentChannel(t, 99116, constant.ChannelTypeCohere, 3, false, 91)
 
 	payload := decodeSubscriptionChannelEquivalentPlans(t, performSubscriptionPlansForEquivalentTest(t))
 
 	require.Len(t, payload.Data, 1)
 	equivalents := payload.Data[0].Plan.ChannelTokenEquivalents
-	require.Len(t, equivalents, 4)
-	openai := requireEquivalentByType(t, equivalents, constant.ChannelTypeOpenAI)
-	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, openai.Kind)
-	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, openai.ValueType)
-	assert.Equal(t, "OpenAI", openai.ChannelTypeName)
-	assert.Equal(t, 1, openai.VariantCount)
-	requireFloat64PtrValue(t, openai.Multiplier, 1)
-	requireInt64PtrValue(t, openai.EquivalentTokenLimit, 1_000_000)
+	require.Len(t, equivalents, 3)
+	gpt := requireEquivalentByType(t, equivalents, 91)
+	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, gpt.Kind)
+	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, gpt.ValueType)
+	assert.Equal(t, "gpt", gpt.ChannelTypeName)
+	assert.Equal(t, 1, gpt.VariantCount)
+	requireFloat64PtrValue(t, gpt.Multiplier, 1)
+	requireInt64PtrValue(t, gpt.EquivalentTokenLimit, 1_000_000)
 
-	gemini := requireEquivalentByType(t, equivalents, constant.ChannelTypeGemini)
+	gemini := requireEquivalentByType(t, equivalents, 92)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, gemini.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, gemini.ValueType)
+	assert.Equal(t, "gemini-grp", gemini.ChannelTypeName)
 	requireFloat64PtrValue(t, gemini.Multiplier, 2)
 	requireInt64PtrValue(t, gemini.EquivalentTokenLimit, 500_000)
 
-	anthropic := requireEquivalentByType(t, equivalents, constant.ChannelTypeAnthropic)
-	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, anthropic.Kind)
-	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, anthropic.ValueType)
-	requireFloat64PtrValue(t, anthropic.Multiplier, 0.5)
-	requireInt64PtrValue(t, anthropic.EquivalentTokenLimit, 2_000_000)
-
-	azure := requireEquivalentByType(t, equivalents, constant.ChannelTypeAzure)
+	azure := requireEquivalentByType(t, equivalents, 93)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, azure.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeRange, azure.ValueType)
+	assert.Equal(t, "azure-grp", azure.ChannelTypeName)
 	assert.Equal(t, 2, azure.VariantCount)
 	requireFloat64PtrValue(t, azure.MinMultiplier, 1.5)
 	requireFloat64PtrValue(t, azure.MaxMultiplier, 2)
@@ -171,13 +191,14 @@ func TestSubscriptionPlansChannelTokenEquivalentsEmptyAndUnlimited(t *testing.T)
 	assert.Empty(t, emptyPayload.Data[0].Plan.ChannelTokenEquivalents)
 	assert.Contains(t, emptyRecorder.Body.String(), `"channel_token_equivalents":[]`)
 
-	seedSubscriptionEquivalentChannel(t, 99211, constant.ChannelTypeOpenAI, 2, true)
+	seedSubscriptionEquivalentGroup(t, 94, "gpt", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentChannel(t, 99211, constant.ChannelTypeOpenAI, 2, true, 94)
 	seedSubscriptionEquivalentPlan(t, 99202, "Unlimited Trial", 0)
 
 	payload := decodeSubscriptionChannelEquivalentPlans(t, performSubscriptionPlansForEquivalentTest(t))
 	require.Len(t, payload.Data, 2)
 	sort.Slice(payload.Data, func(i, j int) bool { return payload.Data[i].Plan.Id < payload.Data[j].Plan.Id })
-	unlimited := requireEquivalentByType(t, payload.Data[1].Plan.ChannelTokenEquivalents, constant.ChannelTypeOpenAI)
+	unlimited := requireEquivalentByType(t, payload.Data[1].Plan.ChannelTokenEquivalents, 94)
 	assert.Equal(t, "unlimited", unlimited.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeUnlimited, unlimited.ValueType)
 	assert.True(t, unlimited.TokenUnlimited)
@@ -188,8 +209,10 @@ func TestSubscriptionPlansChannelTokenEquivalentsEmptyAndUnlimited(t *testing.T)
 func TestSubscriptionPublicPlansChannelTokenEquivalentsMatchAdminPlans(t *testing.T) {
 	setupSubscriptionChannelEquivalentsTestDB(t)
 	seedSubscriptionEquivalentPlan(t, 99301, "Equivalent Public", 1_000_000)
-	seedSubscriptionEquivalentChannel(t, 99311, constant.ChannelTypeOpenAI, 1, true)
-	seedSubscriptionEquivalentChannel(t, 99312, constant.ChannelTypeGemini, 2, true)
+	seedSubscriptionEquivalentGroup(t, 95, "gpt", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentGroup(t, 96, "gemini-grp", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentChannel(t, 99311, constant.ChannelTypeOpenAI, 1, true, 95)
+	seedSubscriptionEquivalentChannel(t, 99312, constant.ChannelTypeGemini, 2, true, 96)
 
 	adminPayload := decodeSubscriptionChannelEquivalentPlans(t, performSubscriptionPlansForEquivalentTest(t))
 	publicPayload := decodeSubscriptionChannelEquivalentPlans(t, performPublicSubscriptionPlansForEquivalentTest(t))
@@ -205,19 +228,21 @@ func TestChannelTokenMultiplierEndToEndSubscriptionPlansReflectCurrentChannelMul
 	const channelAID = 99511
 	const channelBID = 99512
 	seedSubscriptionEquivalentPlan(t, planID, "Multiplier Snapshot Basic", 1_000_000)
-	seedSubscriptionEquivalentChannel(t, channelAID, constant.ChannelTypeOpenAI, 1, true)
-	seedSubscriptionEquivalentChannel(t, channelBID, constant.ChannelTypeGemini, 2, true)
+	seedSubscriptionEquivalentGroup(t, 97, "gpt", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentGroup(t, 98, "gemini-grp", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentChannel(t, channelAID, constant.ChannelTypeOpenAI, 1, true, 97)
+	seedSubscriptionEquivalentChannel(t, channelBID, constant.ChannelTypeGemini, 2, true, 98)
 
 	payload := decodeSubscriptionChannelEquivalentPlans(t, performSubscriptionPlansForEquivalentTest(t))
 
 	require.Len(t, payload.Data, 1)
 	assert.Equal(t, int64(1_000_000), payload.Data[0].Plan.MonthlyTokenLimit)
-	openai := requireEquivalentByType(t, payload.Data[0].Plan.ChannelTokenEquivalents, constant.ChannelTypeOpenAI)
+	openai := requireEquivalentByType(t, payload.Data[0].Plan.ChannelTokenEquivalents, 97)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, openai.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, openai.ValueType)
 	requireFloat64PtrValue(t, openai.Multiplier, 1)
 	requireInt64PtrValue(t, openai.EquivalentTokenLimit, 1_000_000)
-	gemini := requireEquivalentByType(t, payload.Data[0].Plan.ChannelTokenEquivalents, constant.ChannelTypeGemini)
+	gemini := requireEquivalentByType(t, payload.Data[0].Plan.ChannelTokenEquivalents, 98)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, gemini.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, gemini.ValueType)
 	requireFloat64PtrValue(t, gemini.Multiplier, 2)
@@ -227,7 +252,7 @@ func TestChannelTokenMultiplierEndToEndSubscriptionPlansReflectCurrentChannelMul
 	updatedPayload := decodeSubscriptionChannelEquivalentPlans(t, performSubscriptionPlansForEquivalentTest(t))
 
 	require.Len(t, updatedPayload.Data, 1)
-	updatedGemini := requireEquivalentByType(t, updatedPayload.Data[0].Plan.ChannelTokenEquivalents, constant.ChannelTypeGemini)
+	updatedGemini := requireEquivalentByType(t, updatedPayload.Data[0].Plan.ChannelTokenEquivalents, 98)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, updatedGemini.Kind)
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, updatedGemini.ValueType)
 	requireFloat64PtrValue(t, updatedGemini.Multiplier, 1.5)
@@ -236,7 +261,8 @@ func TestChannelTokenMultiplierEndToEndSubscriptionPlansReflectCurrentChannelMul
 
 func TestSubscriptionSelfSummaryChannelTokenEquivalentsIncludesZeroRemaining(t *testing.T) {
 	setupSubscriptionSelfSummaryTestDB(t)
-	seedSubscriptionEquivalentChannel(t, 99411, constant.ChannelTypeOpenAI, 2, true)
+	seedSubscriptionEquivalentGroup(t, 99, "gpt", model.GroupCreditBillingModeInherit, 0)
+	seedSubscriptionEquivalentChannel(t, 99411, constant.ChannelTypeOpenAI, 2, true, 99)
 	const userID = 99401
 	const planID = 99402
 	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_equivalent")
@@ -254,7 +280,7 @@ func TestSubscriptionSelfSummaryChannelTokenEquivalentsIncludesZeroRemaining(t *
 	require.True(t, ok)
 	assert.Equal(t, model.ChannelCreditEquivalentKindUsageTokens, creditEquivalent["kind"])
 	assert.Equal(t, model.ChannelCreditEquivalentValueTypeSingle, creditEquivalent["value_type"])
-	assert.Equal(t, float64(constant.ChannelTypeOpenAI), creditEquivalent["channel_type"])
+	assert.Equal(t, float64(99), creditEquivalent["channel_type"])
 	assert.Equal(t, float64(500_000), creditEquivalent["equivalent_token_limit"])
 	assert.Equal(t, float64(0), creditEquivalent["equivalent_token_remaining"])
 

@@ -45,13 +45,15 @@ export interface VisibleChannelEquivalents<T> {
 }
 
 function getChannelTypeLabel(item: AnyEquivalent, t: TranslationFn): string {
+  // 钱包折算现在按「渠道分组」聚合，后端在 channel_type_name 写入分组名（channel_type 写入分组 id）。
+  // 分组名是权威展示标签，优先使用；仅在缺失时回落到静态渠道类型名或 #id。
+  if (item.channel_type_name) {
+    return item.channel_type_name
+  }
   const labelKey = CHANNEL_TYPE_OPTIONS.find(
     (option) => option.value === item.channel_type
   )?.label
-
-  return labelKey
-    ? t(labelKey)
-    : item.channel_type_name || `#${item.channel_type}`
+  return labelKey ? t(labelKey) : `#${item.channel_type}`
 }
 
 function formatAboutTokens(value: number, t: TranslationFn): string {

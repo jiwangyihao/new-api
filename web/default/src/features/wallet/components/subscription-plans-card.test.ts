@@ -262,7 +262,7 @@ describe('wallet channel token equivalent display', () => {
     const single: PlanChannelTokenEquivalent = {
       kind: 'single',
       channel_type: 1,
-      channel_type_name: 'ignored backend label',
+      channel_type_name: 'gpt',
       variant_count: 1,
       multiplier: 1,
       equivalent_token_limit: 1_000_000,
@@ -270,7 +270,7 @@ describe('wallet channel token equivalent display', () => {
     const range: PlanChannelTokenEquivalent = {
       kind: 'range',
       channel_type: 14,
-      channel_type_name: 'ignored backend label',
+      channel_type_name: 'gitlab',
       variant_count: 2,
       min_multiplier: 1.5,
       max_multiplier: 2,
@@ -280,22 +280,19 @@ describe('wallet channel token equivalent display', () => {
     const unlimited: PlanChannelTokenEquivalent = {
       kind: 'unlimited',
       channel_type: 1,
-      channel_type_name: 'ignored backend label',
+      channel_type_name: 'gpt',
       variant_count: 1,
       token_unlimited: true,
     }
 
-    assert.equal(
-      formatPlanChannelEquivalent(single, t),
-      'OpenAI: about 1M tokens'
-    )
+    assert.equal(formatPlanChannelEquivalent(single, t), 'gpt: about 1M tokens')
     assert.equal(
       formatPlanChannelEquivalent(range, t),
-      'Anthropic: about 500K tokens - 666.67K tokens'
+      'gitlab: about 500K tokens - 666.67K tokens'
     )
     assert.equal(
       formatPlanChannelEquivalent(unlimited, t),
-      'OpenAI: Unlimited tokens'
+      'gpt: Unlimited tokens'
     )
   })
 
@@ -325,44 +322,45 @@ describe('wallet channel token equivalent display', () => {
     ])
   })
 
-  test('formats static channel labels through translation before backend fallback', () => {
-    const staticType: PlanChannelTokenEquivalent = {
+  test('uses backend group name as authoritative label', () => {
+    const groupLabeled: PlanChannelTokenEquivalent = {
       kind: 'single',
       channel_type: 8,
-      channel_type_name: 'backend custom label',
+      channel_type_name: 'gpt',
       variant_count: 1,
       multiplier: 2,
       equivalent_token_limit: 500_000,
     }
-    const unknownType: PlanChannelTokenEquivalent = {
+    const anotherGroup: PlanChannelTokenEquivalent = {
       kind: 'single',
       channel_type: 9999,
-      channel_type_name: 'Backend Only',
+      channel_type_name: 'gitlab',
       variant_count: 1,
       multiplier: 2,
       equivalent_token_limit: 500_000,
     }
-    const staticRemaining: SubscriptionChannelTokenEquivalent = {
+    const groupRemaining: SubscriptionChannelTokenEquivalent = {
       kind: 'single',
       channel_type: 8,
-      channel_type_name: 'backend custom label',
+      channel_type_name: 'gpt',
       variant_count: 1,
       multiplier: 2,
       equivalent_token_limit: 500_000,
       equivalent_token_remaining: 0,
     }
 
+    // 后端 channel_type_name（分组名）权威，即使 channel_type 与某静态渠道类型 id 相同也不取静态名。
     assert.equal(
-      formatPlanChannelEquivalent(staticType, t),
-      'Translated Custom: about 500K tokens'
+      formatPlanChannelEquivalent(groupLabeled, t),
+      'gpt: about 500K tokens'
     )
     assert.equal(
-      formatPlanChannelEquivalent(unknownType, t),
-      'Backend Only: about 500K tokens'
+      formatPlanChannelEquivalent(anotherGroup, t),
+      'gitlab: about 500K tokens'
     )
     assert.equal(
-      formatSubscriptionChannelEquivalent(staticRemaining, t),
-      'Translated Custom: about 0 tokens'
+      formatSubscriptionChannelEquivalent(groupRemaining, t),
+      'gpt: about 0 tokens'
     )
   })
 

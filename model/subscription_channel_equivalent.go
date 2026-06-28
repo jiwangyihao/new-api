@@ -4,7 +4,6 @@ import (
 	"sort"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 )
@@ -118,25 +117,34 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 		return []ChannelCreditBillingGroup{}, nil
 	}
 
-	// 钱包页套餐可用量按渠道折算时，渠道若归属某个覆盖计费的非默认分组，应按该分组的生效计费
-	// profile 折算，而不是渠道自身 profile。预先解析每个启用渠道的覆盖分组 profile。
-	overrideByChannel, err := channelGroupBillingOverrides()
+	// 钱包页套餐可用量按「非默认分组」折算并展示：每个启用渠道归到它所属的非默认分组
+	// （多分组时取 id 最小者）。仅属于默认分组的渠道不在此展示。分组若覆盖计费则用分组 profile，
+	// 否则（inherit）回落渠道自身 profile。
+	assignments, err := channelNonDefaultGroupAssignments()
 	if err != nil {
 		return nil, err
 	}
+	if len(assignments) == 0 {
+		return []ChannelCreditBillingGroup{}, nil
+	}
 
 	groupsByKey := make(map[struct {
-		channelType int
-		kind        string
+		groupId int
+		kind    string
 	}]*ChannelCreditBillingGroup)
 	for _, row := range rows {
+		assignment, ok := assignments[row.Id]
+		if !ok {
+			// 仅属于默认分组（或无任何非默认分组）的渠道不参与按分组折算展示。
+			continue
+		}
 		mode := row.CreditBillingMode
 		multiplier := row.TokenBillingMultiplier
 		fixedCredits := row.FixedRequestCredits
-		if profile, ok := overrideByChannel[row.Id]; ok {
-			mode = profile.CreditBillingMode
-			multiplier = profile.TokenBillingMultiplier
-			fixedCredits = profile.FixedRequestCredits
+		if assignment.overridesBilling {
+			mode = assignment.profile.CreditBillingMode
+			multiplier = assignment.profile.TokenBillingMultiplier
+			fixedCredits = assignment.profile.FixedRequestCredits
 		}
 		kind := mode
 		if kind == "" {
@@ -149,14 +157,14 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 			continue
 		}
 		key := struct {
-			channelType int
-			kind        string
-		}{channelType: row.Type, kind: kind}
+			groupId int
+			kind    string
+		}{groupId: assignment.groupId, kind: kind}
 		group := groupsByKey[key]
 		if group == nil {
 			group = &ChannelCreditBillingGroup{
-				ChannelType:     row.Type,
-				ChannelTypeName: constant.GetChannelTypeName(row.Type),
+				ChannelType:     assignment.groupId,
+				ChannelTypeName: assignment.groupName,
 				Kind:            kind,
 			}
 			groupsByKey[key] = group
@@ -183,40 +191,46 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 		groups = append(groups, *group)
 	}
 	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].ChannelTypeName == groups[j].ChannelTypeName {
-			if groups[i].ChannelType == groups[j].ChannelType {
-				return groups[i].Kind < groups[j].Kind
-			}
-			return groups[i].ChannelType < groups[j].ChannelType
+		if groups[i].ChannelType == groups[j].ChannelType {
+			return groups[i].Kind < groups[j].Kind
 		}
-		return groups[i].ChannelTypeName < groups[j].ChannelTypeName
+		return groups[i].ChannelType < groups[j].ChannelType
 	})
 	return groups, nil
 }
 
-// channelGroupBillingOverrides 返回每个渠道（按渠道 id）的覆盖计费 profile。
-// 仅当渠道归属某个覆盖计费（非 inherit）的非默认分组时才返回；与 ResolveEffectiveGroupForChannel
-// 一致，多个候选分组时优先 id 最小的非默认分组。默认分组永远不参与覆盖。
-func channelGroupBillingOverrides() (map[int]ChannelBillingProfile, error) {
+// channelNonDefaultGroupAssignment 描述某渠道命中的非默认分组及其计费 profile。
+type channelNonDefaultGroupAssignment struct {
+	groupId         int
+	groupName       string
+	overridesBilling bool
+	profile         ChannelBillingProfile
+}
+
+// channelNonDefaultGroupAssignments 返回每个渠道（按渠道 id）命中的非默认分组（按 id 最小者）。
+// 仅依据成员关系，不要求分组覆盖计费——inherit 分组（如按 token 计费的分组）也参与展示。
+// 默认分组永不参与；仅属默认分组的渠道不会出现在结果里。
+func channelNonDefaultGroupAssignments() (map[int]channelNonDefaultGroupAssignment, error) {
 	groups, err := GetAllChannelGroups()
 	if err != nil {
 		return nil, err
 	}
-	// 仅保留覆盖计费的非默认分组，按 id 升序，便于“优先 id 最小”。
-	overriding := make([]*ChannelGroup, 0, len(groups))
+	nonDefault := make([]*ChannelGroup, 0, len(groups))
 	for _, g := range groups {
-		if g.IsDefault() || !g.OverridesBilling() {
+		if g.IsDefault() {
 			continue
 		}
-		overriding = append(overriding, g)
+		nonDefault = append(nonDefault, g)
 	}
-	if len(overriding) == 0 {
-		return map[int]ChannelBillingProfile{}, nil
+	if len(nonDefault) == 0 {
+		return map[int]channelNonDefaultGroupAssignment{}, nil
 	}
-	sort.Slice(overriding, func(i, j int) bool { return overriding[i].Id < overriding[j].Id })
+	sort.Slice(nonDefault, func(i, j int) bool { return nonDefault[i].Id < nonDefault[j].Id })
 
-	groupIds := make([]int, 0, len(overriding))
-	for _, g := range overriding {
+	groupById := make(map[int]*ChannelGroup, len(nonDefault))
+	groupIds := make([]int, 0, len(nonDefault))
+	for _, g := range nonDefault {
+		groupById[g.Id] = g
 		groupIds = append(groupIds, g.Id)
 	}
 	var members []ChannelGroupChannel
@@ -224,22 +238,27 @@ func channelGroupBillingOverrides() (map[int]ChannelBillingProfile, error) {
 		return nil, err
 	}
 
-	profileByGroup := make(map[int]ChannelBillingProfile, len(overriding))
-	for _, g := range overriding {
-		profileByGroup[g.Id] = g.BillingProfile()
-	}
-	// channelId -> 命中的最小 id 覆盖分组。
+	// channelId -> 命中的最小 id 非默认分组。
 	chosenGroup := make(map[int]int)
 	for _, m := range members {
 		if existing, ok := chosenGroup[m.ChannelId]; !ok || m.ChannelGroupId < existing {
 			chosenGroup[m.ChannelId] = m.ChannelGroupId
 		}
 	}
-	overrides := make(map[int]ChannelBillingProfile, len(chosenGroup))
+	assignments := make(map[int]channelNonDefaultGroupAssignment, len(chosenGroup))
 	for channelId, groupId := range chosenGroup {
-		overrides[channelId] = profileByGroup[groupId]
+		g := groupById[groupId]
+		if g == nil {
+			continue
+		}
+		assignments[channelId] = channelNonDefaultGroupAssignment{
+			groupId:          g.Id,
+			groupName:        g.Name,
+			overridesBilling: g.OverridesBilling(),
+			profile:          g.BillingProfile(),
+		}
 	}
-	return overrides, nil
+	return assignments, nil
 }
 
 func ListEnabledChannelTokenBillingMultiplierGroups() ([]ChannelTokenBillingMultiplierGroup, error) {

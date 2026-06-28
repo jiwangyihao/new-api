@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -15,21 +14,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-func modelPriceNotConfiguredError(modelName string, userId int) error {
-	if model.IsAdmin(userId) {
-		return fmt.Errorf(
-			"模型 %s 的价格未配置。请前往「系统设置 → 运营设置」开启自用模式，或在「系统设置 → 模型定价设置」中为该模型配置价格；"+
-				"Model %s price not configured. Go to System Settings → Operation Settings to enable self-use mode, or configure the model price in System Settings → Model Pricing.",
-			modelName, modelName,
-		)
-	}
-	return fmt.Errorf(
-		"模型 %s 的价格尚未由管理员配置，暂时无法使用，请联系站点管理员开启该模型；"+
-			"Model %s has not been priced by the administrator yet. Please contact the site administrator to enable this model.",
-		modelName, modelName,
-	)
-}
 
 // https://docs.claude.com/en/docs/build-with-claude/prompt-caching#1-hour-cache-duration
 const claudeCacheCreation1hMultiplier = 6 / 3.75
@@ -68,18 +52,8 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		if meta.MaxTokens != 0 {
 			preConsumedTokens += meta.MaxTokens
 		}
-		var success bool
-		var matchName string
-		modelRatio, success, matchName = ratio_setting.GetModelRatio(billingModelName)
-		if !success {
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
-			if !acceptUnsetRatio {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
-			}
-		}
+		// 未配置价格/倍率的模型不再被拒绝访问：GetModelRatio 在未配置时返回默认倍率 37.5，按该倍率计费放行。
+		modelRatio, _, _ = ratio_setting.GetModelRatio(billingModelName)
 		completionRatio = ratio_setting.GetCompletionRatio(billingModelName)
 		cacheRatio, _ = ratio_setting.GetCacheRatio(billingModelName)
 		cacheCreationRatio, _ = ratio_setting.GetCreateCacheRatio(billingModelName)
@@ -153,16 +127,8 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 			modelPrice = defaultPrice
 			usePrice = true
 		} else {
-			var ratioSuccess bool
-			var matchName string
-			modelRatio, ratioSuccess, matchName = ratio_setting.GetModelRatio(billingModelName)
-			acceptUnsetRatio := false
-			if info.UserSetting.AcceptUnsetRatioModel {
-				acceptUnsetRatio = true
-			}
-			if !ratioSuccess && !acceptUnsetRatio {
-				return types.PriceData{}, modelPriceNotConfiguredError(matchName, info.UserId)
-			}
+			// 未配置价格的模型不再被拒绝访问：GetModelRatio 在未配置时返回默认倍率 37.5，按该倍率计费放行。
+			modelRatio, _, _ = ratio_setting.GetModelRatio(billingModelName)
 		}
 	}
 

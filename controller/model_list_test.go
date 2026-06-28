@@ -214,9 +214,10 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 
 	ids := decodeListModelsResponse(t, recorder)
 	require.Contains(t, ids, "zz-tiered-visible-model")
-	require.NotContains(t, ids, "zz-tiered-empty-expr-model")
-	require.NotContains(t, ids, "zz-tiered-missing-expr-model")
-	require.NotContains(t, ids, "zz-unpriced-model")
+	// 未配置价格的限制已取消：tiered 表达式为空/缺失的模型与无价格模型现在也对用户可见。
+	require.Contains(t, ids, "zz-tiered-empty-expr-model")
+	require.Contains(t, ids, "zz-tiered-missing-expr-model")
+	require.Contains(t, ids, "zz-unpriced-model")
 
 	pricingByName := pricingByModelName(model.GetPricing())
 	visiblePricing, ok := pricingByName["zz-tiered-visible-model"]
@@ -261,9 +262,10 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 
 	ids := decodeListModelsResponse(t, recorder)
 	require.Contains(t, ids, "zz-token-tiered-visible-model")
-	require.NotContains(t, ids, "zz-token-tiered-empty-expr-model")
-	require.NotContains(t, ids, "zz-token-tiered-missing-expr-model")
-	require.NotContains(t, ids, "zz-token-unpriced-model")
+	// 未配置价格的限制已取消：这些模型现在也对用户可见。
+	require.Contains(t, ids, "zz-token-tiered-empty-expr-model")
+	require.Contains(t, ids, "zz-token-tiered-missing-expr-model")
+	require.Contains(t, ids, "zz-token-unpriced-model")
 }
 
 func TestGetAllUsersReportsInviteCountsFromRelationships(t *testing.T) {

@@ -13,9 +13,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -355,19 +353,12 @@ func validateConfigGuideTokenUsability(c *gin.Context, token *model.Token) (*mod
 }
 
 func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase) []string {
-	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
-	if !acceptUnsetRatioModel && user != nil && user.Id > 0 {
-		userSettings, _ := model.GetUserSetting(user.Id, false)
-		if userSettings.AcceptUnsetRatioModel {
-			acceptUnsetRatioModel = true
-		}
-	}
-
+	// 不再按是否配置价格过滤可见模型：未配置价格的模型也对用户可见、可访问（按默认倍率计费）。
 	if token != nil && token.IsModelLimitsEnabled() {
 		limits := token.GetModelLimits()
 		models := make([]string, 0, len(limits))
 		for _, modelName := range limits {
-			models = appendConfigGuideAvailableModel(models, modelName, acceptUnsetRatioModel)
+			models = appendConfigGuideAvailableModel(models, modelName)
 		}
 		return models
 	}
@@ -376,17 +367,14 @@ func availableConfigGuideModelsForToken(token *model.Token, user *model.UserBase
 
 	filtered := models[:0]
 	for _, modelName := range models {
-		filtered = appendConfigGuideAvailableModel(filtered, modelName, acceptUnsetRatioModel)
+		filtered = appendConfigGuideAvailableModel(filtered, modelName)
 	}
 	return filtered
 }
 
-func appendConfigGuideAvailableModel(models []string, modelName string, acceptUnsetRatioModel bool) []string {
+func appendConfigGuideAvailableModel(models []string, modelName string) []string {
 	normalized := normalizeConfigGuideAvailableModelID(modelName)
 	if normalized == "" {
-		return models
-	}
-	if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(normalized) {
 		return models
 	}
 	return append(models, normalized)

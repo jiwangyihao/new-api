@@ -68,6 +68,41 @@ type LogUsageHourly struct {
 func (LogUsageHourly) TableName() string {
 	return "log_usage_hourly"
 }
+func incrementLogAggregationColumn(table string, name string, delta int64) clause.Expr {
+	return gorm.Expr("? + ?", clause.Column{Table: table, Name: name}, delta)
+}
+
+func logUsageHourlyUpsertClause(row LogUsageHourly) clause.OnConflict {
+	return clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "bucket_start"},
+			{Name: "user_id"},
+			{Name: "token_id"},
+			{Name: "channel_id"},
+			{Name: "status"},
+			{Name: "model_key_hash"},
+		},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"model_name":            row.ModelName,
+			"request_count":         incrementLogAggregationColumn("log_usage_hourly", "request_count", row.RequestCount),
+			"quota_sum":             incrementLogAggregationColumn("log_usage_hourly", "quota_sum", row.QuotaSum),
+			"metered_tokens_sum":    incrementLogAggregationColumn("log_usage_hourly", "metered_tokens_sum", row.MeteredTokensSum),
+			"prompt_tokens_sum":     incrementLogAggregationColumn("log_usage_hourly", "prompt_tokens_sum", row.PromptTokensSum),
+			"completion_tokens_sum": incrementLogAggregationColumn("log_usage_hourly", "completion_tokens_sum", row.CompletionTokensSum),
+			"updated_at":            row.UpdatedAt,
+		}),
+	}
+}
+
+func freeSubscriptionUsageHourlyUpsertClause(row FreeSubscriptionUsageHourly) clause.OnConflict {
+	return clause.OnConflict{
+		Columns: []clause.Column{{Name: "subscription_id"}, {Name: "hour_index"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			"tokens":     incrementLogAggregationColumn("free_subscription_usage_hourly", "tokens", row.Tokens),
+			"updated_at": row.UpdatedAt,
+		}),
+	}
+}
 
 func logAggregationEventsTableReady(db *gorm.DB) bool {
 	return db != nil && db.Migrator().HasTable(&LogAggregationEvent{})
@@ -291,25 +326,7 @@ func applyLogUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) error {
 		CompletionTokensSum: int64(log.CompletionTokens),
 		UpdatedAt:           now,
 	}
-	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{
-			{Name: "bucket_start"},
-			{Name: "user_id"},
-			{Name: "token_id"},
-			{Name: "channel_id"},
-			{Name: "status"},
-			{Name: "model_key_hash"},
-		},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"model_name":            row.ModelName,
-			"request_count":         gorm.Expr("request_count + ?", row.RequestCount),
-			"quota_sum":             gorm.Expr("quota_sum + ?", row.QuotaSum),
-			"metered_tokens_sum":    gorm.Expr("metered_tokens_sum + ?", row.MeteredTokensSum),
-			"prompt_tokens_sum":     gorm.Expr("prompt_tokens_sum + ?", row.PromptTokensSum),
-			"completion_tokens_sum": gorm.Expr("completion_tokens_sum + ?", row.CompletionTokensSum),
-			"updated_at":            row.UpdatedAt,
-		}),
-	}).Create(&row).Error
+	return tx.Clauses(logUsageHourlyUpsertClause(row)).Create(&row).Error
 }
 
 func applyFreeSubscriptionUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) error {
@@ -362,13 +379,7 @@ func applyFreeSubscriptionUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) e
 		Tokens:         *log.SubscriptionTokensConsumed,
 		UpdatedAt:      now,
 	}
-	return tx.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "subscription_id"}, {Name: "hour_index"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"tokens":     gorm.Expr("tokens + ?", row.Tokens),
-			"updated_at": row.UpdatedAt,
-		}),
-	}).Create(&row).Error
+	return tx.Clauses(freeSubscriptionUsageHourlyUpsertClause(row)).Create(&row).Error
 }
 
 func subscriptionQualifiesForFreeUsageAggregation(sub *UserSubscription, plan *SubscriptionPlan) bool {

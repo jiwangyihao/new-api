@@ -3,12 +3,15 @@ package model
 import (
 	"crypto/sha256"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 func setupLogAggregationTestDBs(t *testing.T) {
@@ -209,6 +212,75 @@ func runApplyLogUsageAggregationEventIsIdempotentByLogIDAndAggregateName(t *test
 
 	require.NoError(t, LOG_DB.Model(&LogAggregationEvent{}).Where("log_id = ? AND aggregate_name = ?", log.Id, logAggregationNameLogUsageHourly).Where("status = ?", logAggregationEventStatusApplied).Count(&eventCount).Error)
 	assert.Equal(t, int64(1), eventCount)
+}
+func TestLogUsageHourlyUpsertPostgresSQLQualifiesConflictColumns(t *testing.T) {
+	setupLogAggregationTestDBs(t)
+	row := LogUsageHourly{
+		BucketStart:         1778716800,
+		UserID:              101,
+		TokenID:             201,
+		ChannelID:           301,
+		Status:              "success",
+		ModelKeyHash:        fmt.Sprintf("%x", sha256.Sum256([]byte("gpt-pg-upsert"))),
+		ModelName:           "gpt-pg-upsert",
+		RequestCount:        1,
+		QuotaSum:            17,
+		MeteredTokensSum:    24,
+		PromptTokensSum:     11,
+		CompletionTokensSum: 13,
+		UpdatedAt:           1778717000,
+	}
+	stmt := LOG_DB.Session(&gorm.Session{DryRun: true}).Clauses(logUsageHourlyUpsertClause(row)).Create(&row).Statement
+	require.NoError(t, stmt.Error)
+
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+		PreferSimpleProtocol: true,
+		Conn:                 stmt.ConnPool,
+	}), &gorm.Config{DryRun: true})
+	require.NoError(t, err)
+	pgStmt := db.Clauses(logUsageHourlyUpsertClause(row)).Create(&row).Statement
+	require.NoError(t, pgStmt.Error)
+	sql := pgStmt.SQL.String()
+
+	for _, column := range []string{"request_count", "quota_sum", "metered_tokens_sum", "prompt_tokens_sum", "completion_tokens_sum"} {
+		if strings.Contains(sql, column+"="+column+" +") || strings.Contains(sql, `"`+column+`"="`+column+`" +`) {
+			t.Fatalf("PostgreSQL log_usage_hourly upsert must qualify %s, got SQL: %s", column, sql)
+		}
+		if !strings.Contains(sql, `"log_usage_hourly"."`+column+`"`) {
+			t.Fatalf("PostgreSQL log_usage_hourly upsert should qualify %s, got SQL: %s", column, sql)
+		}
+	}
+}
+
+func TestFreeSubscriptionUsageHourlyUpsertPostgresSQLQualifiesConflictColumns(t *testing.T) {
+	setupLogAggregationTestDBs(t)
+	row := FreeSubscriptionUsageHourly{
+		SubscriptionID: 502,
+		UserID:         102,
+		HourIndex:      1,
+		Tokens:         31,
+		UpdatedAt:      1778717000,
+	}
+	stmt := LOG_DB.Session(&gorm.Session{DryRun: true}).Clauses(freeSubscriptionUsageHourlyUpsertClause(row)).Create(&row).Statement
+	require.NoError(t, stmt.Error)
+
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+		PreferSimpleProtocol: true,
+		Conn:                 stmt.ConnPool,
+	}), &gorm.Config{DryRun: true})
+	require.NoError(t, err)
+	pgStmt := db.Clauses(freeSubscriptionUsageHourlyUpsertClause(row)).Create(&row).Statement
+	require.NoError(t, pgStmt.Error)
+	sql := pgStmt.SQL.String()
+
+	if strings.Contains(sql, "tokens=tokens +") || strings.Contains(sql, `"tokens"="tokens" +`) {
+		t.Fatalf("PostgreSQL free_subscription_usage_hourly upsert must qualify tokens, got SQL: %s", sql)
+	}
+	if !strings.Contains(sql, `"free_subscription_usage_hourly"."tokens"`) {
+		t.Fatalf("PostgreSQL free_subscription_usage_hourly upsert should qualify tokens, got SQL: %s", sql)
+	}
 }
 
 func TestApplyFreeSubscriptionUsageAggregationIsIdempotentByLogIDAndAggregateName(t *testing.T) {

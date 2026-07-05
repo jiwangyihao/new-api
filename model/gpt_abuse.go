@@ -179,7 +179,6 @@ func (l *GPTAbuseRepeatBlockLog) BeforeCreate(tx *gorm.DB) error {
 	return nil
 }
 
-
 func RecordGPTAbuseSignalLog(log *GPTAbuseSignalLog) (bool, error) {
 	if log == nil {
 		return false, nil
@@ -330,9 +329,14 @@ func GetActiveGPTAbuseSuspension(userID int, now int64) (*GPTAbuseUserSuspension
 		return nil, nil
 	}
 	var susp GPTAbuseUserSuspension
-	err := DB.Where("user_id = ? AND status = ? AND suspended_until > ?", userID, GPTAbuseSuspensionStatusActive, now).
-		Order("suspended_until desc, id desc").First(&susp).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	query := DB.Where("user_id = ? AND status = ? AND suspended_until > ?", userID, GPTAbuseSuspensionStatusActive, now).
+		Order("suspended_until desc, id desc").
+		Limit(1).
+		Find(&susp)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if query.RowsAffected == 0 {
 		var expiredCount int64
 		_ = DB.Model(&GPTAbuseUserSuspension{}).
 			Where("user_id = ? AND status = ? AND suspended_until <= ?", userID, GPTAbuseSuspensionStatusActive, now).
@@ -343,9 +347,6 @@ func GetActiveGPTAbuseSuspension(userID int, now int64) (*GPTAbuseUserSuspension
 				Updates(map[string]any{"status": GPTAbuseSuspensionStatusExpired, "active_user_id": nil, "updated_at": now}).Error
 		}
 		return nil, nil
-	}
-	if err != nil {
-		return nil, err
 	}
 	return &susp, nil
 }

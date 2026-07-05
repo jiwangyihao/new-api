@@ -135,11 +135,11 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 			}
 		}
 		var entitlement model.InvitationMonthlyEntitlement
-		entitlementErr := tx.Set("gorm:query_option", "FOR UPDATE").Where("inviter_id = ? AND reward_month = ?", inviterId, rewardMonth).First(&entitlement).Error
-		if entitlementErr != nil && !errors.Is(entitlementErr, gorm.ErrRecordNotFound) {
-			return entitlementErr
+		entitlementQuery := tx.Set("gorm:query_option", "FOR UPDATE").Where("inviter_id = ? AND reward_month = ?", inviterId, rewardMonth).Order("id asc").Limit(1).Find(&entitlement)
+		if entitlementQuery.Error != nil {
+			return entitlementQuery.Error
 		}
-		entitlementMissing := errors.Is(entitlementErr, gorm.ErrRecordNotFound)
+		entitlementMissing := entitlementQuery.RowsAffected == 0
 		if len(candidates) == 0 {
 			if entitlementMissing {
 				entitlement = model.InvitationMonthlyEntitlement{InviterId: inviterId, RewardMonth: rewardMonth}
@@ -422,11 +422,11 @@ func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.S
 	}
 	if rewardSubscriptionId > 0 {
 		var existing model.UserSubscription
-		query := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ? AND user_id = ? AND grant_reason = ?", rewardSubscriptionId, userId, monthlyInviteEntitlementReason).First(&existing)
-		if query.Error != nil && !errors.Is(query.Error, gorm.ErrRecordNotFound) {
+		query := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ? AND user_id = ? AND grant_reason = ?", rewardSubscriptionId, userId, monthlyInviteEntitlementReason).Limit(1).Find(&existing)
+		if query.Error != nil {
 			return nil, query.Error
 		}
-		if query.Error == nil {
+		if query.RowsAffected > 0 {
 			if err := tx.Model(&existing).Updates(fields).Error; err != nil {
 				return nil, err
 			}

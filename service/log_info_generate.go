@@ -33,6 +33,32 @@ func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other
 	}
 }
 
+func noteQuotaClamp(relayInfo *relaycommon.RelayInfo, clamp *common.QuotaClamp) {
+	if relayInfo == nil || clamp == nil || relayInfo.QuotaClamp != nil {
+		return
+	}
+	relayInfo.QuotaClamp = clamp
+}
+
+func attachQuotaClamp(other map[string]interface{}, clamp *common.QuotaClamp) {
+	if other == nil || clamp == nil {
+		return
+	}
+	adminInfo, _ := other["admin_info"].(map[string]interface{})
+	if adminInfo == nil {
+		adminInfo = make(map[string]interface{})
+		other["admin_info"] = adminInfo
+	}
+	adminInfo["quota_saturation"] = clamp.AuditMap()
+}
+
+func attachQuotaSaturation(other map[string]interface{}, relayInfo *relaycommon.RelayInfo) {
+	if relayInfo == nil {
+		return
+	}
+	attachQuotaClamp(other, relayInfo.QuotaClamp)
+}
+
 func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, modelRatio, completionRatio float64,
 	cacheTokens int, cacheRatio float64, modelPrice float64) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -78,6 +104,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	appendTokenLimitAuditInfo(relayInfo, other)
+	attachQuotaSaturation(other, relayInfo)
 	return other
 }
 

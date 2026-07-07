@@ -64,12 +64,12 @@ func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens 
 		audioRatio = ratio_setting.GetAudioRatio(billingModelName)
 		audioCompletionRatio = ratio_setting.GetAudioCompletionRatio(billingModelName)
 		ratio := modelRatio
-		preConsumedQuota = int(float64(preConsumedTokens) * ratio)
+		preConsumedQuota = common.QuotaFromFloat(float64(preConsumedTokens) * ratio)
 	} else {
 		if meta.ImagePriceRatio != 0 {
 			modelPrice = modelPrice * meta.ImagePriceRatio
 		}
-		preConsumedQuota = int(modelPrice * common.QuotaPerUnit)
+		preConsumedQuota = common.QuotaFromFloat(modelPrice * common.QuotaPerUnit)
 	}
 
 	// check if free model pre-consume is disabled
@@ -136,7 +136,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 	freeModel := false
 
 	if usePrice {
-		quota = int(modelPrice * common.QuotaPerUnit)
+		quota = common.QuotaFromFloat(modelPrice * common.QuotaPerUnit)
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if modelPrice == 0 {
 				quota = 0
@@ -145,7 +145,7 @@ func ModelPriceHelperPerCall(c *gin.Context, info *relaycommon.RelayInfo) (types
 		}
 	} else {
 		// 按量计费：以模型倍率的一半作为预扣额度
-		quota = int(modelRatio / 2 * common.QuotaPerUnit)
+		quota = common.QuotaFromFloat(modelRatio / 2 * common.QuotaPerUnit)
 		modelPrice = -1
 		if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
 			if modelRatio == 0 {

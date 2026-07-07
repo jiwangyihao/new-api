@@ -335,6 +335,13 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 			return nil, errors.Wrap(err, "marshal metadata failed")
 		}
 	}
+	if aliReq.Parameters == nil {
+		aliReq.Parameters = &AliVideoParameters{}
+	}
+	if aliReq.Parameters.Duration <= 0 {
+		aliReq.Parameters.Duration = 5 // 默认5秒
+	}
+	aliReq.Parameters.Duration = relaycommon.ClampTaskDurationSeconds(aliReq.Parameters.Duration)
 
 	if aliReq.Model != upstreamModel {
 		return nil, errors.New("can't change model with metadata")
@@ -357,7 +364,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 	}
 
 	otherRatios := map[string]float64{
-		"seconds": float64(aliReq.Parameters.Duration),
+		"seconds": float64(relaycommon.ClampTaskDurationSeconds(aliReq.Parameters.Duration)),
 	}
 	ratios, err := ProcessAliOtherRatios(aliReq)
 	if err != nil {

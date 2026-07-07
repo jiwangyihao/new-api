@@ -111,6 +111,7 @@ func TryTieredSettle(relayInfo *relaycommon.RelayInfo, params billingexpr.TokenP
 		}
 		return true, quota, nil
 	}
+	noteQuotaClamp(relayInfo, tr.Clamp)
 
 	return true, tr.ActualQuota, &tr
 }

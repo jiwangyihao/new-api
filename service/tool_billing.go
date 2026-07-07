@@ -1,8 +1,6 @@
 package service
 
 import (
-	"math"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -50,7 +48,7 @@ func ComputeToolCallQuota(usage ToolCallUsage, _ float64) ToolCallResult {
 			return
 		}
 		totalPrice := pricePer1K * float64(count) / 1000
-		quota := int(math.Round(totalPrice * common.QuotaPerUnit))
+		quota := common.QuotaRound(totalPrice * common.QuotaPerUnit)
 		items = append(items, ToolCallItem{
 			Name:       toolName,
 			CallCount:  count,
@@ -58,7 +56,7 @@ func ComputeToolCallQuota(usage ToolCallUsage, _ float64) ToolCallResult {
 			TotalPrice: totalPrice,
 			Quota:      quota,
 		})
-		totalQuota += quota
+		totalQuota = common.QuotaFromFloat(float64(totalQuota) + float64(quota))
 	}
 
 	if usage.WebSearchCalls > 0 && usage.WebSearchToolName != "" {
@@ -71,7 +69,7 @@ func ComputeToolCallQuota(usage ToolCallUsage, _ float64) ToolCallResult {
 
 	if usage.ImageGenerationCall {
 		price := operation_setting.GetGPTImage1PriceOnceCall(usage.ImageGenerationQuality, usage.ImageGenerationSize)
-		quota := int(math.Round(price * common.QuotaPerUnit))
+		quota := common.QuotaRound(price * common.QuotaPerUnit)
 		items = append(items, ToolCallItem{
 			Name:       "image_generation",
 			CallCount:  1,
@@ -79,7 +77,7 @@ func ComputeToolCallQuota(usage ToolCallUsage, _ float64) ToolCallResult {
 			TotalPrice: price,
 			Quota:      quota,
 		})
-		totalQuota += quota
+		totalQuota = common.QuotaFromFloat(float64(totalQuota) + float64(quota))
 	}
 
 	return ToolCallResult{

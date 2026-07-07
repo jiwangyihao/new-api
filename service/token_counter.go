@@ -140,11 +140,11 @@ func getImageToken(c *gin.Context, fileMeta *types.FileMeta, model string, strea
 			if imageTokens > 1536 {
 				imageTokens = 1536
 			}
-			return int(math.Round(float64(imageTokens) * multiplier)), nil
+			return common.QuotaRound(float64(imageTokens) * multiplier), nil
 		}
 		// below cap
 		imageTokens := rawPatches
-		return int(math.Round(float64(imageTokens) * multiplier)), nil
+		return common.QuotaRound(float64(imageTokens) * multiplier), nil
 	}
 
 	// Tile-based calculation for 4o/4.1/4.5/o1/o3/etc.
@@ -210,8 +210,15 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 			if err != nil {
 				return 0, fmt.Errorf("error getting audio duration: %v", err)
 			}
+			if duration < 0 {
+				duration = 0
+			}
 			// 一分钟 1000 token，与 $price / minute 对齐
-			totalAudioToken += int(math.Round(math.Ceil(duration) / 60.0 * 1000))
+			audioTokens := common.QuotaRound(math.Ceil(duration) / 60.0 * 1000)
+			if audioTokens < 0 {
+				audioTokens = 0
+			}
+			totalAudioToken = common.QuotaFromFloat(float64(totalAudioToken) + float64(audioTokens))
 		}
 		return totalAudioToken, nil
 	}
@@ -379,7 +386,10 @@ func CountAudioTokenInput(audioBase64 string, audioFormat string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	return int(duration / 60 * 100 / 0.06), nil
+	if duration < 0 {
+		return 0, nil
+	}
+	return common.QuotaFromFloat(duration / 60 * 100 / 0.06), nil
 }
 
 func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) {
@@ -390,7 +400,10 @@ func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) 
 	if err != nil {
 		return 0, err
 	}
-	return int(duration / 60 * 200 / 0.24), nil
+	if duration < 0 {
+		return 0, nil
+	}
+	return common.QuotaFromFloat(duration / 60 * 200 / 0.24), nil
 }
 
 // CountTextToken 统计文本的token数量，仅OpenAI模型使用tokenizer，其余模型使用估算

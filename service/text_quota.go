@@ -139,19 +139,20 @@ func calculateTextToolCallSurcharge(ctx *gin.Context, relayInfo *relaycommon.Rel
 	return surcharge
 }
 
-func composeTieredTextQuota(summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
+func composeTieredTextQuota(relayInfo *relaycommon.RelayInfo, summary textQuotaSummary, tieredQuota int, tieredResult *billingexpr.TieredResult) int {
 	if summary.ToolCallSurchargeQuota.IsZero() {
 		return tieredQuota
 	}
 
+	var total decimal.Decimal
 	if tieredResult != nil {
-		return int(decimal.NewFromFloat(tieredResult.ActualQuotaBeforeRatio).
-			Add(summary.ToolCallSurchargeQuota).
-			Round(0).
-			IntPart())
+		total = decimal.NewFromFloat(tieredResult.ActualQuotaBeforeRatio).Add(summary.ToolCallSurchargeQuota)
+	} else {
+		total = decimal.NewFromInt(int64(tieredQuota)).Add(summary.ToolCallSurchargeQuota)
 	}
-
-	return tieredQuota + int(summary.ToolCallSurchargeQuota.Round(0).IntPart())
+	quota, clamp := common.QuotaFromDecimalChecked(total)
+	noteQuotaClamp(relayInfo, clamp)
+	return quota
 }
 
 func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage) textQuotaSummary {
@@ -281,7 +282,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 		if !ratio.IsZero() && quotaCalculateDecimal.LessThanOrEqual(decimal.Zero) {
 			quotaCalculateDecimal = decimal.NewFromInt(1)
 		}
-		summary.Quota = int(quotaCalculateDecimal.Round(0).IntPart())
+		var clamp *common.QuotaClamp
+		summary.Quota, clamp = common.QuotaFromDecimalChecked(quotaCalculateDecimal)
+		noteQuotaClamp(relayInfo, clamp)
 	} else {
 		quotaCalculateDecimal := dModelPrice.Mul(dQuotaPerUnit).Mul(dQuotaMultiplier)
 		quotaCalculateDecimal = quotaCalculateDecimal.Add(summary.ToolCallSurchargeQuota)
@@ -291,7 +294,9 @@ func calculateTextQuotaSummary(ctx *gin.Context, relayInfo *relaycommon.RelayInf
 				quotaCalculateDecimal = quotaCalculateDecimal.Mul(decimal.NewFromFloat(otherRatio))
 			}
 		}
-		summary.Quota = int(quotaCalculateDecimal.Round(0).IntPart())
+		var clamp *common.QuotaClamp
+		summary.Quota, clamp = common.QuotaFromDecimalChecked(quotaCalculateDecimal)
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	if summary.TotalTokens == 0 {
@@ -398,7 +403,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		if tieredOk {
 			tieredBillingApplied = true
 			tieredResult = tieredRes
-			summary.Quota = composeTieredTextQuota(summary, tieredQuota, tieredRes)
+			summary.Quota = composeTieredTextQuota(relayInfo, summary, tieredQuota, tieredRes)
 		}
 	}
 	if tieredBillingApplied {

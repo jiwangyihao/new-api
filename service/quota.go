@@ -11,8 +11,8 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	"github.com/QuantumNous/new-api/pkg/creditbilling"
+	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -46,11 +46,16 @@ func hasCustomModelRatio(modelName string, currentRatio float64) bool {
 }
 
 func calculateAudioQuota(info QuotaInfo) int {
+	quota, _ := calculateAudioQuotaChecked(info)
+	return quota
+}
+
+func calculateAudioQuotaChecked(info QuotaInfo) (int, *common.QuotaClamp) {
 	if info.UsePrice {
 		modelPrice := decimal.NewFromFloat(info.ModelPrice)
 		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
 		quota := modelPrice.Mul(quotaPerUnit)
-		return int(quota.IntPart())
+		return common.QuotaFromDecimalChecked(quota)
 	}
 
 	completionRatio := decimal.NewFromFloat(ratio_setting.GetCompletionRatio(info.ModelName))
@@ -78,7 +83,7 @@ func calculateAudioQuota(info QuotaInfo) int {
 		quota = decimal.NewFromInt(1)
 	}
 
-	return int(quota.Round(0).IntPart())
+	return common.QuotaFromDecimalChecked(quota)
 }
 
 func PreWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.RealtimeUsage) error {
@@ -192,9 +197,13 @@ func PostWssConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, mod
 		ModelRatio: modelRatio,
 	}
 
-	quota := calculateAudioQuota(quotaInfo)
+	var quota int
 	if tieredOk {
 		quota = tieredQuota
+	} else {
+		var clamp *common.QuotaClamp
+		quota, clamp = calculateAudioQuotaChecked(quotaInfo)
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	var logContent string
@@ -263,17 +272,23 @@ func CalcOpenRouterCacheCreateTokens(usage dto.Usage, priceData types.PriceData)
 	promptCacheCreatePrice := quotaPrice * priceData.CacheCreationRatio
 	promptCacheReadPrice := quotaPrice * priceData.CacheRatio
 	completionPrice := quotaPrice * priceData.CompletionRatio
+	denominator := promptCacheCreatePrice - quotaPrice
+	if denominator == 0 || math.IsNaN(denominator) || math.IsInf(denominator, 0) {
+		return 0
+	}
 
 	cost, _ := usage.Cost.(float64)
 	totalPromptTokens := float64(usage.PromptTokens)
 	completionTokens := float64(usage.CompletionTokens)
 	promptCacheReadTokens := float64(usage.PromptTokensDetails.CachedTokens)
-
-	return int(math.Round((cost -
+	value := (cost -
 		totalPromptTokens*quotaPrice +
 		promptCacheReadTokens*(quotaPrice-promptCacheReadPrice) -
-		completionTokens*completionPrice) /
-		(promptCacheCreatePrice - quotaPrice)))
+		completionTokens*completionPrice) / denominator
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return common.QuotaRound(value)
 }
 
 func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent string) {
@@ -318,9 +333,13 @@ func PostAudioConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, u
 		ModelRatio: modelRatio,
 	}
 
-	quota := calculateAudioQuota(quotaInfo)
+	var quota int
 	if tieredOk {
 		quota = tieredQuota
+	} else {
+		var clamp *common.QuotaClamp
+		quota, clamp = calculateAudioQuotaChecked(quotaInfo)
+		noteQuotaClamp(relayInfo, clamp)
 	}
 
 	totalTokens := usage.TotalTokens

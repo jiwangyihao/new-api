@@ -207,6 +207,7 @@ type RelayInfo struct {
 	// captured at pre-consume time. Non-nil only when billing mode is "tiered_expr".
 	TieredBillingSnapshot *billingexpr.BillingSnapshot
 	BillingRequestInput   *billingexpr.RequestInput
+	QuotaClamp            *common.QuotaClamp
 
 	Request dto.Request
 

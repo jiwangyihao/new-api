@@ -104,12 +104,12 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			logger.LogWarn(c, fmt.Sprintf("failed to get audio duration: %v", durationErr))
 			// 如果无法获取时长，则设置保底的 CompletionTokens，根据body大小计算
 			sizeInKB := float64(len(bodyBytes)) / 1000.0
-			estimatedTokens := int(math.Ceil(sizeInKB)) // 粗略估算每KB约等于1 token
+			estimatedTokens := common.QuotaRound(sizeInKB) // 粗略估算每KB约等于1 token
 			usage.CompletionTokens = estimatedTokens
 			usage.CompletionTokenDetails.AudioTokens = estimatedTokens
 		} else if duration > 0 {
 			// 计算 token: ceil(duration) / 60.0 * 1000，即每分钟 1000 tokens
-			completionTokens := int(math.Round(math.Ceil(duration) / 60.0 * 1000))
+			completionTokens := common.QuotaRound(math.Ceil(duration) / 60.0 * 1000)
 			usage.CompletionTokens = completionTokens
 			usage.CompletionTokenDetails.AudioTokens = completionTokens
 		}

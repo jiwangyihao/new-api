@@ -299,6 +299,60 @@ func TestCreditBalanceSingletonIndexesGenerateForMySQLAndPostgres(t *testing.T) 
 	}
 }
 
+func TestCreditBalanceMySQL57MigrationDDLUsesStoredGeneratedColumns(t *testing.T) {
+	constraints := creditBalanceMySQL57ConstraintDDL()
+	require.Len(t, constraints, 2)
+
+	expectedStatements := []string{
+		"ALTER TABLE `subscription_plans` ADD COLUMN `credit_balance_identity_guard` TINYINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN 1 ELSE NULL END) STORED",
+		"CREATE UNIQUE INDEX `idx_subscription_plans_credit_balance_identity` ON `subscription_plans` (`credit_balance_identity_guard`)",
+		"ALTER TABLE `user_subscriptions` ADD COLUMN `credit_balance_identity_guard` BIGINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN `user_id` ELSE NULL END) STORED",
+		"CREATE UNIQUE INDEX `idx_user_subscriptions_credit_balance_identity` ON `user_subscriptions` (`credit_balance_identity_guard`)",
+	}
+	actualStatements := make([]string, 0, len(expectedStatements))
+	for _, constraint := range constraints {
+		actualStatements = append(actualStatements, constraint.addColumnSQL, constraint.createIndexSQL)
+	}
+	require.Equal(t, expectedStatements, actualStatements)
+
+	baseDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	baseStatement := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]SubscriptionPlan{}).Statement
+	capture := &sqlCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	mysqlDB, err := gorm.Open(mysql.New(mysql.Config{
+		Conn:                      baseStatement.ConnPool,
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{DryRun: true, Logger: capture})
+	require.NoError(t, err)
+	for _, statement := range actualStatements {
+		require.NoError(t, mysqlDB.Exec(statement).Error)
+	}
+	require.Equal(t, expectedStatements, capture.statements)
+}
+
+func TestCreditBalancePostgres96MigrationDDLUsesPartialUniqueIndexes(t *testing.T) {
+	statements := creditBalancePartialUniqueIndexDDL()
+	require.Equal(t, []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS "idx_subscription_plans_credit_balance_identity" ON "subscription_plans" ("entitlement_type") WHERE "entitlement_type" = 'credit_balance'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS "idx_user_subscriptions_credit_balance_identity" ON "user_subscriptions" ("user_id") WHERE "entitlement_type" = 'credit_balance'`,
+	}, statements)
+
+	baseDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	baseStatement := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]SubscriptionPlan{}).Statement
+	capture := &sqlCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	postgresDB, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+		PreferSimpleProtocol: true,
+		Conn:                 baseStatement.ConnPool,
+	}), &gorm.Config{DryRun: true, Logger: capture})
+	require.NoError(t, err)
+	for _, statement := range statements {
+		require.NoError(t, postgresDB.Exec(statement).Error)
+	}
+	require.Equal(t, statements, capture.statements)
+}
+
 func TestSubscriptionPlanBusinessCode_AllowsMultipleLegacyNulls(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7202, Title: "Legacy A", Enabled: true}).Error)
@@ -328,6 +382,36 @@ func TestCreditBalanceSingletonKeysEnforceDatabaseUniqueness(t *testing.T) {
 	require.NoError(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
 	require.Error(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
 	require.NoError(t, db.Create(&UserSubscription{UserId: 2, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+}
+
+func TestCreditBalanceDatabaseConstraintsRejectRawDuplicateIdentity(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}))
+	require.NoError(t, ensureCreditBalanceSingletonConstraints())
+	require.NoError(t, ensureCreditBalanceSingletonConstraints())
+
+	require.NoError(t, DB.Exec("INSERT INTO subscription_plans (title, entitlement_type, singleton_key) VALUES (?, ?, ?)", "Raw credit balance", SubscriptionEntitlementCreditBalance, creditBalancePlanSingletonKey).Error)
+	require.Error(t, DB.Exec("INSERT INTO subscription_plans (title, entitlement_type) VALUES (?, ?)", "Duplicate raw credit balance with null key", SubscriptionEntitlementCreditBalance).Error)
+	require.Error(t, DB.Exec("INSERT INTO subscription_plans (title, entitlement_type, singleton_key) VALUES (?, ?, ?)", "Duplicate raw credit balance with different key", SubscriptionEntitlementCreditBalance, "different-credit-plan").Error)
+	require.NoError(t, DB.Exec("INSERT INTO subscription_plans (title, entitlement_type) VALUES (?, ?), (?, ?)", "Raw timed A", SubscriptionEntitlementTimed, "Raw timed B", SubscriptionEntitlementTimed).Error)
+	require.Error(t, DB.Exec("UPDATE subscription_plans SET entitlement_type = ?, singleton_key = ? WHERE title = ?", SubscriptionEntitlementCreditBalance, "updated-credit-plan", "Raw timed A").Error)
+
+	require.NoError(t, DB.Exec("INSERT INTO user_subscriptions (user_id, entitlement_type, singleton_key) VALUES (?, ?, ?)", 1, SubscriptionEntitlementCreditBalance, creditBalanceUserSingletonKey).Error)
+	require.Error(t, DB.Exec("INSERT INTO user_subscriptions (user_id, entitlement_type) VALUES (?, ?)", 1, SubscriptionEntitlementCreditBalance).Error)
+	require.Error(t, DB.Exec("INSERT INTO user_subscriptions (user_id, entitlement_type, singleton_key) VALUES (?, ?, ?)", 1, SubscriptionEntitlementCreditBalance, "different-credit-entitlement").Error)
+	require.NoError(t, DB.Exec("INSERT INTO user_subscriptions (user_id, entitlement_type) VALUES (?, ?)", 2, SubscriptionEntitlementCreditBalance).Error)
+	require.NoError(t, DB.Exec("INSERT INTO user_subscriptions (user_id, entitlement_type) VALUES (?, ?), (?, ?)", 1, SubscriptionEntitlementTimed, 1, SubscriptionEntitlementTimed).Error)
+	require.Error(t, DB.Exec("UPDATE user_subscriptions SET entitlement_type = ?, singleton_key = ? WHERE user_id = ? AND entitlement_type = ?", SubscriptionEntitlementCreditBalance, "updated-credit-entitlement", 1, SubscriptionEntitlementTimed).Error)
 }
 
 func TestEnsureCreditBalanceSubscriptionPlanConcurrentInitializationConverges(t *testing.T) {
@@ -386,8 +470,10 @@ func TestEnsureSubscriptionPlanTableSQLiteCreatesCreditBalanceSchema(t *testing.
 
 	require.NoError(t, DB.AutoMigrate(&UserSubscription{}))
 	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, ensureCreditBalanceSingletonConstraints())
 	require.NoError(t, ensureCreditBalanceSubscriptionPlan())
 	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, ensureCreditBalanceSingletonConstraints())
 	require.NoError(t, ensureCreditBalanceSubscriptionPlan())
 
 	for _, column := range []string{
@@ -405,6 +491,8 @@ func TestEnsureSubscriptionPlanTableSQLiteCreatesCreditBalanceSchema(t *testing.
 	}
 	require.True(t, DB.Migrator().HasIndex("subscription_plans", "idx_subscription_plans_singleton_key"))
 	require.True(t, DB.Migrator().HasIndex("user_subscriptions", "idx_user_subscription_singleton"))
+	require.True(t, DB.Migrator().HasIndex("subscription_plans", creditBalancePlanIdentityIndex))
+	require.True(t, DB.Migrator().HasIndex("user_subscriptions", creditBalanceUserIdentityIndex))
 
 	var plans []SubscriptionPlan
 	require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Find(&plans).Error)

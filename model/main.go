@@ -318,6 +318,9 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := ensureCreditBalanceSingletonConstraints(); err != nil {
+		return err
+	}
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
 		return err
 	}
@@ -422,6 +425,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := ensureCreditBalanceSingletonConstraints(); err != nil {
+		return err
 	}
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
 		return err
@@ -671,6 +677,75 @@ PRIMARY KEY (` + "`id`" + `)
 	if !DB.Migrator().HasIndex(tableName, "idx_subscription_plans_singleton_key") {
 		if err := DB.Exec("CREATE UNIQUE INDEX `idx_subscription_plans_singleton_key` ON `" + tableName + "` (`singleton_key`)").Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+const (
+	creditBalancePlanIdentityIndex   = "idx_subscription_plans_credit_balance_identity"
+	creditBalanceUserIdentityIndex   = "idx_user_subscriptions_credit_balance_identity"
+	creditBalanceIdentityGuardColumn = "credit_balance_identity_guard"
+)
+
+type creditBalanceMySQLConstraintDDL struct {
+	tableName      string
+	indexName      string
+	addColumnSQL   string
+	createIndexSQL string
+}
+
+func creditBalancePartialUniqueIndexDDL() []string {
+	return []string{
+		`CREATE UNIQUE INDEX IF NOT EXISTS "` + creditBalancePlanIdentityIndex + `" ON "subscription_plans" ("entitlement_type") WHERE "entitlement_type" = 'credit_balance'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS "` + creditBalanceUserIdentityIndex + `" ON "user_subscriptions" ("user_id") WHERE "entitlement_type" = 'credit_balance'`,
+	}
+}
+
+func creditBalanceMySQL57ConstraintDDL() []creditBalanceMySQLConstraintDDL {
+	return []creditBalanceMySQLConstraintDDL{
+		{
+			tableName:      "subscription_plans",
+			indexName:      creditBalancePlanIdentityIndex,
+			addColumnSQL:   "ALTER TABLE `subscription_plans` ADD COLUMN `" + creditBalanceIdentityGuardColumn + "` TINYINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN 1 ELSE NULL END) STORED",
+			createIndexSQL: "CREATE UNIQUE INDEX `" + creditBalancePlanIdentityIndex + "` ON `subscription_plans` (`" + creditBalanceIdentityGuardColumn + "`)",
+		},
+		{
+			tableName:      "user_subscriptions",
+			indexName:      creditBalanceUserIdentityIndex,
+			addColumnSQL:   "ALTER TABLE `user_subscriptions` ADD COLUMN `" + creditBalanceIdentityGuardColumn + "` BIGINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN `user_id` ELSE NULL END) STORED",
+			createIndexSQL: "CREATE UNIQUE INDEX `" + creditBalanceUserIdentityIndex + "` ON `user_subscriptions` (`" + creditBalanceIdentityGuardColumn + "`)",
+		},
+	}
+}
+
+func ensureCreditBalanceSingletonConstraints() error {
+	if DB == nil {
+		return fmt.Errorf("database is nil")
+	}
+	if common.UsingMySQL {
+		return ensureCreditBalanceSingletonConstraintsMySQL()
+	}
+
+	for _, statement := range creditBalancePartialUniqueIndexDDL() {
+		if err := DB.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func ensureCreditBalanceSingletonConstraintsMySQL() error {
+	for _, constraint := range creditBalanceMySQL57ConstraintDDL() {
+		if !DB.Migrator().HasColumn(constraint.tableName, creditBalanceIdentityGuardColumn) {
+			if err := DB.Exec(constraint.addColumnSQL).Error; err != nil {
+				return err
+			}
+		}
+		if !DB.Migrator().HasIndex(constraint.tableName, constraint.indexName) {
+			if err := DB.Exec(constraint.createIndexSQL).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

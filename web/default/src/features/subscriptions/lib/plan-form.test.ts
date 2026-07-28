@@ -9,8 +9,10 @@ import {
 } from './plan-form'
 
 describe('subscription plan distributor form mapping', () => {
-  test('defaults GPT abuse warning limit to automatic mode', () => {
+  test('defaults GPT abuse warning limit and Credit eligibility switches', () => {
     assert.equal(PLAN_FORM_DEFAULTS.gpt_abuse_warning_limit, 0)
+    assert.equal(PLAN_FORM_DEFAULTS.unlimited_purchase_enabled, false)
+    assert.equal(PLAN_FORM_DEFAULTS.timed_conversion_enabled, false)
   })
 
   test('maps backend distributor fields into form values', () => {
@@ -50,6 +52,8 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(values.reward_eligible, false)
     assert.equal(values.business_code, 'trial_24h')
     assert.equal(values.invite_trial, true)
+    assert.equal(values.unlimited_purchase_enabled, false)
+    assert.equal(values.timed_conversion_enabled, false)
   })
 
   test('includes token, concurrency, and visibility fields in submit payload', () => {
@@ -67,6 +71,8 @@ describe('subscription plan distributor form mapping', () => {
       reward_eligible: true,
       business_code: ' basic_monthly ',
       invite_trial: true,
+      unlimited_purchase_enabled: true,
+      timed_conversion_enabled: false,
     }
 
     const payload = formValuesToPlanPayload(values)
@@ -82,6 +88,8 @@ describe('subscription plan distributor form mapping', () => {
     assert.equal(payload.plan.business_code, 'basic_monthly')
     assert.equal(payload.plan.invite_trial, true)
     assert.equal(payload.plan.currency, 'CNY')
+    assert.equal(payload.plan.unlimited_purchase_enabled, true)
+    assert.equal(payload.plan.timed_conversion_enabled, false)
   })
 
   test('keeps explicit GPT abuse warning limit zero in submit payload', () => {

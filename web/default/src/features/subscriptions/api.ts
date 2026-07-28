@@ -24,6 +24,8 @@ import type {
   PlanPayload,
   UserSubscriptionRecord,
   CreateUserSubscriptionRequest,
+  SubscriptionPlan,
+  CreditBalancePlanUpdateRequest,
   SubscriptionPayResponse,
   SubscriptionPayRequest,
   SelfSubscriptionData,
@@ -41,13 +43,26 @@ export interface SetActiveSubscriptionRequest {
   subscription_id: number
 }
 
-
 // ============================================================================
 // Admin Plan Management
 // ============================================================================
 
 export async function getAdminPlans(): Promise<ApiResponse<PlanRecord[]>> {
   const res = await api.get('/api/subscription/admin/plans')
+  return res.data
+}
+
+export async function getCreditBalancePlan(): Promise<
+  ApiResponse<SubscriptionPlan>
+> {
+  const res = await api.get('/api/subscription/admin/credit-balance-plan')
+  return res.data
+}
+
+export async function updateCreditBalancePlan(
+  data: CreditBalancePlanUpdateRequest
+): Promise<ApiResponse<SubscriptionPlan>> {
+  const res = await api.put('/api/subscription/admin/credit-balance-plan', data)
   return res.data
 }
 
@@ -225,9 +240,7 @@ export async function setActiveSubscription(
   return res.data
 }
 
-export async function resetSubscriptionQuota(
-  subscriptionId: number
-): Promise<
+export async function resetSubscriptionQuota(subscriptionId: number): Promise<
   ApiResponse<{
     subscription_id: number
     end_time: number

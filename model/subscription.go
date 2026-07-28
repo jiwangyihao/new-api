@@ -37,6 +37,13 @@ const (
 )
 
 const (
+	SubscriptionEntitlementTimed         = "timed"
+	SubscriptionEntitlementCreditBalance = "credit_balance"
+	creditBalancePlanSingletonKey        = "global"
+	creditBalanceUserSingletonKey        = "credit_balance"
+)
+
+const (
 	SubscriptionGrantOrder                    = "order"
 	SubscriptionGrantMonthlyInviteEntitlement = "monthly_invite_entitlement"
 )
@@ -200,6 +207,16 @@ type SubscriptionPlan struct {
 	RewardEligible       bool    `json:"reward_eligible" gorm:"default:true"`
 	BusinessCode         *string `json:"business_code" gorm:"type:varchar(64);uniqueIndex"`
 
+	EntitlementType                string  `json:"entitlement_type" gorm:"type:varchar(32);not null;default:'timed';index"`
+	SingletonKey                   *string `json:"-" gorm:"type:varchar(32);uniqueIndex:idx_subscription_plans_singleton_key"`
+	ModelLimits                    string  `json:"model_limits" gorm:"type:text"`
+	CreditBalanceConfigured        bool    `json:"credit_balance_configured" gorm:"not null;default:false"`
+	CreditBalancePurchaseEnabled   bool    `json:"credit_balance_purchase_enabled" gorm:"not null;default:false"`
+	CreditBalanceRedemptionEnabled bool    `json:"credit_balance_redemption_enabled" gorm:"not null;default:false"`
+	CreditBalanceConversionEnabled bool    `json:"credit_balance_conversion_enabled" gorm:"not null;default:false"`
+	UnlimitedPurchaseEnabled       bool    `json:"unlimited_purchase_enabled" gorm:"not null;default:false"`
+	TimedConversionEnabled         bool    `json:"timed_conversion_enabled" gorm:"not null;default:false"`
+
 	// Quota reset period for plan
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
 	QuotaResetCustomSeconds int64  `json:"quota_reset_custom_seconds" gorm:"type:bigint;default:0"`
@@ -211,6 +228,9 @@ type SubscriptionPlan struct {
 }
 
 func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
+	if err := p.normalizeEntitlementIdentity(); err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	p.CreatedAt = now
 	p.UpdatedAt = now
@@ -218,7 +238,24 @@ func (p *SubscriptionPlan) BeforeCreate(tx *gorm.DB) error {
 }
 
 func (p *SubscriptionPlan) BeforeUpdate(tx *gorm.DB) error {
+	if err := p.normalizeEntitlementIdentity(); err != nil {
+		return err
+	}
 	p.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+func (p *SubscriptionPlan) normalizeEntitlementIdentity() error {
+	switch strings.TrimSpace(p.EntitlementType) {
+	case "", SubscriptionEntitlementTimed:
+		p.EntitlementType = SubscriptionEntitlementTimed
+		p.SingletonKey = nil
+	case SubscriptionEntitlementCreditBalance:
+		p.EntitlementType = SubscriptionEntitlementCreditBalance
+		key := creditBalancePlanSingletonKey
+		p.SingletonKey = &key
+	default:
+		return fmt.Errorf("invalid subscription entitlement type: %s", p.EntitlementType)
+	}
 	return nil
 }
 
@@ -359,9 +396,11 @@ func RestoreClaimedKyrenSubscriptionOrder(tradeNo string, leaseTime int64) error
 
 // User subscription instance
 type UserSubscription struct {
-	Id     int `json:"id" gorm:"index:idx_user_sub_active_order,priority:4"`
-	UserId int `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1;index:idx_user_sub_active_order,priority:1"`
-	PlanId int `json:"plan_id" gorm:"index"`
+	Id              int     `json:"id" gorm:"index:idx_user_sub_active_order,priority:4"`
+	UserId          int     `json:"user_id" gorm:"index;index:idx_user_sub_active,priority:1;index:idx_user_sub_active_order,priority:1;uniqueIndex:idx_user_subscription_singleton,priority:1"`
+	PlanId          int     `json:"plan_id" gorm:"index"`
+	EntitlementType string  `json:"entitlement_type" gorm:"type:varchar(32);not null;default:'timed';index"`
+	SingletonKey    *string `json:"-" gorm:"type:varchar(32);uniqueIndex:idx_user_subscription_singleton,priority:2"`
 
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
@@ -389,6 +428,9 @@ type UserSubscription struct {
 }
 
 func (s *UserSubscription) BeforeCreate(tx *gorm.DB) error {
+	if err := s.normalizeEntitlementIdentity(); err != nil {
+		return err
+	}
 	now := common.GetTimestamp()
 	s.CreatedAt = now
 	s.UpdatedAt = now
@@ -396,7 +438,24 @@ func (s *UserSubscription) BeforeCreate(tx *gorm.DB) error {
 }
 
 func (s *UserSubscription) BeforeUpdate(tx *gorm.DB) error {
+	if err := s.normalizeEntitlementIdentity(); err != nil {
+		return err
+	}
 	s.UpdatedAt = common.GetTimestamp()
+	return nil
+}
+func (s *UserSubscription) normalizeEntitlementIdentity() error {
+	switch strings.TrimSpace(s.EntitlementType) {
+	case "", SubscriptionEntitlementTimed:
+		s.EntitlementType = SubscriptionEntitlementTimed
+		s.SingletonKey = nil
+	case SubscriptionEntitlementCreditBalance:
+		s.EntitlementType = SubscriptionEntitlementCreditBalance
+		key := creditBalanceUserSingletonKey
+		s.SingletonKey = &key
+	default:
+		return fmt.Errorf("invalid subscription entitlement type: %s", s.EntitlementType)
+	}
 	return nil
 }
 
@@ -424,6 +483,7 @@ type PublicUserSubscription struct {
 	Id                int    `json:"id"`
 	UserId            int    `json:"user_id"`
 	PlanId            int    `json:"plan_id"`
+	EntitlementType   string `json:"entitlement_type"`
 	AmountTotal       int64  `json:"amount_total"`
 	AmountUsed        int64  `json:"amount_used"`
 	TokenLimit        int64  `json:"token_limit"`
@@ -612,6 +672,12 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
+	if err := plan.normalizeEntitlementIdentity(); err != nil {
+		return nil, err
+	}
+	if plan.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return nil, errors.New("credit balance entitlements must use the dedicated credit service")
+	}
 	nowUnix := getDBTimestampTx(tx)
 	now := time.Unix(nowUnix, 0)
 	var existing UserSubscription
@@ -697,6 +763,7 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	sub := &UserSubscription{
 		UserId:           userId,
 		PlanId:           plan.Id,
+		EntitlementType:  plan.EntitlementType,
 		AmountTotal:      plan.TotalAmount,
 		AmountUsed:       0,
 		TokenLimit:       plan.MonthlyTokenLimit,
@@ -1066,6 +1133,9 @@ func AdminBindSubscription(userId int, planId int, sourceNote string) (string, e
 	if err != nil {
 		return "", err
 	}
+	if plan.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return "", errors.New("Credit 余额套餐不能通过普通绑定接口创建权益")
+	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
 		_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "admin")
 		return err
@@ -1239,6 +1309,7 @@ func toPublicUserSubscription(sub *UserSubscription, plan *SubscriptionPlan, act
 		UserId:            sub.UserId,
 		PlanId:            sub.PlanId,
 		AmountTotal:       sub.AmountTotal,
+		EntitlementType:   sub.EntitlementType,
 		AmountUsed:        sub.AmountUsed,
 		TokenLimit:        sub.TokenLimit,
 		TokenUsed:         sub.TokenUsed,
@@ -1293,6 +1364,9 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
 		}
+		if sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+			return errors.New("Credit 余额权益不能通过普通接口失效")
+		}
 
 		if err := tx.Model(&sub).Updates(map[string]interface{}{
 			"status":     "cancelled",
@@ -1321,6 +1395,9 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		if err := tx.Set("gorm:query_option", "FOR UPDATE").
 			Where("id = ?", userSubscriptionId).First(&sub).Error; err != nil {
 			return err
+		}
+		if sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+			return errors.New("Credit 余额权益不能通过普通接口删除")
 		}
 
 		if err := tx.Where("id = ?", userSubscriptionId).Delete(&UserSubscription{}).Error; err != nil {
@@ -1451,6 +1528,26 @@ func isUnlimitedTrialSubscription(sub *UserSubscription, plan *SubscriptionPlan)
 		return true
 	}
 	return reason == "admin" && plan != nil && plan.IsTrial
+}
+
+// IsTimedSubscriptionConversionIdentityEligible enforces identity-level conversion bans.
+// Product switches and time-based eligibility are evaluated separately by conversion flows.
+func IsTimedSubscriptionConversionIdentityEligible(sub *UserSubscription, plan *SubscriptionPlan) bool {
+	if sub == nil || plan == nil {
+		return false
+	}
+	if sub.EntitlementType == SubscriptionEntitlementCreditBalance || plan.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return false
+	}
+	if plan.IsTrial || plan.InviteTrial {
+		return false
+	}
+	switch normalizedSubscriptionGrantSource(sub) {
+	case "trial_code", "invite_trial", SubscriptionGrantMonthlyInviteEntitlement:
+		return false
+	default:
+		return true
+	}
 }
 
 func normalizedSubscriptionGrantSource(sub *UserSubscription) string {

@@ -86,7 +86,7 @@ func normalizeSubscriptionPlanCurrency(currency string) string {
 
 func GetSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ? AND public_visible = ? AND is_trial = ?", true, true, false).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.Where("enabled = ? AND public_visible = ? AND is_trial = ? AND entitlement_type = ?", true, true, false, model.SubscriptionEntitlementTimed).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -110,7 +110,7 @@ func GetSubscriptionPlans(c *gin.Context) {
 
 func GetPublicSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ? AND public_visible = ? AND is_trial = ?", true, true, false).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.Where("enabled = ? AND public_visible = ? AND is_trial = ? AND entitlement_type = ?", true, true, false, model.SubscriptionEntitlementTimed).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -303,7 +303,7 @@ func ResetSubscriptionQuota(c *gin.Context) {
 
 func AdminListSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.Where("entitlement_type = ?", model.SubscriptionEntitlementTimed).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -329,12 +329,157 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	Plan model.SubscriptionPlan `json:"plan"`
 }
 
+type AdminUpdateCreditBalancePlanRequest struct {
+	ModelLimits       string `json:"model_limits"`
+	ConcurrencyLimit  int    `json:"concurrency_limit"`
+	QueueCapacity     int    `json:"queue_capacity"`
+	BusinessCode      string `json:"business_code"`
+	Configured        bool   `json:"configured"`
+	PurchaseEnabled   bool   `json:"purchase_enabled"`
+	RedemptionEnabled bool   `json:"redemption_enabled"`
+	ConversionEnabled bool   `json:"conversion_enabled"`
+}
+
+func getCreditBalancePlan() (*model.SubscriptionPlan, error) {
+	var plan model.SubscriptionPlan
+	if err := model.DB.Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error; err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func normalizeCreditBalanceModelLimits(value string) string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for _, raw := range strings.Split(value, ",") {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		models = append(models, name)
+	}
+	return strings.Join(models, ",")
+}
+
+func AdminGetCreditBalancePlan(c *gin.Context) {
+	plan, err := getCreditBalancePlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, plan)
+}
+
+func AdminUpdateCreditBalancePlan(c *gin.Context) {
+	var req AdminUpdateCreditBalancePlanRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	if req.ConcurrencyLimit < 0 {
+		common.ApiErrorMsg(c, "并发上限不能为负数")
+		return
+	}
+	if req.QueueCapacity < 0 {
+		common.ApiErrorMsg(c, "排队容量不能为负数")
+		return
+	}
+	modelLimits := normalizeCreditBalanceModelLimits(req.ModelLimits)
+	businessCode := strings.TrimSpace(req.BusinessCode)
+	if req.Configured && modelLimits == "" {
+		common.ApiErrorMsg(c, "配置完成前必须设置模型范围")
+		return
+	}
+	if req.Configured && businessCode == "" {
+		common.ApiErrorMsg(c, "配置完成前必须设置 BusinessCode")
+		return
+	}
+	if (req.PurchaseEnabled || req.RedemptionEnabled || req.ConversionEnabled) && !req.Configured {
+		common.ApiErrorMsg(c, "必须先确认 Credit 余额套餐配置")
+		return
+	}
+	plan, err := getCreditBalancePlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	var businessCodeValue any
+	if businessCode != "" {
+		businessCodeValue = businessCode
+	}
+	updates := map[string]any{
+		"model_limits":                      modelLimits,
+		"concurrency_limit":                 req.ConcurrencyLimit,
+		"queue_capacity":                    req.QueueCapacity,
+		"business_code":                     businessCodeValue,
+		"credit_balance_configured":         req.Configured,
+		"credit_balance_purchase_enabled":   req.PurchaseEnabled,
+		"credit_balance_redemption_enabled": req.RedemptionEnabled,
+		"credit_balance_conversion_enabled": req.ConversionEnabled,
+		"updated_at":                        common.GetTimestamp(),
+	}
+	if err := model.DB.Model(&model.SubscriptionPlan{}).
+		Where("id = ? AND entitlement_type = ?", plan.Id, model.SubscriptionEntitlementCreditBalance).
+		Updates(updates).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.InvalidateSubscriptionPlanCache(plan.Id)
+	updated, err := getCreditBalancePlan()
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, updated)
+}
+
+func validateTimedPlanCreditEligibility(plan *model.SubscriptionPlan) string {
+	if plan == nil || (!plan.UnlimitedPurchaseEnabled && !plan.TimedConversionEnabled) {
+		return ""
+	}
+	if plan.DurationUnit != model.SubscriptionDurationMonth || plan.DurationValue != 1 {
+		return "只有期限恰好 1 个月的计时套餐可开启 Credit 资格"
+	}
+	if model.NormalizeResetPeriod(plan.QuotaResetPeriod) != model.SubscriptionResetMonthly {
+		return "只有按月重置的计时套餐可开启 Credit 资格"
+	}
+	if plan.MonthlyTokenLimit <= 0 {
+		return "月 Credit 必须为正且有限"
+	}
+	if plan.IsTrial || plan.InviteTrial {
+		return "试用套餐和每月邀请套餐不能开启 Credit 资格"
+	}
+	return ""
+}
+
+func rejectCreditBalancePlanMutation(c *gin.Context, id int) bool {
+	var plan model.SubscriptionPlan
+	if err := model.DB.Select("id", "entitlement_type").First(&plan, id).Error; err != nil {
+		common.ApiError(c, err)
+		return true
+	}
+	if plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+		common.ApiErrorMsg(c, "Credit 余额套餐只能通过专用接口配置")
+		return true
+	}
+	return false
+}
+
 func AdminCreateSubscriptionPlan(c *gin.Context) {
 	var req AdminUpsertSubscriptionPlanRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	if req.Plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+		common.ApiErrorMsg(c, "Credit 余额套餐只能通过专用接口配置")
+		return
+	}
+	req.Plan.EntitlementType = model.SubscriptionEntitlementTimed
 	req.Plan.Id = 0
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
@@ -377,6 +522,10 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	if message := validateTimedPlanCreditEligibility(&req.Plan); message != "" {
+		common.ApiErrorMsg(c, message)
+		return
+	}
 	err := model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
@@ -390,6 +539,9 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
+		return
+	}
+	if rejectCreditBalancePlanMutation(c, id) {
 		return
 	}
 	var req AdminUpsertSubscriptionPlanRequest
@@ -440,6 +592,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
+	if message := validateTimedPlanCreditEligibility(&req.Plan); message != "" {
+		common.ApiErrorMsg(c, message)
+		return
+	}
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
@@ -471,6 +627,8 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"trial_duration_hours":       req.Plan.TrialDurationHours,
 			"reward_eligible":            req.Plan.RewardEligible,
 			"business_code":              req.Plan.BusinessCode,
+			"unlimited_purchase_enabled": req.Plan.UnlimitedPurchaseEnabled,
+			"timed_conversion_enabled":   req.Plan.TimedConversionEnabled,
 			"updated_at":                 common.GetTimestamp(),
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
@@ -494,6 +652,9 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
 		common.ApiErrorMsg(c, "无效的ID")
+		return
+	}
+	if rejectCreditBalancePlanMutation(c, id) {
 		return
 	}
 	var req AdminUpdateSubscriptionPlanStatusRequest

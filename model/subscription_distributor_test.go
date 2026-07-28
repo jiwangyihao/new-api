@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,6 +14,8 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -178,6 +181,124 @@ func TestCreateUserSubscriptionFromPlanTx_ExtendsActiveSamePlanWhenUnlimited(t *
 	assert.Equal(t, int64(1), count)
 }
 
+func TestTimedSubscriptionConversionIdentityRejectsTrialAndMonthlyInvite(t *testing.T) {
+	timedPlan := &SubscriptionPlan{EntitlementType: SubscriptionEntitlementTimed}
+	assert.True(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementTimed, GrantReason: SubscriptionGrantOrder}, timedPlan))
+	assert.False(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementTimed, GrantReason: "trial_code"}, timedPlan))
+	assert.False(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementTimed, GrantReason: "invite_trial"}, timedPlan))
+	assert.False(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementTimed, GrantReason: SubscriptionGrantMonthlyInviteEntitlement}, timedPlan))
+	assert.False(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementCreditBalance, GrantReason: SubscriptionGrantOrder}, timedPlan))
+	assert.False(t, IsTimedSubscriptionConversionIdentityEligible(&UserSubscription{EntitlementType: SubscriptionEntitlementTimed, GrantReason: SubscriptionGrantOrder}, &SubscriptionPlan{EntitlementType: SubscriptionEntitlementTimed, InviteTrial: true}))
+}
+
+func TestCreateUserSubscriptionPropagatesTimedIdentityAndRejectsCreditBalancePlan(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&UserSubscription{}))
+
+	timedPlan := &SubscriptionPlan{Id: 1, EntitlementType: "", DurationUnit: SubscriptionDurationMonth, DurationValue: 1}
+	var timed *UserSubscription
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		created, createErr := CreateUserSubscriptionFromPlanTx(tx, 1, timedPlan, SubscriptionGrantOrder)
+		timed = created
+		return createErr
+	}))
+	require.NotNil(t, timed)
+	assert.Equal(t, SubscriptionEntitlementTimed, timed.EntitlementType)
+	assert.Nil(t, timed.SingletonKey)
+
+	creditPlan := &SubscriptionPlan{Id: 2, EntitlementType: SubscriptionEntitlementCreditBalance, DurationUnit: SubscriptionDurationMonth, DurationValue: 1}
+	err = db.Transaction(func(tx *gorm.DB) error {
+		_, createErr := CreateUserSubscriptionFromPlanTx(tx, 1, creditPlan, SubscriptionGrantOrder)
+		return createErr
+	})
+	require.ErrorContains(t, err, "dedicated credit service")
+}
+
+func TestOrdinaryAdminLifecycleCannotDestroyCreditBalanceEntitlement(t *testing.T) {
+	originalDB := DB
+	t.Cleanup(func() { DB = originalDB })
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	require.NoError(t, DB.AutoMigrate(&UserSubscription{}))
+	require.NoError(t, DB.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active"}).Error)
+	var sub UserSubscription
+	require.NoError(t, DB.First(&sub).Error)
+
+	_, err = AdminInvalidateUserSubscription(sub.Id)
+	require.ErrorContains(t, err, "不能通过普通接口失效")
+	_, err = AdminDeleteUserSubscription(sub.Id)
+	require.ErrorContains(t, err, "不能通过普通接口删除")
+
+	require.NoError(t, DB.First(&sub, sub.Id).Error)
+	assert.Equal(t, "active", sub.Status)
+}
+
+func TestCreditBalanceSingletonIndexesGenerateForMySQLAndPostgres(t *testing.T) {
+	baseDB, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	baseStatement := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]SubscriptionPlan{}).Statement
+
+	tests := []struct {
+		name      string
+		dialector gorm.Dialector
+	}{
+		{
+			name: "mysql",
+			dialector: mysql.New(mysql.Config{
+				Conn:                      baseStatement.ConnPool,
+				SkipInitializeWithVersion: true,
+			}),
+		},
+		{
+			name: "postgres",
+			dialector: postgres.New(postgres.Config{
+				DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+				PreferSimpleProtocol: true,
+				Conn:                 baseStatement.ConnPool,
+			}),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capture := &sqlCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+			db, openErr := gorm.Open(test.dialector, &gorm.Config{
+				DryRun:                                   true,
+				Logger:                                   capture,
+				DisableForeignKeyConstraintWhenMigrating: true,
+			})
+			require.NoError(t, openErr)
+			require.NoError(t, db.Migrator().CreateTable(&SubscriptionPlan{}, &UserSubscription{}))
+
+			expectedColumns := map[string][]string{
+				"idx_subscription_plans_singleton_key": {"singleton_key"},
+				"idx_user_subscription_singleton":      {"user_id", "singleton_key"},
+			}
+			for indexName, columns := range expectedColumns {
+				definitionPattern := regexp.MustCompile(`(?i)unique\s+(?:index\s+)?(?:if\s+not\s+exists\s+)?["` + "`" + `]?` + regexp.QuoteMeta(indexName) + `["` + "`" + `]?\s+(?:on\s+["` + "`" + `]?[^"` + "`" + `\s]+["` + "`" + `]?\s*)?\(([^)]*)\)`)
+				matched := false
+				for _, statement := range capture.statements {
+					matches := definitionPattern.FindStringSubmatch(statement)
+					if len(matches) != 2 {
+						continue
+					}
+					definition := strings.ToLower(matches[1])
+					matched = true
+					for _, column := range columns {
+						matched = matched && strings.Contains(definition, column)
+					}
+					if matched {
+						break
+					}
+				}
+				assert.True(t, matched, "expected UNIQUE index %s on %v; statements=%#v", indexName, columns, capture.statements)
+			}
+		})
+	}
+}
+
 func TestSubscriptionPlanBusinessCode_AllowsMultipleLegacyNulls(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7202, Title: "Legacy A", Enabled: true}).Error)
@@ -190,6 +311,140 @@ func TestSubscriptionPlanBusinessCode_RejectsDuplicateNonEmpty(t *testing.T) {
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7204, Title: "Basic A", Enabled: true, BusinessCode: &code}).Error)
 	dup := "basic_monthly"
 	require.Error(t, DB.Create(&SubscriptionPlan{Id: 7205, Title: "Basic B", Enabled: true, BusinessCode: &dup}).Error)
+}
+
+func TestCreditBalanceSingletonKeysEnforceDatabaseUniqueness(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}))
+
+	require.NoError(t, db.Create(&SubscriptionPlan{Title: "Timed A", EntitlementType: SubscriptionEntitlementTimed}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{Title: "Timed B", EntitlementType: SubscriptionEntitlementTimed}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{Title: "Credit balance", EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+	require.Error(t, db.Create(&SubscriptionPlan{Title: "Duplicate credit balance", EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+
+	require.NoError(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementTimed}).Error)
+	require.NoError(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementTimed}).Error)
+	require.NoError(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+	require.Error(t, db.Create(&UserSubscription{UserId: 1, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+	require.NoError(t, db.Create(&UserSubscription{UserId: 2, EntitlementType: SubscriptionEntitlementCreditBalance}).Error)
+}
+
+func TestEnsureCreditBalanceSubscriptionPlanConcurrentInitializationConverges(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_pragma=busy_timeout(5000)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPlan{}))
+
+	const workers = 8
+	start := make(chan struct{})
+	errorsByWorker := make(chan error, workers)
+	var waitGroup sync.WaitGroup
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			errorsByWorker <- ensureCreditBalanceSubscriptionPlan()
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsByWorker)
+	for workerErr := range errorsByWorker {
+		require.NoError(t, workerErr)
+	}
+
+	var plans []SubscriptionPlan
+	require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Find(&plans).Error)
+	require.Len(t, plans, 1)
+	require.NotNil(t, plans[0].SingletonKey)
+	assert.Equal(t, creditBalancePlanSingletonKey, *plans[0].SingletonKey)
+}
+
+func TestEnsureSubscriptionPlanTableSQLiteCreatesCreditBalanceSchema(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+
+	require.NoError(t, DB.AutoMigrate(&UserSubscription{}))
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, ensureCreditBalanceSubscriptionPlan())
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, ensureCreditBalanceSubscriptionPlan())
+
+	for _, column := range []string{
+		"entitlement_type",
+		"singleton_key",
+		"model_limits",
+		"credit_balance_configured",
+		"credit_balance_purchase_enabled",
+		"credit_balance_redemption_enabled",
+		"credit_balance_conversion_enabled",
+		"unlimited_purchase_enabled",
+		"timed_conversion_enabled",
+	} {
+		require.True(t, DB.Migrator().HasColumn(&SubscriptionPlan{}, column), column)
+	}
+	require.True(t, DB.Migrator().HasIndex("subscription_plans", "idx_subscription_plans_singleton_key"))
+	require.True(t, DB.Migrator().HasIndex("user_subscriptions", "idx_user_subscription_singleton"))
+
+	var plans []SubscriptionPlan
+	require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Find(&plans).Error)
+	require.Len(t, plans, 1)
+	plan := plans[0]
+	assert.False(t, plan.CreditBalanceConfigured)
+	assert.False(t, plan.CreditBalancePurchaseEnabled)
+	assert.False(t, plan.CreditBalanceRedemptionEnabled)
+	assert.False(t, plan.CreditBalanceConversionEnabled)
+	assert.False(t, plan.PublicVisible)
+	assert.False(t, plan.RewardEligible)
+	assert.Equal(t, float64(0), plan.PriceAmount)
+}
+
+func TestEnsureSubscriptionPlanTableSQLiteUpgradesLegacyRowsToTimed(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite = originalUsingSQLite
+	})
+
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = true
+	require.NoError(t, DB.Exec(`CREATE TABLE subscription_plans (id integer PRIMARY KEY, title varchar(128) NOT NULL, price_amount decimal(10,6) NOT NULL)`).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO subscription_plans (id, title, price_amount) VALUES (1, 'Legacy timed', 40)`).Error)
+
+	require.NoError(t, ensureSubscriptionPlanTableSQLite())
+	require.NoError(t, DB.AutoMigrate(&UserSubscription{}))
+	require.NoError(t, ensureCreditBalanceSubscriptionPlan())
+
+	var legacy SubscriptionPlan
+	require.NoError(t, DB.First(&legacy, 1).Error)
+	assert.Equal(t, SubscriptionEntitlementTimed, legacy.EntitlementType)
+	assert.Nil(t, legacy.SingletonKey)
+	var count int64
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
 }
 
 func TestEnsureSubscriptionPlanTableSQLite_CreatesBusinessCodeUniqueIndexOnFreshTable(t *testing.T) {

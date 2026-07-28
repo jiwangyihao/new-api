@@ -318,6 +318,9 @@ func migrateDB() error {
 			return err
 		}
 	}
+	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
+		return err
+	}
 	if err := migrateLegacyTrialPlanTitle(); err != nil {
 		return err
 	}
@@ -419,6 +422,9 @@ func migrateDBFast() error {
 		if err := DB.AutoMigrate(&SubscriptionPlan{}); err != nil {
 			return err
 		}
+	}
+	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
+		return err
 	}
 	if err := migrateLegacyTrialPlanTitle(); err != nil {
 		return err
@@ -579,6 +585,15 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`trial_duration_hours`" + ` integer NOT NULL DEFAULT 0,
 ` + "`reward_eligible`" + ` numeric DEFAULT 1,
 ` + "`business_code`" + ` varchar(64) DEFAULT NULL,
+` + "`entitlement_type`" + ` varchar(32) NOT NULL DEFAULT 'timed',
+` + "`singleton_key`" + ` varchar(32) DEFAULT NULL,
+` + "`model_limits`" + ` text,
+` + "`credit_balance_configured`" + ` numeric NOT NULL DEFAULT 0,
+` + "`credit_balance_purchase_enabled`" + ` numeric NOT NULL DEFAULT 0,
+` + "`credit_balance_redemption_enabled`" + ` numeric NOT NULL DEFAULT 0,
+` + "`credit_balance_conversion_enabled`" + ` numeric NOT NULL DEFAULT 0,
+` + "`unlimited_purchase_enabled`" + ` numeric NOT NULL DEFAULT 0,
+` + "`timed_conversion_enabled`" + ` numeric NOT NULL DEFAULT 0,
 ` + "`quota_reset_period`" + ` varchar(16) DEFAULT 'never',
 ` + "`quota_reset_custom_seconds`" + ` bigint DEFAULT 0,
 ` + "`created_at`" + ` bigint,
@@ -625,6 +640,15 @@ PRIMARY KEY (` + "`id`" + `)
 			{Name: "trial_duration_hours", DDL: "`trial_duration_hours` integer NOT NULL DEFAULT 0"},
 			{Name: "reward_eligible", DDL: "`reward_eligible` numeric DEFAULT 1"},
 			{Name: "business_code", DDL: "`business_code` varchar(64) DEFAULT NULL"},
+			{Name: "entitlement_type", DDL: "`entitlement_type` varchar(32) NOT NULL DEFAULT 'timed'"},
+			{Name: "singleton_key", DDL: "`singleton_key` varchar(32) DEFAULT NULL"},
+			{Name: "model_limits", DDL: "`model_limits` text"},
+			{Name: "credit_balance_configured", DDL: "`credit_balance_configured` numeric NOT NULL DEFAULT 0"},
+			{Name: "credit_balance_purchase_enabled", DDL: "`credit_balance_purchase_enabled` numeric NOT NULL DEFAULT 0"},
+			{Name: "credit_balance_redemption_enabled", DDL: "`credit_balance_redemption_enabled` numeric NOT NULL DEFAULT 0"},
+			{Name: "credit_balance_conversion_enabled", DDL: "`credit_balance_conversion_enabled` numeric NOT NULL DEFAULT 0"},
+			{Name: "unlimited_purchase_enabled", DDL: "`unlimited_purchase_enabled` numeric NOT NULL DEFAULT 0"},
+			{Name: "timed_conversion_enabled", DDL: "`timed_conversion_enabled` numeric NOT NULL DEFAULT 0"},
 			{Name: "quota_reset_period", DDL: "`quota_reset_period` varchar(16) DEFAULT 'never'"},
 			{Name: "quota_reset_custom_seconds", DDL: "`quota_reset_custom_seconds` bigint DEFAULT 0"},
 			{Name: "created_at", DDL: "`created_at` bigint"},
@@ -644,7 +668,62 @@ PRIMARY KEY (` + "`id`" + `)
 			return err
 		}
 	}
+	if !DB.Migrator().HasIndex(tableName, "idx_subscription_plans_singleton_key") {
+		if err := DB.Exec("CREATE UNIQUE INDEX `idx_subscription_plans_singleton_key` ON `" + tableName + "` (`singleton_key`)").Error; err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func ensureCreditBalanceSubscriptionPlan() error {
+	if DB == nil {
+		return fmt.Errorf("database is nil")
+	}
+
+	var existing []SubscriptionPlan
+	if err := DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Order("id asc").Limit(2).Find(&existing).Error; err != nil {
+		return err
+	}
+	if len(existing) > 1 {
+		return fmt.Errorf("multiple credit balance subscription plans exist")
+	}
+	if len(existing) == 1 {
+		if existing[0].SingletonKey != nil && *existing[0].SingletonKey == creditBalancePlanSingletonKey {
+			return nil
+		}
+		return DB.Model(&SubscriptionPlan{}).Where("id = ?", existing[0].Id).Update("singleton_key", creditBalancePlanSingletonKey).Error
+	}
+
+	now := common.GetTimestamp()
+	createErr := DB.Model(&SubscriptionPlan{}).Create(map[string]any{
+		"title":                             "Credit 余额套餐",
+		"price_amount":                      0,
+		"currency":                          "CNY",
+		"duration_unit":                     SubscriptionDurationMonth,
+		"duration_value":                    1,
+		"enabled":                           true,
+		"public_visible":                    false,
+		"reward_eligible":                   false,
+		"entitlement_type":                  SubscriptionEntitlementCreditBalance,
+		"singleton_key":                     creditBalancePlanSingletonKey,
+		"quota_reset_period":                SubscriptionResetNever,
+		"credit_balance_configured":         false,
+		"credit_balance_purchase_enabled":   false,
+		"credit_balance_redemption_enabled": false,
+		"credit_balance_conversion_enabled": false,
+		"created_at":                        now,
+		"updated_at":                        now,
+	}).Error
+	if createErr == nil {
+		return nil
+	}
+
+	var concurrent SubscriptionPlan
+	if err := DB.Where("singleton_key = ? AND entitlement_type = ?", creditBalancePlanSingletonKey, SubscriptionEntitlementCreditBalance).First(&concurrent).Error; err == nil {
+		return nil
+	}
+	return createErr
 }
 
 // migrateTokenModelLimitsToText migrates model_limits column from varchar(1024) to text

@@ -53,6 +53,8 @@ export function getPlanFormSchema(t: TFunction) {
     trial_duration_hours: z.coerce.number().min(0),
     reward_eligible: z.boolean(),
     business_code: z.string().optional(),
+    unlimited_purchase_enabled: z.boolean(),
+    timed_conversion_enabled: z.boolean(),
   })
 }
 
@@ -84,6 +86,8 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   trial_duration_hours: 0,
   reward_eligible: true,
   business_code: '',
+  unlimited_purchase_enabled: false,
+  timed_conversion_enabled: false,
 }
 
 export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
@@ -113,6 +117,8 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
     trial_duration_hours: Number(plan.trial_duration_hours || 0),
     reward_eligible: plan.reward_eligible !== false,
     business_code: plan.business_code || '',
+    unlimited_purchase_enabled: plan.unlimited_purchase_enabled === true,
+    timed_conversion_enabled: plan.timed_conversion_enabled === true,
   }
 }
 
@@ -143,6 +149,8 @@ export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
       trial_duration_hours: Number(values.trial_duration_hours || 0),
       reward_eligible: values.reward_eligible,
       business_code: values.business_code?.trim() || undefined,
+      unlimited_purchase_enabled: values.unlimited_purchase_enabled,
+      timed_conversion_enabled: values.timed_conversion_enabled,
     },
   }
 }

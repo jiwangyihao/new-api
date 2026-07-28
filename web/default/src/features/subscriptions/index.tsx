@@ -20,6 +20,7 @@ import { Info } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { SectionPageLayout } from '@/components/layout'
+import { CreditBalancePlanCard } from './components/credit-balance-plan-card'
 import { SubscriptionsDialogs } from './components/subscriptions-dialogs'
 import { SubscriptionsPrimaryButtons } from './components/subscriptions-primary-buttons'
 import { SubscriptionsProvider } from './components/subscriptions-provider'
@@ -50,7 +51,10 @@ export function Subscriptions() {
           </div>
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <SubscriptionsTable />
+          <div className='space-y-4'>
+            <CreditBalancePlanCard />
+            <SubscriptionsTable />
+          </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
 

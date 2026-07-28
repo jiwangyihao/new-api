@@ -173,7 +173,7 @@ func setupSubscriptionPublicPlansRouteTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB = db
 	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.Channel{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.Channel{}, &model.ChannelGroup{}, &model.ChannelGroupChannel{}))
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()
@@ -196,6 +196,8 @@ func seedSubscriptionPublicPlanRouteTestPlans(t *testing.T) {
 	t.Helper()
 
 	require.NoError(t, model.DB.Create(&model.Channel{Id: 9181, Type: constant.ChannelTypeOpenAI, Key: "sk-public-plans", Status: common.ChannelStatusEnabled, Name: "public-plans-openai", Models: "gpt-test", TokenBillingMultiplier: 2}).Error)
+	require.NoError(t, model.DB.Create(&model.ChannelGroup{Id: constant.ChannelTypeOpenAI, Name: "OpenAI", Enabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.ChannelGroupChannel{ChannelGroupId: constant.ChannelTypeOpenAI, ChannelId: 9181}).Error)
 	createSubscriptionPublicPlanRouteTestPlan(t, model.SubscriptionPlan{
 		Id:                 9101,
 		Title:              "Public Low",

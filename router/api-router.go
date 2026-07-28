@@ -205,6 +205,8 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionAdminRoute.POST("/plans", controller.AdminCreateSubscriptionPlan)
 			subscriptionAdminRoute.PUT("/plans/:id", controller.AdminUpdateSubscriptionPlan)
 			subscriptionAdminRoute.PATCH("/plans/:id", controller.AdminUpdateSubscriptionPlanStatus)
+			subscriptionAdminRoute.GET("/credit-balance-plan", controller.AdminGetCreditBalancePlan)
+			subscriptionAdminRoute.PUT("/credit-balance-plan", controller.AdminUpdateCreditBalancePlan)
 			subscriptionAdminRoute.GET("/plans/:id/kyren/product", controller.AdminGetSubscriptionKyrenProduct)
 			subscriptionAdminRoute.POST("/plans/:id/kyren/product", middleware.CriticalRateLimit(), controller.AdminSyncSubscriptionKyrenProduct)
 			subscriptionAdminRoute.POST("/bind", controller.AdminBindSubscription)

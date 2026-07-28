@@ -29,12 +29,14 @@ const channelEquivalentBaseSchema = z.object({
   variant_count: z.number(),
 })
 
-const usageTokenPlanSingleEquivalentSchema = channelEquivalentBaseSchema.extend({
-  kind: z.literal('usage_tokens'),
-  value_type: z.literal('single'),
-  multiplier: z.number(),
-  equivalent_token_limit: z.number(),
-})
+const usageTokenPlanSingleEquivalentSchema = channelEquivalentBaseSchema.extend(
+  {
+    kind: z.literal('usage_tokens'),
+    value_type: z.literal('single'),
+    multiplier: z.number(),
+    equivalent_token_limit: z.number(),
+  }
+)
 
 const usageTokenPlanRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
   kind: z.literal('usage_tokens'),
@@ -45,21 +47,23 @@ const usageTokenPlanRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
   equivalent_token_limit_max: z.number(),
 })
 
-const fixedRequestPlanSingleEquivalentSchema = channelEquivalentBaseSchema.extend({
-  kind: z.literal('fixed_request'),
-  value_type: z.literal('single'),
-  fixed_request_credits: z.number(),
-  equivalent_request_limit: z.number(),
-})
+const fixedRequestPlanSingleEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('fixed_request'),
+    value_type: z.literal('single'),
+    fixed_request_credits: z.number(),
+    equivalent_request_limit: z.number(),
+  })
 
-const fixedRequestPlanRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
-  kind: z.literal('fixed_request'),
-  value_type: z.literal('range'),
-  fixed_request_credits_min: z.number(),
-  fixed_request_credits_max: z.number(),
-  equivalent_request_limit_min: z.number(),
-  equivalent_request_limit_max: z.number(),
-})
+const fixedRequestPlanRangeEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('fixed_request'),
+    value_type: z.literal('range'),
+    fixed_request_credits_min: z.number(),
+    fixed_request_credits_max: z.number(),
+    equivalent_request_limit_min: z.number(),
+    equivalent_request_limit_max: z.number(),
+  })
 
 const unlimitedPlanEquivalentSchema = channelEquivalentBaseSchema.extend({
   kind: z.literal('unlimited'),
@@ -85,16 +89,17 @@ const usageTokenSubscriptionSingleEquivalentSchema =
     equivalent_token_remaining: z.number(),
   })
 
-const usageTokenSubscriptionRangeEquivalentSchema = channelEquivalentBaseSchema.extend({
-  kind: z.literal('usage_tokens'),
-  value_type: z.literal('range'),
-  min_multiplier: z.number(),
-  max_multiplier: z.number(),
-  equivalent_token_limit_min: z.number(),
-  equivalent_token_limit_max: z.number(),
-  equivalent_token_remaining_min: z.number(),
-  equivalent_token_remaining_max: z.number(),
-})
+const usageTokenSubscriptionRangeEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('usage_tokens'),
+    value_type: z.literal('range'),
+    min_multiplier: z.number(),
+    max_multiplier: z.number(),
+    equivalent_token_limit_min: z.number(),
+    equivalent_token_limit_max: z.number(),
+    equivalent_token_remaining_min: z.number(),
+    equivalent_token_remaining_max: z.number(),
+  })
 
 const fixedRequestSubscriptionSingleEquivalentSchema =
   channelEquivalentBaseSchema.extend({
@@ -117,14 +122,15 @@ const fixedRequestSubscriptionRangeEquivalentSchema =
     equivalent_request_remaining_max: z.number(),
   })
 
-const unlimitedSubscriptionEquivalentSchema = channelEquivalentBaseSchema.extend({
-  kind: z.literal('unlimited'),
-  value_type: z.literal('unlimited'),
-  credit_unlimited: z.literal(true).optional(),
-  token_unlimited: z.literal(true).optional(),
-})
+const unlimitedSubscriptionEquivalentSchema =
+  channelEquivalentBaseSchema.extend({
+    kind: z.literal('unlimited'),
+    value_type: z.literal('unlimited'),
+    credit_unlimited: z.literal(true).optional(),
+    token_unlimited: z.literal(true).optional(),
+  })
 
-const subscriptionChannelCreditEquivalentSchema = z.union([
+const _subscriptionChannelCreditEquivalentSchema = z.union([
   usageTokenSubscriptionSingleEquivalentSchema,
   usageTokenSubscriptionRangeEquivalentSchema,
   fixedRequestSubscriptionSingleEquivalentSchema,
@@ -151,7 +157,7 @@ const legacyPlanChannelTokenEquivalentSchema = z.discriminatedUnion('kind', [
   }),
 ])
 
-const legacySubscriptionChannelTokenEquivalentSchema = z.discriminatedUnion(
+const _legacySubscriptionChannelTokenEquivalentSchema = z.discriminatedUnion(
   'kind',
   [
     channelEquivalentBaseSchema.extend({
@@ -181,26 +187,21 @@ const planChannelTokenEquivalentSchema = z.union([
   planChannelCreditEquivalentSchema,
 ])
 
-const subscriptionChannelTokenEquivalentSchema = z.union([
-  legacySubscriptionChannelTokenEquivalentSchema,
-  subscriptionChannelCreditEquivalentSchema,
-])
-
 export type PlanChannelCreditEquivalent = z.infer<
   typeof planChannelCreditEquivalentSchema
 >
 
 export type SubscriptionChannelCreditEquivalent = z.infer<
-  typeof subscriptionChannelCreditEquivalentSchema
+  typeof _subscriptionChannelCreditEquivalentSchema
 >
 
 export type PlanChannelTokenEquivalent = z.infer<
   typeof planChannelTokenEquivalentSchema
 >
 
-export type SubscriptionChannelTokenEquivalent = z.infer<
-  typeof subscriptionChannelTokenEquivalentSchema
->
+export type SubscriptionChannelTokenEquivalent =
+  | z.infer<typeof _legacySubscriptionChannelTokenEquivalentSchema>
+  | SubscriptionChannelCreditEquivalent
 
 export const subscriptionPlanSchema = z.object({
   id: z.number(),
@@ -230,6 +231,14 @@ export const subscriptionPlanSchema = z.object({
   trial_duration_hours: z.number().optional(),
   reward_eligible: z.boolean().optional(),
   business_code: z.string().optional(),
+  entitlement_type: z.enum(['timed', 'credit_balance']).default('timed'),
+  model_limits: z.string().optional(),
+  credit_balance_configured: z.boolean().optional(),
+  credit_balance_purchase_enabled: z.boolean().optional(),
+  credit_balance_redemption_enabled: z.boolean().optional(),
+  credit_balance_conversion_enabled: z.boolean().optional(),
+  unlimited_purchase_enabled: z.boolean().optional(),
+  timed_conversion_enabled: z.boolean().optional(),
   channel_credit_equivalents: z
     .array(planChannelCreditEquivalentSchema)
     .default([]),
@@ -240,8 +249,11 @@ export const subscriptionPlanSchema = z.object({
 
 export type SubscriptionPlan = Omit<
   z.infer<typeof subscriptionPlanSchema>,
-  'channel_credit_equivalents' | 'channel_token_equivalents'
+  | 'channel_credit_equivalents'
+  | 'channel_token_equivalents'
+  | 'entitlement_type'
 > & {
+  entitlement_type?: 'timed' | 'credit_balance'
   channel_credit_equivalents?: PlanChannelCreditEquivalent[]
   channel_token_equivalents?: PlanChannelTokenEquivalent[]
 }
@@ -297,13 +309,19 @@ export const userSubscriptionSchema = z.object({
   queue_capacity: z.number().optional(),
   grant_reason: z.string().optional(),
   grant_source_user_id: z.number().optional(),
+  entitlement_type: z.enum(['timed', 'credit_balance']).default('timed'),
   effective_end_time: z.number().optional(),
   is_active_selected: z.boolean().optional(),
   can_reset_quota: z.boolean().optional(),
   source_label: z.string().optional(),
 })
 
-export type UserSubscription = z.infer<typeof userSubscriptionSchema>
+export type UserSubscription = Omit<
+  z.infer<typeof userSubscriptionSchema>,
+  'entitlement_type'
+> & {
+  entitlement_type?: 'timed' | 'credit_balance'
+}
 
 export interface UserSubscriptionRecord {
   subscription: UserSubscription
@@ -345,6 +363,17 @@ export interface PlanPayload {
   plan: Partial<SubscriptionPlan>
 }
 
+export interface CreditBalancePlanUpdateRequest {
+  model_limits: string
+  concurrency_limit: number
+  queue_capacity: number
+  business_code: string
+  configured: boolean
+  purchase_enabled: boolean
+  redemption_enabled: boolean
+  conversion_enabled: boolean
+}
+
 export interface SubscriptionPayRequest {
   plan_id: number
   payment_method?: string
@@ -367,8 +396,7 @@ export interface SubscriptionKyrenProductStatus {
   currency_matches?: boolean
 }
 
-export interface SubscriptionKyrenProductSyncStatus
-  extends SubscriptionKyrenProductStatus {
+export interface SubscriptionKyrenProductSyncStatus extends SubscriptionKyrenProductStatus {
   synced?: boolean
   local_error?: string
 }

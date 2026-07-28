@@ -594,6 +594,9 @@ func validateKyrenSubscriptionPlanForProduct(plan *model.SubscriptionPlan) (stri
 	if plan == nil {
 		return "", errors.New("套餐不存在")
 	}
+	if plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+		return "", errors.New("Credit 余额套餐不能同步为普通定价商品")
+	}
 	currency := normalizeSubscriptionPlanCurrency(plan.Currency)
 	if currency != kyrenCurrencyCNY {
 		return "", errors.New("Kyren 产品同步仅支持 CNY 套餐")

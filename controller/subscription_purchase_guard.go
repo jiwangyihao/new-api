@@ -11,6 +11,9 @@ func validatePurchasableSubscriptionPlan(plan *model.SubscriptionPlan) string {
 	if plan == nil {
 		return "套餐不存在"
 	}
+	if plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+		return "Credit 余额套餐不可作为普通计时商品购买"
+	}
 	if !plan.Enabled {
 		return "套餐未启用"
 	}

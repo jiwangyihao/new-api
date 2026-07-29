@@ -406,6 +406,51 @@ func TestSubscriptionBalancePayCreditReplayUsesStoredSnapshotAfterPlanChanges(t 
 	assert.Equal(t, int64(1), ledgerCount)
 }
 
+func TestSubscriptionBalancePayRejectsUnverifiablePendingCreditOrder(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	setupSubscriptionControllerRedis(t)
+	const userID = 9584
+	const optionPlanID = 9585
+	const creditPlanID = 9586
+	user := model.User{Id: userID, Username: "pending_credit_replay", Quota: 6000, Status: common.UserStatusEnabled}
+	require.NoError(t, model.DB.Create(&user).Error)
+	seedUserCacheForSubscriptionControllerTest(t, user)
+	optionCode := "pending_credit_replay_option"
+	optionPlan := &model.SubscriptionPlan{Id: optionPlanID, Title: "Pending credit replay", PriceAmount: 40, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, Enabled: true, PublicVisible: true, BusinessCode: &optionCode, UnlimitedPurchaseEnabled: true}
+	require.NoError(t, model.DB.Create(optionPlan).Error)
+	creditCode := "pending_credit_replay_global"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
+	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshot(optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlanID))
+	require.NoError(t, err)
+	tradeNo := subscriptionBalanceTradeNo(userID, "pending-credit-replay")
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{UserId: userID, PlanId: optionPlanID, Money: 40, AmountCents: 4000, Currency: "CNY", TradeNo: tradeNo, PaymentProvider: model.PaymentProviderBalance, PaymentMethod: model.PaymentMethodAccountBalance, Status: common.TopUpStatusPending, EntitlementSnapshot: snapshot, CreateTime: common.GetTimestamp()}).Error)
+
+	first := performRawBalancePayRequest(t, userID, `{"plan_id":9585,"purchase_mode":"credit_balance","idempotency_key":"pending-credit-replay"}`)
+	second := performRawBalancePayRequest(t, userID, `{"plan_id":9585,"purchase_mode":"credit_balance","idempotency_key":"pending-credit-replay"}`)
+
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	assert.Contains(t, first.Body.String(), "subscription order status invalid")
+	assert.NotContains(t, first.Body.String(), `"message":"success"`)
+	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
+	assert.Contains(t, second.Body.String(), "subscription order status invalid")
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&order).Error)
+	assert.Equal(t, common.TopUpStatusPending, order.Status)
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, 6000, user.Quota)
+	assert.Empty(t, user.GetSetting().LastSubscriptionPurchaseMode)
+	assert.Zero(t, user.GetSetting().ActiveSubscriptionId)
+	cachedUser, err := model.GetUserCache(userID)
+	require.NoError(t, err)
+	assert.Empty(t, cachedUser.GetSetting().LastSubscriptionPurchaseMode)
+	assert.Zero(t, cachedUser.GetSetting().ActiveSubscriptionId)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("user_id = ?", userID).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
 func TestSubscriptionBalancePayRejectsLegacyOrderReplayWithExplicitCreditMode(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9584
@@ -610,7 +655,8 @@ func TestSubscriptionBalancePayExistingPendingDoesNotDeduct(t *testing.T) {
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9532,"idempotency_key":"pending-key"}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
-	assert.Contains(t, recorder.Body.String(), `"status":"pending"`)
+	assert.Contains(t, recorder.Body.String(), "subscription order status invalid")
+	assert.NotContains(t, recorder.Body.String(), `"message":"success"`)
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
 	assert.Equal(t, 10000, user.Quota)

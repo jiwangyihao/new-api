@@ -60,7 +60,7 @@ func completeExistingBalanceSubscriptionOrderTx(tx *gorm.DB, order *model.Subscr
 		return nil, errors.New("幂等键已绑定其他购买模式或订单快照")
 	}
 	if order.Status == common.TopUpStatusPending {
-		return &model.SubscriptionOrderCompletionResult{PurchaseMode: storedMode}, nil
+		return nil, model.ErrSubscriptionOrderStatusInvalid
 	}
 	return model.CompleteSubscriptionOrderTx(tx, order, "", model.PaymentMethodAccountBalance)
 }

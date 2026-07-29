@@ -135,6 +135,47 @@ func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *test
 	assert.Zero(t, ledgerCount)
 }
 
+func TestActiveCreditBalanceInsufficientDoesNotFallBackToTimedSubscription(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		tokenLimit     int64
+		tokenUsed      int64
+		requiredTokens int64
+	}{
+		{name: "positive but insufficient", tokenLimit: 100, tokenUsed: 95, requiredTokens: 10},
+		{name: "explicit zero balance", tokenLimit: 0, tokenUsed: 0, requiredTokens: 1},
+		{name: "exhausted", tokenLimit: 100, tokenUsed: 100, requiredTokens: 1},
+		{name: "settlement debt", tokenLimit: 100, tokenUsed: 105, requiredTokens: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			truncateTables(t)
+			ensureSubscriptionPreConsumeRecordTableForTest(t)
+			ClearPrimaryBillableSubscriptionCacheForTest()
+			user := User{Id: 7105, Username: "active_credit_insufficient", Status: common.UserStatusEnabled, AffCode: "aff7105"}
+			setting := user.GetSetting()
+			setting.ActiveSubscriptionId = 7209
+			user.SetSetting(setting)
+			require.NoError(t, DB.Create(&user).Error)
+			creditCode := "active_credit_insufficient_balance"
+			timedCode := "active_credit_insufficient_timed"
+			require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7208, Title: "Credit 余额套餐", EntitlementType: SubscriptionEntitlementCreditBalance, Enabled: true, ModelLimits: "gpt-4o", ConcurrencyLimit: 2, BusinessCode: &creditCode}).Error)
+			require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7210, Title: "Timed fallback", EntitlementType: SubscriptionEntitlementTimed, Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 1000, ConcurrencyLimit: 2, BusinessCode: &timedCode}).Error)
+			require.NoError(t, DB.Create(&UserSubscription{Id: 7209, UserId: user.Id, PlanId: 7208, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: test.tokenLimit, TokenUsed: test.tokenUsed, EndTime: 0, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+			require.NoError(t, DB.Create(&UserSubscription{Id: 7211, UserId: user.Id, PlanId: 7210, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 1000, TokenUsed: 0, EndTime: common.GetTimestamp() + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+
+			_, err := PreConsumeUserSubscription(test.name, user.Id, "gpt-4o", 0, test.requiredTokens)
+
+			require.ErrorContains(t, err, "subscription token quota insufficient")
+			var timed UserSubscription
+			require.NoError(t, DB.First(&timed, 7211).Error)
+			assert.Equal(t, int64(0), timed.TokenUsed)
+			var recordCount int64
+			require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", test.name).Count(&recordCount).Error)
+			assert.Zero(t, recordCount)
+		})
+	}
+}
+
 func TestPreConsumeFallsBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)

@@ -1925,6 +1925,9 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		sawModelAllowedSubscription = true
 		ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens)
 		if !ok {
+			if activeSubscriptionId > 0 && sub.Id == activeSubscriptionId && sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+				return nil, sawDistributorSubscription, sawModelAllowedSubscription, nil
+			}
 			continue
 		}
 		entry := billableSubscriptionCandidate{sub: sub, plan: plan, distributor: distributor, unlimited: unlimited, index: i}

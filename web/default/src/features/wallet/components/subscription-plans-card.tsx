@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Crown, RefreshCw, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -285,13 +285,11 @@ export const billingStrategyOptions: Array<{
 
 export function SubscriptionBillingStrategyControl({
   data,
-  onUpdated,
 }: {
   data: SelfSubscriptionData
-  onUpdated: () => Promise<unknown>
 }) {
   const { t } = useTranslation()
-  const [saving, setSaving] = useState(false)
+  const queryClient = useQueryClient()
   const strategy = data.billing_strategy ?? 'single_active'
   const activeSubscriptionId = Number(data.active_subscription_id || 0)
   const recordsById = new Map(
@@ -304,26 +302,28 @@ export function SubscriptionBillingStrategyControl({
     const record = recordsById.get(subscriptionId)
     return record?.plan?.title || `${t('Subscription')} #${subscriptionId}`
   }
-
-  const handleChange = async (values: string[]) => {
-    const next = values[0] as SubscriptionBillingStrategy | undefined
-    if (!next || next === strategy || saving) return
-    setSaving(true)
-    try {
-      const response = await updateSubscriptionBillingStrategy({
-        billing_strategy: next,
-      })
+  const updateMutation = useMutation({
+    mutationFn: (next: SubscriptionBillingStrategy) =>
+      updateSubscriptionBillingStrategy({ billing_strategy: next }),
+    onSuccess: async (response) => {
       if (!response.success) {
         toast.error(response.message || t('Request failed'))
         return
       }
-      await onUpdated()
+      await queryClient.invalidateQueries({
+        queryKey: subscriptionQueryKeys.selfSummary,
+      })
       toast.success(t('Billing strategy updated'))
-    } catch {
+    },
+    onError: () => {
       toast.error(t('Request failed'))
-    } finally {
-      setSaving(false)
-    }
+    },
+  })
+
+  const handleChange = (values: string[]) => {
+    const next = values[0] as SubscriptionBillingStrategy | undefined
+    if (!next || next === strategy || updateMutation.isPending) return
+    updateMutation.mutate(next)
   }
 
   return (
@@ -339,7 +339,7 @@ export function SubscriptionBillingStrategyControl({
       <ToggleGroup
         value={[strategy]}
         onValueChange={handleChange}
-        disabled={saving}
+        disabled={updateMutation.isPending}
         spacing={2}
         className='grid w-full grid-cols-1 gap-2 lg:grid-cols-3'
         aria-label={t('Subscription billing strategy')}
@@ -901,10 +901,7 @@ export function SubscriptionPlansCard({
           )}
 
           {selfSubscriptionData && (
-            <SubscriptionBillingStrategyControl
-              data={selfSubscriptionData}
-              onUpdated={() => selfSubscriptionQuery.refetch()}
-            />
+            <SubscriptionBillingStrategyControl data={selfSubscriptionData} />
           )}
 
           {!hasAny && (

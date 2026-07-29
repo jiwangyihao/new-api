@@ -1319,7 +1319,16 @@ type ActiveSubscriptionUsage struct {
 	Unlimited  bool
 }
 
+type subscriptionTransactionHooks struct {
+	afterUsageStateResolved    func()
+	onPreConsumeAttemptStarted func()
+}
+
 func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage, error) {
+	return getActiveDistributorSubscriptionUsage(userId, nil)
+}
+
+func getActiveDistributorSubscriptionUsage(userId int, hooks *subscriptionTransactionHooks) (*ActiveSubscriptionUsage, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
@@ -1335,6 +1344,9 @@ func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage
 			return err
 		}
 		state = resolved
+		if hooks != nil && hooks.afterUsageStateResolved != nil {
+			hooks.afterUsageStateResolved()
+		}
 		return nil
 	})
 	if err != nil {
@@ -2580,6 +2592,10 @@ func PreConsumeUserSubscription(requestId string, userId int, modelName string, 
 // PreConsumeUserSubscriptionByUnits pre-consumes from active subscription token quota.
 // legacyAmount is kept for compatibility with older callers, but API request billing no longer falls back to amount_total.
 func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName string, quotaType int, legacyAmount int64, distributorAmount int64) (*SubscriptionPreConsumeResult, error) {
+	return preConsumeUserSubscriptionByUnits(requestId, userId, modelName, quotaType, legacyAmount, distributorAmount, nil)
+}
+
+func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName string, quotaType int, legacyAmount int64, distributorAmount int64, hooks *subscriptionTransactionHooks) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
@@ -2595,10 +2611,13 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 	var repairedSettingJSON string
 	var selectionBusinessErr error
 
-	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+	runPreConsume := func(tx *gorm.DB) error {
 		*returnValue = SubscriptionPreConsumeResult{}
 		repairedSettingJSON = ""
 		selectionBusinessErr = nil
+		if hooks != nil && hooks.onPreConsumeAttemptStarted != nil {
+			hooks.onPreConsumeAttemptStarted()
+		}
 		var existing SubscriptionPreConsumeRecord
 		query := tx.Where("request_id = ?", requestId).Limit(1).Find(&existing)
 		if query.Error != nil {
@@ -2680,7 +2699,8 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
-	})
+	}
+	err := transactionWithUserSettingCASRetry(runPreConsume)
 	if err != nil {
 		return nil, err
 	}

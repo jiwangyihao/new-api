@@ -282,7 +282,8 @@ func TestPreConsumeBillingSyncsSubscriptionTrialMarker(t *testing.T) {
 	ensureSubscriptionBillingTables(t)
 	trialCode := "trial-marker-billing"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Trial Marker", Enabled: true, IsTrial: true, BusinessCode: &trialCode}).Error)
-	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, AmountTotal: 1, TokenLimit: 0, TokenUsed: 0, Status: "active", GrantReason: "trial_code", StartTime: time.Now().Unix(), EndTime: time.Now().Add(24 * time.Hour).Unix()}).Error)
+	now := time.Now().Unix()
+	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subID, UserId: userID, PlanId: planID, EntitlementType: model.SubscriptionEntitlementTimed, AmountTotal: 1, TokenLimit: 0, TokenUsed: 0, Status: "active", GrantReason: "trial_code", StartTime: now - 60, EndTime: now + int64(24*time.Hour/time.Second)}).Error)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-trial-marker", "req-trial-marker", "subscription_only")

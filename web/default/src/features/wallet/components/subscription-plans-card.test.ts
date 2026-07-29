@@ -147,6 +147,30 @@ function makeSelfSubscriptionData(
   }
 }
 
+function createBillingStrategyQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, staleTime: Infinity },
+      mutations: { retry: false },
+    },
+  })
+}
+
+function createBillingStrategyControlElement(
+  data: SelfSubscriptionData,
+  queryClient: QueryClient
+) {
+  return createElement(
+    I18nextProvider,
+    { i18n: testI18n },
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(SubscriptionBillingStrategyControl, { data })
+    )
+  )
+}
+
 describe('subscription billing strategy control', () => {
   test('renders all account strategies, active subscription, and candidate order', () => {
     const active = makeRecord(
@@ -165,16 +189,11 @@ describe('subscription billing strategy control', () => {
       all_subscriptions: [active, fallback],
     })
 
+    const queryClient = createBillingStrategyQueryClient()
     const markup = renderToString(
-      createElement(
-        I18nextProvider,
-        { i18n: testI18n },
-        createElement(SubscriptionBillingStrategyControl, {
-          data,
-          onUpdated: async () => undefined,
-        })
-      )
+      createBillingStrategyControlElement(data, queryClient)
     )
+    queryClient.clear()
 
     assert.equal(billingStrategyOptions.length, 3)
     assert.match(markup, /Single active subscription/)
@@ -185,7 +204,7 @@ describe('subscription billing strategy control', () => {
     assert.match(markup, /aria-pressed="true"/)
   })
 
-  test('submits one strategy and refreshes the self summary on success', async () => {
+  test('submits one strategy and refreshes the shared self summary on success', async () => {
     const data = makeSelfSubscriptionData({
       billing_strategy: 'single_active',
       billing_candidate_subscription_ids: [],
@@ -207,19 +226,25 @@ describe('subscription billing strategy control', () => {
         config,
       }
     }
+    const queryClient = createBillingStrategyQueryClient()
+    queryClient.setQueryData(subscriptionQueryKeys.selfSummary, {
+      success: true,
+      data,
+    })
+    const observer = new QueryObserver(queryClient, {
+      queryKey: subscriptionQueryKeys.selfSummary,
+      queryFn: async () => {
+        refreshCount += 1
+        return {
+          success: true,
+          data: { ...data, billing_strategy: 'timed_first' as const },
+        }
+      },
+      staleTime: Infinity,
+    })
+    const unsubscribe = observer.subscribe(() => undefined)
 
-    const view = render(
-      createElement(
-        I18nextProvider,
-        { i18n: testI18n },
-        createElement(SubscriptionBillingStrategyControl, {
-          data,
-          onUpdated: async () => {
-            refreshCount += 1
-          },
-        })
-      )
-    )
+    const view = render(createBillingStrategyControlElement(data, queryClient))
 
     fireEvent.click(
       view.getByRole('button', { name: 'Timed subscriptions first' })
@@ -227,7 +252,9 @@ describe('subscription billing strategy control', () => {
 
     await waitFor(() => assert.ok(submitted))
     assert.deepEqual(submitted, { billing_strategy: 'timed_first' })
-    assert.equal(refreshCount, 1)
+    await waitFor(() => assert.equal(refreshCount, 1))
+    unsubscribe()
+    queryClient.clear()
   })
 
   test('keeps the server-selected strategy when the update fails', async () => {
@@ -236,7 +263,6 @@ describe('subscription billing strategy control', () => {
       billing_candidate_subscription_ids: [],
     })
     let requestCount = 0
-    let refreshCount = 0
     api.defaults.adapter = async (config) => {
       requestCount += 1
       return {
@@ -248,18 +274,8 @@ describe('subscription billing strategy control', () => {
       }
     }
 
-    const view = render(
-      createElement(
-        I18nextProvider,
-        { i18n: testI18n },
-        createElement(SubscriptionBillingStrategyControl, {
-          data,
-          onUpdated: async () => {
-            refreshCount += 1
-          },
-        })
-      )
-    )
+    const queryClient = createBillingStrategyQueryClient()
+    const view = render(createBillingStrategyControlElement(data, queryClient))
     const selected = view.getByRole('button', {
       name: 'Active subscription fallback',
     })
@@ -270,9 +286,9 @@ describe('subscription billing strategy control', () => {
     fireEvent.click(rejected)
 
     await waitFor(() => assert.equal(requestCount, 1))
-    assert.equal(refreshCount, 0)
     assert.equal(selected.getAttribute('aria-pressed'), 'true')
     assert.equal(rejected.getAttribute('aria-pressed'), 'false')
+    queryClient.clear()
   })
 
   test('supports arrow-key focus while preserving one selected strategy', async () => {
@@ -280,16 +296,8 @@ describe('subscription billing strategy control', () => {
       billing_strategy: 'single_active',
       billing_candidate_subscription_ids: [],
     })
-    const view = render(
-      createElement(
-        I18nextProvider,
-        { i18n: testI18n },
-        createElement(SubscriptionBillingStrategyControl, {
-          data,
-          onUpdated: async () => undefined,
-        })
-      )
-    )
+    const queryClient = createBillingStrategyQueryClient()
+    const view = render(createBillingStrategyControlElement(data, queryClient))
     const first = view.getByRole('button', {
       name: 'Single active subscription',
     })
@@ -304,6 +312,7 @@ describe('subscription billing strategy control', () => {
     assert.equal(document.activeElement, second)
     assert.equal(first.getAttribute('aria-pressed'), 'true')
     assert.equal(second.getAttribute('aria-pressed'), 'false')
+    queryClient.clear()
   })
 })
 

@@ -174,7 +174,7 @@ func GetAdminOpsUserConcurrencyLimits(userIDs []int) (map[int]AdminOpsUserConcur
 
 func selectAdminOpsPrimarySubscription(userID int, user User, now int64) (*primaryBillableSubscription, error) {
 	var subs []UserSubscription
-	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userID, "active", now).
+	if err := DB.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userID, "active", SubscriptionEntitlementCreditBalance, now).
 		Order(primaryBillableSubscriptionOrder).
 		Find(&subs).Error; err != nil {
 		return nil, err

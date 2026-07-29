@@ -45,7 +45,6 @@ import {
   resetSubscriptionQuota,
   setActiveSubscription,
 } from '@/features/subscriptions/api'
-import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
   formatConcurrencyLimit,
@@ -54,6 +53,7 @@ import {
   formatCreditLimit,
   formatFiniteCreditCount,
 } from '@/features/subscriptions/lib'
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import type {
   PlanRecord,
   SelfSubscriptionData,
@@ -139,7 +139,9 @@ export function canResetSubscriptionQuotaFromRecord(
   now: number
 ): boolean {
   const subscription = record?.subscription
-  if (!subscription) return false
+  if (!subscription || subscription.entitlement_type === 'credit_balance') {
+    return false
+  }
   const endTime = getSubscriptionEndTime(subscription)
   const isExpired = endTime < now
   const isCancelled = subscription.status === 'cancelled'
@@ -193,11 +195,11 @@ export function renderPlanChannelEquivalentNotes(
 ): string[] {
   const equivalents = plan.channel_credit_equivalents ?? []
   const legacyEquivalents = plan.channel_token_equivalents ?? []
-  const visibleEquivalents = equivalents.length > 0 ? equivalents : legacyEquivalents
+  const visibleEquivalents =
+    equivalents.length > 0 ? equivalents : legacyEquivalents
   if (!shouldShowChannelEquivalents(visibleEquivalents)) return []
   return getChannelEquivalentNotes(visibleEquivalents, t)
 }
-
 
 export function renderSubscriptionChannelEquivalentLabels(
   data: Pick<SelfSubscriptionData, 'summary'> | null,
@@ -246,7 +248,8 @@ export function renderSubscriptionChannelEquivalentNotes(
   const legacyEquivalents = isCurrentActive
     ? (data?.summary?.channel_token_equivalents ?? [])
     : []
-  const visibleEquivalents = equivalents.length > 0 ? equivalents : legacyEquivalents
+  const visibleEquivalents =
+    equivalents.length > 0 ? equivalents : legacyEquivalents
   if (!shouldShowChannelEquivalents(visibleEquivalents)) return []
   return getChannelEquivalentNotes(visibleEquivalents, t)
 }
@@ -485,6 +488,71 @@ export function SubscriptionPlansCard({
             </div>
           </div>
 
+          {selfSubscriptionData?.credit_balance && (
+            <div className='mt-3 grid gap-2 rounded-md border p-3 text-xs sm:grid-cols-3'>
+              <div>
+                <div className='text-muted-foreground'>
+                  {t('Available Credit balance')}
+                </div>
+                <div className='mt-1 font-medium'>
+                  {formatFiniteCreditCount(
+                    selfSubscriptionData.credit_balance.available_credit,
+                    t
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className='text-muted-foreground'>
+                  {t('Settlement debt')}
+                </div>
+                <div className='mt-1 font-medium'>
+                  {formatFiniteCreditCount(
+                    selfSubscriptionData.credit_balance.settlement_debt,
+                    t
+                  )}
+                </div>
+              </div>
+              <div>
+                <div className='text-muted-foreground'>
+                  {t('Credit balance status')}
+                </div>
+                <div className='mt-1 font-medium'>
+                  {t(selfSubscriptionData.credit_balance.status)}
+                  {selfSubscriptionData.credit_balance.active
+                    ? ` · ${t('Current active')}`
+                    : ''}
+                </div>
+              </div>
+              {(selfSubscriptionData.credit_balance_ledger?.length || 0) >
+                0 && (
+                <div className='sm:col-span-3'>
+                  <div className='text-muted-foreground mb-1'>
+                    {t('Credit purchase history')}
+                  </div>
+                  <div className='max-h-28 space-y-1 overflow-y-auto'>
+                    {selfSubscriptionData.credit_balance_ledger?.map(
+                      (entry) => (
+                        <div
+                          key={entry.id}
+                          className='flex flex-wrap justify-between gap-2'
+                        >
+                          <span>
+                            {new Date(entry.created_at * 1000).toLocaleString()}
+                          </span>
+                          <span>
+                            +{entry.gross_credit} · {t('Debt offset')}{' '}
+                            {entry.debt_offset} · {t('Available')}{' '}
+                            {entry.available_credit_after}
+                          </span>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {hasAny && (
             <>
               <Separator className='my-3' />
@@ -506,7 +574,9 @@ export function SubscriptionPlansCard({
                   const endTime = getSubscriptionEndTime(subscription)
                   const subscriptionId = subscription?.id || 0
                   const sourceLabel = getSubscriptionSourceLabel(sub, t)
-                  const isExpired = endTime < now
+                  const isCreditBalance =
+                    subscription?.entitlement_type === 'credit_balance'
+                  const isExpired = !isCreditBalance && endTime < now
                   const isCancelled = subscription?.status === 'cancelled'
                   const isActive =
                     subscription?.status === 'active' && !isExpired
@@ -573,11 +643,13 @@ export function SubscriptionPlansCard({
                         </div>
                         {isActive && (
                           <div className='flex shrink-0 flex-wrap items-center justify-end gap-2'>
-                            <span className='text-muted-foreground'>
-                              {t('{{count}} days remaining', {
-                                count: remainDays,
-                              })}
-                            </span>
+                            {!isCreditBalance && (
+                              <span className='text-muted-foreground'>
+                                {t('{{count}} days remaining', {
+                                  count: remainDays,
+                                })}
+                              </span>
+                            )}
                             {!isSelected && subscriptionId > 0 && (
                               <Button
                                 variant='outline'
@@ -606,24 +678,31 @@ export function SubscriptionPlansCard({
                       <div className='text-muted-foreground mt-1.5'>
                         {t('Source')}: {sourceLabel}
                       </div>
-                      <div className='text-muted-foreground mt-1.5'>
-                        {isActive
-                          ? t('Until')
-                          : isCancelled
-                            ? t('Cancelled at')
-                            : t('Expired at')}{' '}
-                        {new Date(endTime * 1000).toLocaleString()}
-                      </div>
-                      {isActive && (subscription?.next_reset_time ?? 0) > 0 && (
-                        <div className='text-muted-foreground mt-1'>
-                          {t('Next reset')}:{' '}
-                          {new Date(
-                            subscription!.next_reset_time! * 1000
-                          ).toLocaleString()}
+                      {!isCreditBalance && (
+                        <div className='text-muted-foreground mt-1.5'>
+                          {isActive
+                            ? t('Until')
+                            : isCancelled
+                              ? t('Cancelled at')
+                              : t('Expired at')}{' '}
+                          {new Date(endTime * 1000).toLocaleString()}
                         </div>
                       )}
+                      {!isCreditBalance &&
+                        isActive &&
+                        (subscription?.next_reset_time ?? 0) > 0 && (
+                          <div className='text-muted-foreground mt-1'>
+                            {t('Next reset')}:{' '}
+                            {new Date(
+                              subscription!.next_reset_time! * 1000
+                            ).toLocaleString()}
+                          </div>
+                        )}
                       <div className='text-muted-foreground mt-1'>
-                        {t('Monthly Credits')}:{' '}
+                        {isCreditBalance
+                          ? t('Credit balance')
+                          : t('Monthly Credits')}
+                        :{' '}
                         {tokenLimit > 0 ? (
                           <Tooltip>
                             <TooltipTrigger
@@ -639,6 +718,8 @@ export function SubscriptionPlansCard({
                               {t('Remaining')} {remainTokens}
                             </TooltipContent>
                           </Tooltip>
+                        ) : isCreditBalance ? (
+                          formatFiniteCreditCount(0, t)
                         ) : (
                           formatCreditLimit(0, t)
                         )}
@@ -776,29 +857,16 @@ export function SubscriptionPlansCard({
 
                     <Separator className='mb-3' />
 
-                    {reached ? (
-                      <Tooltip>
-                        <TooltipTrigger render={<div />}>
-                          <Button variant='outline' className='w-full' disabled>
-                            {t('Limit Reached')}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>
-                          {t('Purchase limit reached')} ({count}/{limit})
-                        </TooltipContent>
-                      </Tooltip>
-                    ) : (
-                      <Button
-                        variant='outline'
-                        className='w-full'
-                        onClick={() => {
-                          setSelectedPlan(p)
-                          setPurchaseOpen(true)
-                        }}
-                      >
-                        {t('Subscribe Now')}
-                      </Button>
-                    )}
+                    <Button
+                      variant='outline'
+                      className='w-full'
+                      onClick={() => {
+                        setSelectedPlan(p)
+                        setPurchaseOpen(true)
+                      }}
+                    >
+                      {reached ? t('Choose purchase mode') : t('Subscribe Now')}
+                    </Button>
                   </CardContent>
                 </Card>
               )
@@ -836,6 +904,11 @@ export function SubscriptionPlansCard({
             : undefined
         }
         accountBalance={accountBalance}
+        lastPurchaseMode={selfSubscriptionData?.last_subscription_purchase_mode}
+        creditBalancePurchaseEnabled={
+          selfSubscriptionData?.credit_balance_purchase_enabled
+        }
+        creditBalancePlan={selfSubscriptionData?.credit_balance_plan}
         onPurchaseSuccess={onPurchaseSuccess}
       />
 

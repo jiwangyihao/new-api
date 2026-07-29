@@ -44,3 +44,30 @@ func TestSubscriptionSelfCodexProModeRouteIsRegistered(t *testing.T) {
 	require.NoError(t, common.Unmarshal([]byte(rawSetting), &setting))
 	assert.Equal(t, "all", setting["codex_pro_mode"])
 }
+
+func TestSubscriptionCreditBalanceLedgerRouteIsAuthenticated(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionPublicPlansRouteTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.CreditBalanceLedger{}))
+	accessToken := "credit-ledger-route-token"
+	require.NoError(t, model.DB.Create(&model.User{Id: 9942, Username: "credit-ledger-route", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditBalanceLedger{UserId: 9942, UserSubscriptionId: 9943, Type: model.CreditBalanceLedgerTypePurchase, IdempotencyKey: "route-ledger", SourceType: model.CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 9944, GrossCredit: 100, BalanceBefore: 0, BalanceAfter: 100, AvailableCreditAfter: 100, CreatedAt: common.GetTimestamp()}).Error)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
+	SetApiRouter(engine)
+
+	unauthorized := httptest.NewRecorder()
+	engine.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/subscription/self/credit-balance/ledger", nil))
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/subscription/self/credit-balance/ledger", nil)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("New-Api-User", "9942")
+	engine.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"gross_credit":100`)
+	assert.NotContains(t, recorder.Body.String(), `"user_id":9941`)
+}

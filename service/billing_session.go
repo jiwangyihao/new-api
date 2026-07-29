@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -155,19 +156,13 @@ func (s *BillingSession) Refund(c *gin.Context) {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
 		if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -committedSubscriptionTokens)
-			if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
-				err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -committedSubscriptionTokens)
-			}
+			err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)
 			if err != nil {
 				common.SysLog("error refunding committed subscription tokens: " + err.Error())
 			}
 		}
 		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-			err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -int64(extraReserved))
-			if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
-				err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -int64(extraReserved))
-			}
+			err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -int64(extraReserved))
 			if err != nil {
 				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
 			}
@@ -203,19 +198,13 @@ func (s *BillingSession) refundSync() {
 		common.SysLog("error refunding billing source: " + err.Error())
 	}
 	if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-		err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -committedSubscriptionTokens)
-		if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
-			err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -committedSubscriptionTokens)
-		}
+		err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)
 		if err != nil {
 			common.SysLog("error refunding committed subscription tokens: " + err.Error())
 		}
 	}
 	if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
-		err := model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, -int64(extraReserved))
-		if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
-			err = model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, -int64(extraReserved))
-		}
+		err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -int64(extraReserved))
 		if err != nil {
 			common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
 		}
@@ -295,14 +284,17 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 
 	if sub, ok := s.funding.(*SubscriptionFunding); ok {
 		sub.preConsumed += int64(delta)
-		sub.TokenUsedAfter += int64(delta)
-		sub.AmountUsedAfter += int64(delta)
-		if sub.TokenLimit > 0 {
-			remaining := sub.TokenLimit - sub.TokenUsedAfter
-			if remaining < 0 {
-				remaining = 0
+		if sub.DistributorTokenBilling {
+			sub.TokenUsedAfter += int64(delta)
+			if sub.TokenLimit > 0 {
+				remaining := sub.TokenLimit - sub.TokenUsedAfter
+				if remaining < 0 {
+					remaining = 0
+				}
+				sub.TokenRemaining = remaining
 			}
-			sub.TokenRemaining = remaining
+		} else {
+			sub.AmountUsedAfter += int64(delta)
 		}
 		s.preConsumedSubscription += int64(delta)
 	}
@@ -312,20 +304,25 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 	return nil
 }
 
-func newSubscriptionBillingError(errMsg string) *types.NewAPIError {
+func newSubscriptionBillingError(err error) *types.NewAPIError {
+	if err == nil {
+		err = model.ErrNoActiveSubscription
+	}
+	errorCode := types.ErrorCodeSubscriptionRequired
+	message := "active subscription is required"
+	if strings.Contains(err.Error(), "subscription token quota insufficient") {
+		message = "subscription token exhausted"
+		errorCode = types.ErrorCodeSubscriptionTokenExhausted
+	}
+	wrappedErr := fmt.Errorf("%s: %w", message, err)
 	openAIError := types.OpenAIError{
-		Message: "active subscription is required",
+		Message: wrappedErr.Error(),
 		Type:    "insufficient_quota",
-		Code:    string(types.ErrorCodeSubscriptionRequired),
+		Code:    string(errorCode),
 	}
-	if strings.Contains(errMsg, "subscription token quota insufficient") {
-		openAIError.Message = "subscription token exhausted"
-		openAIError.Code = string(types.ErrorCodeSubscriptionTokenExhausted)
-	}
-	if errMsg != "" {
-		openAIError.Message = openAIError.Message + ": " + errMsg
-	}
-	return types.WithOpenAIError(openAIError, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	apiErr := types.WithOpenAIError(openAIError, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	apiErr.Err = wrappedErr
+	return apiErr
 }
 
 // ---------------------------------------------------------------------------
@@ -346,11 +343,10 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	}
 
 	// ---- 1) 预扣资金来源 ----
-	// 请求级计费强制走订阅，token key quota 不再作为资金来源或预扣检查。
 	if err := s.funding.PreConsume(effectiveQuota); err != nil {
 		errMsg := err.Error()
-		if strings.Contains(errMsg, "no active subscription") || strings.Contains(errMsg, "subscription quota insufficient") || strings.Contains(errMsg, "subscription token quota insufficient") {
-			return newSubscriptionBillingError(errMsg)
+		if errors.Is(err, model.ErrNoActiveSubscription) || strings.Contains(errMsg, "subscription quota insufficient") || strings.Contains(errMsg, "subscription token quota insufficient") {
+			return newSubscriptionBillingError(err)
 		}
 		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 	}
@@ -368,6 +364,13 @@ func (s *BillingSession) preConsume(c *gin.Context, quota int) *types.NewAPIErro
 	return nil
 }
 
+func postConsumeSubscriptionFundingDelta(funding FundingSource, subscriptionId int, delta int64) error {
+	if sub, ok := funding.(*SubscriptionFunding); ok && sub.DistributorTokenBilling {
+		return model.PostConsumeUserSubscriptionTokenDelta(subscriptionId, delta)
+	}
+	return model.PostConsumeUserSubscriptionAmountDelta(subscriptionId, delta)
+}
+
 func (s *BillingSession) reserveFunding(delta int) error {
 	switch funding := s.funding.(type) {
 	case *WalletFunding:
@@ -377,10 +380,7 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
-		err := model.PostConsumeUserSubscriptionAmountDelta(funding.subscriptionId, int64(delta))
-		if funding.DistributorTokenBilling {
-			err = model.PostConsumeUserSubscriptionTokenDelta(funding.subscriptionId, int64(delta))
-		}
+		err := postConsumeSubscriptionFundingDelta(funding, funding.subscriptionId, int64(delta))
 		if err != nil {
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
@@ -604,9 +604,23 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.DynamicBillingMultiplierIgnoredReason = ""
 }
 
+func sessionFundingEntitlementType(session *BillingSession) string {
+	if session == nil {
+		return ""
+	}
+	sub, ok := session.funding.(*SubscriptionFunding)
+	if !ok {
+		return ""
+	}
+	return sub.EntitlementType
+}
+
 func distributorSubscriptionEligibleForBilling(relayInfo *relaycommon.RelayInfo) bool {
 	if relayInfo == nil {
 		return false
+	}
+	if relayInfo.RelayFormat == types.RelayFormatTask {
+		return true
 	}
 	if distributorTokenBillingEligibleForText(relayInfo) {
 		return true
@@ -638,14 +652,18 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 	if relayInfo == nil {
 		return nil, types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
 	}
+	if relayInfo.RelayFormat == types.RelayFormatTask && (relayInfo.FreeModel || relayInfo.PriceData.FreeModel) {
+		clearRelayBillingState(relayInfo)
+		return nil, types.NewOpenAIError(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	}
 	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
-		hasSubscription, err := model.HasActiveUserSubscription(relayInfo.UserId)
+		hasSubscription, err := model.HasActiveUserSubscriptionForModel(relayInfo.UserId, relaycommon.ResolveBillingModelName(relayInfo))
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}
 		if !hasSubscription {
 			clearRelayBillingState(relayInfo)
-			return nil, newSubscriptionBillingError("active subscription is required")
+			return nil, newSubscriptionBillingError(model.ErrNoActiveSubscription)
 		}
 		relayInfo.FinalPreConsumedQuota = 0
 		relayInfo.SubscriptionPreConsumed = 0
@@ -666,12 +684,17 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 
 	trySubscription := func() (*BillingSession, *types.NewAPIError) {
 		distributorConsumeRaw := int64(relayInfo.GetEstimatePromptTokens())
+		if relayInfo.RelayFormat == types.RelayFormatTask {
+			distributorConsumeRaw = int64(preConsumedQuota)
+		}
 		if distributorConsumeRaw <= 0 {
 			distributorConsumeRaw = 1
 		}
 		distributorConsume := int64(0)
 		var err error
-		if relayInfo.FrozenCreditBillingMode() == creditbilling.ModeFixedRequest {
+		if relayInfo.RelayFormat == types.RelayFormatTask {
+			distributorConsume = distributorConsumeRaw
+		} else if relayInfo.FrozenCreditBillingMode() == creditbilling.ModeFixedRequest {
 			distributorConsume = relayInfo.FixedRequestCredits
 		} else {
 			distributorConsume, err = creditbilling.ApplyCreditMultiplier(distributorConsumeRaw, relayInfo.FrozenChannelTokenBillingMultiplier())
@@ -695,7 +718,23 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 			},
 		}
 		if apiErr := session.preConsume(c, int(distributorConsume)); apiErr != nil {
+			if relayInfo.RelayFormat == types.RelayFormatTask && errors.Is(apiErr, model.ErrNoActiveSubscription) {
+				clearRelayBillingState(relayInfo)
+				mappedErr := fmt.Errorf("%s: %w", distributorSubscriptionRelayError(relayInfo), model.ErrNoActiveSubscription)
+				mappedAPIError := types.NewOpenAIError(mappedErr, types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+				mappedAPIError.Err = mappedErr
+				return nil, mappedAPIError
+			}
 			return nil, apiErr
+		}
+		if relayInfo.RelayFormat == types.RelayFormatTask && sessionFundingEntitlementType(session) != model.SubscriptionEntitlementCreditBalance {
+			if err := session.funding.Refund(); err != nil {
+				clearRelayBillingState(relayInfo)
+				return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
+			session.refunded = true
+			clearRelayBillingState(relayInfo)
+			return nil, types.NewOpenAIError(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 		}
 		return session, nil
 	}

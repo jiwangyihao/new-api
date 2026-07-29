@@ -90,6 +90,120 @@ func TestPreConsumeUserSubscriptionRefreshesPlanLimitsWhenPrimarySelectionCached
 	assert.Equal(t, 21, second.QueueCapacity)
 }
 
+func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.AutoMigrate(&CreditBalanceLedger{}))
+	require.NoError(t, DB.Create(&User{Id: 7104, Username: "credit_balance_consumer", Status: common.UserStatusEnabled, AffCode: "aff7104"}).Error)
+	creditCode := "credit_balance_consume"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7206, Title: "Credit 余额套餐", EntitlementType: SubscriptionEntitlementCreditBalance, Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 0, ConcurrencyLimit: 2, BusinessCode: &creditCode}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7207, UserId: 7104, PlanId: 7206, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 100, TokenUsed: 90, EndTime: 0, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+
+	hasAllowed, err := HasActiveUserSubscriptionForModel(7104, "gpt-4o")
+	require.NoError(t, err)
+	assert.True(t, hasAllowed)
+	hasDenied, err := HasActiveUserSubscriptionForModel(7104, "claude-3-7-sonnet")
+	require.NoError(t, err)
+	assert.False(t, hasDenied)
+
+	_, err = PreConsumeUserSubscription("credit-balance-model-denied", 7104, "claude-3-7-sonnet", 0, 1)
+	require.ErrorContains(t, err, "subscription model not allowed")
+	var deniedRecordCount int64
+	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", "credit-balance-model-denied").Count(&deniedRecordCount).Error)
+	assert.Zero(t, deniedRecordCount)
+
+	pre, err := PreConsumeUserSubscription("credit-balance-preconsume", 7104, "gpt-4o", 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, 7207, pre.UserSubscriptionId)
+	assert.Equal(t, int64(100), pre.TokenUsedAfter)
+
+	_, err = PreConsumeUserSubscription("credit-balance-exhausted", 7104, "gpt-4o", 0, 1)
+	require.ErrorContains(t, err, "subscription token quota insufficient")
+	require.NoError(t, PostConsumeUserSubscriptionTokenDelta(7207, 5))
+	var balance UserSubscription
+	require.NoError(t, DB.First(&balance, 7207).Error)
+	assert.Equal(t, int64(105), balance.TokenUsed)
+
+	_, err = PreConsumeUserSubscription("credit-balance-debt", 7104, "gpt-4o", 0, 1)
+	require.ErrorContains(t, err, "subscription token quota insufficient")
+	require.NoError(t, RefundSubscriptionPreConsume("credit-balance-preconsume"))
+
+	require.NoError(t, DB.First(&balance, 7207).Error)
+	assert.Equal(t, int64(95), balance.TokenUsed)
+	var ledgerCount int64
+	require.NoError(t, DB.Model(&CreditBalanceLedger{}).Where("user_id = ?", 7104).Count(&ledgerCount).Error)
+	assert.Zero(t, ledgerCount)
+}
+
+func TestPreConsumeFallsBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	require.NoError(t, DB.Create(&User{Id: 7106, Username: "model_fallback", Status: common.UserStatusEnabled, AffCode: "aff7106"}).Error)
+	firstCode := "model_fallback_first"
+	secondCode := "model_fallback_second"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7211, Title: "First", Enabled: true, ModelLimits: "claude-3-7-sonnet", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &firstCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7212, Title: "Second", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &secondCode}).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7210, UserId: 7106, PlanId: 7211, Status: "active", TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7213, UserId: 7106, PlanId: 7212, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: SubscriptionGrantOrder}).Error)
+
+	primed, err := PreConsumeUserSubscription("model-fallback-prime-cache", 7106, "claude-3-7-sonnet", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7210, primed.UserSubscriptionId)
+	cachedValue, cached := primaryBillableSubscriptionCache.Load(primaryBillableSubscriptionCacheKey(7106))
+	require.True(t, cached)
+	cachedEntry, ok := cachedValue.(primaryBillableSubscriptionCacheEntry)
+	require.True(t, ok)
+	assert.Equal(t, 7210, cachedEntry.loaded.Subscription.Id)
+	setting, err := GetUserSetting(7106, true)
+	require.NoError(t, err)
+	assert.Zero(t, setting.ActiveSubscriptionId)
+
+	pre, err := PreConsumeUserSubscription("model-fallback-first", 7106, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7213, pre.UserSubscriptionId)
+
+	second, err := PreConsumeUserSubscription("model-fallback-cached", 7106, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7213, second.UserSubscriptionId)
+}
+
+func TestSubscriptionSelfSummaryIncludesModelRestrictedPlan(t *testing.T) {
+	truncateTables(t)
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	require.NoError(t, DB.AutoMigrate(&GPTAbuseSignalLog{}, &GPTAbuseUserSuspension{}, &GPTAbuseWarningReset{}, &GPTAbuseRepeatBlockLog{}))
+	require.NoError(t, DB.Create(&User{Id: 7107, Username: "restricted_summary", Status: common.UserStatusEnabled, AffCode: "aff7107", Setting: `{"active_subscription_id":7214}`}).Error)
+	businessCode := "restricted_summary_plan"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7215, Title: "Restricted", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 3, BusinessCode: &businessCode}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7214, UserId: 7107, PlanId: 7215, Status: "active", TokenLimit: 100, EndTime: common.GetTimestamp() + 3600, GrantReason: SubscriptionGrantOrder}).Error)
+
+	summary, err := GetSubscriptionSelfSummary(7107)
+	require.NoError(t, err)
+	assert.Equal(t, 1, summary.ActiveCount)
+	assert.Equal(t, 7214, summary.SubscriptionId)
+	assert.Equal(t, "Restricted", summary.PrimaryPlanTitle)
+}
+
+func TestCreditBalanceZeroLimitIsNotUnlimited(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	require.NoError(t, DB.Create(&User{Id: 7105, Username: "credit_balance_zero", Status: common.UserStatusEnabled, AffCode: "aff7105"}).Error)
+	creditCode := "credit_balance_zero"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7208, Title: "Zero Credit", EntitlementType: SubscriptionEntitlementCreditBalance, Enabled: true, ConcurrencyLimit: 2, BusinessCode: &creditCode}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7209, UserId: 7105, PlanId: 7208, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 0, TokenUsed: 0, EndTime: 0, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+
+	hasActive, err := HasActiveUserSubscription(7105)
+	require.NoError(t, err)
+	assert.False(t, hasActive)
+
+	_, err = PreConsumeUserSubscription("credit-balance-zero", 7105, "gpt-4o", 0, 1)
+	require.ErrorContains(t, err, "subscription token quota insufficient")
+	var recordCount int64
+	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", "credit-balance-zero").Count(&recordCount).Error)
+	assert.Zero(t, recordCount)
+}
+
 func TestCreateUserSubscriptionFromPlanTx_RejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7301, Username: "extend_user", Status: common.UserStatusEnabled}).Error)

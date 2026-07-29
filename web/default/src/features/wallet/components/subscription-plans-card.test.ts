@@ -1,14 +1,15 @@
-import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
 import { createElement } from 'react'
-import { renderToString } from 'react-dom/server'
-import i18next from 'i18next'
-import { I18nextProvider, initReactI18next } from 'react-i18next'
 import {
   QueryClient,
   QueryClientProvider,
   QueryObserver,
 } from '@tanstack/react-query'
+import i18next from 'i18next'
+import assert from 'node:assert/strict'
+import { describe, test } from 'node:test'
+import { renderToString } from 'react-dom/server'
+import { I18nextProvider, initReactI18next } from 'react-i18next'
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import type {
   PlanChannelTokenEquivalent,
   PlanRecord,
@@ -16,7 +17,6 @@ import type {
   SubscriptionChannelTokenEquivalent,
   UserSubscriptionRecord,
 } from '@/features/subscriptions/types'
-import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import {
   formatPlanChannelEquivalent,
   formatSubscriptionChannelEquivalent,
@@ -35,11 +35,7 @@ import {
 type TranslationFn = (key: string, options?: Record<string, unknown>) => string
 const t: TranslationFn = (key, values) => {
   const translated =
-    key === 'about'
-      ? 'about'
-      : key === 'Custom'
-        ? 'Translated Custom'
-        : key
+    key === 'about' ? 'about' : key === 'Custom' ? 'Translated Custom' : key
   return translated.replace(/{{(\w+)}}/g, (_match, name: string) =>
     String(values?.[name] ?? '')
   )
@@ -251,6 +247,83 @@ describe('wallet subscription React Query rendering', () => {
         html,
         /Estimated by current channel multiplier\. Actual deduction depends on the channel used\./
       )
+    } finally {
+      queryClient.clear()
+    }
+  })
+  test('renders exhausted Credit balance and ledger without unlimited copy', () => {
+    const creditRecord = makeRecord(
+      {
+        id: 51,
+        plan_id: 52,
+        entitlement_type: 'credit_balance',
+        end_time: 0,
+        token_limit: 0,
+        token_used: 0,
+        is_active_selected: true,
+      },
+      {
+        id: 52,
+        title: 'Credit balance plan',
+        entitlement_type: 'credit_balance',
+      }
+    )
+    const base = makeSelfSubscriptionData()
+    const selfSummary = makeSelfSubscriptionData({
+      active_subscription_id: 51,
+      subscriptions: [],
+      all_subscriptions: [creditRecord],
+      credit_balance: {
+        user_subscription_id: 51,
+        plan_id: 52,
+        gross_credit: 0,
+        debt_offset: 0,
+        available_credit: 0,
+        settlement_debt: 0,
+        balance_before: 0,
+        balance_after: 0,
+        active: true,
+        ledger_id: 61,
+        status: 'exhausted',
+      },
+      credit_balance_ledger: [
+        {
+          id: 61,
+          user_id: 1,
+          user_subscription_id: 51,
+          type: 'purchase',
+          idempotency_key: 'credit-order-61',
+          source_type: 'subscription_order',
+          source_id: 62,
+          gross_credit: 1000,
+          debt_offset: 250,
+          balance_before: -250,
+          balance_after: 750,
+          available_credit_after: 750,
+          settlement_debt_after: 0,
+          reason: 'purchase',
+          created_at: 1,
+        },
+      ],
+      summary: {
+        ...base.summary,
+        active_subscription_id: 51,
+        token_unlimited: false,
+      },
+    })
+    const queryClient = createWalletQueryClient([], selfSummary)
+
+    try {
+      const html = renderSubscriptionPlansCardWithQueryClient(queryClient)
+
+      assert.match(html, /Available Credit balance/)
+      assert.match(html, /Settlement debt/)
+      assert.match(html, /exhausted/)
+      assert.match(html, /Credit purchase history/)
+      assert.match(html, /\+<!-- -->1000/)
+      assert.match(html, /Debt offset<!-- --> <!-- -->250/)
+      assert.match(html, /Credit balance<!-- -->:<!-- --> <!-- -->0 credits/)
+      assert.doesNotMatch(html, /Unlimited credits/)
     } finally {
       queryClient.clear()
     }

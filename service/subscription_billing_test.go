@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
@@ -873,6 +876,49 @@ func TestPreConsumeBillingFreeNonTextModelOnlyRequiresActiveSubscription(t *test
 	assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 }
+
+func TestPreConsumeBillingFreeModelUsesResolvedBillingModelScope(t *testing.T) {
+	tests := []struct {
+		name        string
+		modelLimits string
+		wantSuccess bool
+	}{
+		{name: "allowed resolved model", modelLimits: "mapped-gpt-4o", wantSuccess: true},
+		{name: "denied origin model", modelLimits: "gpt-4o", wantSuccess: false},
+	}
+	for index, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			truncate(t)
+			userID := 8100 + index*10
+			tokenID := userID + 1
+			planID := userID + 2
+			subID := userID + 3
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, fmt.Sprintf("sk-free-scope-%d", index), 10_000)
+			seedDistributorPlan(t, planID, fmt.Sprintf("plan-free-scope-%d", index), 1_000)
+			require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Update("model_limits", tc.modelLimits).Error)
+			model.InvalidateSubscriptionPlanCache(planID)
+			seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, fmt.Sprintf("sk-free-scope-%d", index), fmt.Sprintf("req-free-scope-%d", index), "subscription_only")
+			relayInfo.FreeModel = true
+			relayInfo.BillingModelName = "mapped-gpt-4o"
+			relayInfo.OriginModelName = "gpt-4o"
+
+			session, apiErr := NewBillingSession(ctx, relayInfo, 0)
+			if tc.wantSuccess {
+				require.Nil(t, apiErr)
+				assert.Nil(t, session)
+				assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
+				return
+			}
+			require.Nil(t, session)
+			require.NotNil(t, apiErr)
+			assert.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
+		})
+	}
+}
 func TestPostAudioConsumeQuotaDoesNotConsumeDistributorSubscription(t *testing.T) {
 	truncate(t)
 	const userID = 8121
@@ -1658,4 +1704,86 @@ func setBoolFieldForTest(t *testing.T, target any, fieldName string, value bool)
 	require.Truef(t, field.IsValid(), "%T must expose %s", target, fieldName)
 	require.Truef(t, field.CanSet(), "%T.%s must be settable", target, fieldName)
 	field.SetBool(value)
+}
+
+func TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve(t *testing.T) {
+	truncate(t)
+	ensureSubscriptionBillingTables(t)
+	const userID = 8291
+	const tokenID = 8292
+	const planID = 8293
+	const subID = 8294
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-credit-task", 10_000)
+	code := "credit-task"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id:               planID,
+		Title:            "Credit task",
+		EntitlementType:  model.SubscriptionEntitlementCreditBalance,
+		Enabled:          true,
+		ModelLimits:      "video-model",
+		ConcurrencyLimit: 2,
+		BusinessCode:     &code,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id:              subID,
+		UserId:          userID,
+		PlanId:          planID,
+		EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		TokenLimit:      1_000,
+		TokenUsed:       0,
+		AmountUsed:      7,
+		Status:          "active",
+		EndTime:         0,
+		GrantReason:     model.SubscriptionGrantOrder,
+	}).Error)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-task", "req-credit-task", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatTask
+	relayInfo.RelayMode = relayconstant.RelayModeVideoSubmit
+	relayInfo.OriginModelName = "video-model"
+	relayInfo.SetEstimatePromptTokens(6)
+
+	require.Nil(t, PreConsumeBilling(ctx, 100, relayInfo))
+	require.Equal(t, subID, relayInfo.SubscriptionId)
+	require.Equal(t, 100, relayInfo.FinalPreConsumedQuota)
+	require.Equal(t, int64(100), getSubscriptionTokenUsed(t, subID))
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
+	require.Equal(t, int64(7), sub.AmountUsed)
+
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+	require.NoError(t, session.Reserve(150))
+	require.Equal(t, int64(150), getSubscriptionTokenUsed(t, subID))
+	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
+	require.Equal(t, int64(7), sub.AmountUsed)
+
+	RefundBillingAfterTokenLimitReject(relayInfo.Billing)
+	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
+	require.Equal(t, int64(7), sub.AmountUsed)
+}
+
+func TestTaskBillingMapsMissingSubscriptionWithStructuredError(t *testing.T) {
+	truncate(t)
+	const userID = 8295
+	const tokenID = 8296
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-task-missing-subscription", 10_000)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-task-missing-subscription", "req-task-missing-subscription", "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatTask
+	relayInfo.RelayMode = relayconstant.RelayModeVideoSubmit
+
+	session, apiErr := NewBillingSession(ctx, relayInfo, 100)
+
+	require.Nil(t, session)
+	require.NotNil(t, apiErr)
+	require.True(t, errors.Is(apiErr, model.ErrNoActiveSubscription))
+	require.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
+	require.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	require.Contains(t, apiErr.Error(), "非文本异步任务不支持分销订阅扣费")
 }

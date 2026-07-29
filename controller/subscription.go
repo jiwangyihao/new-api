@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -130,6 +131,15 @@ func GetPublicSubscriptionPlans(c *gin.Context) {
 	common.ApiSuccess(c, result)
 }
 
+func GetCreditBalanceLedger(c *gin.Context) {
+	entries, err := model.ListCreditBalanceLedger(c.GetInt("id"), 100)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, entries)
+}
+
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
 	settingMap, _ := model.GetUserSetting(userId, false)
@@ -188,16 +198,47 @@ func GetSubscriptionSelf(c *gin.Context) {
 		summary.ChannelTokenEquivalents = []model.SubscriptionChannelTokenEquivalent{}
 	}
 
+	creditBalance, _, err := model.CreditBalanceStateForUser(userId, settingMap.ActiveSubscriptionId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	ledger := []model.CreditBalanceLedger{}
+	if creditBalance != nil {
+		ledger, err = model.ListCreditBalanceLedger(userId, 100)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	}
+	var creditBalancePlan any
+	creditBalancePurchaseEnabled := false
+	if plan, planErr := model.GetCreditBalancePlanTx(model.DB); planErr == nil {
+		creditBalancePurchaseEnabled = plan.Enabled && plan.CreditBalanceConfigured && plan.CreditBalancePurchaseEnabled
+		creditBalancePlan = gin.H{
+			"model_limits":      plan.ModelLimits,
+			"concurrency_limit": plan.ConcurrencyLimit,
+			"queue_capacity":    plan.QueueCapacity,
+		}
+	} else if !errors.Is(planErr, gorm.ErrRecordNotFound) {
+		common.ApiError(c, planErr)
+		return
+	}
 	common.ApiSuccess(c, gin.H{
-		"active_subscription_id":       settingMap.ActiveSubscriptionId,
-		"billing_preference":           pref,
-		"codex_pro_mode":               mode,
-		"codex_pro_eligible":           codexProEligible,
-		"codex_pro_features_hidden":    common.CodexProFeaturesHidden,
-		"codex_pro_unavailable_reason": codexProUnavailableReason,
-		"subscriptions":                model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId), // all active subscriptions
-		"all_subscriptions":            model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),    // all subscriptions including expired
-		"summary":                      summary,
+		"active_subscription_id":          settingMap.ActiveSubscriptionId,
+		"billing_preference":              pref,
+		"last_subscription_purchase_mode": settingMap.LastSubscriptionPurchaseMode,
+		"codex_pro_mode":                  mode,
+		"codex_pro_eligible":              codexProEligible,
+		"codex_pro_features_hidden":       common.CodexProFeaturesHidden,
+		"codex_pro_unavailable_reason":    codexProUnavailableReason,
+		"subscriptions":                   model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId),
+		"all_subscriptions":               model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),
+		"summary":                         summary,
+		"credit_balance":                  creditBalance,
+		"credit_balance_ledger":           ledger,
+		"credit_balance_purchase_enabled": creditBalancePurchaseEnabled,
+		"credit_balance_plan":             creditBalancePlan,
 	})
 }
 

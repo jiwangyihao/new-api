@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -69,31 +70,49 @@ func taskIsSubscription(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceSubscription && task.PrivateData.SubscriptionId > 0
 }
 
-func taskUsesDistributorSubscription(task *model.Task) bool {
+func loadTaskSubscription(task *model.Task) (*model.UserSubscription, error) {
 	if !taskIsSubscription(task) {
-		return false
+		return nil, errors.New("task subscription funding is required")
 	}
 	var sub model.UserSubscription
 	if err := model.DB.Where("id = ?", task.PrivateData.SubscriptionId).First(&sub).Error; err != nil {
-		return false
+		return nil, err
+	}
+	return &sub, nil
+}
+
+func taskUsesDistributorSubscription(sub *model.UserSubscription) (bool, error) {
+	if sub == nil {
+		return false, errors.New("task subscription is required")
 	}
 	if sub.TokenLimit > 0 || sub.ConcurrencyLimit > 0 || sub.GrantReason == "trial_code" || sub.GrantReason == "invite_trial" || sub.GrantReason == "monthly_invite_entitlement" {
-		return true
+		return true, nil
 	}
 	if sub.PlanId <= 0 {
-		return false
+		return false, nil
 	}
 	var plan model.SubscriptionPlan
 	if err := model.DB.Select("business_code").Where("id = ?", sub.PlanId).First(&plan).Error; err != nil {
-		return false
+		return false, err
 	}
-	return plan.BusinessCode != nil && strings.TrimSpace(*plan.BusinessCode) != ""
+	return plan.BusinessCode != nil && strings.TrimSpace(*plan.BusinessCode) != "", nil
 }
 
 // taskAdjustFunding 只调整任务资金来源；API Key 旧 quota 不参与请求或任务结算。
 func taskAdjustFunding(task *model.Task, delta int) error {
 	if taskIsSubscription(task) {
-		if taskUsesDistributorSubscription(task) {
+		sub, err := loadTaskSubscription(task)
+		if err != nil {
+			return err
+		}
+		if sub.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
+		}
+		distributor, err := taskUsesDistributorSubscription(sub)
+		if err != nil {
+			return err
+		}
+		if distributor {
 			return fmt.Errorf("非文本异步任务不支持分销订阅扣费")
 		}
 		return model.PostConsumeUserSubscriptionAmountDelta(task.PrivateData.SubscriptionId, int64(delta))

@@ -44,6 +44,11 @@ const (
 )
 
 const (
+	SubscriptionPurchaseModeTimed         = SubscriptionEntitlementTimed
+	SubscriptionPurchaseModeCreditBalance = SubscriptionEntitlementCreditBalance
+)
+
+const (
 	SubscriptionGrantOrder                    = "order"
 	SubscriptionGrantMonthlyInviteEntitlement = "monthly_invite_entitlement"
 )
@@ -51,6 +56,7 @@ const (
 var (
 	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
 	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
+	ErrNoActiveSubscription           = errors.New("no active subscription")
 )
 
 const (
@@ -163,6 +169,12 @@ func InvalidateSubscriptionPlanCache(planId int) {
 	_, _ = cache.DeleteMany([]string{subscriptionPlanCacheKey(planId)})
 	infoCache := getSubscriptionPlanInfoCache()
 	_ = infoCache.Purge()
+}
+
+// ClearSubscriptionPlanCacheForTest clears both plan caches between isolated test databases.
+func ClearSubscriptionPlanCacheForTest() {
+	_ = getSubscriptionPlanCache().Purge()
+	_ = getSubscriptionPlanInfoCache().Purge()
 }
 
 // Subscription plan
@@ -466,12 +478,14 @@ type UserSubscriptionCreationResult struct {
 }
 
 type SubscriptionOrderCompletionResult struct {
-	Subscription         *UserSubscription `json:"subscription,omitempty"`
-	Transitioned         bool              `json:"transitioned"`
-	SourceSubscriptionId int               `json:"source_subscription_id"`
-	EventStartTime       int64             `json:"event_start_time"`
-	EventEndTime         int64             `json:"event_end_time"`
-	InviterId            int               `json:"inviter_id"`
+	Subscription         *UserSubscription         `json:"subscription,omitempty"`
+	CreditBalance        *CreditBalanceGrantResult `json:"credit_balance,omitempty"`
+	PurchaseMode         string                    `json:"purchase_mode"`
+	Transitioned         bool                      `json:"transitioned"`
+	SourceSubscriptionId int                       `json:"source_subscription_id"`
+	EventStartTime       int64                     `json:"event_start_time"`
+	EventEndTime         int64                     `json:"event_end_time"`
+	InviterId            int                       `json:"inviter_id"`
 }
 
 type SubscriptionSummary struct {
@@ -792,7 +806,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		return nil, errors.New("invalid subscription order")
 	}
 	if order.Status == common.TopUpStatusSuccess {
-		return subscriptionOrderCompletionResultFromExistingEventTx(tx, order, false)
+		return subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx, order, false)
 	}
 	if order.Status != common.TopUpStatusPending {
 		return nil, ErrSubscriptionOrderStatusInvalid
@@ -818,7 +832,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 			return nil, err
 		}
 		if existing.Status == common.TopUpStatusSuccess {
-			return subscriptionOrderCompletionResultFromExistingEventTx(tx, &existing, false)
+			return subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx, &existing, false)
 		}
 		return nil, ErrSubscriptionOrderStatusInvalid
 	}
@@ -830,10 +844,54 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if actualPaymentMethod != "" {
 		order.PaymentMethod = actualPaymentMethod
 	}
-	plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
+
+	purchaseMode := SubscriptionPurchaseModeTimed
+	var snapshot SubscriptionEntitlementSnapshot
+	var plan *SubscriptionPlan
+	var err error
+	if strings.TrimSpace(order.EntitlementSnapshot) != "" {
+		snapshot, err = UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(snapshot.PurchaseMode) != "" {
+			purchaseMode, err = NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
+			if err != nil {
+				return nil, err
+			}
+		}
+		plan, err = SubscriptionPlanFromEntitlementSnapshot(snapshot)
+	} else {
+		plan, err = getSubscriptionPlanByIdTx(tx, order.PlanId)
+	}
 	if err != nil {
 		return nil, err
 	}
+
+	if purchaseMode == SubscriptionPurchaseModeCreditBalance {
+		if order.PaymentProvider != PaymentProviderBalance {
+			return nil, errors.New("Credit 余额仅支持人民币账户余额购买")
+		}
+		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
+			UserId:         order.UserId,
+			GrossCredit:    snapshot.MonthlyTokenLimit,
+			IdempotencyKey: order.TradeNo,
+			SourceType:     CreditBalanceLedgerSourceSubscriptionOrder,
+			SourceId:       order.Id,
+			Type:           CreditBalanceLedgerTypePurchase,
+			TargetPlanId:   snapshot.TargetCreditBalancePlanID,
+			Reason:         "人民币账户余额购买 Credit 余额",
+		})
+		if err != nil {
+			return nil, err
+		}
+		return &SubscriptionOrderCompletionResult{
+			CreditBalance: grant,
+			PurchaseMode:  purchaseMode,
+			Transitioned:  true,
+		}, nil
+	}
+
 	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
 	if err != nil {
 		return nil, err
@@ -844,6 +902,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		}
 	}
 	result := subscriptionOrderCompletionResultFromSubscription(order, creation, true)
+	result.PurchaseMode = purchaseMode
 	if err := createInvitationRewardEventForSubscriptionOrderTx(tx, order, plan, result); err != nil {
 		return nil, err
 	}
@@ -853,7 +912,7 @@ func subscriptionOrderCompletionResultFromSubscription(order *SubscriptionOrder,
 	if order == nil {
 		return nil
 	}
-	result := &SubscriptionOrderCompletionResult{Transitioned: transitioned}
+	result := &SubscriptionOrderCompletionResult{PurchaseMode: SubscriptionPurchaseModeTimed, Transitioned: transitioned}
 	if creation != nil {
 		result.Subscription = creation.Subscription
 		result.EventStartTime = creation.EventStartTime
@@ -865,6 +924,29 @@ func subscriptionOrderCompletionResultFromSubscription(order *SubscriptionOrder,
 	return result
 }
 
+func subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
+	if tx == nil || order == nil {
+		return nil, errors.New("invalid subscription order")
+	}
+	if strings.TrimSpace(order.EntitlementSnapshot) != "" {
+		snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(snapshot.PurchaseMode) == SubscriptionPurchaseModeCreditBalance {
+			grant, err := FindCreditBalanceGrantBySourceTx(tx, CreditBalanceLedgerSourceSubscriptionOrder, order.Id)
+			if err != nil {
+				return nil, err
+			}
+			return &SubscriptionOrderCompletionResult{CreditBalance: grant, PurchaseMode: SubscriptionPurchaseModeCreditBalance, Transitioned: transitioned}, nil
+		}
+	}
+	result, err := subscriptionOrderCompletionResultFromExistingEventTx(tx, order, transitioned)
+	if result != nil {
+		result.PurchaseMode = SubscriptionPurchaseModeTimed
+	}
+	return result, err
+}
 func subscriptionOrderCompletionResultFromExistingEventTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {
 		return nil, errors.New("invalid subscription order")
@@ -1153,7 +1235,7 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	}
 	now := common.GetTimestamp()
 	var subs []UserSubscription
-	err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+	err := DB.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", SubscriptionEntitlementCreditBalance, now).
 		Order("end_time desc, id desc").
 		Find(&subs).Error
 	if err != nil {
@@ -1162,20 +1244,40 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs)
 }
 
-// HasActiveUserSubscription returns whether the user has any active subscription.
+// HasActiveUserSubscription returns whether the user has any billable active subscription.
 // This is a lightweight existence check to avoid heavy pre-consume transactions.
 func HasActiveUserSubscription(userId int) (bool, error) {
+	return hasActiveUserSubscriptionForModel(userId, "")
+}
+
+// HasActiveUserSubscriptionForModel returns whether the user has a billable active
+// subscription whose model scope includes modelName.
+func HasActiveUserSubscriptionForModel(userId int, modelName string) (bool, error) {
+	return hasActiveUserSubscriptionForModel(userId, modelName)
+}
+
+func hasActiveUserSubscriptionForModel(userId int, modelName string) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := common.GetTimestamp()
-	var count int64
-	if err := DB.Model(&UserSubscription{}).
-		Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
-		Count(&count).Error; err != nil {
+	var subs []UserSubscription
+	if err := DB.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", SubscriptionEntitlementCreditBalance, now).Find(&subs).Error; err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	for i := range subs {
+		plan, err := getSubscriptionPlanByIdTx(DB, subs[i].PlanId)
+		if err != nil {
+			return false, err
+		}
+		if !subscriptionPlanAllowsModel(plan, modelName) {
+			continue
+		}
+		if usable, _ := isBillableSubscriptionCandidate(&subs[i], plan, 1); usable {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type ActiveSubscriptionUsage struct {
@@ -1191,7 +1293,7 @@ func GetActiveDistributorSubscriptionUsage(userId int) (*ActiveSubscriptionUsage
 	}
 	now := common.GetTimestamp()
 	var subs []UserSubscription
-	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+	if err := DB.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", SubscriptionEntitlementCreditBalance, now).
 		Order(primaryBillableSubscriptionOrder).
 		Find(&subs).Error; err != nil {
 		return nil, err
@@ -1425,6 +1527,7 @@ type SubscriptionPreConsumeResult struct {
 	ConcurrencyLimit           int
 	QueueCapacity              int
 	PlanId                     int
+	EntitlementType            string
 	PlanIsTrial                bool
 	PlanTitle                  string
 	PlanPriceAmount            float64
@@ -1646,6 +1749,20 @@ func isBillableSubscriptionCandidate(sub *UserSubscription, plan *SubscriptionPl
 	return false, false
 }
 
+func subscriptionPlanAllowsModel(plan *SubscriptionPlan, modelName string) bool {
+	modelName = strings.TrimSpace(modelName)
+	if modelName == "" || plan == nil || strings.TrimSpace(plan.ModelLimits) == "" {
+		return true
+	}
+
+	for _, allowed := range strings.Split(plan.ModelLimits, ",") {
+		if strings.TrimSpace(allowed) == modelName {
+			return true
+		}
+	}
+	return false
+}
+
 type billableSubscriptionCandidate struct {
 	sub         UserSubscription
 	plan        *SubscriptionPlan
@@ -1683,7 +1800,7 @@ func primaryBillableSubscriptionCacheKey(userId int) string {
 	return strconv.Itoa(userId)
 }
 
-func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting string, requiredTokens int64, now int64) (*primaryBillableSubscription, bool) {
+func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting string, requiredTokens int64, now int64, modelName string) (*primaryBillableSubscription, bool) {
 	if tx == nil {
 		return nil, false
 	}
@@ -1697,7 +1814,7 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 	}
 	selection := entry.loaded
 	sub := selection.Subscription
-	if sub.Status != "active" || sub.EndTime <= now {
+	if sub.Status != "active" || (sub.EntitlementType != SubscriptionEntitlementCreditBalance && sub.EndTime <= now) {
 		return nil, false
 	}
 	var usage struct {
@@ -1714,6 +1831,9 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 		return nil, false
 	}
 	selection.Plan = plan
+	if !subscriptionPlanAllowsModel(plan, modelName) {
+		return nil, false
+	}
 	if ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens); !ok {
 		return nil, false
 	} else {
@@ -1749,25 +1869,25 @@ func cachePrimaryBillableSelectionTx(tx *gorm.DB, userId int, sub *UserSubscript
 		Subscription:     *sub,
 		Plan:             plan,
 		Distributor:      distributor,
-		TokenUnlimited:   sub.TokenLimit == 0,
+		TokenUnlimited:   isUnlimitedTrialSubscription(sub, plan),
 		AmountUsedBefore: sub.AmountUsed,
 		TokenUsedBefore:  sub.TokenUsed,
 	})
 }
 
-func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool) (*primaryBillableSubscription, bool, error) {
+func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool, modelName string) (*primaryBillableSubscription, bool, bool, error) {
 	if tx == nil {
 		tx = DB
 	}
 	var user User
 	if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	setting := user.Setting
 	activeSubscriptionId := user.GetSetting().ActiveSubscriptionId
 	if forUpdate {
-		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, setting, requiredTokens, now); ok && (activeSubscriptionId <= 0 || cached.Subscription.Id == activeSubscriptionId) {
-			return cached, true, nil
+		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, setting, requiredTokens, now, modelName); ok && (activeSubscriptionId <= 0 || cached.Subscription.Id == activeSubscriptionId) {
+			return cached, true, true, nil
 		}
 	}
 	var subs []UserSubscription
@@ -1775,22 +1895,23 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	if forUpdate {
 		query = query.Set("gorm:query_option", "FOR UPDATE")
 	}
-	if err := query.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+	if err := query.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", SubscriptionEntitlementCreditBalance, now).
 		Order(primaryBillableSubscriptionOrder).
 		Find(&subs).Error; err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	sawDistributorSubscription := false
+	sawModelAllowedSubscription := false
 	candidates := make([]billableSubscriptionCandidate, 0, len(subs))
 	for i, candidate := range subs {
 		sub := candidate
 		plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 		if err != nil {
-			return nil, sawDistributorSubscription, err
+			return nil, sawDistributorSubscription, sawModelAllowedSubscription, err
 		}
 		if resetDue {
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &sub, plan, now); err != nil {
-				return nil, sawDistributorSubscription, err
+				return nil, sawDistributorSubscription, sawModelAllowedSubscription, err
 			}
 		}
 		distributor := isDistributorSubscription(&sub, plan)
@@ -1798,6 +1919,10 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 			continue
 		}
 		sawDistributorSubscription = true
+		if !subscriptionPlanAllowsModel(plan, modelName) {
+			continue
+		}
+		sawModelAllowedSubscription = true
 		ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens)
 		if !ok {
 			continue
@@ -1808,7 +1933,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 			if forUpdate {
 				setCachedPrimaryBillableSubscription(userId, setting, selection)
 			}
-			return selection, sawDistributorSubscription, nil
+			return selection, sawDistributorSubscription, sawModelAllowedSubscription, nil
 		}
 		candidates = append(candidates, entry)
 	}
@@ -1822,7 +1947,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 					if forUpdate {
 						setCachedPrimaryBillableSubscription(userId, setting, selection)
 					}
-					return selection, sawDistributorSubscription, nil
+					return selection, sawDistributorSubscription, sawModelAllowedSubscription, nil
 				}
 			}
 		}
@@ -1832,9 +1957,9 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		if forUpdate {
 			setCachedPrimaryBillableSubscription(userId, setting, selection)
 		}
-		return selection, sawDistributorSubscription, nil
+		return selection, sawDistributorSubscription, sawModelAllowedSubscription, nil
 	}
-	return nil, sawDistributorSubscription, nil
+	return nil, sawDistributorSubscription, sawModelAllowedSubscription, nil
 }
 
 func ResolveGPTAbuseWarningLimit(plan *SubscriptionPlan) int {
@@ -1869,7 +1994,7 @@ func GetSubscriptionSelfSummary(userId int) (SelfSubscriptionSummary, error) {
 	}
 	summary := SelfSubscriptionSummary{ActiveSubscriptionId: setting.ActiveSubscriptionId, GPTAbuseLimitEnabled: common.GPTAbuseLimitEnabled}
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		selection, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
+		selection, _, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true, "")
 		if err != nil {
 			return err
 		}
@@ -1927,7 +2052,7 @@ func GetCodexProEligibility(userId int, _ dto.UserSetting) (bool, string, error)
 	now := GetDBTimestamp()
 	var selection *primaryBillableSubscription
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		selected, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, false, true)
+		selected, _, _, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, false, true, "")
 		if err != nil {
 			return err
 		}
@@ -1988,7 +2113,7 @@ func HasActiveDistributorSubscription(userId int) (bool, error) {
 	}
 	now := GetDBTimestamp()
 	var subs []UserSubscription
-	if err := DB.Where("user_id = ? AND status = ? AND end_time > ?", userId, "active", now).
+	if err := DB.Where("user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", SubscriptionEntitlementCreditBalance, now).
 		Order("end_time asc, id asc").
 		Find(&subs).Error; err != nil {
 		return false, err
@@ -2021,6 +2146,7 @@ func fillSubscriptionPreConsumeResult(result *SubscriptionPreConsumeResult, sub 
 	result.TokenUsedAfter = sub.TokenUsed
 	result.DistributorTokenBilling = distributor
 	result.PlanId = sub.PlanId
+	result.EntitlementType = sub.EntitlementType
 	result.PlanIsTrial = false
 	result.PlanInviteTrial = false
 	result.PlanPriceAmount = 0
@@ -2113,7 +2239,7 @@ func SetUserActiveSubscription(userId int, subscriptionId int) error {
 	now := GetDBTimestamp()
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var sub UserSubscription
-		if err := tx.Where("id = ? AND user_id = ? AND status = ? AND end_time > ?", subscriptionId, userId, "active", now).First(&sub).Error; err != nil {
+		if err := tx.Where("id = ? AND user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", subscriptionId, userId, "active", SubscriptionEntitlementCreditBalance, now).First(&sub).Error; err != nil {
 			return err
 		}
 		var user User
@@ -2274,13 +2400,16 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return nil
 		}
 
-		selection, sawDistributorSubscription, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, distributorAmount, true, true)
+		selection, sawDistributorSubscription, sawModelAllowedSubscription, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, distributorAmount, true, true, modelName)
 		if err != nil {
 			return err
 		}
 		if selection == nil {
 			if !sawDistributorSubscription {
-				return errors.New("no active subscription")
+				return ErrNoActiveSubscription
+			}
+			if !sawModelAllowedSubscription {
+				return fmt.Errorf("subscription model not allowed: %s", modelName)
 			}
 			return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
 		}
@@ -2462,7 +2591,7 @@ func applySubscriptionPreConsumeUpdateTx(tx *gorm.DB, userSubscriptionId int, di
 	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
 	if distributor {
 		updates["token_used"] = tokenUsedDeltaExpr(consumeAmount)
-		query = query.Where("token_limit <= 0 OR token_used + ? <= token_limit", consumeAmount)
+		query = query.Where("(entitlement_type <> ? AND token_limit <= 0) OR token_used + ? <= token_limit", SubscriptionEntitlementCreditBalance, consumeAmount)
 	} else {
 		updates["amount_used"] = amountUsedDeltaExpr(consumeAmount)
 		query = query.Where("amount_total <= 0 OR amount_used + ? <= amount_total", consumeAmount)
@@ -2509,7 +2638,7 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	}
 	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
 	if delta > 0 {
-		query = query.Where("token_limit <= 0 OR token_used + ? <= token_limit", delta)
+		query = query.Where("entitlement_type = ? OR token_limit <= 0 OR token_used + ? <= token_limit", SubscriptionEntitlementCreditBalance, delta)
 	}
 	res := query.Updates(updates)
 	if res.Error != nil {

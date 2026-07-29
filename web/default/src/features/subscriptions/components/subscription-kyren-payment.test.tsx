@@ -2,10 +2,15 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 import {
+  creditPurchaseSuccessMessage,
+  initialSubscriptionPurchaseMode,
+  isCreditBalancePurchaseAvailable,
+} from '../lib/subscription-purchase'
+import type { SubscriptionPlan } from '../types'
+import {
   getKyrenSubscriptionAvailability,
   processKyrenSubscriptionPayment,
 } from './dialogs/subscription-purchase-dialog'
-import type { SubscriptionPlan } from '../types'
 
 function makePlan(overrides: Partial<SubscriptionPlan> = {}): SubscriptionPlan {
   return {
@@ -30,6 +35,78 @@ function makePlan(overrides: Partial<SubscriptionPlan> = {}): SubscriptionPlan {
 function readSource(path: string): string {
   return readFileSync(path, 'utf8')
 }
+
+describe('subscription purchase mode helpers', () => {
+  test('requires a choice without preference and only restores an eligible preference', () => {
+    const eligible = makePlan({
+      quota_reset_period: 'monthly',
+      monthly_token_limit: 1000,
+      unlimited_purchase_enabled: true,
+    })
+
+    assert.equal(initialSubscriptionPurchaseMode(undefined, true), undefined)
+    assert.equal(initialSubscriptionPurchaseMode('timed', true), 'timed')
+    assert.equal(
+      initialSubscriptionPurchaseMode('credit_balance', true),
+      'credit_balance'
+    )
+    assert.equal(
+      initialSubscriptionPurchaseMode('credit_balance', false),
+      undefined
+    )
+    assert.equal(isCreditBalancePurchaseAvailable(eligible, true), true)
+    assert.equal(
+      isCreditBalancePurchaseAvailable(
+        { ...eligible, duration_value: 3 },
+        true
+      ),
+      false
+    )
+    assert.equal(isCreditBalancePurchaseAvailable(eligible, false), false)
+    assert.equal(
+      isCreditBalancePurchaseAvailable({ ...eligible, currency: 'USD' }, true),
+      false
+    )
+    assert.equal(
+      isCreditBalancePurchaseAvailable({ ...eligible, enabled: false }, true),
+      false
+    )
+    assert.equal(
+      isCreditBalancePurchaseAvailable(
+        { ...eligible, public_visible: false },
+        true
+      ),
+      false
+    )
+  })
+
+  test('formats gross credit, debt offset, and net availability', () => {
+    const message = creditPurchaseSuccessMessage(
+      {
+        user_subscription_id: 1,
+        plan_id: 2,
+        gross_credit: 1000,
+        debt_offset: 250,
+        available_credit: 750,
+        settlement_debt: 0,
+        balance_before: -250,
+        balance_after: 750,
+        active: true,
+        ledger_id: 3,
+        status: 'available',
+      },
+      ((key: string, values?: Record<string, unknown>) =>
+        key.replace(/{{(\w+)}}/g, (_match, name: string) =>
+          String(values?.[name] ?? '')
+        )) as never
+    )
+
+    assert.equal(
+      message,
+      'Added 1000 Credits; offset 250 debt; 750 Credits available.'
+    )
+  })
+})
 
 describe('subscription Kyren payment helper', () => {
   test('opens Kyren checkout for a purchasable CNY plan', async () => {

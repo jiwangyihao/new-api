@@ -74,7 +74,10 @@ describe('Issue #6 home page copy source contract', () => {
       /export\s+\{\s*PlansPreview\s*\}\s+from\s+['"]\.\/sections\/plans-preview['"]/
     )
     assert.doesNotMatch(componentsSource, /from\s+['"]\.\/sections\/stats['"]/)
-    assert.doesNotMatch(componentsSource, /from\s+['"]\.\/sections\/features['"]/)
+    assert.doesNotMatch(
+      componentsSource,
+      /from\s+['"]\.\/sections\/features['"]/
+    )
   })
 
   test('updates hero title while preserving dashboard and model directory entries', () => {
@@ -110,7 +113,7 @@ describe('Issue #6 home page copy source contract', () => {
     assert.doesNotMatch(plansPreviewSource, /getPublicPlans\(/)
     assert.match(plansPreviewSource, /formatPlanPrice/)
     assert.match(plansPreviewSource, /formatDuration/)
-    assert.match(plansPreviewSource, /formatTokenLimit/)
+    assert.match(plansPreviewSource, /formatCreditLimit/)
     assert.match(plansPreviewSource, /formatConcurrencyLimit/)
     assert.match(plansPreviewSource, /t\('Choose a plan'\)/)
     assert.match(plansPreviewSource, /t\('View all plans'\)/)

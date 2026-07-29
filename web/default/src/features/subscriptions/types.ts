@@ -409,8 +409,11 @@ export type SubscriptionKyrenProductSyncResponse =
 
 export type SubscriptionKyrenPayResponse = SubscriptionPayResponse
 
+export type SubscriptionPurchaseMode = 'timed' | 'credit_balance'
+
 export interface SubscriptionBalancePayRequest {
   plan_id: number
+  purchase_mode: SubscriptionPurchaseMode
   idempotency_key: string
 }
 
@@ -428,8 +431,43 @@ export interface SubscriptionOrderRecord {
   provider_payload: string
 }
 
-export type SubscriptionBalancePayResponse =
-  ApiResponse<SubscriptionOrderRecord>
+export interface CreditBalanceGrantResult {
+  user_subscription_id: number
+  plan_id: number
+  gross_credit: number
+  debt_offset: number
+  available_credit: number
+  settlement_debt: number
+  balance_before: number
+  balance_after: number
+  active: boolean
+  ledger_id: number
+  status: 'available' | 'exhausted' | 'debt'
+}
+
+export interface CreditBalanceLedgerEntry {
+  id: number
+  user_id: number
+  user_subscription_id: number
+  type: string
+  idempotency_key: string
+  source_type: string
+  source_id: number
+  gross_credit: number
+  debt_offset: number
+  balance_before: number
+  balance_after: number
+  available_credit_after: number
+  settlement_debt_after: number
+  reason: string
+  created_at: number
+}
+
+export type SubscriptionBalancePayResponse = ApiResponse<{
+  order: SubscriptionOrderRecord
+  purchase_mode: SubscriptionPurchaseMode
+  credit_balance?: CreditBalanceGrantResult
+}>
 
 export interface SubscriptionPayResponse {
   success: boolean
@@ -475,6 +513,15 @@ export interface SelfSubscriptionSummary {
 export interface SelfSubscriptionData {
   active_subscription_id?: number
   billing_preference?: string
+  last_subscription_purchase_mode?: SubscriptionPurchaseMode
+  credit_balance?: CreditBalanceGrantResult | null
+  credit_balance_ledger?: CreditBalanceLedgerEntry[]
+  credit_balance_purchase_enabled?: boolean
+  credit_balance_plan?: {
+    model_limits?: string
+    concurrency_limit?: number
+    queue_capacity?: number
+  } | null
   codex_pro_mode?: CodexProMode
   codex_pro_eligible?: boolean
   codex_pro_unavailable_reason?: CodexProUnavailableReason

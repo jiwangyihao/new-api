@@ -379,6 +379,38 @@ func TestTaskBillingDoesNotAdjustBusinessCodedDistributorSubscription(t *testing
 	assert.Equal(t, tokenUsed, getSubscriptionTokenUsedForTaskTest(t, subID))
 }
 
+func TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, tokenID, channelID, subID = 83, 83, 83, 83
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-credit-balance-task", 8_000)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id:              subID,
+		UserId:          userID,
+		EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		TokenLimit:      1_000,
+		TokenUsed:       100,
+		AmountUsed:      9,
+		Status:          "active",
+		EndTime:         0,
+	}).Error)
+
+	settleTask := makeTask(userID, channelID, 100, tokenID, BillingSourceSubscription, subID)
+	RecalculateTaskQuota(ctx, settleTask, 140, "credit task settle")
+	require.Equal(t, int64(140), getSubscriptionTokenUsedForTaskTest(t, subID))
+	var sub model.UserSubscription
+	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
+	require.Equal(t, int64(9), sub.AmountUsed)
+
+	refundTask := makeTask(userID, channelID, 40, tokenID, BillingSourceSubscription, subID)
+	RefundTaskQuota(ctx, refundTask, "credit task failed")
+	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, subID))
+	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
+	require.Equal(t, int64(9), sub.AmountUsed)
+}
+
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

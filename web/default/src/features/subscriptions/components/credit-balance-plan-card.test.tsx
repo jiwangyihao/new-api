@@ -1,8 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { Window } from 'happy-dom'
 import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { afterEach, describe, test } from 'node:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { I18nextProvider } from 'react-i18next'
 import { api } from '@/lib/api'
@@ -14,47 +13,16 @@ import {
 import type { SubscriptionPlan } from '../types'
 import { CreditBalancePlanCard } from './credit-balance-plan-card'
 
-function installTestDom() {
-  const window = new Window({ url: 'http://localhost' })
-  const bindings = {
-    window,
-    document: window.document,
-    navigator: window.navigator,
-    Element: window.Element,
-    HTMLElement: window.HTMLElement,
-    HTMLInputElement: window.HTMLInputElement,
-    HTMLTextAreaElement: window.HTMLTextAreaElement,
-    Node: window.Node,
-    Event: window.Event,
-    MouseEvent: window.MouseEvent,
-    PointerEvent: window.PointerEvent,
-    MutationObserver: window.MutationObserver,
-    getComputedStyle: window.getComputedStyle.bind(window),
-    requestAnimationFrame: window.requestAnimationFrame.bind(window),
-    cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
-  }
-  const previous = new Map<string, PropertyDescriptor | undefined>()
+const { cleanup, fireEvent, render, waitFor } =
+  await import('@testing-library/react/pure')
+const { SubscriptionPurchaseDialog } =
+  await import('./dialogs/subscription-purchase-dialog')
+const originalAPIAdapter = api.defaults.adapter
 
-  for (const [key, value] of Object.entries(bindings)) {
-    previous.set(key, Object.getOwnPropertyDescriptor(globalThis, key))
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      writable: true,
-      value,
-    })
-  }
-
-  return () => {
-    window.close()
-    for (const [key, descriptor] of previous) {
-      if (descriptor) {
-        Object.defineProperty(globalThis, key, descriptor)
-      } else {
-        Reflect.deleteProperty(globalThis, key)
-      }
-    }
-  }
-}
+afterEach(() => {
+  cleanup()
+  api.defaults.adapter = originalAPIAdapter
+})
 
 function makeCreditBalancePlan(
   overrides: Partial<SubscriptionPlan> = {}
@@ -158,20 +126,7 @@ describe('Credit balance plan admin component', () => {
     assert.equal(result.data?.entitlement_type, 'credit_balance')
   })
 
-  test('submits the editor and rehydrates controls from the persisted response', async (context) => {
-    const restoreDom = installTestDom()
-    // React DOM probes `document` while loading, so install Happy DOM before
-    // importing this test-only client renderer.
-    const { cleanup, fireEvent, render, waitFor } =
-      await import('@testing-library/react/pure')
-    const originalAdapter = api.defaults.adapter
-    context.after(async () => {
-      cleanup()
-      await new Promise<void>((resolve) => setTimeout(resolve, 0))
-      api.defaults.adapter = originalAdapter
-      restoreDom()
-    })
-
+  test('submits the editor and rehydrates controls from the persisted response', async () => {
     const i18n = createInstance()
     await i18n.init({
       lng: 'en',
@@ -291,6 +246,197 @@ describe('Credit balance plan admin component', () => {
         'false'
       )
     })
+  })
+
+  test('supports keyboard mode selection and only exposes timed external checkout', async () => {
+    const i18n = createInstance()
+    await i18n.init({
+      lng: 'en',
+      fallbackLng: false,
+      resources: { en: { translation: {} } },
+      interpolation: { escapeValue: false },
+    })
+    const purchasePlan: SubscriptionPlan = {
+      id: 9010,
+      title: 'Monthly',
+      price_amount: 40,
+      currency: 'CNY',
+      duration_unit: 'month',
+      duration_value: 1,
+      quota_reset_period: 'monthly',
+      enabled: true,
+      sort_order: 1,
+      max_purchase_per_user: 0,
+      total_amount: 0,
+      monthly_token_limit: 1000,
+      concurrency_limit: 1,
+      public_visible: true,
+      unlimited_purchase_enabled: true,
+      stripe_price_id: 'price_stripe',
+      creem_product_id: 'product_creem',
+      kyren_product_id: 'product_kyren',
+    }
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <SubscriptionPurchaseDialog
+          open
+          onOpenChange={() => {}}
+          plan={{ plan: purchasePlan }}
+          accountBalance={10000}
+          enableStripe
+          enableCreem
+          enableKyrenSubscription
+          creditBalancePurchaseEnabled
+          creditBalancePlan={{
+            model_limits: 'gpt-4o',
+            concurrency_limit: 2,
+            queue_capacity: 4,
+          }}
+        />
+      </I18nextProvider>
+    )
+
+    assert.ok(view.getByRole('dialog'))
+    assert.equal(view.queryByRole('button', { name: 'Stripe' }), null)
+    const timed = view.getByRole('radio', { name: /Timed subscription/ })
+    const credit = view.getByRole('radio', { name: /Credit balance/ })
+
+    fireEvent.click(timed)
+    await waitFor(() =>
+      assert.equal(timed.getAttribute('aria-checked'), 'true')
+    )
+    assert.ok(view.getByRole('button', { name: 'Stripe' }))
+    assert.ok(view.getByRole('button', { name: 'Creem' }))
+    assert.ok(view.getByRole('button', { name: 'Pay with Kyren' }))
+
+    timed.focus()
+    fireEvent.keyDown(timed, { key: 'ArrowDown', code: 'ArrowDown' })
+    await waitFor(() =>
+      assert.equal(credit.getAttribute('aria-checked'), 'true')
+    )
+    assert.equal(view.queryByRole('button', { name: 'Stripe' }), null)
+    assert.equal(view.queryByRole('button', { name: 'Creem' }), null)
+    assert.equal(view.queryByRole('button', { name: 'Pay with Kyren' }), null)
+    assert.ok(
+      view.getByText((_text, element) =>
+        Boolean(
+          element?.getAttribute('data-slot') === 'alert-description' &&
+          element.textContent?.includes('gpt-4o')
+        )
+      )
+    )
+  })
+
+  test('restores Credit preference and submits an explicit balance purchase', async () => {
+    const i18n = createInstance()
+    await i18n.init({
+      lng: 'en',
+      fallbackLng: false,
+      resources: { en: { translation: {} } },
+      interpolation: { escapeValue: false },
+    })
+    const purchasePlan: SubscriptionPlan = {
+      id: 9011,
+      title: 'Monthly Credit option',
+      price_amount: 40,
+      currency: 'CNY',
+      duration_unit: 'month',
+      duration_value: 1,
+      quota_reset_period: 'monthly',
+      enabled: true,
+      sort_order: 1,
+      max_purchase_per_user: 0,
+      total_amount: 0,
+      monthly_token_limit: 1000,
+      concurrency_limit: 1,
+      public_visible: true,
+      unlimited_purchase_enabled: true,
+    }
+    let submitted: Record<string, unknown> | undefined
+    let refreshCount = 0
+    let closed = false
+    api.defaults.adapter = async (config) => {
+      assert.equal(config.method, 'post')
+      assert.equal(config.url, '/api/subscription/balance/pay')
+      submitted = JSON.parse(String(config.data))
+      return {
+        data: {
+          success: true,
+          message: 'success',
+          data: {
+            order: {
+              id: 1,
+              user_id: 2,
+              plan_id: purchasePlan.id,
+              money: purchasePlan.price_amount,
+              trade_no: 'balance-order',
+              payment_method: 'account_balance',
+              payment_provider: 'balance',
+              status: 'success',
+              create_time: 1,
+              complete_time: 2,
+              provider_payload: '',
+            },
+            purchase_mode: 'credit_balance',
+            credit_balance: {
+              user_subscription_id: 3,
+              plan_id: 4,
+              gross_credit: 1000,
+              debt_offset: 250,
+              available_credit: 750,
+              settlement_debt: 0,
+              balance_before: -250,
+              balance_after: 750,
+              active: true,
+              ledger_id: 5,
+              status: 'available',
+            },
+          },
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }
+    }
+    const view = render(
+      <I18nextProvider i18n={i18n}>
+        <SubscriptionPurchaseDialog
+          open
+          onOpenChange={(open) => {
+            closed = !open
+          }}
+          plan={{ plan: purchasePlan }}
+          accountBalance={10000}
+          creditBalancePurchaseEnabled
+          lastPurchaseMode='credit_balance'
+          onPurchaseSuccess={() => {
+            refreshCount += 1
+          }}
+          creditBalancePlan={{
+            model_limits: 'gpt-4o',
+            concurrency_limit: 2,
+            queue_capacity: 4,
+          }}
+        />
+      </I18nextProvider>
+    )
+
+    const credit = view.getByRole('radio', { name: /Credit balance/ })
+    await waitFor(() =>
+      assert.equal(credit.getAttribute('aria-checked'), 'true')
+    )
+    fireEvent.click(
+      view.getByRole('button', { name: /Pay with Account Balance/ })
+    )
+
+    await waitFor(() => assert.ok(submitted))
+    assert.equal(submitted?.plan_id, purchasePlan.id)
+    assert.equal(submitted?.purchase_mode, 'credit_balance')
+    assert.equal(typeof submitted?.idempotency_key, 'string')
+    assert.ok(String(submitted?.idempotency_key).length > 0)
+    assert.equal(refreshCount, 1)
+    assert.equal(closed, true)
   })
 
   test('renders the persisted configuration as an accessible admin form', async () => {

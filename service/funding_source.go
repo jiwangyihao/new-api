@@ -78,6 +78,7 @@ type SubscriptionFunding struct {
 	TokenRemaining             int64
 	DistributorTokenBilling    bool
 	PlanId                     int
+	EntitlementType            string
 	PlanIsTrial                bool
 	PlanTitle                  string
 	PlanPriceAmount            float64
@@ -126,6 +127,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.queueCapacity = res.QueueCapacity
 	s.TokenRemaining = res.TokenRemaining
 	s.PlanId = res.PlanId
+	s.EntitlementType = res.EntitlementType
 	s.PlanIsTrial = res.PlanIsTrial
 	s.PlanTitle = res.PlanTitle
 	s.PlanPriceAmount = res.PlanPriceAmount

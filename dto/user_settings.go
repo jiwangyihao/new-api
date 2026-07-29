@@ -17,6 +17,7 @@ type UserSetting struct {
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
 	CodexProMode                     string  `json:"codex_pro_mode,omitempty"`                       // CodexProMode Codex Pro 分组服务模式
 	ActiveSubscriptionId             int     `json:"active_subscription_id,omitempty"`               // ActiveSubscriptionId 当前激活订阅ID
+	LastSubscriptionPurchaseMode     string  `json:"last_subscription_purchase_mode,omitempty"`      // LastSubscriptionPurchaseMode 上次套餐购买模式
 	Language                         string  `json:"language,omitempty"`                             // Language 用户语言偏好 (zh, en)
 	RankingsDisplayName              string  `json:"rankings_display_name,omitempty"`                // RankingsDisplayName 排行榜展示名称
 }

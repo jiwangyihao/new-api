@@ -14,14 +14,16 @@ function exportedFunctionSource(name: string): string {
 }
 
 describe('subscription balance payment API payload', () => {
-  test('keeps plan id and idempotency key in request body', () => {
+  test('keeps the explicit purchase mode in request body', () => {
     assert.deepEqual(
       buildSubscriptionBalancePayRequestBody({
         plan_id: 42,
+        purchase_mode: 'credit_balance',
         idempotency_key: 'balance-pay-1',
       }),
       {
         plan_id: 42,
+        purchase_mode: 'credit_balance',
         idempotency_key: 'balance-pay-1',
       }
     )
@@ -39,13 +41,19 @@ describe('subscription Kyren payment API helpers', () => {
   test('uses the admin subscription Kyren product status route', () => {
     const source = exportedFunctionSource('getSubscriptionKyrenProduct')
 
-    assert.match(source, /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/)
+    assert.match(
+      source,
+      /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/
+    )
   })
 
   test('posts sync mode to the admin subscription Kyren product route', () => {
     const source = exportedFunctionSource('syncSubscriptionKyrenProduct')
 
-    assert.match(source, /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/)
+    assert.match(
+      source,
+      /`\/api\/subscription\/admin\/plans\/\$\{planId\}\/kyren\/product`/
+    )
     assert.match(source, /\{\s*mode\s*\}/)
   })
 })

@@ -188,6 +188,7 @@ func SetApiRouter(router *gin.Engine) {
 		{
 			subscriptionRoute.GET("/plans", controller.GetSubscriptionPlans)
 			subscriptionRoute.GET("/self", controller.GetSubscriptionSelf)
+			subscriptionRoute.GET("/self/credit-balance/ledger", controller.GetCreditBalanceLedger)
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
 			subscriptionRoute.PUT("/self/active", controller.SetActiveSubscription)
 			subscriptionRoute.PUT("/self/codex-pro-mode", controller.UpdateCodexProMode)

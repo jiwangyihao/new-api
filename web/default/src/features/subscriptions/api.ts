@@ -193,6 +193,7 @@ export function buildSubscriptionBalancePayRequestBody(
 ): SubscriptionBalancePayRequest {
   return {
     plan_id: data.plan_id,
+    purchase_mode: data.purchase_mode,
     idempotency_key: data.idempotency_key,
   }
 }

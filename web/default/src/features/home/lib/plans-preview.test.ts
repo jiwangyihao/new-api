@@ -47,7 +47,6 @@ function record(id: number, publicVisible = true): PublicPlanRecordForTest {
   }
 }
 
-
 describe('home subscription query key', () => {
   test('uses a public plans cache key distinct from wallet plans', () => {
     assert.deepEqual(subscriptionQueryKeys.homePublicPlans, [
@@ -110,7 +109,7 @@ describe('home plan channel equivalent preview', () => {
 
     assert.deepEqual(renderHomePlanChannelEquivalentLabels(plan, t), [
       'OpenAI: about 500K tokens',
-      'Anthropic: about 500K tokens - 666.67K tokens',
+      'Claude: about 500K tokens - 666.67K tokens',
       '+1 more',
     ])
   })

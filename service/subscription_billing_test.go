@@ -85,7 +85,7 @@ func seedDistributorSubscription(t *testing.T, id int, userId int, planId int, t
 		TokenUsed:   tokenUsed,
 		Status:      "active",
 		GrantReason: "order",
-		StartTime:   time.Now().Unix(),
+		StartTime:   time.Now().Add(-time.Minute).Unix(),
 		EndTime:     time.Now().Add(30 * 24 * time.Hour).Unix(),
 	}
 	require.NoError(t, model.DB.Create(sub).Error)

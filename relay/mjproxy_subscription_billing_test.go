@@ -22,11 +22,17 @@ import (
 func setupMidjourneySubscriptionOnlyTestDB(t *testing.T) {
 	t.Helper()
 	originalDB := model.DB
+	originalRedisEnabled := common.RedisEnabled
+	originalRDB := common.RDB
+	common.RedisEnabled = false
+	common.RDB = nil
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
 	t.Cleanup(func() {
 		model.DB = originalDB
+		common.RedisEnabled = originalRedisEnabled
+		common.RDB = originalRDB
 		sqlDB, dbErr := db.DB()
 		if dbErr == nil {
 			_ = sqlDB.Close()

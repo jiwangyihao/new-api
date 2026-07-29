@@ -37,10 +37,15 @@ import type {
   SubscriptionKyrenProductSyncMode,
   UpdateCodexProModeRequest,
   UpdateCodexProModeResponse,
+  SubscriptionBillingStrategy,
 } from './types'
 
 export interface SetActiveSubscriptionRequest {
   subscription_id: number
+}
+
+export interface UpdateSubscriptionBillingStrategyRequest {
+  billing_strategy: SubscriptionBillingStrategy
 }
 
 // ============================================================================
@@ -231,6 +236,13 @@ export async function updateCodexProMode(
   data: UpdateCodexProModeRequest
 ): Promise<ApiResponse<UpdateCodexProModeResponse>> {
   const res = await api.put('/api/subscription/self/codex-pro-mode', data)
+  return res.data
+}
+
+export async function updateSubscriptionBillingStrategy(
+  data: UpdateSubscriptionBillingStrategyRequest
+): Promise<ApiResponse<{ billing_strategy: SubscriptionBillingStrategy }>> {
+  const res = await api.put('/api/subscription/self/billing-strategy', data)
   return res.data
 }
 

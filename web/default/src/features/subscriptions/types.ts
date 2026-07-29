@@ -487,8 +487,15 @@ export interface CreateUserSubscriptionRequest {
 // Self Subscription Data (user-facing)
 // ============================================================================
 
+export type SubscriptionBillingStrategy =
+  | 'single_active'
+  | 'active_fallback'
+  | 'timed_first'
+
 export interface SelfSubscriptionSummary {
   active_subscription_id?: number
+  billing_strategy?: SubscriptionBillingStrategy
+  billing_candidate_subscription_ids?: number[]
   active_count: number
   subscription_id?: number
   plan_id?: number
@@ -513,6 +520,8 @@ export interface SelfSubscriptionSummary {
 export interface SelfSubscriptionData {
   active_subscription_id?: number
   billing_preference?: string
+  billing_strategy?: SubscriptionBillingStrategy
+  billing_candidate_subscription_ids?: number[]
   last_subscription_purchase_mode?: SubscriptionPurchaseMode
   credit_balance?: CreditBalanceGrantResult | null
   credit_balance_ledger?: CreditBalanceLedgerEntry[]

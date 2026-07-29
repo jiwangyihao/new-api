@@ -100,7 +100,7 @@ func TestGetSubscriptionSelfReturnsActiveSelectionAndEffectiveRewardEndTime(t *t
 	require.NotNil(t, reward)
 	assert.Equal(t, true, reward["is_active_selected"])
 	assert.Equal(t, "invitation_reward", reward["source_label"])
-	assert.Equal(t, float64(now+33*86400), reward["effective_end_time"])
+	assert.InDelta(t, float64(now+33*86400), reward["effective_end_time"], 2)
 	assert.Equal(t, true, reward["can_reset_quota"])
 }
 

@@ -4,11 +4,18 @@ import {
   QueryClientProvider,
   QueryObserver,
 } from '@tanstack/react-query'
+import {
+  cleanup,
+  fireEvent,
+  render,
+  waitFor,
+} from '@testing-library/react/pure'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
-import { describe, test } from 'node:test'
+import { afterEach, describe, test } from 'node:test'
 import { renderToString } from 'react-dom/server'
 import { I18nextProvider, initReactI18next } from 'react-i18next'
+import { api } from '@/lib/api'
 import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
 import type {
   PlanChannelTokenEquivalent,
@@ -24,11 +31,13 @@ import {
   shouldShowChannelEquivalents,
 } from '../lib/subscription-display'
 import {
+  billingStrategyOptions,
   canResetSubscriptionQuotaFromRecord,
   getSubscriptionSourceLabel,
   renderPlanChannelEquivalentLabels,
   renderPlanChannelEquivalentNotes,
   renderSubscriptionChannelEquivalentLabels,
+  SubscriptionBillingStrategyControl,
   SubscriptionPlansCard,
 } from './subscription-plans-card'
 
@@ -47,6 +56,13 @@ await testI18n.use(initReactI18next).init({
   fallbackLng: 'en',
   resources: { en: { translation: {} } },
   interpolation: { escapeValue: false },
+})
+
+const originalAPIAdapter = api.defaults.adapter
+
+afterEach(() => {
+  cleanup()
+  api.defaults.adapter = originalAPIAdapter
 })
 
 describe('wallet subscription query keys', () => {
@@ -130,6 +146,166 @@ function makeSelfSubscriptionData(
     ...overrides,
   }
 }
+
+describe('subscription billing strategy control', () => {
+  test('renders all account strategies, active subscription, and candidate order', () => {
+    const active = makeRecord(
+      { id: 42, end_time: 4_102_444_800, is_active_selected: true },
+      { title: 'Active Pro' }
+    )
+    const fallback = makeRecord(
+      { id: 43, end_time: 4_102_444_900 },
+      { title: 'Fallback Basic' }
+    )
+    const data = makeSelfSubscriptionData({
+      billing_strategy: 'active_fallback',
+      active_subscription_id: 42,
+      billing_candidate_subscription_ids: [42, 43],
+      subscriptions: [active, fallback],
+      all_subscriptions: [active, fallback],
+    })
+
+    const markup = renderToString(
+      createElement(
+        I18nextProvider,
+        { i18n: testI18n },
+        createElement(SubscriptionBillingStrategyControl, {
+          data,
+          onUpdated: async () => undefined,
+        })
+      )
+    )
+
+    assert.equal(billingStrategyOptions.length, 3)
+    assert.match(markup, /Single active subscription/)
+    assert.match(markup, /Active subscription fallback/)
+    assert.match(markup, /Timed subscriptions first/)
+    assert.match(markup, /Active Pro/)
+    assert.match(markup, /Fallback Basic/)
+    assert.match(markup, /aria-pressed="true"/)
+  })
+
+  test('submits one strategy and refreshes the self summary on success', async () => {
+    const data = makeSelfSubscriptionData({
+      billing_strategy: 'single_active',
+      billing_candidate_subscription_ids: [],
+    })
+    let submitted: Record<string, unknown> | undefined
+    let refreshCount = 0
+    api.defaults.adapter = async (config) => {
+      assert.equal(config.method, 'put')
+      assert.equal(config.url, '/api/subscription/self/billing-strategy')
+      submitted = JSON.parse(String(config.data))
+      return {
+        data: {
+          success: true,
+          data: { billing_strategy: 'timed_first' },
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }
+    }
+
+    const view = render(
+      createElement(
+        I18nextProvider,
+        { i18n: testI18n },
+        createElement(SubscriptionBillingStrategyControl, {
+          data,
+          onUpdated: async () => {
+            refreshCount += 1
+          },
+        })
+      )
+    )
+
+    fireEvent.click(
+      view.getByRole('button', { name: 'Timed subscriptions first' })
+    )
+
+    await waitFor(() => assert.ok(submitted))
+    assert.deepEqual(submitted, { billing_strategy: 'timed_first' })
+    assert.equal(refreshCount, 1)
+  })
+
+  test('keeps the server-selected strategy when the update fails', async () => {
+    const data = makeSelfSubscriptionData({
+      billing_strategy: 'active_fallback',
+      billing_candidate_subscription_ids: [],
+    })
+    let requestCount = 0
+    let refreshCount = 0
+    api.defaults.adapter = async (config) => {
+      requestCount += 1
+      return {
+        data: { success: false, message: 'Rejected strategy' },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }
+    }
+
+    const view = render(
+      createElement(
+        I18nextProvider,
+        { i18n: testI18n },
+        createElement(SubscriptionBillingStrategyControl, {
+          data,
+          onUpdated: async () => {
+            refreshCount += 1
+          },
+        })
+      )
+    )
+    const selected = view.getByRole('button', {
+      name: 'Active subscription fallback',
+    })
+    const rejected = view.getByRole('button', {
+      name: 'Timed subscriptions first',
+    })
+
+    fireEvent.click(rejected)
+
+    await waitFor(() => assert.equal(requestCount, 1))
+    assert.equal(refreshCount, 0)
+    assert.equal(selected.getAttribute('aria-pressed'), 'true')
+    assert.equal(rejected.getAttribute('aria-pressed'), 'false')
+  })
+
+  test('supports arrow-key focus while preserving one selected strategy', async () => {
+    const data = makeSelfSubscriptionData({
+      billing_strategy: 'single_active',
+      billing_candidate_subscription_ids: [],
+    })
+    const view = render(
+      createElement(
+        I18nextProvider,
+        { i18n: testI18n },
+        createElement(SubscriptionBillingStrategyControl, {
+          data,
+          onUpdated: async () => undefined,
+        })
+      )
+    )
+    const first = view.getByRole('button', {
+      name: 'Single active subscription',
+    })
+    const second = view.getByRole('button', {
+      name: 'Active subscription fallback',
+    })
+
+    first.focus()
+    fireEvent.keyDown(first, { key: 'ArrowRight', code: 'ArrowRight' })
+    await Promise.resolve()
+
+    assert.equal(document.activeElement, second)
+    assert.equal(first.getAttribute('aria-pressed'), 'true')
+    assert.equal(second.getAttribute('aria-pressed'), 'false')
+  })
+})
 
 describe('wallet subscription React Query rendering', () => {
   test('renders updated channel equivalents from the same wallet query client data', async () => {

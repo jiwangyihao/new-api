@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -65,6 +66,10 @@ func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDT
 
 type BillingPreferenceRequest struct {
 	BillingPreference string `json:"billing_preference"`
+}
+
+type SubscriptionBillingStrategyRequest struct {
+	BillingStrategy string `json:"billing_strategy"`
 }
 
 type ActiveSubscriptionRequest struct {
@@ -198,7 +203,8 @@ func GetSubscriptionSelf(c *gin.Context) {
 		summary.ChannelTokenEquivalents = []model.SubscriptionChannelTokenEquivalent{}
 	}
 
-	creditBalance, _, err := model.CreditBalanceStateForUser(userId, settingMap.ActiveSubscriptionId)
+	effectiveActiveSubscriptionId := summary.ActiveSubscriptionId
+	creditBalance, _, err := model.CreditBalanceStateForUser(userId, effectiveActiveSubscriptionId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -225,20 +231,22 @@ func GetSubscriptionSelf(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"active_subscription_id":          settingMap.ActiveSubscriptionId,
-		"billing_preference":              pref,
-		"last_subscription_purchase_mode": settingMap.LastSubscriptionPurchaseMode,
-		"codex_pro_mode":                  mode,
-		"codex_pro_eligible":              codexProEligible,
-		"codex_pro_features_hidden":       common.CodexProFeaturesHidden,
-		"codex_pro_unavailable_reason":    codexProUnavailableReason,
-		"subscriptions":                   model.BuildPublicSubscriptionSummaries(activeSubscriptions, settingMap.ActiveSubscriptionId),
-		"all_subscriptions":               model.BuildPublicSubscriptionSummaries(allSubscriptions, settingMap.ActiveSubscriptionId),
-		"summary":                         summary,
-		"credit_balance":                  creditBalance,
-		"credit_balance_ledger":           ledger,
-		"credit_balance_purchase_enabled": creditBalancePurchaseEnabled,
-		"credit_balance_plan":             creditBalancePlan,
+		"active_subscription_id":             effectiveActiveSubscriptionId,
+		"billing_preference":                 pref,
+		"billing_strategy":                   summary.BillingStrategy,
+		"billing_candidate_subscription_ids": summary.BillingCandidateIds,
+		"last_subscription_purchase_mode":    settingMap.LastSubscriptionPurchaseMode,
+		"codex_pro_mode":                     mode,
+		"codex_pro_eligible":                 codexProEligible,
+		"codex_pro_features_hidden":          common.CodexProFeaturesHidden,
+		"codex_pro_unavailable_reason":       codexProUnavailableReason,
+		"subscriptions":                      model.BuildPublicSubscriptionSummaries(activeSubscriptions, effectiveActiveSubscriptionId),
+		"all_subscriptions":                  model.BuildPublicSubscriptionSummaries(allSubscriptions, effectiveActiveSubscriptionId),
+		"summary":                            summary,
+		"credit_balance":                     creditBalance,
+		"credit_balance_ledger":              ledger,
+		"credit_balance_purchase_enabled":    creditBalancePurchaseEnabled,
+		"credit_balance_plan":                creditBalancePlan,
 	})
 }
 
@@ -250,19 +258,32 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 		return
 	}
 	pref := common.NormalizeBillingPreference(req.BillingPreference)
-
-	user, err := model.GetUserById(userId, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	current := user.GetSetting()
-	current.BillingPreference = pref
-	if _, err := model.SaveUserSetting(userId, current); err != nil {
+	if _, err := model.MutateUserSetting(userId, func(setting *dto.UserSetting) error {
+		setting.BillingPreference = pref
+		return nil
+	}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	common.ApiSuccess(c, gin.H{"billing_preference": pref})
+}
+
+func UpdateSubscriptionBillingStrategy(c *gin.Context) {
+	userId := c.GetInt("id")
+	var req SubscriptionBillingStrategyRequest
+	if err := c.ShouldBindJSON(&req); err != nil || model.ValidateSubscriptionBillingStrategy(req.BillingStrategy) != nil {
+		common.ApiErrorMsg(c, "无效的套餐扣费策略")
+		return
+	}
+	strategy := model.NormalizeSubscriptionBillingStrategy(req.BillingStrategy)
+	if _, err := model.MutateUserSetting(userId, func(setting *dto.UserSetting) error {
+		setting.SubscriptionBillingStrategy = strategy
+		return nil
+	}); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, gin.H{"billing_strategy": strategy})
 }
 
 func SetActiveSubscription(c *gin.Context) {
@@ -300,15 +321,11 @@ func UpdateCodexProMode(c *gin.Context) {
 		return
 	}
 	mode := strings.TrimSpace(req.Mode)
-
-	user, err := model.GetUserById(userId, true)
+	current, err := model.MutateUserSetting(userId, func(setting *dto.UserSetting) error {
+		setting.CodexProMode = mode
+		return nil
+	})
 	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	current := user.GetSetting()
-	current.CodexProMode = mode
-	if _, err := model.SaveUserSetting(userId, current); err != nil {
 		common.ApiError(c, err)
 		return
 	}

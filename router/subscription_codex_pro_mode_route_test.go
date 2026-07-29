@@ -71,3 +71,31 @@ func TestSubscriptionCreditBalanceLedgerRouteIsAuthenticated(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), `"gross_credit":100`)
 	assert.NotContains(t, recorder.Body.String(), `"user_id":9941`)
 }
+
+func TestSubscriptionBillingStrategyRouteIsAuthenticatedAndRegistered(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionPublicPlansRouteTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
+	accessToken := "billing-strategy-route-token"
+	require.NoError(t, model.DB.Create(&model.User{Id: 9943, Username: "billing-strategy-route", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}).Error)
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
+	SetApiRouter(engine)
+
+	unauthorized := httptest.NewRecorder()
+	unauthorizedReq := httptest.NewRequest(http.MethodPut, "/api/subscription/self/billing-strategy", bytes.NewBufferString(`{"billing_strategy":"timed_first"}`))
+	unauthorizedReq.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(unauthorized, unauthorizedReq)
+	require.Equal(t, http.StatusUnauthorized, unauthorized.Code)
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/subscription/self/billing-strategy", bytes.NewBufferString(`{"billing_strategy":"timed_first"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("New-Api-User", "9943")
+	engine.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"billing_strategy":"timed_first"`)
+}

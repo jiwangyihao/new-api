@@ -294,10 +294,10 @@ func TestGetSubscriptionSelfSummaryIncludesGPTAbuseWarningUsage(t *testing.T) {
 	assert.True(t, summaryBool(t, summary, "gpt_abuse_limit_enabled"))
 }
 
-func TestGetSubscriptionSelfSummarySkipsExhaustedPrimaryCandidate(t *testing.T) {
+func TestGetSubscriptionSelfSummaryKeepsExhaustedSingleActiveCandidate(t *testing.T) {
 	setupSubscriptionSelfSummaryTestDB(t)
 	const userID = 8301
-	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_skip_exhausted")
+	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_exhausted_active")
 	seedSubscriptionSelfSummaryPlan(t, 8311, "Exhausted Earlier", "self-summary-exhausted-a", 1000, 1, false, false)
 	seedSubscriptionSelfSummaryPlan(t, 8312, "Usable Later", "self-summary-exhausted-b", 9999, 9, false, false)
 	seedSubscriptionSelfSummarySubscription(t, 8321, userID, 8311, 1000, 1000, 1, "order", 3600)
@@ -307,12 +307,12 @@ func TestGetSubscriptionSelfSummarySkipsExhaustedPrimaryCandidate(t *testing.T) 
 
 	summary := requireSubscriptionSelfSummary(t, subscriptionSelfSummaryData(t, recorder))
 	assert.Equal(t, int64(1), summaryInt64(t, summary, "active_count"))
-	assert.Equal(t, int64(8322), summaryInt64(t, summary, "subscription_id"))
-	assert.Equal(t, int64(8312), summaryInt64(t, summary, "plan_id"))
-	assert.Equal(t, "Usable Later", summaryString(t, summary, "primary_plan_title"))
-	assert.Equal(t, int64(9999), summaryInt64(t, summary, "token_limit"))
-	assert.Equal(t, int64(0), summaryInt64(t, summary, "token_used"))
-	assert.Equal(t, int64(9999), summaryInt64(t, summary, "token_remaining"))
+	assert.Equal(t, int64(8321), summaryInt64(t, summary, "subscription_id"))
+	assert.Equal(t, int64(8311), summaryInt64(t, summary, "plan_id"))
+	assert.Equal(t, "Exhausted Earlier", summaryString(t, summary, "primary_plan_title"))
+	assert.Equal(t, int64(1000), summaryInt64(t, summary, "token_limit"))
+	assert.Equal(t, int64(1000), summaryInt64(t, summary, "token_used"))
+	assert.Zero(t, summaryInt64(t, summary, "token_remaining"))
 	assert.False(t, summaryBool(t, summary, "token_unlimited"))
 }
 
@@ -339,12 +339,12 @@ func TestGetSubscriptionSelfSummaryReturnsExplicitUnlimitedTrial(t *testing.T) {
 	assert.Equal(t, int64(1), summaryInt64(t, summary, "concurrency_limit"))
 }
 
-func TestGetSubscriptionSelfSummaryReturnsZeroWhenNoBillableSubscription(t *testing.T) {
+func TestGetSubscriptionSelfSummaryReturnsZeroWhenNoEligibleSubscription(t *testing.T) {
 	setupSubscriptionSelfSummaryTestDB(t)
 	const userID = 8501
-	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_no_billable")
-	seedSubscriptionSelfSummaryPlan(t, 8511, "Exhausted Only", "self-summary-no-billable", 1000, 2, false, false)
-	seedSubscriptionSelfSummarySubscription(t, 8521, userID, 8511, 1000, 1000, 2, "order", 3600)
+	seedSubscriptionSelfSummaryUser(t, userID, "self_summary_no_eligible")
+	seedSubscriptionSelfSummaryPlan(t, 8511, "Expired Only", "self-summary-no-eligible", 1000, 2, false, false)
+	seedSubscriptionSelfSummarySubscription(t, 8521, userID, 8511, 1000, 1000, 2, "order", -1)
 
 	recorder := performGetSubscriptionSelfSummaryRequest(t, userID)
 

@@ -176,11 +176,16 @@ func TestActiveCreditBalanceInsufficientDoesNotFallBackToTimedSubscription(t *te
 	}
 }
 
-func TestPreConsumeFallsBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
+func TestPreConsumeDoesNotFallBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
-	require.NoError(t, DB.Create(&User{Id: 7106, Username: "model_fallback", Status: common.UserStatusEnabled, AffCode: "aff7106"}).Error)
+	user := User{Id: 7106, Username: "model_fallback", Status: common.UserStatusEnabled, AffCode: "aff7106"}
+	setting := user.GetSetting()
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategyActiveFallback
+	setting.ActiveSubscriptionId = 7210
+	user.SetSetting(setting)
+	require.NoError(t, DB.Create(&user).Error)
 	firstCode := "model_fallback_first"
 	secondCode := "model_fallback_second"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7211, Title: "First", Enabled: true, ModelLimits: "claude-3-7-sonnet", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &firstCode}).Error)
@@ -197,17 +202,18 @@ func TestPreConsumeFallsBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
 	cachedEntry, ok := cachedValue.(primaryBillableSubscriptionCacheEntry)
 	require.True(t, ok)
 	assert.Equal(t, 7210, cachedEntry.loaded.Subscription.Id)
-	setting, err := GetUserSetting(7106, true)
+	persistedSetting, err := GetUserSetting(7106, true)
 	require.NoError(t, err)
-	assert.Zero(t, setting.ActiveSubscriptionId)
+	assert.Equal(t, 7210, persistedSetting.ActiveSubscriptionId)
 
-	pre, err := PreConsumeUserSubscription("model-fallback-first", 7106, "gpt-4o", 0, 5)
-	require.NoError(t, err)
-	assert.Equal(t, 7213, pre.UserSubscriptionId)
+	_, err = PreConsumeUserSubscription("model-fallback-first", 7106, "gpt-4o", 0, 5)
+	require.ErrorContains(t, err, "subscription model not allowed")
 
-	second, err := PreConsumeUserSubscription("model-fallback-cached", 7106, "gpt-4o", 0, 5)
-	require.NoError(t, err)
-	assert.Equal(t, 7213, second.UserSubscriptionId)
+	_, err = PreConsumeUserSubscription("model-fallback-cached", 7106, "gpt-4o", 0, 5)
+	require.ErrorContains(t, err, "subscription model not allowed")
+	var fallback UserSubscription
+	require.NoError(t, DB.First(&fallback, 7213).Error)
+	assert.Zero(t, fallback.TokenUsed)
 }
 
 func TestSubscriptionSelfSummaryIncludesModelRestrictedPlan(t *testing.T) {
@@ -1066,7 +1072,7 @@ func TestAdminTrialSubscriptionIsNotPaidEquivalentForReset(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestPreConsumeUserSubscriptionUsesSameTierRewardWhenRedemptionIsPaid(t *testing.T) {
+func TestPreConsumeUserSubscriptionUsesEarlierPaidRedemptionBeforeLaterReward(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7688, Username: "same_tier_redemption_reward", Status: common.UserStatusEnabled, AffCode: "aff7688"}).Error)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
@@ -1078,13 +1084,13 @@ func TestPreConsumeUserSubscriptionUsesSameTierRewardWhenRedemptionIsPaid(t *tes
 	pre, err := PreConsumeUserSubscription("same-tier-redemption-reward", 7688, "gpt-4o", 0, 6)
 
 	require.NoError(t, err)
-	assert.Equal(t, 7691, pre.UserSubscriptionId)
+	assert.Equal(t, 7690, pre.UserSubscriptionId)
 	var paid UserSubscription
 	require.NoError(t, DB.First(&paid, 7690).Error)
-	assert.Equal(t, int64(0), paid.TokenUsed)
+	assert.Equal(t, int64(6), paid.TokenUsed)
 	var reward UserSubscription
 	require.NoError(t, DB.First(&reward, 7691).Error)
-	assert.Equal(t, int64(31), reward.TokenUsed)
+	assert.Equal(t, int64(25), reward.TokenUsed)
 }
 
 func TestPreConsumeUserSubscription_IgnoresAmountTotalForDistributorLimit(t *testing.T) {
@@ -1531,48 +1537,52 @@ func TestPreConsumeUserSubscription_TokenLimitZeroUnlimitedTrials(t *testing.T) 
 	assert.True(t, usage.Unlimited)
 }
 
-func TestPreConsumeUserSubscriptionPrefersPaidDistributorBeforeUnlimitedTrial(t *testing.T) {
+func TestPreConsumeUserSubscriptionUsesEarlierUnlimitedTrialBeforeLaterPaid(t *testing.T) {
 	truncateTables(t)
-	require.NoError(t, DB.Create(&User{Id: 7445, Username: "paid_before_trial", Status: common.UserStatusEnabled, AffCode: "aff7445"}).Error)
+	require.NoError(t, DB.Create(&User{Id: 7445, Username: "trial_before_paid", Status: common.UserStatusEnabled, AffCode: "aff7445"}).Error)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	seedDistributorSubscriptionPlanForTest(t, 7446, "trial-first", 0)
-	seedUserSubscriptionForDistributorTest(t, 7447, 7445, 7446, 0, 0, 0, "trial_code")
 	seedDistributorSubscriptionPlanForTest(t, 7448, "paid-second", 100)
-	seedUserSubscriptionForDistributorTest(t, 7449, 7445, 7448, 100, 0, 1, "order")
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7447, UserId: 7445, PlanId: 7446, Status: "active", TokenLimit: 0, EndTime: now + 3600, GrantReason: "trial_code"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7449, UserId: 7445, PlanId: 7448, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: "order"}).Error)
 
-	pre, err := PreConsumeUserSubscription("paid-before-trial", 7445, "gpt-4o", 0, 6)
+	pre, err := PreConsumeUserSubscription("trial-before-paid", 7445, "gpt-4o", 0, 6)
 	require.NoError(t, err)
-	assert.Equal(t, 7449, pre.UserSubscriptionId)
+	assert.Equal(t, 7447, pre.UserSubscriptionId)
 
 	var trial UserSubscription
 	require.NoError(t, DB.First(&trial, 7447).Error)
-	assert.Equal(t, int64(0), trial.TokenUsed)
+	assert.Equal(t, int64(6), trial.TokenUsed)
 	var paid UserSubscription
 	require.NoError(t, DB.First(&paid, 7449).Error)
-	assert.Equal(t, int64(6), paid.TokenUsed)
+	assert.Zero(t, paid.TokenUsed)
 }
 
-func TestPreConsumeUserSubscriptionPrefersPaidBeforeAdminUnlimitedTrial(t *testing.T) {
+func TestPreConsumeUserSubscriptionUsesEarlierAdminTrialBeforeLaterPaid(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	require.NoError(t, DB.Exec("DELETE FROM subscription_pre_consume_records").Error)
-	require.NoError(t, DB.Create(&User{Id: 7491, Username: "paid_before_admin_trial", Status: common.UserStatusEnabled, AffCode: "aff7491"}).Error)
+	InvalidateSubscriptionPlanCache(7492)
+	t.Cleanup(func() { InvalidateSubscriptionPlanCache(7492) })
+	require.NoError(t, DB.Create(&User{Id: 7491, Username: "admin_trial_before_paid", Status: common.UserStatusEnabled, AffCode: "aff7491"}).Error)
 	adminTrialCode := "admin-trial-first"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7492, Title: "Admin Trial", Enabled: true, IsTrial: true, BusinessCode: &adminTrialCode}).Error)
-	seedUserSubscriptionForDistributorTest(t, 7493, 7491, 7492, 0, 0, 0, "admin")
 	seedDistributorSubscriptionPlanForTest(t, 7494, "paid-after-admin-trial", 100)
-	seedUserSubscriptionForDistributorTest(t, 7495, 7491, 7494, 100, 0, 1, "order")
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7493, UserId: 7491, PlanId: 7492, Status: "active", TokenLimit: 0, EndTime: now + 3600, GrantReason: "admin"}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7495, UserId: 7491, PlanId: 7494, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: "order"}).Error)
 
-	pre, err := PreConsumeUserSubscription("paid-before-admin-trial", 7491, "gpt-4o", 0, 6)
+	pre, err := PreConsumeUserSubscription("admin-trial-before-paid", 7491, "gpt-4o", 0, 6)
 	require.NoError(t, err)
-	assert.Equal(t, 7495, pre.UserSubscriptionId)
+	assert.Equal(t, 7493, pre.UserSubscriptionId)
 
 	var adminTrial UserSubscription
 	require.NoError(t, DB.First(&adminTrial, 7493).Error)
-	assert.Equal(t, int64(0), adminTrial.TokenUsed)
+	assert.Equal(t, int64(6), adminTrial.TokenUsed)
 	var paid UserSubscription
 	require.NoError(t, DB.First(&paid, 7495).Error)
-	assert.Equal(t, int64(6), paid.TokenUsed)
+	assert.Zero(t, paid.TokenUsed)
 }
 
 func TestEnsureDistributorDefaultPlans(t *testing.T) {

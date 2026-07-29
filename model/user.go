@@ -835,7 +835,106 @@ func (user *User) Update(updatePassword bool) error {
 	return updateUserCache(*user)
 }
 
-// SaveUserSetting persists a user setting JSON blob and synchronizes the setting field in user cache.
+const userSettingCASMaxAttempts = 5
+
+var ErrUserSettingCASConflict = errors.New("user setting changed concurrently")
+
+func mutateUserSettingCASAttempt(db *gorm.DB, userId int, mutate func(*dto.UserSetting) error) (dto.UserSetting, string, error) {
+	if db == nil || userId <= 0 || mutate == nil {
+		return dto.UserSetting{}, "", errors.New("invalid user setting mutation")
+	}
+	var rawSetting sql.NullString
+	result := db.Model(&User{}).Where("id = ?", userId).Select("setting").Scan(&rawSetting)
+	if result.Error != nil {
+		return dto.UserSetting{}, "", result.Error
+	}
+	if result.RowsAffected == 0 {
+		return dto.UserSetting{}, "", gorm.ErrRecordNotFound
+	}
+	raw := ""
+	if rawSetting.Valid {
+		raw = rawSetting.String
+	}
+	setting, err := ParseUserSettingString(raw)
+	if err != nil {
+		return dto.UserSetting{}, "", err
+	}
+	if err := mutate(&setting); err != nil {
+		return dto.UserSetting{}, "", err
+	}
+	settingBytes, err := common.Marshal(setting)
+	if err != nil {
+		return dto.UserSetting{}, "", err
+	}
+	settingJSON := string(settingBytes)
+	if settingJSON == raw {
+		return setting, settingJSON, nil
+	}
+	update := db.Model(&User{}).
+		Where("id = ? AND (setting = ? OR (setting IS NULL AND ? = ''))", userId, raw, raw).
+		Update("setting", settingJSON)
+	if update.Error != nil {
+		return dto.UserSetting{}, "", update.Error
+	}
+	if update.RowsAffected != 1 {
+		return dto.UserSetting{}, "", ErrUserSettingCASConflict
+	}
+	return setting, settingJSON, nil
+}
+func isRetryableUserSettingMutationError(err error) bool {
+	if err == nil || errors.Is(err, ErrUserSettingCASConflict) {
+		return errors.Is(err, ErrUserSettingCASConflict)
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "sqlite_busy") ||
+		strings.Contains(message, "sqlite_locked")
+}
+
+func mutateUserSettingCAS(userId int, mutate func(*dto.UserSetting) error) (dto.UserSetting, string, error) {
+	for attempt := range userSettingCASMaxAttempts {
+		setting, settingJSON, err := mutateUserSettingCASAttempt(DB, userId, mutate)
+		if !isRetryableUserSettingMutationError(err) {
+			return setting, settingJSON, err
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	return dto.UserSetting{}, "", ErrUserSettingCASConflict
+}
+
+func transactionWithUserSettingCASRetry(run func(*gorm.DB) error) error {
+	if run == nil {
+		return errors.New("user setting transaction is nil")
+	}
+	var lastErr error
+	for attempt := range userSettingCASMaxAttempts {
+		lastErr = DB.Transaction(run)
+		if !isRetryableUserSettingMutationError(lastErr) {
+			return lastErr
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return ErrUserSettingCASConflict
+}
+
+// MutateUserSetting atomically merges one settings change and synchronizes the cache.
+func MutateUserSetting(userId int, mutate func(*dto.UserSetting) error) (dto.UserSetting, error) {
+	setting, _, err := mutateUserSettingCAS(userId, mutate)
+	if err != nil {
+		return dto.UserSetting{}, err
+	}
+	if err := invalidateUserCache(userId); err != nil {
+		return dto.UserSetting{}, err
+	}
+	return setting, nil
+}
+
+// SaveUserSetting persists a complete user setting JSON blob and synchronizes the cache.
+// Callers changing one field should use MutateUserSetting to avoid lost updates.
 func SaveUserSetting(userId int, setting dto.UserSetting) (string, error) {
 	if userId <= 0 {
 		return "", errors.New("invalid userId")

@@ -78,6 +78,65 @@ func TestAcquireSubscriptionConcurrencyReturns429WhenExceeded(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
 }
 
+func TestAcquireSubscriptionConcurrencyDoesNotStackLimitsAcrossSubscriptions(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	common.SubscriptionConcurrencyQueueCapacity = 0
+	first := newConcurrencyRelayInfoForTest(1)
+	first.UserId = 7
+	first.RequestId = "req-shared-limit-first"
+	first.Billing.(*BillingSession).funding.(*SubscriptionFunding).subscriptionId = 71
+	lease, apiErr := AcquireSubscriptionConcurrency(context.Background(), first)
+	require.Nil(t, apiErr)
+	defer lease.Release(context.Background())
+	otherUser := newConcurrencyRelayInfoForTest(1)
+	otherUser.UserId = 9
+	otherUser.RequestId = "req-shared-limit-other-user"
+	otherUser.Billing.(*BillingSession).funding.(*SubscriptionFunding).subscriptionId = 73
+	otherUserLease, otherUserErr := AcquireSubscriptionConcurrency(context.Background(), otherUser)
+	require.Nil(t, otherUserErr, "a different user must have an independent concurrency key")
+	require.NoError(t, otherUserLease.Release(context.Background()))
+
+	snapshot := subscriptionConcurrencyMemory.Snapshot(time.Now())
+	require.Len(t, snapshot, 1)
+	assert.Equal(t, 7, snapshot[0].UserID)
+	assert.Equal(t, int64(1), snapshot[0].Active)
+
+	second := newConcurrencyRelayInfoForTest(1)
+	second.UserId = 7
+	second.RequestId = "req-shared-limit-second"
+	second.Billing.(*BillingSession).funding.(*SubscriptionFunding).subscriptionId = 72
+	_, apiErr = AcquireSubscriptionConcurrency(context.Background(), second)
+
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+}
+
+func TestExistingConcurrencyLeaseSurvivesSwitchToLowerLimit(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	common.SubscriptionConcurrencyQueueCapacity = 0
+
+	first := newConcurrencyRelayInfoForTest(2)
+	first.UserId = 8
+	first.RequestId = "req-lower-limit-existing"
+	lease, apiErr := AcquireSubscriptionConcurrency(context.Background(), first)
+	require.Nil(t, apiErr)
+
+	lower := newConcurrencyRelayInfoForTest(1)
+	lower.UserId = 8
+	lower.RequestId = "req-lower-limit-new"
+	_, apiErr = AcquireSubscriptionConcurrency(context.Background(), lower)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
+
+	require.NoError(t, lease.Release(context.Background()))
+	accepted := newConcurrencyRelayInfoForTest(1)
+	accepted.UserId = 8
+	accepted.RequestId = "req-lower-limit-after-release"
+	acceptedLease, apiErr := AcquireSubscriptionConcurrency(context.Background(), accepted)
+	require.Nil(t, apiErr)
+	require.NoError(t, acceptedLease.Release(context.Background()))
+}
+
 func TestAcquireSubscriptionConcurrencyUsesSubscriptionQueueCapacity(t *testing.T) {
 	resetSubscriptionConcurrencyForTest(t)
 	common.SubscriptionConcurrencyQueueCapacity = 0

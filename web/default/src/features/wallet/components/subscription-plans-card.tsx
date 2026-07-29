@@ -24,10 +24,12 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { FieldDescription, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TitledCard } from '@/components/ui/titled-card'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   Tooltip,
   TooltipContent,
@@ -44,6 +46,7 @@ import {
   getSelfSubscriptionFull,
   resetSubscriptionQuota,
   setActiveSubscription,
+  updateSubscriptionBillingStrategy,
 } from '@/features/subscriptions/api'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
@@ -58,6 +61,7 @@ import type {
   PlanRecord,
   SelfSubscriptionData,
   UserSubscriptionRecord,
+  SubscriptionBillingStrategy,
 } from '@/features/subscriptions/types'
 import {
   formatPlanChannelEquivalent,
@@ -252,6 +256,145 @@ export function renderSubscriptionChannelEquivalentNotes(
     equivalents.length > 0 ? equivalents : legacyEquivalents
   if (!shouldShowChannelEquivalents(visibleEquivalents)) return []
   return getChannelEquivalentNotes(visibleEquivalents, t)
+}
+
+export const billingStrategyOptions: Array<{
+  value: SubscriptionBillingStrategy
+  label: string
+  description: string
+}> = [
+  {
+    value: 'single_active',
+    label: 'Single active subscription',
+    description:
+      'Uses only the active subscription. Credit shortage, model restrictions, concurrency limits, and request failures never switch benefits.',
+  },
+  {
+    value: 'active_fallback',
+    label: 'Active subscription fallback',
+    description:
+      'Uses the active subscription first. Only invalid, disabled, or Credit-insufficient benefits fall back to timed subscriptions by expiry, then Credit balance.',
+  },
+  {
+    value: 'timed_first',
+    label: 'Timed subscriptions first',
+    description:
+      'Ignores the active selection and tries timed subscriptions by expiry, then Credit balance. Each request still uses one benefit only.',
+  },
+]
+
+export function SubscriptionBillingStrategyControl({
+  data,
+  onUpdated,
+}: {
+  data: SelfSubscriptionData
+  onUpdated: () => Promise<unknown>
+}) {
+  const { t } = useTranslation()
+  const [saving, setSaving] = useState(false)
+  const strategy = data.billing_strategy ?? 'single_active'
+  const activeSubscriptionId = Number(data.active_subscription_id || 0)
+  const recordsById = new Map(
+    data.all_subscriptions.map((record) => [
+      Number(record.subscription?.id || 0),
+      record,
+    ])
+  )
+  const describeSubscription = (subscriptionId: number) => {
+    const record = recordsById.get(subscriptionId)
+    return record?.plan?.title || `${t('Subscription')} #${subscriptionId}`
+  }
+
+  const handleChange = async (values: string[]) => {
+    const next = values[0] as SubscriptionBillingStrategy | undefined
+    if (!next || next === strategy || saving) return
+    setSaving(true)
+    try {
+      const response = await updateSubscriptionBillingStrategy({
+        billing_strategy: next,
+      })
+      if (!response.success) {
+        toast.error(response.message || t('Request failed'))
+        return
+      }
+      await onUpdated()
+      toast.success(t('Billing strategy updated'))
+    } catch {
+      toast.error(t('Request failed'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <FieldSet className='rounded-xl border p-3 sm:p-4'>
+      <FieldLegend variant='label'>
+        {t('Subscription billing strategy')}
+      </FieldLegend>
+      <FieldDescription>
+        {t(
+          'This account-level strategy applies to every API key and only affects requests that start after it changes.'
+        )}
+      </FieldDescription>
+      <ToggleGroup
+        value={[strategy]}
+        onValueChange={handleChange}
+        disabled={saving}
+        spacing={2}
+        className='grid w-full grid-cols-1 gap-2 lg:grid-cols-3'
+        aria-label={t('Subscription billing strategy')}
+      >
+        {billingStrategyOptions.map((option) => (
+          <ToggleGroupItem
+            key={option.value}
+            value={option.value}
+            variant='outline'
+            className='h-auto min-h-20 w-full items-start justify-start p-3 text-left whitespace-normal'
+            aria-label={t(option.label)}
+          >
+            <span>
+              <span className='block font-medium'>{t(option.label)}</span>
+              <span className='text-muted-foreground mt-1 block text-xs font-normal'>
+                {t(option.description)}
+              </span>
+            </span>
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+      <div className='grid gap-3 text-xs sm:grid-cols-2'>
+        <div>
+          <div className='text-muted-foreground'>
+            {t('Active subscription')}
+          </div>
+          <div className='mt-1 font-medium'>
+            {activeSubscriptionId > 0
+              ? describeSubscription(activeSubscriptionId)
+              : t('No active subscription')}
+          </div>
+        </div>
+        <div>
+          <div className='text-muted-foreground'>
+            {t('Current candidate order')}
+          </div>
+          {(data.billing_candidate_subscription_ids?.length || 0) > 0 ? (
+            <ol className='mt-1 list-inside list-decimal space-y-1 font-medium'>
+              {data.billing_candidate_subscription_ids?.map(
+                (subscriptionId) => (
+                  <li key={subscriptionId}>
+                    {describeSubscription(subscriptionId)}
+                  </li>
+                )
+              )}
+            </ol>
+          ) : (
+            <div className='mt-1 font-medium'>
+              {t('No billable candidates')}
+            </div>
+          )}
+        </div>
+      </div>
+    </FieldSet>
+  )
 }
 
 export function SubscriptionPlansCard({
@@ -755,6 +898,13 @@ export function SubscriptionPlansCard({
                 })}
               </div>
             </>
+          )}
+
+          {selfSubscriptionData && (
+            <SubscriptionBillingStrategyControl
+              data={selfSubscriptionData}
+              onUpdated={() => selfSubscriptionQuery.refetch()}
+            />
           )}
 
           {!hasAny && (

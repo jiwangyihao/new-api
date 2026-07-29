@@ -15,6 +15,7 @@ type UserSetting struct {
 	RecordIpLog                      bool    `json:"record_ip_log,omitempty"`                        // 是否记录请求和错误日志IP
 	SidebarModules                   string  `json:"sidebar_modules,omitempty"`                      // SidebarModules 左侧边栏模块配置
 	BillingPreference                string  `json:"billing_preference,omitempty"`                   // BillingPreference 扣费策略（订阅/钱包）
+	SubscriptionBillingStrategy      string  `json:"subscription_billing_strategy,omitempty"`        // SubscriptionBillingStrategy 套餐权益扣费策略
 	CodexProMode                     string  `json:"codex_pro_mode,omitempty"`                       // CodexProMode Codex Pro 分组服务模式
 	ActiveSubscriptionId             int     `json:"active_subscription_id,omitempty"`               // ActiveSubscriptionId 当前激活订阅ID
 	LastSubscriptionPurchaseMode     string  `json:"last_subscription_purchase_mode,omitempty"`      // LastSubscriptionPurchaseMode 上次套餐购买模式

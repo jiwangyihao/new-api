@@ -506,19 +506,6 @@ export function SubscriptionPlansCard({
   const hasAny = allSubscriptions.length > 0
   const isAvailable = loading || plans.length > 0 || hasAny
 
-  const subscriptionRecordsForPurchaseCount =
-    selfSubscriptionData?.all_subscriptions ?? allSubscriptions
-
-  const planPurchaseCountMap = useMemo(() => {
-    const map = new Map<number, number>()
-    for (const sub of subscriptionRecordsForPurchaseCount) {
-      const planId = sub?.subscription?.plan_id
-      if (!planId) continue
-      map.set(planId, (map.get(planId) || 0) + 1)
-    }
-    return map
-  }, [subscriptionRecordsForPurchaseCount])
-
   useEffect(() => {
     onAvailabilityChange?.(isAvailable)
   }, [isAvailable, onAvailabilityChange])
@@ -686,6 +673,9 @@ export function SubscriptionPlansCard({
                             ·{' '}
                             {new Date(entry.created_at * 1000).toLocaleString()}
                           </span>
+                          {entry.payment_provider && (
+                            <span>{entry.payment_provider} · </span>
+                          )}
                           <span>
                             +{entry.gross_credit} · {t('Debt offset')}{' '}
                             {entry.debt_offset} · {t('Available')}{' '}
@@ -922,9 +912,6 @@ export function SubscriptionPlansCard({
               if (!plan) return null
               const price = formatPlanPrice(plan.price_amount, plan.currency)
               const isPopular = index === 0 && plans.length > 1
-              const limit = Number(plan.max_purchase_per_user || 0)
-              const count = planPurchaseCountMap.get(plan.id) || 0
-              const reached = limit > 0 && count >= limit
               const planEquivalentLabels = renderPlanChannelEquivalentLabels(
                 plan,
                 t
@@ -944,7 +931,6 @@ export function SubscriptionPlansCard({
                   plan.concurrency_limit,
                   t
                 )}`,
-                limit > 0 ? `${t('Purchase Limit')}: ${limit}` : null,
               ].filter(Boolean) as string[]
 
               return (
@@ -1016,7 +1002,7 @@ export function SubscriptionPlansCard({
                         setPurchaseOpen(true)
                       }}
                     >
-                      {reached ? t('Choose purchase mode') : t('Subscribe Now')}
+                      {t('Subscribe Now')}
                     </Button>
                   </CardContent>
                 </Card>
@@ -1044,16 +1030,6 @@ export function SubscriptionPlansCard({
         enableOnlineTopUp={enableOnlineTopUp}
         enableKyrenSubscription={!!topupInfo?.enable_kyren_subscription}
         epayMethods={epayMethods}
-        purchaseLimit={
-          selectedPlan?.plan?.max_purchase_per_user
-            ? Number(selectedPlan.plan.max_purchase_per_user)
-            : undefined
-        }
-        purchaseCount={
-          selectedPlan?.plan?.id
-            ? planPurchaseCountMap.get(selectedPlan.plan.id)
-            : undefined
-        }
         accountBalance={accountBalance}
         lastPurchaseMode={selfSubscriptionData?.last_subscription_purchase_mode}
         creditBalancePurchaseEnabled={

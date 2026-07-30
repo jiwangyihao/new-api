@@ -13,6 +13,12 @@ const keys = [
   'Available Credit balance',
   'Settlement debt',
   'Credit purchase history',
+  'Payment page opened',
+  'Waiting for payment confirmation. You can close this dialog and resume here later.',
+  'Unable to check payment status. Retry status check or payment.',
+  'Retry status check',
+  'Try payment again',
+  'Payment failed or expired. You can try again.',
 ] as const
 
 describe('Credit balance purchase translations', () => {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/Calcium-Ion/go-epay/epay"
@@ -17,6 +18,7 @@ import (
 
 type SubscriptionEpayPayRequest struct {
 	PlanId        int    `json:"plan_id"`
+	PurchaseMode  string `json:"purchase_mode"`
 	PaymentMethod string `json:"payment_method"`
 }
 
@@ -24,6 +26,11 @@ func SubscriptionRequestEpay(c *gin.Context) {
 	var req SubscriptionEpayPayRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
 		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	purchaseMode, err := model.NormalizeSubscriptionPurchaseMode(req.PurchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
 		return
 	}
 
@@ -46,11 +53,17 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐价格无效")
 		return
 	}
-	userId := c.GetInt("id")
-	if err := validateSubscriptionPurchaseLimit(userId, plan); err != nil {
+	entitlementSnapshot, err := prepareExternalSubscriptionEntitlementSnapshot(plan, purchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	serializedSnapshot, err := marshalExternalSubscriptionEntitlementSnapshot(entitlementSnapshot, model.PaymentProviderEpay, "", req.PaymentMethod, amountCents, currency)
+	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	userId := c.GetInt("id")
 
 	callBackAddress := service.GetCallbackAddress()
 	returnUrl, err := url.Parse(callBackAddress + "/api/subscription/epay/return")
@@ -73,17 +86,21 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		return
 	}
 
+	creditGrantAmount, creditTargetPlanID := entitlementSnapshot.CreditGrantIdentity()
 	order := &model.SubscriptionOrder{
-		UserId:          userId,
-		PlanId:          plan.Id,
-		Money:           plan.PriceAmount,
-		AmountCents:     amountCents,
-		Currency:        currency,
-		TradeNo:         tradeNo,
-		PaymentMethod:   req.PaymentMethod,
-		PaymentProvider: model.PaymentProviderEpay,
-		CreateTime:      time.Now().Unix(),
-		Status:          common.TopUpStatusPending,
+		UserId:              userId,
+		PlanId:              plan.Id,
+		Money:               plan.PriceAmount,
+		AmountCents:         amountCents,
+		Currency:            currency,
+		CreditGrantAmount:   creditGrantAmount,
+		CreditTargetPlanID:  creditTargetPlanID,
+		TradeNo:             tradeNo,
+		PaymentMethod:       req.PaymentMethod,
+		PaymentProvider:     model.PaymentProviderEpay,
+		CreateTime:          time.Now().Unix(),
+		Status:              common.TopUpStatusPending,
+		EntitlementSnapshot: serializedSnapshot,
 	}
 	if err := order.Insert(); err != nil {
 		common.ApiErrorMsg(c, "创建订单失败")
@@ -103,7 +120,7 @@ func SubscriptionRequestEpay(c *gin.Context) {
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri})
+	c.JSON(http.StatusOK, gin.H{"message": "success", "data": params, "url": uri, "order_id": tradeNo})
 }
 
 func SubscriptionEpayNotify(c *gin.Context) {
@@ -144,6 +161,16 @@ func SubscriptionEpayNotify(c *gin.Context) {
 	}
 
 	if verifyInfo.TradeStatus != epay.StatusTradeSuccess {
+		LockOrder(verifyInfo.ServiceTradeNo)
+		defer UnlockOrder(verifyInfo.ServiceTradeNo)
+		if strings.EqualFold(strings.TrimSpace(verifyInfo.TradeStatus), "TRADE_CLOSED") {
+			if err := model.FailSubscriptionOrder(verifyInfo.ServiceTradeNo, model.PaymentProviderEpay); err != nil {
+				_, _ = c.Writer.Write([]byte("fail"))
+				return
+			}
+			_, _ = c.Writer.Write([]byte("success"))
+			return
+		}
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
@@ -205,6 +232,16 @@ func SubscriptionEpayReturn(c *gin.Context) {
 			return
 		}
 		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=success"))
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(verifyInfo.TradeStatus), "TRADE_CLOSED") {
+		LockOrder(verifyInfo.ServiceTradeNo)
+		defer UnlockOrder(verifyInfo.ServiceTradeNo)
+		if err := model.FailSubscriptionOrder(verifyInfo.ServiceTradeNo, model.PaymentProviderEpay); err != nil {
+			c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
+			return
+		}
+		c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=fail"))
 		return
 	}
 	c.Redirect(http.StatusFound, paymentReturnPath("/console/topup?pay=pending"))

@@ -490,6 +490,25 @@ describe('wallet subscription React Query rendering', () => {
           source_snapshot: '{}',
           created_at: 1,
         },
+        {
+          id: 63,
+          user_id: 1,
+          user_subscription_id: 51,
+          type: 'purchase',
+          idempotency_key: 'credit-order-63',
+          source_type: 'subscription_order',
+          source_id: 64,
+          gross_credit: 500,
+          debt_offset: 0,
+          balance_before: 750,
+          balance_after: 1250,
+          available_credit_after: 1250,
+          settlement_debt_after: 0,
+          reason: 'purchase',
+          payment_provider: 'stripe',
+          purchase_mode: 'credit_balance',
+          created_at: 2,
+        },
       ],
       summary: {
         ...base.summary,
@@ -507,9 +526,11 @@ describe('wallet subscription React Query rendering', () => {
       assert.match(html, /exhausted/)
       assert.match(html, /Credit balance history/)
       assert.match(html, /Redemption/)
+      assert.match(html, /Purchase/)
       assert.doesNotMatch(html, /Credit purchase history/)
       assert.match(html, /\+<!-- -->1000/)
       assert.match(html, /Debt offset<!-- --> <!-- -->250/)
+      assert.match(html, /stripe/)
       assert.match(html, /Credit balance<!-- -->:<!-- --> <!-- -->0 credits/)
       assert.doesNotMatch(html, /Unlimited credits/)
     } finally {

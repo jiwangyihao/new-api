@@ -1,11 +1,6 @@
 package controller
 
-import (
-	"errors"
-
-	"github.com/QuantumNous/new-api/model"
-	"gorm.io/gorm"
-)
+import "github.com/QuantumNous/new-api/model"
 
 func validatePurchasableSubscriptionPlan(plan *model.SubscriptionPlan) string {
 	if plan == nil {
@@ -23,34 +18,32 @@ func validatePurchasableSubscriptionPlan(plan *model.SubscriptionPlan) string {
 	return ""
 }
 
-func validateSubscriptionPurchaseLimit(userId int, plan *model.SubscriptionPlan) error {
-	if plan == nil || plan.MaxPurchasePerUser <= 0 {
-		return nil
-	}
-
-	count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+func prepareExternalSubscriptionEntitlementSnapshot(plan *model.SubscriptionPlan, purchaseMode string) (model.SubscriptionEntitlementSnapshot, error) {
+	mode, err := model.NormalizeSubscriptionPurchaseMode(purchaseMode)
 	if err != nil {
-		return err
+		return model.SubscriptionEntitlementSnapshot{}, err
 	}
-	if count >= int64(plan.MaxPurchasePerUser) {
-		return errors.New("已达到该套餐购买上限")
+	targetCreditPlanID := 0
+	var creditPlan *model.SubscriptionPlan
+	if mode == model.SubscriptionPurchaseModeCreditBalance {
+		creditPlan, err = model.GetCreditBalancePlanTx(model.DB)
+		if err != nil {
+			return model.SubscriptionEntitlementSnapshot{}, err
+		}
+		if err := model.ValidateCreditBalancePurchaseOption(plan, creditPlan); err != nil {
+			return model.SubscriptionEntitlementSnapshot{}, err
+		}
+		targetCreditPlanID = creditPlan.Id
 	}
-	return nil
+	snapshot := model.NewSubscriptionEntitlementSnapshot(plan, mode, targetCreditPlanID)
+	snapshot.MaxPurchasePerUser = 0
+	if creditPlan != nil {
+		snapshot.SetTargetCreditBalancePlanSnapshot(creditPlan)
+	}
+	return snapshot, nil
 }
 
-func validateSubscriptionPurchaseLimitTx(tx *gorm.DB, userId int, plan *model.SubscriptionPlan) error {
-	if tx == nil || plan == nil || plan.MaxPurchasePerUser <= 0 {
-		return nil
-	}
-
-	var count int64
-	if err := tx.Model(&model.UserSubscription{}).
-		Where("user_id = ? AND plan_id = ?", userId, plan.Id).
-		Count(&count).Error; err != nil {
-		return err
-	}
-	if count >= int64(plan.MaxPurchasePerUser) {
-		return errors.New("已达到该套餐购买上限")
-	}
-	return nil
+func marshalExternalSubscriptionEntitlementSnapshot(snapshot model.SubscriptionEntitlementSnapshot, paymentProvider string, providerProductID string, paymentMethod string, amountCents int64, currency string) (string, error) {
+	snapshot.SetPaymentSnapshot(paymentProvider, providerProductID, paymentMethod, amountCents, currency)
+	return model.MarshalSubscriptionEntitlementSnapshot(snapshot)
 }

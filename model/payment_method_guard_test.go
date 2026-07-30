@@ -205,7 +205,7 @@ func TestCompleteSubscriptionOrder_RejectsInvalidStatus(t *testing.T) {
 	}
 }
 
-func TestCompleteSubscriptionOrderRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+func TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached(t *testing.T) {
 	truncateTables(t)
 
 	insertUserForPaymentGuardTest(t, 404, 0)
@@ -226,20 +226,20 @@ func TestCompleteSubscriptionOrderRejectsRenewalWhenPurchaseLimitReached(t *test
 	require.NoError(t, DB.Create(existing).Error)
 	insertSubscriptionOrderForPaymentGuardTest(t, "sub-extend-order", 404, plan.Id, PaymentProviderStripe)
 
-	_, err := CompleteSubscriptionOrder("sub-extend-order", `{"provider":"stripe"}`, PaymentProviderStripe, "stripe")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "已达到该套餐购买上限")
+	result, err := CompleteSubscriptionOrder("sub-extend-order", `{"provider":"stripe"}`, PaymentProviderStripe, "stripe")
+	require.NoError(t, err)
+	require.NotNil(t, result)
 
 	var sub UserSubscription
 	require.NoError(t, DB.First(&sub, existing.Id).Error)
-	assert.Equal(t, initialEnd, sub.EndTime)
+	assert.Equal(t, time.Unix(initialEnd, 0).AddDate(0, 1, 0).Unix(), sub.EndTime)
 	assert.Equal(t, int64(123), sub.AmountUsed)
 	assert.Equal(t, "order", sub.GrantReason)
 	assert.Equal(t, "order", sub.Source)
 	assert.Equal(t, int64(1), countUserSubscriptionsForPaymentGuardTest(t, 404))
 	order := GetSubscriptionOrderByTradeNo("sub-extend-order")
 	require.NotNil(t, order)
-	assert.Equal(t, common.TopUpStatusPending, order.Status)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
 }
 
 func TestExpireSubscriptionOrder_RejectsMismatchedPaymentProvider(t *testing.T) {

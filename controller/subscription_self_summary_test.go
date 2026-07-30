@@ -33,7 +33,7 @@ func (gptAbuseWarningResetTableForSubscriptionSelfTest) TableName() string {
 func setupSubscriptionSelfSummaryTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.CreditBalanceLedger{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &gptAbuseWarningResetTableForSubscriptionSelfTest{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.CreditBalanceLedger{}, &model.GPTAbuseSignalLog{}, &model.GPTAbuseUserSuspension{}, &gptAbuseWarningResetTableForSubscriptionSelfTest{}))
 	require.NoError(t, db.AutoMigrate(&model.ChannelGroup{}, &model.ChannelGroupChannel{}, &model.TokenGroupBinding{}))
 }
 
@@ -220,6 +220,9 @@ func TestGetSubscriptionSelfReturnsCreditBalanceStateHistoryAndPreference(t *tes
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, ConcurrencyLimit: 2, BusinessCode: &code}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: subscriptionID, UserId: userID, PlanId: planID, EntitlementType: model.SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 100, TokenUsed: 125, EndTime: 0, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder}).Error)
 	require.NoError(t, model.DB.Create(&model.CreditBalanceLedger{UserId: userID, UserSubscriptionId: subscriptionID, Type: model.CreditBalanceLedgerTypePurchase, IdempotencyKey: "credit-self", SourceType: model.CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 8154, GrossCredit: 100, DebtOffset: 25, BalanceBefore: -25, BalanceAfter: 75, AvailableCreditAfter: 75, CreatedAt: common.GetTimestamp()}).Error)
+	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.SubscriptionEntitlementSnapshot{PurchaseMode: model.SubscriptionPurchaseModeCreditBalance, PaymentProvider: model.PaymentProviderStripe})
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{Id: 8154, UserId: userID, PlanId: planID, TradeNo: "credit-self", PaymentProvider: model.PaymentProviderStripe, PaymentMethod: model.PaymentMethodStripe, Status: common.TopUpStatusSuccess, EntitlementSnapshot: snapshot}).Error)
 
 	recorder := performGetSubscriptionSelfSummaryRequest(t, userID)
 
@@ -237,6 +240,8 @@ func TestGetSubscriptionSelfReturnsCreditBalanceStateHistoryAndPreference(t *tes
 	entry := ledger[0].(map[string]interface{})
 	assert.Equal(t, float64(100), entry["gross_credit"])
 	assert.Equal(t, float64(25), entry["debt_offset"])
+	assert.Equal(t, model.PaymentProviderStripe, entry["payment_provider"])
+	assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, entry["purchase_mode"])
 	active, ok := data["subscriptions"].([]interface{})
 	require.True(t, ok)
 	require.Len(t, active, 1)

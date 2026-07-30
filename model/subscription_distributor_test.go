@@ -251,7 +251,7 @@ func TestCreditBalanceZeroLimitIsNotUnlimited(t *testing.T) {
 	assert.Zero(t, recordCount)
 }
 
-func TestCreateUserSubscriptionFromPlanTx_RejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+func TestCreateUserSubscriptionFromPlanTx_IgnoresHistoricalPurchaseLimitOnRenewal(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.Create(&User{Id: 7301, Username: "extend_user", Status: common.UserStatusEnabled}).Error)
 	businessCode := "extend_daily"
@@ -280,17 +280,16 @@ func TestCreateUserSubscriptionFromPlanTx_RejectsRenewalWhenPurchaseLimitReached
 	firstEnd := first.EndTime
 	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", first.Id).Update("token_used", int64(123)).Error)
 
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		_, err := CreateUserSubscriptionFromPlanTx(tx, 7301, plan, "order")
+	var second *UserSubscription
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		created, err := CreateUserSubscriptionFromPlanTx(tx, 7301, plan, "order")
+		second = created
 		return err
-	})
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "已达到该套餐购买上限")
-	var sub UserSubscription
-	require.NoError(t, DB.First(&sub, first.Id).Error)
-	assert.Equal(t, firstEnd, sub.EndTime)
-	assert.Equal(t, int64(123), sub.TokenUsed)
+	}))
+	require.NotNil(t, second)
+	assert.Equal(t, first.Id, second.Id)
+	assert.Equal(t, firstEnd+86400, second.EndTime)
+	assert.Equal(t, int64(123), second.TokenUsed)
 	var count int64
 	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND plan_id = ?", 7301, 7302).Count(&count).Error)
 	assert.Equal(t, int64(1), count)

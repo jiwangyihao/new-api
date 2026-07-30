@@ -195,7 +195,7 @@ func TestSubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure(t *t
 	assert.Zero(t, count)
 }
 
-func TestCreditBalanceCompletionRejectsExternalPaymentProviders(t *testing.T) {
+func TestCreditBalanceCompletionSupportsExternalPaymentProviders(t *testing.T) {
 	for index, provider := range []string{model.PaymentProviderStripe, model.PaymentProviderCreem, model.PaymentProviderKyren, model.PaymentProviderEpay} {
 		t.Run(provider, func(t *testing.T) {
 			setupSubscriptionBalancePurchaseTestDB(t)
@@ -205,26 +205,97 @@ func TestCreditBalanceCompletionRejectsExternalPaymentProviders(t *testing.T) {
 			require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "external_credit_" + provider, Status: common.UserStatusEnabled}).Error)
 			optionCode := fmt.Sprintf("external_credit_option_%d", index)
 			creditCode := fmt.Sprintf("external_credit_global_%d", index)
-			optionPlan := &model.SubscriptionPlan{Id: optionPlanID, Title: "External Credit", MonthlyTokenLimit: 1000, BusinessCode: &optionCode}
+			optionPlan := &model.SubscriptionPlan{Id: optionPlanID, Title: "External Credit", PriceAmount: 40, Currency: "CNY", MonthlyTokenLimit: 1000, BusinessCode: &optionCode, Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, UnlimitedPurchaseEnabled: true}
 			require.NoError(t, model.DB.Create(optionPlan).Error)
-			require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, BusinessCode: &creditCode}).Error)
-			snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshot(optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlanID))
+			require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
+			paymentMethod := map[string]string{
+				model.PaymentProviderStripe: model.PaymentMethodStripe,
+				model.PaymentProviderCreem:  model.PaymentMethodCreem,
+				model.PaymentProviderKyren:  model.PaymentMethodKyren,
+				model.PaymentProviderEpay:   "alipay",
+			}[provider]
+			snapshot, err := prepareExternalSubscriptionEntitlementSnapshot(optionPlan, model.SubscriptionPurchaseModeCreditBalance)
 			require.NoError(t, err)
-			order := model.SubscriptionOrder{UserId: userID, PlanId: optionPlanID, TradeNo: fmt.Sprintf("external-credit-%d", index), PaymentProvider: provider, Status: common.TopUpStatusPending, EntitlementSnapshot: snapshot, CreateTime: common.GetTimestamp()}
+			serialized, err := marshalExternalSubscriptionEntitlementSnapshot(snapshot, provider, "", paymentMethod, 4000, "CNY")
+			require.NoError(t, err)
+			order := model.SubscriptionOrder{UserId: userID, PlanId: optionPlanID, Money: 40, AmountCents: 4000, Currency: "CNY", CreditGrantAmount: 1000, CreditTargetPlanID: creditPlanID, TradeNo: fmt.Sprintf("external-credit-%d", index), PaymentMethod: paymentMethod, PaymentProvider: provider, Status: common.TopUpStatusPending, EntitlementSnapshot: serialized, CreateTime: common.GetTimestamp()}
+			require.NoError(t, model.DB.Create(&order).Error)
+
+			require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+				_, completeErr := model.CompleteSubscriptionOrderTx(tx, &order, "", paymentMethod)
+				return completeErr
+			}))
+
+			require.NoError(t, model.DB.First(&order, order.Id).Error)
+			assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+			var count int64
+			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
+			assert.Equal(t, int64(1), count)
+			require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("user_id = ?", userID).Count(&count).Error)
+			assert.Equal(t, int64(1), count)
+			var topUp model.TopUp
+			require.NoError(t, model.DB.Where("trade_no = ?", order.TradeNo).First(&topUp).Error)
+			assert.Equal(t, provider, topUp.PaymentProvider)
+		})
+	}
+}
+
+func TestCreditBalanceCompletionRejectsTamperedEntitlementIdentity(t *testing.T) {
+	for index, test := range []struct {
+		name   string
+		mutate func(*model.SubscriptionEntitlementSnapshot, *model.SubscriptionOrder)
+	}{
+		{
+			name: "grant amount",
+			mutate: func(snapshot *model.SubscriptionEntitlementSnapshot, _ *model.SubscriptionOrder) {
+				snapshot.MonthlyTokenLimit++
+			},
+		},
+		{
+			name: "target plan",
+			mutate: func(_ *model.SubscriptionEntitlementSnapshot, order *model.SubscriptionOrder) {
+				order.CreditTargetPlanID++
+			},
+		},
+		{
+			name: "source entitlement type",
+			mutate: func(snapshot *model.SubscriptionEntitlementSnapshot, _ *model.SubscriptionOrder) {
+				snapshot.PlanEntitlementType = model.SubscriptionEntitlementCreditBalance
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			setupSubscriptionBalancePurchaseTestDB(t)
+			const userID = 9650
+			const optionPlanID = 9651
+			const creditPlanID = 9652
+			require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "tampered_credit_snapshot", Status: common.UserStatusEnabled}).Error)
+			optionCode := "tampered_credit_option"
+			creditCode := "tampered_credit_global"
+			optionPlan := &model.SubscriptionPlan{Id: optionPlanID, Title: "Tamper option", PriceAmount: 40, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, Enabled: true, PublicVisible: true, BusinessCode: &optionCode, UnlimitedPurchaseEnabled: true}
+			require.NoError(t, model.DB.Create(optionPlan).Error)
+			require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
+			snapshot, err := prepareExternalSubscriptionEntitlementSnapshot(optionPlan, model.SubscriptionPurchaseModeCreditBalance)
+			require.NoError(t, err)
+			order := model.SubscriptionOrder{UserId: userID, PlanId: optionPlanID, Money: 40, AmountCents: 4000, Currency: "CNY", CreditGrantAmount: 1000, CreditTargetPlanID: creditPlanID, TradeNo: fmt.Sprintf("tampered-credit-%d", index), PaymentMethod: model.PaymentMethodStripe, PaymentProvider: model.PaymentProviderStripe, Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
+			test.mutate(&snapshot, &order)
+			serialized, err := marshalExternalSubscriptionEntitlementSnapshot(snapshot, model.PaymentProviderStripe, "price_tampered", model.PaymentMethodStripe, 4000, "CNY")
+			require.NoError(t, err)
+			order.EntitlementSnapshot = serialized
 			require.NoError(t, model.DB.Create(&order).Error)
 
 			err = model.DB.Transaction(func(tx *gorm.DB) error {
-				_, completeErr := model.CompleteSubscriptionOrderTx(tx, &order, "", "")
+				_, completeErr := model.CompleteSubscriptionOrderTx(tx, &order, "", model.PaymentMethodStripe)
 				return completeErr
 			})
 
-			require.ErrorContains(t, err, "仅支持人民币账户余额购买")
+			require.ErrorIs(t, err, model.ErrSubscriptionOrderSnapshotMismatch)
 			require.NoError(t, model.DB.First(&order, order.Id).Error)
 			assert.Equal(t, common.TopUpStatusPending, order.Status)
 			var count int64
-			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
+			require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_id = ?", order.Id).Count(&count).Error)
 			assert.Zero(t, count)
-			require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("user_id = ?", userID).Count(&count).Error)
+			require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
 			assert.Zero(t, count)
 		})
 	}
@@ -377,11 +448,27 @@ func TestSubscriptionBalancePayCreditReplayUsesStoredSnapshotAfterPlanChanges(t 
 	plan := &model.SubscriptionPlan{Id: 9588, Title: "Credit snapshot option", PriceAmount: 40, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, Enabled: true, PublicVisible: true, BusinessCode: &optionCode, UnlimitedPurchaseEnabled: true}
 	require.NoError(t, model.DB.Create(plan).Error)
 	creditCode := "credit_snapshot_global"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9589, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
+	const creditPlanID = 9589
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, ModelLimits: "gpt-4o,claude-3-7-sonnet", ConcurrencyLimit: 7, QueueCapacity: 13, GPTAbuseWarningLimit: 5, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
 
 	firstResponse := performBalancePayRequest(t, userID, `{"plan_id":9588,"purchase_mode":"credit_balance","idempotency_key":"credit-snapshot-replay"}`)
 	require.Equal(t, http.StatusOK, firstResponse.Code, firstResponse.Body.String())
 	require.Contains(t, firstResponse.Body.String(), `"message":"success"`)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", subscriptionBalanceTradeNo(userID, "credit-snapshot-replay")).First(&order).Error)
+	storedSnapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	require.NoError(t, err)
+	assert.Equal(t, creditPlanID, storedSnapshot.TargetCreditBalancePlanID)
+	assert.Equal(t, "Credit 余额套餐", storedSnapshot.TargetCreditBalanceTitle)
+	assert.Equal(t, creditCode, storedSnapshot.TargetCreditBalanceBusinessCode)
+	assert.Equal(t, "gpt-4o,claude-3-7-sonnet", storedSnapshot.TargetCreditBalanceModelLimits)
+	assert.Equal(t, 7, storedSnapshot.TargetCreditBalanceConcurrencyLimit)
+	assert.Equal(t, 13, storedSnapshot.TargetCreditBalanceQueueCapacity)
+	assert.Equal(t, 5, storedSnapshot.TargetCreditBalanceGPTAbuseWarningLimit)
+	assert.Equal(t, model.PaymentProviderBalance, storedSnapshot.PaymentProvider)
+	assert.Equal(t, model.PaymentMethodAccountBalance, storedSnapshot.ProviderPaymentMethod)
+	assert.Equal(t, int64(4000), storedSnapshot.PaymentAmountCents)
+	assert.Equal(t, "CNY", storedSnapshot.PaymentCurrency)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{"title": "Changed title", "price_amount": 80, "monthly_token_limit": 9000, "enabled": false}).Error)
 	model.InvalidateSubscriptionPlanCache(plan.Id)
 
@@ -693,7 +780,7 @@ func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 	assert.Equal(t, int64(1), logCount)
 }
 
-func TestSubscriptionBalancePayIgnoresLegacyPurchaseLimit(t *testing.T) {
+func TestSubscriptionBalancePayTimedModeIgnoresHistoricalPurchaseLimit(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9541
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_limit", Quota: 20000, Status: common.UserStatusEnabled}).Error)
@@ -713,9 +800,14 @@ func TestSubscriptionBalancePayIgnoresLegacyPurchaseLimit(t *testing.T) {
 	var subCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&subCount).Error)
 	assert.Equal(t, int64(1), subCount)
-	var orderCount int64
-	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 9542).Count(&orderCount).Error)
-	assert.Equal(t, int64(2), orderCount)
+	var orders []model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 9542).Order("id asc").Find(&orders).Error)
+	require.Len(t, orders, 2)
+	for _, order := range orders {
+		var snapshot model.SubscriptionEntitlementSnapshot
+		require.NoError(t, common.UnmarshalJsonStr(order.EntitlementSnapshot, &snapshot))
+		assert.Zero(t, snapshot.MaxPurchasePerUser)
+	}
 }
 
 func TestSubscriptionBalancePayExtendsActiveSubscriptionWithoutNewRecord(t *testing.T) {

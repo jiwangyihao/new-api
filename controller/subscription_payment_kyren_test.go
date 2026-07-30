@@ -83,6 +83,7 @@ func setupKyrenPaymentControllerTestDB(t *testing.T) {
 		&model.InvitationCommissionAccount{},
 		&model.InvitationCommissionLedger{},
 		&model.InvitationCommissionWithdrawal{},
+		&model.CreditBalanceLedger{},
 	))
 
 	originalAPIKey := setting.KyrenApiKey
@@ -213,6 +214,116 @@ func performSignedKyrenWebhook(t *testing.T, payload []byte) *httptest.ResponseR
 	ctx.Request.Header.Set("Kyren-Signature", signKyrenWebhookPayload(payload, timestamp, setting.KyrenWebhookSecret))
 	KyrenWebhook(ctx)
 	return recorder
+}
+
+func TestSubscriptionKyrenRequiresExplicitPurchaseMode(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6091
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6092, "prod_explicit_mode", 1000, 2)
+	fake := &kyrenCheckoutFakeAPI{}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), "购买模式必须明确选择")
+	assert.Empty(t, fake.retrieveIDs)
+	assert.Empty(t, fake.createCheckoutRequests)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, plan.Id).Count(&count).Error)
+	assert.Zero(t, count)
+}
+
+func TestSubscriptionKyrenAllowsRenewalWhenHistoricalPurchaseLimitReached(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6088
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6089, "prod_renewal", 1000, 2)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Update("max_purchase_per_user", 1).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: userID, PlanId: plan.Id, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: common.GetTimestamp() + 3600, GrantReason: "order", Source: "order"}).Error)
+	fake := &kyrenCheckoutFakeAPI{}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, plan.Id))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	require.Len(t, fake.createCheckoutRequests, 1)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, plan.Id).First(&order).Error)
+	var snapshot model.SubscriptionEntitlementSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(order.EntitlementSnapshot, &snapshot))
+	assert.Zero(t, snapshot.MaxPurchasePerUser)
+}
+
+func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6093
+	seedKyrenPaymentUser(t, userID)
+	seedExternalCreditPurchasePlans(t, 6094, 6095)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6094).Update("kyren_product_id", "prod_credit_mode").Error)
+	var observedOrder model.SubscriptionOrder
+	var orderLookupErr error
+	fake := &kyrenCheckoutFakeAPI{createCheckoutFunc: func(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {
+		orderLookupErr = model.DB.Where("trade_no = ?", req.Metadata["trade_no"]).First(&observedOrder).Error
+		return &kyrenCheckoutSession{ID: "chk_credit", URL: "https://pay.kyren.test/credit", Status: "open"}, nil
+	}}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionPayRequest(t, userID, `{"plan_id":6094,"purchase_mode":"credit_balance"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	require.NoError(t, orderLookupErr)
+	var snapshot model.SubscriptionEntitlementSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(observedOrder.EntitlementSnapshot, &snapshot))
+	assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, snapshot.PurchaseMode)
+	assert.Equal(t, 6095, snapshot.TargetCreditBalancePlanID)
+	assert.Equal(t, model.PaymentProviderKyren, snapshot.PaymentProvider)
+	assert.Equal(t, "prod_credit_mode", snapshot.ProviderProductID)
+	assert.Equal(t, model.PaymentMethodKyren, snapshot.ProviderPaymentMethod)
+	assert.Equal(t, int64(4000), snapshot.PaymentAmountCents)
+	assert.Equal(t, kyrenCurrencyCNY, snapshot.PaymentCurrency)
+	assert.Equal(t, "Global Credit Balance", snapshot.TargetCreditBalanceTitle)
+}
+
+func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	setupSubscriptionControllerRedis(t)
+	userID := 6096
+	seedKyrenPaymentUser(t, userID)
+	var buyer model.User
+	require.NoError(t, model.DB.First(&buyer, userID).Error)
+	seedUserCacheForSubscriptionControllerTest(t, buyer)
+	seedExternalCreditPurchasePlans(t, 6097, 6098)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Update("kyren_product_id", "prod_credit_webhook").Error)
+	fake := &kyrenCheckoutFakeAPI{}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+	create := performKyrenSubscriptionPayRequest(t, userID, `{"plan_id":6097,"purchase_mode":"credit_balance"}`)
+	require.Contains(t, create.Body.String(), `"success":true`)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 6097).First(&order).Error)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", order.TradeNo, "prod_credit_webhook", "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	var ledger model.CreditBalanceLedger
+	require.NoError(t, model.DB.Where("source_id = ?", order.Id).First(&ledger).Error)
+	assert.Equal(t, int64(1000), ledger.GrossCredit)
+	cachedBuyer, err := model.GetUserCache(userID)
+	require.NoError(t, err)
+	assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, cachedBuyer.GetSetting().LastSubscriptionPurchaseMode)
+	assert.Equal(t, ledger.UserSubscriptionId, cachedBuyer.GetSetting().ActiveSubscriptionId)
+	var timedCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, 6097).Count(&timedCount).Error)
+	assert.Zero(t, timedCount)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+	assert.Zero(t, eventCount)
 }
 
 func TestVerifyKyrenWebhookSignature(t *testing.T) {
@@ -684,6 +795,34 @@ func TestKyrenWebhookRejectsAmountCurrencyOrProductMismatch(t *testing.T) {
 	}
 }
 
+func TestKyrenSuccessfulSubscriptionReplayStillValidatesPaymentSnapshot(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6149
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6150, "prod_sub_success_replay", 1000, 1)
+	tradeNo := "kyren-sub-success-replay"
+	seedPendingKyrenSubscriptionOrder(t, tradeNo, userID, &plan)
+	calledOrderIDs := make([]int, 0, 2)
+	SetInvitationRewardOrderHandlerForTest(t, func(orderID int) error {
+		calledOrderIDs = append(calledOrderIDs, orderID)
+		return nil
+	})
+	validPayload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+	require.Equal(t, http.StatusOK, performSignedKyrenWebhook(t, validPayload).Code)
+	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	require.NotNil(t, order)
+	require.Equal(t, []int{order.Id}, calledOrderIDs)
+
+	mismatchedPayload := kyrenWebhookEventPayload(t, "order.paid", "subscription", tradeNo, plan.KyrenProductId, "41.00", kyrenCurrencyCNY)
+	recorder := performSignedKyrenWebhook(t, mismatchedPayload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, []int{order.Id}, calledOrderIDs)
+	var subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, plan.Id).Count(&subscriptionCount).Error)
+	assert.Equal(t, int64(1), subscriptionCount)
+}
+
 func TestKyrenSubscriptionOrderStoresEmptySnapshotWhenCurrencyUnsupported(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
 	userID := 9561
@@ -839,7 +978,7 @@ func TestKyrenCheckoutFailureFinalizesPendingOrder(t *testing.T) {
 	}}
 	withKyrenCheckoutFakeControllerClient(t, fake)
 
-	recorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
+	recorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, plan.Id))
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.Contains(t, recorder.Body.String(), "拉起支付失败")
@@ -862,7 +1001,7 @@ func TestKyrenCheckoutRejectsArchivedOrMismatchedProductBeforeOrderCreation(t *t
 	}}
 	withKyrenCheckoutFakeControllerClient(t, fake)
 
-	archivedRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, archivedPlan.Id))
+	archivedRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, archivedPlan.Id))
 
 	require.Equal(t, http.StatusOK, archivedRecorder.Code, archivedRecorder.Body.String())
 	assert.Contains(t, archivedRecorder.Body.String(), "不可用")
@@ -875,7 +1014,7 @@ func TestKyrenCheckoutRejectsArchivedOrMismatchedProductBeforeOrderCreation(t *t
 	fake.retrieveProductFunc = func(_ context.Context, id string) (*kyrenProduct, error) {
 		return &kyrenProduct{ID: id, Status: kyrenProductStatusActive, Price: "39.99", Currency: kyrenCurrencyCNY}, nil
 	}
-	mismatchRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, mismatchPlan.Id))
+	mismatchRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, mismatchPlan.Id))
 
 	require.Equal(t, http.StatusOK, mismatchRecorder.Code, mismatchRecorder.Body.String())
 	assert.Contains(t, mismatchRecorder.Body.String(), "不匹配")
@@ -891,7 +1030,7 @@ func TestKyrenCheckoutMetadataIncludesStableBusinessFields(t *testing.T) {
 	fake := &kyrenCheckoutFakeAPI{}
 	withKyrenCheckoutFakeControllerClient(t, fake)
 
-	response := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
+	response := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, plan.Id))
 
 	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
 	require.Len(t, fake.createCheckoutRequests, 1)
@@ -933,7 +1072,7 @@ func TestKyrenPayRejectsMissingWebhookSecret(t *testing.T) {
 	fake := &kyrenCheckoutFakeAPI{}
 	withKyrenCheckoutFakeControllerClient(t, fake)
 
-	subRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d}`, plan.Id))
+	subRecorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed"}`, plan.Id))
 	topUpRecorder := performKyrenTopUpPayRequest(t, userID, `{"product_id":"topup_missing_secret"}`)
 
 	require.Equal(t, http.StatusOK, subRecorder.Code, subRecorder.Body.String())

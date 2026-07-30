@@ -376,6 +376,7 @@ export interface CreditBalancePlanUpdateRequest {
 
 export interface SubscriptionPayRequest {
   plan_id: number
+  purchase_mode: SubscriptionPurchaseMode
   payment_method?: string
 }
 
@@ -445,6 +446,18 @@ export interface CreditBalanceGrantResult {
   status: 'available' | 'exhausted' | 'debt'
 }
 
+export interface SubscriptionOrderStatus {
+  trade_no: string
+  plan_id: number
+  payment_provider: string
+  payment_method: string
+  purchase_mode: SubscriptionPurchaseMode
+  status: 'pending' | 'success' | 'failed' | 'expired' | string
+  create_time: number
+  complete_time: number
+  credit_balance?: CreditBalanceGrantResult
+}
+
 export interface CreditBalanceLedgerEntry {
   id: number
   user_id: number
@@ -462,6 +475,9 @@ export interface CreditBalanceLedgerEntry {
   reason: string
   source_snapshot?: string
   created_at: number
+  payment_provider?: string
+  payment_method?: string
+  purchase_mode?: SubscriptionPurchaseMode
 }
 
 export type SubscriptionBalancePayResponse = ApiResponse<{
@@ -476,8 +492,10 @@ export interface SubscriptionPayResponse {
   data?: {
     pay_link?: string
     checkout_url?: string
+    order_id?: string
   }
   url?: string
+  order_id?: string
 }
 
 export interface CreateUserSubscriptionRequest {

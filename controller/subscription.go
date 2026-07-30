@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -80,6 +81,18 @@ type CodexProModeRequest struct {
 	Mode string `json:"mode"`
 }
 
+type SubscriptionOrderStatusResponse struct {
+	TradeNo         string                          `json:"trade_no"`
+	PlanId          int                             `json:"plan_id"`
+	PaymentProvider string                          `json:"payment_provider"`
+	PaymentMethod   string                          `json:"payment_method"`
+	PurchaseMode    string                          `json:"purchase_mode"`
+	Status          string                          `json:"status"`
+	CreateTime      int64                           `json:"create_time"`
+	CompleteTime    int64                           `json:"complete_time"`
+	CreditBalance   *model.CreditBalanceGrantResult `json:"credit_balance,omitempty"`
+}
+
 func normalizeSubscriptionPlanCurrency(currency string) string {
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if currency == "" {
@@ -153,6 +166,80 @@ func GetSubscriptionConversionQuotes(c *gin.Context) {
 	}
 	common.ApiSuccess(c, toSubscriptionConversionQuoteListResponse(quotes))
 }
+func GetSubscriptionOrderStatus(c *gin.Context) {
+	userId := c.GetInt("id")
+	tradeNo := strings.TrimSpace(c.Param("trade_no"))
+	if userId <= 0 || tradeNo == "" {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "订单不存在"})
+		return
+	}
+	var order model.SubscriptionOrder
+	if err := model.DB.Select("id", "user_id", "plan_id", "trade_no", "payment_method", "payment_provider", "status", "create_time", "complete_time", "entitlement_snapshot").
+		Where("user_id = ? AND trade_no = ?", userId, tradeNo).
+		First(&order).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "订单不存在"})
+			return
+		}
+		common.ApiError(c, err)
+		return
+	}
+	purchaseMode := model.SubscriptionPurchaseModeTimed
+	var snapshot model.SubscriptionEntitlementSnapshot
+	if strings.TrimSpace(order.EntitlementSnapshot) != "" {
+		var err error
+		snapshot, err = model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if strings.TrimSpace(snapshot.PurchaseMode) != "" {
+			purchaseMode, err = model.NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		}
+	}
+	response := SubscriptionOrderStatusResponse{
+		TradeNo:         order.TradeNo,
+		PlanId:          order.PlanId,
+		PaymentProvider: order.PaymentProvider,
+		PaymentMethod:   order.PaymentMethod,
+		PurchaseMode:    purchaseMode,
+		Status:          order.Status,
+		CreateTime:      order.CreateTime,
+		CompleteTime:    order.CompleteTime,
+	}
+	if order.Status == common.TopUpStatusSuccess && purchaseMode == model.SubscriptionPurchaseModeCreditBalance {
+		var ledger model.CreditBalanceLedger
+		if err := model.DB.Where("user_id = ? AND source_type = ? AND source_id = ?", userId, model.CreditBalanceLedgerSourceSubscriptionOrder, order.Id).First(&ledger).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		status := model.CreditBalanceStatusExhausted
+		if ledger.SettlementDebtAfter > 0 {
+			status = model.CreditBalanceStatusDebt
+		} else if ledger.AvailableCreditAfter > 0 {
+			status = model.CreditBalanceStatusAvailable
+		}
+		settingMap, _ := model.GetUserSetting(userId, false)
+		response.CreditBalance = &model.CreditBalanceGrantResult{
+			UserSubscriptionId: ledger.UserSubscriptionId,
+			PlanId:             snapshot.TargetCreditBalancePlanID,
+			GrossCredit:        ledger.GrossCredit,
+			DebtOffset:         ledger.DebtOffset,
+			AvailableCredit:    ledger.AvailableCreditAfter,
+			SettlementDebt:     ledger.SettlementDebtAfter,
+			BalanceBefore:      ledger.BalanceBefore,
+			BalanceAfter:       ledger.BalanceAfter,
+			Active:             settingMap.ActiveSubscriptionId == ledger.UserSubscriptionId,
+			LedgerId:           ledger.Id,
+			Status:             status,
+		}
+	}
+	common.ApiSuccess(c, response)
+}
 
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
@@ -218,7 +305,7 @@ func GetSubscriptionSelf(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	ledger := []model.CreditBalanceLedger{}
+	ledger := []model.CreditBalanceLedgerHistoryItem{}
 	if creditBalance != nil {
 		ledger, err = model.ListCreditBalanceLedger(userId, 100)
 		if err != nil {

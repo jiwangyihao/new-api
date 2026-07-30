@@ -48,7 +48,7 @@ func TestSubscriptionSelfCodexProModeRouteIsRegistered(t *testing.T) {
 func TestSubscriptionCreditBalanceLedgerRouteIsAuthenticated(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupSubscriptionPublicPlansRouteTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.CreditBalanceLedger{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.CreditBalanceLedger{}, &model.SubscriptionOrder{}))
 	accessToken := "credit-ledger-route-token"
 	require.NoError(t, model.DB.Create(&model.User{Id: 9942, Username: "credit-ledger-route", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}).Error)
 	require.NoError(t, model.DB.Create(&model.CreditBalanceLedger{UserId: 9942, UserSubscriptionId: 9943, Type: model.CreditBalanceLedgerTypePurchase, IdempotencyKey: "route-ledger", SourceType: model.CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 9944, GrossCredit: 100, BalanceBefore: 0, BalanceAfter: 100, AvailableCreditAfter: 100, CreatedAt: common.GetTimestamp()}).Error)

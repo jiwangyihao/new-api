@@ -16,12 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Crown, CalendarClock, Package, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -56,6 +58,7 @@ import {
   paySubscriptionKyren,
   paySubscriptionEpay,
   paySubscriptionBalance,
+  getSubscriptionOrderStatus,
 } from '../../api'
 import {
   formatConcurrencyLimit,
@@ -72,9 +75,11 @@ import {
   purchaseModeSchema,
   type PurchaseModeFormValues,
 } from '../../lib/subscription-purchase'
+import { subscriptionQueryKeys } from '../../query-keys'
 import type {
   PlanRecord,
   SubscriptionPayResponse,
+  SubscriptionOrderStatus,
   SubscriptionPurchaseMode,
 } from '../../types'
 
@@ -90,11 +95,6 @@ type KyrenReasonKey =
   | 'Kyren does not support free subscription plans'
   | 'Kyren does not support trial subscription plans'
   | 'Kyren requires enabled and visible subscription plans'
-  | 'Purchase limit reached'
-
-interface KyrenPurchaseContext {
-  purchaseCount?: number
-}
 
 interface KyrenAvailability {
   available: boolean
@@ -103,10 +103,13 @@ interface KyrenAvailability {
 
 interface KyrenPaymentDependencies {
   planId: number
+  purchaseMode: SubscriptionPurchaseMode
   paySubscriptionKyren: (data: {
     plan_id: number
+    purchase_mode: SubscriptionPurchaseMode
   }) => Promise<SubscriptionPayResponse>
   openCheckout: (url: string) => void
+  onOrderCreated?: (orderId: string) => void
 }
 
 interface CreditBalancePlanDisplay {
@@ -124,13 +127,99 @@ interface Props {
   enableOnlineTopUp?: boolean
   epayMethods?: PaymentMethod[]
   enableKyrenSubscription?: boolean
-  purchaseLimit?: number
-  purchaseCount?: number
   accountBalance?: number
   lastPurchaseMode?: SubscriptionPurchaseMode
   creditBalancePurchaseEnabled?: boolean
   creditBalancePlan?: CreditBalancePlanDisplay | null
   onPurchaseSuccess?: () => Promise<void> | void
+}
+
+type ExternalPaymentProvider = 'stripe' | 'creem' | 'kyren' | 'epay'
+
+interface ExternalCheckoutVariables {
+  provider: ExternalPaymentProvider
+  purchaseMode: SubscriptionPurchaseMode
+  paymentMethod?: string
+}
+
+interface PendingExternalOrder {
+  ownerUserId: number
+  tradeNo: string
+  provider: ExternalPaymentProvider
+  purchaseMode: SubscriptionPurchaseMode
+}
+
+const pendingExternalOrderStoragePrefix =
+  'new-api:subscription:pending-external-order:'
+
+export function pendingExternalOrderStorageKey(
+  userId: number,
+  planId: number
+): string {
+  return `${pendingExternalOrderStoragePrefix}${userId}:${planId}`
+}
+
+function readPendingExternalOrder(
+  userId: number,
+  planId: number
+): PendingExternalOrder | null {
+  if (typeof window === 'undefined') return null
+  const key = pendingExternalOrderStorageKey(userId, planId)
+  try {
+    const raw = window.sessionStorage.getItem(key)
+    if (!raw) return null
+    const candidate = JSON.parse(raw) as Record<string, unknown>
+    const ownerUserId = Number(candidate.ownerUserId)
+    const tradeNo =
+      typeof candidate.tradeNo === 'string' ? candidate.tradeNo.trim() : ''
+    const provider = candidate.provider
+    const purchaseMode = candidate.purchaseMode
+    if (
+      ownerUserId !== userId ||
+      !tradeNo ||
+      !['stripe', 'creem', 'kyren', 'epay'].includes(String(provider)) ||
+      !['timed', 'credit_balance'].includes(String(purchaseMode))
+    ) {
+      removePendingExternalOrder(userId, planId)
+      return null
+    }
+    return {
+      ownerUserId,
+      tradeNo,
+      provider: provider as ExternalPaymentProvider,
+      purchaseMode: purchaseMode as SubscriptionPurchaseMode,
+    }
+  } catch {
+    removePendingExternalOrder(userId, planId)
+    return null
+  }
+}
+
+function writePendingExternalOrder(
+  userId: number,
+  planId: number,
+  order: PendingExternalOrder
+): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.setItem(
+      pendingExternalOrderStorageKey(userId, planId),
+      JSON.stringify(order)
+    )
+  } catch {
+    // Polling still works for the current render when storage is unavailable.
+  }
+}
+
+function removePendingExternalOrder(userId: number, planId: number): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.sessionStorage.removeItem(
+      pendingExternalOrderStorageKey(userId, planId)
+    )
+  } catch {
+    // Nothing else is required when storage is unavailable.
+  }
 }
 
 function isKyrenSuccessMessage(message: string | undefined): boolean {
@@ -157,15 +246,21 @@ function isSafeHttpCheckoutUrl(value: string): boolean {
 export async function processKyrenSubscriptionPayment(
   deps: KyrenPaymentDependencies
 ): Promise<string> {
-  const res = await deps.paySubscriptionKyren({ plan_id: deps.planId })
+  const res = await deps.paySubscriptionKyren({
+    plan_id: deps.planId,
+    purchase_mode: deps.purchaseMode,
+  })
   const checkoutUrl = getKyrenCheckoutUrl(res)
+  const orderId = res.data?.order_id?.trim() || ''
   if (
     (res.success || isKyrenSuccessMessage(res.message)) &&
     checkoutUrl &&
+    orderId &&
     isSafeHttpCheckoutUrl(checkoutUrl)
   ) {
+    deps.onOrderCreated?.(orderId)
     deps.openCheckout(checkoutUrl)
-    return checkoutUrl
+    return orderId
   }
   throw new Error(
     res.message && !isKyrenSuccessMessage(res.message)
@@ -176,8 +271,7 @@ export async function processKyrenSubscriptionPayment(
 
 export function getKyrenSubscriptionAvailability(
   plan: PlanRecord['plan'] | null | undefined,
-  topupInfo: Pick<TopupInfo, 'enable_kyren_subscription'> | null | undefined,
-  purchaseContext: KyrenPurchaseContext = {}
+  topupInfo: Pick<TopupInfo, 'enable_kyren_subscription'> | null | undefined
 ): KyrenAvailability {
   if (!topupInfo?.enable_kyren_subscription) {
     return { available: false, reasonKey: 'Kyren payment is unavailable' }
@@ -209,10 +303,6 @@ export function getKyrenSubscriptionAvailability(
       reasonKey: 'Kyren requires enabled and visible subscription plans',
     }
   }
-  const limit = Number(plan.max_purchase_per_user || 0)
-  if (limit > 0 && Number(purchaseContext.purchaseCount || 0) >= limit) {
-    return { available: false, reasonKey: 'Purchase limit reached' }
-  }
   return { available: true }
 }
 
@@ -231,8 +321,6 @@ function translateKyrenUnavailableReason(
       return t('Kyren does not support trial subscription plans')
     case 'Kyren requires enabled and visible subscription plans':
       return t('Kyren requires enabled and visible subscription plans')
-    case 'Purchase limit reached':
-      return t('Purchase limit reached')
     case 'Kyren payment is unavailable':
     default:
       return t('Kyren payment is unavailable')
@@ -241,6 +329,7 @@ function translateKyrenUnavailableReason(
 
 export function SubscriptionPurchaseDialog(props: Props) {
   const { t } = useTranslation()
+  const { onOpenChange, onPurchaseSuccess } = props
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
   const balanceIdempotencyKeyRef = useRef('')
@@ -253,6 +342,195 @@ export function SubscriptionPurchaseDialog(props: Props) {
     resolver: zodResolver(purchaseModeSchema),
   })
   const purchaseMode = form.watch('purchase_mode')
+  const queryClient = useQueryClient()
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const [pendingExternalOrder, setPendingExternalOrder] =
+    useState<PendingExternalOrder | null>(null)
+  const planId = plan?.id
+  const rememberPendingExternalOrder = useCallback(
+    (order: Omit<PendingExternalOrder, 'ownerUserId'>) => {
+      if (!userId) return
+      const ownedOrder = { ...order, ownerUserId: userId }
+      if (planId) writePendingExternalOrder(userId, planId, ownedOrder)
+      setPendingExternalOrder(ownedOrder)
+    },
+    [planId, userId]
+  )
+  const clearPendingExternalOrder = useCallback(() => {
+    if (userId && planId) removePendingExternalOrder(userId, planId)
+    setPendingExternalOrder(null)
+  }, [planId, userId])
+  const externalCheckoutMutation = useMutation({
+    mutationFn: async (variables: ExternalCheckoutVariables) => {
+      if (!plan) {
+        throw new Error('Payment request failed')
+      }
+      if (variables.provider === 'kyren') {
+        const tradeNo = await processKyrenSubscriptionPayment({
+          planId: plan.id,
+          purchaseMode: variables.purchaseMode,
+          paySubscriptionKyren,
+          onOrderCreated: (orderId) =>
+            rememberPendingExternalOrder({
+              tradeNo: orderId,
+              provider: variables.provider,
+              purchaseMode: variables.purchaseMode,
+            }),
+          openCheckout: (url) => window.open(url, '_blank'),
+        })
+        return { tradeNo, ...variables }
+      }
+
+      const request = {
+        plan_id: plan.id,
+        purchase_mode: variables.purchaseMode,
+      }
+      let response: SubscriptionPayResponse
+      let checkoutUrl: string
+      if (variables.provider === 'stripe') {
+        response = await paySubscriptionStripe(request)
+        checkoutUrl = response.data?.pay_link || ''
+      } else if (variables.provider === 'creem') {
+        response = await paySubscriptionCreem(request)
+        checkoutUrl = response.data?.checkout_url || ''
+      } else {
+        if (!variables.paymentMethod) {
+          throw new Error('Please select a payment method')
+        }
+        response = await paySubscriptionEpay({
+          ...request,
+          payment_method: variables.paymentMethod,
+        })
+        checkoutUrl = response.url || ''
+      }
+
+      if (
+        !(response.success === true || response.message === 'success') ||
+        !isSafeHttpCheckoutUrl(checkoutUrl)
+      ) {
+        throw new Error(
+          response.message && response.message !== 'success'
+            ? response.message
+            : 'Payment request failed'
+        )
+      }
+      const tradeNo =
+        response.data?.order_id?.trim() || response.order_id?.trim() || ''
+      if (!tradeNo) {
+        throw new Error('Payment request failed')
+      }
+      rememberPendingExternalOrder({
+        tradeNo,
+        provider: variables.provider,
+        purchaseMode: variables.purchaseMode,
+      })
+
+      if (variables.provider === 'epay') {
+        const paymentForm = document.createElement('form')
+        paymentForm.action = checkoutUrl
+        paymentForm.method = 'POST'
+        const isSafari =
+          typeof navigator !== 'undefined' &&
+          /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
+        if (!isSafari) {
+          paymentForm.target = '_blank'
+        }
+        Object.entries(
+          (response.data || {}) as Record<string, unknown>
+        ).forEach(([key, value]) => {
+          if (key === 'order_id') return
+          const input = document.createElement('input')
+          input.type = 'hidden'
+          input.name = key
+          input.value = String(value)
+          paymentForm.appendChild(input)
+        })
+        document.body.appendChild(paymentForm)
+        paymentForm.submit()
+        document.body.removeChild(paymentForm)
+      } else {
+        window.open(checkoutUrl, '_blank')
+      }
+      return { tradeNo, ...variables }
+    },
+    onMutate: () => setPaying(true),
+    onSuccess: () => {
+      toast.success(t('Payment page opened'))
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : ''
+      toast.error(message ? t(message) : t('Payment request failed'))
+    },
+    onSettled: () => setPaying(false),
+  })
+  const activePendingExternalOrder =
+    pendingExternalOrder?.ownerUserId === userId ? pendingExternalOrder : null
+  const externalOrderQuery = useQuery({
+    queryKey: [
+      'subscriptions',
+      userId || 'anonymous',
+      'orders',
+      activePendingExternalOrder?.tradeNo || 'idle',
+    ],
+    queryFn: () =>
+      getSubscriptionOrderStatus(activePendingExternalOrder?.tradeNo || ''),
+    enabled: props.open && activePendingExternalOrder !== null,
+    refetchInterval: activePendingExternalOrder ? 1500 : false,
+    retry: false,
+  })
+  const orderStatus: SubscriptionOrderStatus | undefined =
+    externalOrderQuery.data?.data
+
+  useEffect(() => {
+    if (!activePendingExternalOrder || !orderStatus) return
+    if (orderStatus.status === 'success') {
+      clearPendingExternalOrder()
+      const finishPurchase = async () => {
+        if (
+          orderStatus.purchase_mode === 'credit_balance' &&
+          orderStatus.credit_balance
+        ) {
+          toast.success(
+            creditPurchaseSuccessMessage(orderStatus.credit_balance, t)
+          )
+        } else {
+          toast.success(t('Subscription purchased successfully'))
+        }
+        await Promise.all([
+          queryClient.invalidateQueries({
+            queryKey: subscriptionQueryKeys.selfSummary,
+          }),
+          queryClient.invalidateQueries({
+            queryKey: subscriptionQueryKeys.dashboardSelfSubscriptions,
+          }),
+        ])
+        await onPurchaseSuccess?.()
+        onOpenChange(false)
+      }
+      void finishPurchase()
+      return
+    }
+    if (orderStatus.status === 'failed' || orderStatus.status === 'expired') {
+      clearPendingExternalOrder()
+      toast.error(t('Payment failed or expired. You can try again.'))
+    }
+  }, [
+    clearPendingExternalOrder,
+    orderStatus,
+    activePendingExternalOrder,
+    onOpenChange,
+    onPurchaseSuccess,
+    queryClient,
+    t,
+  ])
+
+  useEffect(() => {
+    if (props.open && userId && planId) {
+      setPendingExternalOrder(readPendingExternalOrder(userId, planId))
+    } else {
+      setPendingExternalOrder(null)
+    }
+  }, [planId, props.open, userId])
 
   useEffect(() => {
     if (props.open) {
@@ -282,16 +560,15 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const hasCreem = props.enableCreem && !!plan.creem_product_id
   const hasKyren = !!props.enableKyrenSubscription
   const hasEpay =
-    props.enableOnlineTopUp && (props.epayMethods || []).length > 0
+    props.enableOnlineTopUp &&
+    String(plan.currency || '').toUpperCase() === 'CNY' &&
+    (props.epayMethods || []).length > 0
   const selectedEpayMethodLabel =
     (props.epayMethods || []).find((m) => m.type === selectedEpayMethod)
       ?.name ||
     selectedEpayMethod ||
     t('Select payment method')
   const price = formatPlanPrice(plan.price_amount, plan.currency)
-  const limitReached =
-    (props.purchaseLimit || 0) > 0 &&
-    (props.purchaseCount || 0) >= (props.purchaseLimit || 0)
   const accountBalanceLoaded = props.accountBalance !== undefined
   const balancePaymentState = getAccountBalancePaymentState({
     accountBalanceQuota: props.accountBalance ?? 0,
@@ -301,125 +578,37 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const accountBalanceDisplay = formatAccountBalanceForPlanPurchase(
     props.accountBalance ?? 0
   )
-  const kyrenAvailability = getKyrenSubscriptionAvailability(
-    plan,
-    { enable_kyren_subscription: hasKyren },
-    { purchaseCount: props.purchaseCount }
-  )
+  const kyrenAvailability = getKyrenSubscriptionAvailability(plan, {
+    enable_kyren_subscription: hasKyren,
+  })
 
-  const handlePayStripe = async () => {
-    setPaying(true)
-    try {
-      const res = await paySubscriptionStripe({ plan_id: plan.id })
-      if (res.message === 'success' && res.data?.pay_link) {
-        window.open(res.data.pay_link, '_blank')
-        toast.success(t('Payment page opened'))
-        props.onOpenChange(false)
-      } else {
-        toast.error(
-          res.message && res.message !== 'success'
-            ? res.message
-            : t('Payment request failed')
-        )
-      }
-    } catch {
-      toast.error(t('Payment request failed'))
-    } finally {
-      setPaying(false)
+  const submitExternalPayment = (
+    provider: ExternalPaymentProvider,
+    paymentMethod?: string
+  ) => {
+    if (!purchaseMode) {
+      form.trigger('purchase_mode')
+      return
     }
-  }
-
-  const handlePayCreem = async () => {
-    setPaying(true)
-    try {
-      const res = await paySubscriptionCreem({ plan_id: plan.id })
-      if (res.message === 'success' && res.data?.checkout_url) {
-        window.open(res.data.checkout_url, '_blank')
-        toast.success(t('Payment page opened'))
-        props.onOpenChange(false)
-      } else {
-        toast.error(
-          res.message && res.message !== 'success'
-            ? res.message
-            : t('Payment request failed')
-        )
-      }
-    } catch {
-      toast.error(t('Payment request failed'))
-    } finally {
-      setPaying(false)
+    if (purchaseMode === 'credit_balance' && !creditAvailable) {
+      toast.error(t('Credit balance purchase is unavailable for this plan.'))
+      return
     }
-  }
-
-  const handlePayKyren = async () => {
-    if (!kyrenAvailability.available) {
+    if (provider === 'kyren' && !kyrenAvailability.available) {
       toast.error(
         translateKyrenUnavailableReason(kyrenAvailability.reasonKey, t)
       )
       return
     }
-    setPaying(true)
-    try {
-      await processKyrenSubscriptionPayment({
-        planId: plan.id,
-        paySubscriptionKyren,
-        openCheckout: (url) => window.open(url, '_blank'),
-      })
-      toast.success(t('Payment page opened'))
-      props.onOpenChange(false)
-    } catch {
-      toast.error(t('Kyren checkout creation failed'))
-    } finally {
-      setPaying(false)
-    }
-  }
-
-  const isSafari =
-    typeof navigator !== 'undefined' &&
-    /^((?!chrome|android).)*safari/i.test(navigator.userAgent)
-
-  const handlePayEpay = async () => {
-    if (!selectedEpayMethod) {
+    if (provider === 'epay' && !paymentMethod) {
       toast.error(t('Please select a payment method'))
       return
     }
-    setPaying(true)
-    try {
-      const res = await paySubscriptionEpay({
-        plan_id: plan.id,
-        payment_method: selectedEpayMethod,
-      })
-      if (res.message === 'success' && res.url) {
-        const form = document.createElement('form')
-        form.action = res.url
-        form.method = 'POST'
-        if (!isSafari) {
-          form.target = '_blank'
-        }
-        Object.entries(res.data || {}).forEach(([key, value]) => {
-          const input = document.createElement('input')
-          input.type = 'hidden'
-          input.name = key
-          input.value = String(value)
-          form.appendChild(input)
-        })
-        document.body.appendChild(form)
-        form.submit()
-        document.body.removeChild(form)
-        toast.success(t('Payment initiated'))
-        props.onOpenChange(false)
-      } else {
-        toast.error(
-          res.message && res.message !== 'success'
-            ? res.message
-            : t('Payment request failed')
-        )
-      }
-    } catch {
-      toast.error(t('Payment request failed'))
-    } finally {
-      setPaying(false)
-    }
+    externalCheckoutMutation.mutate({
+      provider,
+      purchaseMode,
+      paymentMethod,
+    })
   }
 
   const handlePayBalance = form.handleSubmit(async ({ purchase_mode }) => {
@@ -456,8 +645,8 @@ export function SubscriptionPurchaseDialog(props: Props) {
             ? creditPurchaseSuccessMessage(grant, t)
             : t('Subscription purchased successfully')
         )
-        await props.onPurchaseSuccess?.()
-        props.onOpenChange(false)
+        await onPurchaseSuccess?.()
+        onOpenChange(false)
       } else {
         toast.error(
           res.message && res.message !== 'success'
@@ -473,7 +662,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
   })
 
   return (
-    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+    <Dialog open={props.open} onOpenChange={onOpenChange}>
       <DialogContent className='max-h-[90vh] overflow-y-auto max-sm:w-[calc(100vw-1.5rem)] sm:max-w-md'>
         <DialogHeader>
           <DialogTitle className='flex items-center gap-2'>
@@ -607,28 +796,52 @@ export function SubscriptionPurchaseDialog(props: Props) {
               </div>
             </div>
 
-            {limitReached && purchaseMode === 'timed' && (
+            {hasKyren && !kyrenAvailability.available && (
               <Alert>
                 <AlertDescription>
-                  {t(
-                    'The historical purchase limit applies to online checkout, but not to account balance purchases.'
+                  {translateKyrenUnavailableReason(
+                    kyrenAvailability.reasonKey,
+                    t
                   )}
                 </AlertDescription>
               </Alert>
             )}
 
-            {hasKyren &&
-              purchaseMode === 'timed' &&
-              !kyrenAvailability.available && (
-                <Alert>
-                  <AlertDescription>
-                    {translateKyrenUnavailableReason(
-                      kyrenAvailability.reasonKey,
-                      t
-                    )}
-                  </AlertDescription>
-                </Alert>
-              )}
+            {activePendingExternalOrder && (
+              <Alert aria-live='polite'>
+                <AlertDescription className='flex flex-col gap-2'>
+                  <span>
+                    {externalOrderQuery.isError
+                      ? t(
+                          'Unable to check payment status. Retry status check or payment.'
+                        )
+                      : t(
+                          'Waiting for payment confirmation. You can close this dialog and resume here later.'
+                        )}
+                  </span>
+                  {externalOrderQuery.isError && (
+                    <span className='flex flex-wrap gap-2'>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        onClick={() => void externalOrderQuery.refetch()}
+                      >
+                        {t('Retry status check')}
+                      </Button>
+                      <Button
+                        type='button'
+                        size='sm'
+                        variant='outline'
+                        onClick={clearPendingExternalOrder}
+                      >
+                        {t('Try payment again')}
+                      </Button>
+                    </span>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
 
             {accountBalanceLoaded && balancePaymentState.disabled && (
               <Alert>
@@ -667,46 +880,49 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 </span>
               </Button>
 
-              {purchaseMode === 'timed' &&
-                (hasStripe || hasCreem || hasKyren) && (
-                  <div className='grid grid-cols-2 gap-2 sm:flex'>
-                    {hasStripe && (
-                      <Button
-                        type='button'
-                        variant='outline'
-                        className='flex-1'
-                        onClick={handlePayStripe}
-                        disabled={paying || limitReached}
-                      >
-                        Stripe
-                      </Button>
-                    )}
-                    {hasCreem && (
-                      <Button
-                        type='button'
-                        variant='outline'
-                        className='flex-1'
-                        onClick={handlePayCreem}
-                        disabled={paying || limitReached}
-                      >
-                        Creem
-                      </Button>
-                    )}
-                    {hasKyren && (
-                      <Button
-                        type='button'
-                        variant='outline'
-                        className='flex-1'
-                        onClick={handlePayKyren}
-                        disabled={paying || !kyrenAvailability.available}
-                      >
-                        {t('Pay with Kyren')}
-                      </Button>
-                    )}
-                  </div>
-                )}
+              {(hasStripe || hasCreem || hasKyren) && (
+                <div className='grid grid-cols-2 gap-2 sm:flex'>
+                  {hasStripe && (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      className='flex-1'
+                      onClick={() => submitExternalPayment('stripe')}
+                      disabled={paying || activePendingExternalOrder !== null}
+                    >
+                      Stripe
+                    </Button>
+                  )}
+                  {hasCreem && (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      className='flex-1'
+                      onClick={() => submitExternalPayment('creem')}
+                      disabled={paying || activePendingExternalOrder !== null}
+                    >
+                      Creem
+                    </Button>
+                  )}
+                  {hasKyren && (
+                    <Button
+                      type='button'
+                      variant='outline'
+                      className='flex-1'
+                      onClick={() => submitExternalPayment('kyren')}
+                      disabled={
+                        paying ||
+                        activePendingExternalOrder !== null ||
+                        !kyrenAvailability.available
+                      }
+                    >
+                      {t('Pay with Kyren')}
+                    </Button>
+                  )}
+                </div>
+              )}
 
-              {purchaseMode === 'timed' && hasEpay && (
+              {hasEpay && (
                 <div className='grid grid-cols-[minmax(0,1fr)_auto] gap-2'>
                   <Select
                     items={(props.epayMethods || []).map((method) => ({
@@ -717,7 +933,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                     onValueChange={(value) =>
                       value !== null && setSelectedEpayMethod(value)
                     }
-                    disabled={limitReached}
+                    disabled={activePendingExternalOrder !== null}
                   >
                     <SelectTrigger className='flex-1'>
                       <SelectValue>{selectedEpayMethodLabel}</SelectValue>
@@ -734,8 +950,14 @@ export function SubscriptionPurchaseDialog(props: Props) {
                   </Select>
                   <Button
                     type='button'
-                    onClick={handlePayEpay}
-                    disabled={paying || !selectedEpayMethod || limitReached}
+                    onClick={() =>
+                      submitExternalPayment('epay', selectedEpayMethod)
+                    }
+                    disabled={
+                      paying ||
+                      !selectedEpayMethod ||
+                      activePendingExternalOrder !== null
+                    }
                   >
                     {t('Pay')}
                   </Button>

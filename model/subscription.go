@@ -86,9 +86,10 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound      = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid = errors.New("subscription order status invalid")
-	ErrNoActiveSubscription           = errors.New("no active subscription")
+	ErrSubscriptionOrderNotFound         = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid    = errors.New("subscription order status invalid")
+	ErrSubscriptionOrderSnapshotMismatch = errors.New("subscription order entitlement snapshot mismatch")
+	ErrNoActiveSubscription              = errors.New("no active subscription")
 )
 
 const (
@@ -305,12 +306,14 @@ func (p *SubscriptionPlan) normalizeEntitlementIdentity() error {
 
 // Subscription order (payment -> webhook -> create UserSubscription)
 type SubscriptionOrder struct {
-	Id          int     `json:"id"`
-	UserId      int     `json:"user_id" gorm:"index"`
-	PlanId      int     `json:"plan_id" gorm:"index"`
-	Money       float64 `json:"money"`
-	AmountCents int64   `json:"amount_cents" gorm:"type:bigint;not null;default:0"`
-	Currency    string  `json:"currency" gorm:"type:varchar(8);not null;default:''"`
+	Id                 int     `json:"id"`
+	UserId             int     `json:"user_id" gorm:"index"`
+	PlanId             int     `json:"plan_id" gorm:"index"`
+	Money              float64 `json:"money"`
+	AmountCents        int64   `json:"amount_cents" gorm:"type:bigint;not null;default:0"`
+	Currency           string  `json:"currency" gorm:"type:varchar(8);not null;default:''"`
+	CreditGrantAmount  int64   `json:"-" gorm:"type:bigint;not null;default:0"`
+	CreditTargetPlanID int     `json:"-" gorm:"type:int;not null;default:0"`
 
 	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`
@@ -753,17 +756,6 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	if existingQuery.Error != nil {
 		return nil, existingQuery.Error
 	}
-	if plan.MaxPurchasePerUser > 0 {
-		var count int64
-		if err := tx.Model(&UserSubscription{}).
-			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
-			Count(&count).Error; err != nil {
-			return nil, err
-		}
-		if count >= int64(plan.MaxPurchasePerUser) {
-			return nil, errors.New("已达到该套餐购买上限")
-		}
-	}
 	if isInvitationRewardSource(source) && sameTierPaidQuery.RowsAffected > 0 && sameTierPaid.EndTime > nowUnix {
 		existingQuery.RowsAffected = 0
 	}
@@ -854,15 +846,71 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	return &UserSubscriptionCreationResult{Subscription: sub, EventStartTime: sub.StartTime, EventEndTime: sub.EndTime}, nil
 }
 
+func validateSubscriptionOrderEntitlementSnapshot(tx *gorm.DB, order *SubscriptionOrder, snapshot SubscriptionEntitlementSnapshot, purchaseMode string, actualPaymentMethod string) error {
+	if tx == nil || order == nil || snapshot.PlanID <= 0 || snapshot.PlanID != order.PlanId {
+		return ErrSubscriptionOrderSnapshotMismatch
+	}
+	snapshotProvider := strings.TrimSpace(snapshot.PaymentProvider)
+	snapshotMethod := strings.TrimSpace(snapshot.ProviderPaymentMethod)
+	if snapshotProvider != "" {
+		if snapshotProvider != strings.TrimSpace(order.PaymentProvider) || snapshot.PaymentAmountCents <= 0 || snapshot.PaymentAmountCents != order.AmountCents || !strings.EqualFold(strings.TrimSpace(snapshot.PaymentCurrency), strings.TrimSpace(order.Currency)) || snapshotMethod == "" || snapshotMethod != strings.TrimSpace(order.PaymentMethod) {
+			return ErrSubscriptionOrderSnapshotMismatch
+		}
+		if method := strings.TrimSpace(actualPaymentMethod); method != "" && method != snapshotMethod {
+			return ErrSubscriptionOrderSnapshotMismatch
+		}
+	}
+	if purchaseMode == SubscriptionPurchaseModeCreditBalance {
+		if snapshotProvider == "" || snapshot.MonthlyTokenLimit <= 0 || order.CreditGrantAmount <= 0 || snapshot.MonthlyTokenLimit != order.CreditGrantAmount || snapshot.TargetCreditBalancePlanID <= 0 || order.CreditTargetPlanID <= 0 || snapshot.TargetCreditBalancePlanID != order.CreditTargetPlanID || strings.TrimSpace(snapshot.PlanEntitlementType) != SubscriptionEntitlementTimed {
+			return ErrSubscriptionOrderSnapshotMismatch
+		}
+		return nil
+	}
+	if order.CreditGrantAmount != 0 || order.CreditTargetPlanID != 0 {
+		return ErrSubscriptionOrderSnapshotMismatch
+	}
+	return nil
+}
+
 func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, providerPayload string, actualPaymentMethod string) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {
 		return nil, errors.New("invalid subscription order")
+	}
+	purchaseMode := SubscriptionPurchaseModeTimed
+	var snapshot SubscriptionEntitlementSnapshot
+	var plan *SubscriptionPlan
+	var err error
+	hasSnapshot := strings.TrimSpace(order.EntitlementSnapshot) != ""
+	if hasSnapshot {
+		snapshot, err = UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(snapshot.PurchaseMode) != "" {
+			purchaseMode, err = NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err := validateSubscriptionOrderEntitlementSnapshot(tx, order, snapshot, purchaseMode, actualPaymentMethod); err != nil {
+			return nil, err
+		}
+	} else if order.CreditGrantAmount != 0 || order.CreditTargetPlanID != 0 {
+		return nil, ErrSubscriptionOrderSnapshotMismatch
 	}
 	if order.Status == common.TopUpStatusSuccess {
 		return subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx, order, false)
 	}
 	if order.Status != common.TopUpStatusPending {
 		return nil, ErrSubscriptionOrderStatusInvalid
+	}
+	if hasSnapshot {
+		plan, err = SubscriptionPlanFromEntitlementSnapshot(snapshot)
+	} else {
+		plan, err = getSubscriptionPlanByIdTx(tx, order.PlanId)
+	}
+	if err != nil {
+		return nil, err
 	}
 	completeTime, completeTimeErr := getDBTimestampStrictTx(tx)
 	if completeTimeErr != nil {
@@ -884,7 +932,7 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	}
 	if claim.RowsAffected == 0 {
 		var existing SubscriptionOrder
-		if err := tx.Where("id = ?", order.Id).First(&existing).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", order.Id).First(&existing).Error; err != nil {
 			return nil, err
 		}
 		if existing.Status == common.TopUpStatusSuccess {
@@ -901,44 +949,35 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		order.PaymentMethod = actualPaymentMethod
 	}
 
-	purchaseMode := SubscriptionPurchaseModeTimed
-	var snapshot SubscriptionEntitlementSnapshot
-	var plan *SubscriptionPlan
-	var err error
-	if strings.TrimSpace(order.EntitlementSnapshot) != "" {
-		snapshot, err = UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	if purchaseMode == SubscriptionPurchaseModeCreditBalance {
+		targetPlan, err := CreditBalancePlanFromEntitlementSnapshot(snapshot)
 		if err != nil {
 			return nil, err
 		}
-		if strings.TrimSpace(snapshot.PurchaseMode) != "" {
-			purchaseMode, err = NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
-			if err != nil {
+		reason := "外部支付购买 Credit 余额"
+		if order.PaymentProvider == PaymentProviderBalance {
+			reason = "人民币账户余额购买 Credit 余额"
+		}
+		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
+			UserId:             order.UserId,
+			GrossCredit:        order.CreditGrantAmount,
+			IdempotencyKey:     order.TradeNo,
+			SourceType:         CreditBalanceLedgerSourceSubscriptionOrder,
+			SourceId:           order.Id,
+			Type:               CreditBalanceLedgerTypePurchase,
+			TargetPlanId:       order.CreditTargetPlanID,
+			TargetPlanSnapshot: targetPlan,
+			Reason:             reason,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if order.PaymentProvider != PaymentProviderBalance {
+			if err := upsertSubscriptionTopUpTx(tx, order); err != nil {
 				return nil, err
 			}
 		}
-		plan, err = SubscriptionPlanFromEntitlementSnapshot(snapshot)
-	} else {
-		plan, err = getSubscriptionPlanByIdTx(tx, order.PlanId)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	if purchaseMode == SubscriptionPurchaseModeCreditBalance {
-		if order.PaymentProvider != PaymentProviderBalance {
-			return nil, errors.New("Credit 余额仅支持人民币账户余额购买")
-		}
-		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
-			UserId:         order.UserId,
-			GrossCredit:    snapshot.MonthlyTokenLimit,
-			IdempotencyKey: order.TradeNo,
-			SourceType:     CreditBalanceLedgerSourceSubscriptionOrder,
-			SourceId:       order.Id,
-			Type:           CreditBalanceLedgerTypePurchase,
-			TargetPlanId:   snapshot.TargetCreditBalancePlanID,
-			Reason:         "人民币账户余额购买 Credit 余额",
-		})
-		if err != nil {
+		if err := SetUserLastSubscriptionPurchaseModeTx(tx, order.UserId, purchaseMode); err != nil {
 			return nil, err
 		}
 		return &SubscriptionOrderCompletionResult{
@@ -960,6 +999,9 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	result := subscriptionOrderCompletionResultFromSubscription(order, creation, true)
 	result.PurchaseMode = purchaseMode
 	if err := createInvitationRewardEventForSubscriptionOrderTx(tx, order, plan, result); err != nil {
+		return nil, err
+	}
+	if err := SetUserLastSubscriptionPurchaseModeTx(tx, order.UserId, purchaseMode); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -1162,7 +1204,7 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 	var logPaymentMethod string
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
-		if err := tx.Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
 			return ErrSubscriptionOrderNotFound
 		}
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
@@ -1171,12 +1213,18 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		if order.Status != common.TopUpStatusPending && order.Status != common.TopUpStatusSuccess {
 			return ErrSubscriptionOrderStatusInvalid
 		}
-		plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
-		if err != nil {
-			return err
-		}
-		if !plan.Enabled {
-			// still allow completion for already purchased orders
+		if snapshotPayload := strings.TrimSpace(order.EntitlementSnapshot); snapshotPayload != "" {
+			snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(snapshotPayload)
+			if err != nil {
+				return err
+			}
+			logPlanTitle = snapshot.PlanTitle
+		} else {
+			plan, err := getSubscriptionPlanByIdTx(tx, order.PlanId)
+			if err != nil {
+				return err
+			}
+			logPlanTitle = plan.Title
 		}
 		completion, err := CompleteSubscriptionOrderTx(tx, &order, providerPayload, actualPaymentMethod)
 		if err != nil {
@@ -1185,7 +1233,6 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 		result = completion
 		if completion != nil && completion.Transitioned {
 			logUserId = order.UserId
-			logPlanTitle = plan.Title
 			logMoney = order.Money
 			logPaymentMethod = order.PaymentMethod
 		}
@@ -1193,6 +1240,9 @@ func CompleteSubscriptionOrder(tradeNo string, providerPayload string, expectedP
 	})
 	if err != nil {
 		return nil, err
+	}
+	if logUserId > 0 {
+		invalidateUserCacheBestEffort(logUserId)
 	}
 	if logUserId > 0 {
 		msg := fmt.Sprintf("订阅购买成功，套餐: %s，支付金额: %.2f，支付方式: %s", logPlanTitle, logMoney, logPaymentMethod)
@@ -1210,18 +1260,29 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	if err := tx.Where("trade_no = ?", order.TradeNo).First(&topup).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			topup = TopUp{
-				UserId:        order.UserId,
-				Amount:        0,
-				Money:         order.Money,
-				TradeNo:       order.TradeNo,
-				PaymentMethod: order.PaymentMethod,
-				CreateTime:    order.CreateTime,
-				CompleteTime:  now,
-				Status:        common.TopUpStatusSuccess,
+				UserId:          order.UserId,
+				Amount:          0,
+				Money:           order.Money,
+				TradeNo:         order.TradeNo,
+				PaymentMethod:   order.PaymentMethod,
+				PaymentProvider: order.PaymentProvider,
+				KyrenSnapshot:   order.KyrenSnapshot,
+				CreateTime:      order.CreateTime,
+				CompleteTime:    now,
+				Status:          common.TopUpStatusSuccess,
 			}
 			return tx.Create(&topup).Error
 		}
 		return err
+	}
+	if topup.PaymentProvider != "" && topup.PaymentProvider != order.PaymentProvider {
+		return ErrPaymentMethodMismatch
+	}
+	if topup.PaymentProvider == "" {
+		topup.PaymentProvider = order.PaymentProvider
+	}
+	if topup.KyrenSnapshot == "" {
+		topup.KyrenSnapshot = order.KyrenSnapshot
 	}
 	topup.Money = order.Money
 	if topup.PaymentMethod == "" {
@@ -1235,6 +1296,29 @@ func upsertSubscriptionTopUpTx(tx *gorm.DB, order *SubscriptionOrder) error {
 	topup.CompleteTime = now
 	topup.Status = common.TopUpStatusSuccess
 	return tx.Save(&topup).Error
+}
+
+func FailSubscriptionOrder(tradeNo string, expectedPaymentProvider string) error {
+	if strings.TrimSpace(tradeNo) == "" {
+		return errors.New("tradeNo is empty")
+	}
+	result := DB.Model(&SubscriptionOrder{}).
+		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, expectedPaymentProvider, common.TopUpStatusPending).
+		Updates(map[string]any{"status": common.TopUpStatusFailed, "complete_time": common.GetTimestamp()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	var order SubscriptionOrder
+	if err := DB.Where("trade_no = ?", tradeNo).First(&order).Error; err != nil {
+		return ErrSubscriptionOrderNotFound
+	}
+	if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
+		return ErrPaymentMethodMismatch
+	}
+	return nil
 }
 
 func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) error {

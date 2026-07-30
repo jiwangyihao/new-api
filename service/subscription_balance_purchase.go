@@ -103,6 +103,11 @@ func CreateBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.Subsc
 		return false, nil, err
 	}
 
+	snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(entitlementSnapshot)
+	if err != nil {
+		return false, nil, err
+	}
+	creditGrantAmount, creditTargetPlanID := snapshot.CreditGrantIdentity()
 	now := common.GetTimestamp()
 	*order = model.SubscriptionOrder{
 		UserId:              userId,
@@ -111,6 +116,8 @@ func CreateBalanceSubscriptionOrderTx(tx *gorm.DB, userId int, plan *model.Subsc
 		TradeNo:             tradeNo,
 		AmountCents:         int64(amount),
 		Currency:            "CNY",
+		CreditGrantAmount:   creditGrantAmount,
+		CreditTargetPlanID:  creditTargetPlanID,
 		PaymentMethod:       model.PaymentMethodAccountBalance,
 		PaymentProvider:     model.PaymentProviderBalance,
 		CreateTime:          now,

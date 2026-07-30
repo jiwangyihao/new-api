@@ -243,6 +243,12 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+	if found, err := failPendingStripeSubscriptionOrder(referenceId); found {
+		if err != nil {
+			logger.LogError(ctx, fmt.Sprintf("Stripe 标记订阅订单失败状态失败 trade_no=%s client_ip=%s error=%q", referenceId, callerIp, err.Error()))
+		}
+		return
+	}
 
 	topUp := model.GetTopUpByTradeNo(referenceId)
 	if topUp == nil {
@@ -278,10 +284,11 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
 	payload := map[string]any{
-		"customer":     customerId,
-		"amount_total": event.GetObjectValue("amount_total"),
-		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
-		"event_type":   string(event.Type),
+		"customer":            customerId,
+		"amount_total":        event.GetObjectValue("amount_total"),
+		"currency":            strings.ToUpper(event.GetObjectValue("currency")),
+		"event_type":          string(event.Type),
+		"provider_product_id": event.GetObjectValue("metadata", stripeSubscriptionProductMetadataKey),
 	}
 	if err := completeSubscriptionOrderAndEvaluateInvitation(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单处理成功 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))

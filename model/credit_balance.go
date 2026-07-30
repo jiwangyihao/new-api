@@ -44,6 +44,13 @@ type CreditBalanceLedger struct {
 	CreatedAt            int64  `json:"created_at" gorm:"type:bigint;not null;index"`
 }
 
+type CreditBalanceLedgerHistoryItem struct {
+	CreditBalanceLedger
+	PaymentProvider string `json:"payment_provider,omitempty"`
+	PaymentMethod   string `json:"payment_method,omitempty"`
+	PurchaseMode    string `json:"purchase_mode,omitempty"`
+}
+
 func (l *CreditBalanceLedger) BeforeUpdate(_ *gorm.DB) error {
 	return errors.New("credit balance ledger is immutable")
 }
@@ -53,16 +60,17 @@ func (l *CreditBalanceLedger) BeforeDelete(_ *gorm.DB) error {
 }
 
 type CreditBalanceGrantRequest struct {
-	UserId         int
-	GrossCredit    int64
-	IdempotencyKey string
-	SourceType     string
-	SourceId       int
-	SourceSnapshot string
-	Type           string
-	TargetPlanId   int
-	OperatorUserId int
-	Reason         string
+	UserId             int
+	GrossCredit        int64
+	IdempotencyKey     string
+	SourceType         string
+	SourceId           int
+	SourceSnapshot     string
+	Type               string
+	TargetPlanId       int
+	OperatorUserId     int
+	Reason             string
+	TargetPlanSnapshot *SubscriptionPlan
 }
 
 type CreditBalanceGrantResult struct {
@@ -90,6 +98,27 @@ func NormalizeSubscriptionPurchaseMode(value string) (string, error) {
 	}
 }
 
+func CreditBalancePlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) (*SubscriptionPlan, error) {
+	if snapshot.TargetCreditBalancePlanID <= 0 {
+		return nil, errors.New("invalid credit balance target snapshot")
+	}
+	businessCode := strings.TrimSpace(snapshot.TargetCreditBalanceBusinessCode)
+	plan := &SubscriptionPlan{
+		Id:                      snapshot.TargetCreditBalancePlanID,
+		Title:                   snapshot.TargetCreditBalanceTitle,
+		EntitlementType:         SubscriptionEntitlementCreditBalance,
+		Enabled:                 true,
+		ModelLimits:             snapshot.TargetCreditBalanceModelLimits,
+		ConcurrencyLimit:        snapshot.TargetCreditBalanceConcurrencyLimit,
+		QueueCapacity:           snapshot.TargetCreditBalanceQueueCapacity,
+		GPTAbuseWarningLimit:    snapshot.TargetCreditBalanceGPTAbuseWarningLimit,
+		CreditBalanceConfigured: true,
+	}
+	if businessCode != "" {
+		plan.BusinessCode = &businessCode
+	}
+	return plan, nil
+}
 func SubscriptionPlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) (*SubscriptionPlan, error) {
 	if snapshot.PlanID <= 0 {
 		return nil, errors.New("invalid subscription entitlement snapshot")
@@ -105,6 +134,8 @@ func SubscriptionPlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSna
 		MonthlyTokenLimit:       snapshot.MonthlyTokenLimit,
 		ConcurrencyLimit:        snapshot.ConcurrencyLimit,
 		QueueCapacity:           snapshot.QueueCapacity,
+		ModelLimits:             snapshot.ModelLimits,
+		GPTAbuseWarningLimit:    snapshot.GPTAbuseWarningLimit,
 		DurationUnit:            snapshot.DurationUnit,
 		DurationValue:           snapshot.DurationValue,
 		CustomSeconds:           snapshot.CustomSeconds,
@@ -179,11 +210,15 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		return result, nil
 	}
 
-	plan, err := GetCreditBalancePlanTx(tx)
-	if err != nil {
-		return nil, err
+	plan := request.TargetPlanSnapshot
+	if plan == nil {
+		var err error
+		plan, err = GetCreditBalancePlanTx(tx)
+		if err != nil {
+			return nil, err
+		}
 	}
-	if plan.Id != request.TargetPlanId {
+	if plan.Id != request.TargetPlanId || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
 		return nil, errors.New("credit balance target plan mismatch")
 	}
 	hadUsableSubscription, err := hasUsableSubscriptionTx(tx, request.UserId)
@@ -300,7 +335,7 @@ func FindCreditBalanceGrantBySourceTx(tx *gorm.DB, sourceType string, sourceId i
 	return creditBalanceGrantResult(&ledger, balance.PlanId, user.GetSetting().ActiveSubscriptionId == balance.Id), nil
 }
 
-func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedger, error) {
+func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedgerHistoryItem, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
@@ -311,7 +346,47 @@ func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedger, erro
 	if err := DB.Where("user_id = ?", userId).Order("id desc").Limit(limit).Find(&entries).Error; err != nil {
 		return nil, err
 	}
-	return entries, nil
+	result := make([]CreditBalanceLedgerHistoryItem, len(entries))
+	orderIds := make([]int, 0, len(entries))
+	for index := range entries {
+		result[index].CreditBalanceLedger = entries[index]
+		if entries[index].SourceType == CreditBalanceLedgerSourceSubscriptionOrder && entries[index].SourceId > 0 {
+			orderIds = append(orderIds, entries[index].SourceId)
+		}
+	}
+	if len(orderIds) == 0 {
+		return result, nil
+	}
+	var orders []SubscriptionOrder
+	if err := DB.Select("id", "payment_provider", "payment_method", "entitlement_snapshot").
+		Where("user_id = ? AND id IN ?", userId, orderIds).
+		Find(&orders).Error; err != nil {
+		return nil, err
+	}
+	ordersById := make(map[int]SubscriptionOrder, len(orders))
+	for index := range orders {
+		ordersById[orders[index].Id] = orders[index]
+	}
+	for index := range result {
+		order, ok := ordersById[result[index].SourceId]
+		if !ok {
+			continue
+		}
+		result[index].PaymentProvider = order.PaymentProvider
+		result[index].PaymentMethod = order.PaymentMethod
+		result[index].PurchaseMode = SubscriptionPurchaseModeCreditBalance
+		if strings.TrimSpace(order.EntitlementSnapshot) == "" {
+			continue
+		}
+		snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			continue
+		}
+		if mode, err := NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode); err == nil {
+			result[index].PurchaseMode = mode
+		}
+	}
+	return result, nil
 }
 
 func getOrCreateCreditBalanceSubscriptionTx(tx *gorm.DB, userId int, plan *SubscriptionPlan) (*UserSubscription, error) {

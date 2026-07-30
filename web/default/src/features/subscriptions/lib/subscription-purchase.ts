@@ -38,7 +38,6 @@ export function isCreditBalancePurchaseAvailable(
     globallyEnabled &&
     plan?.enabled &&
     plan.public_visible &&
-    plan.currency.trim().toUpperCase() === 'CNY' &&
     plan.unlimited_purchase_enabled &&
     plan.duration_unit === 'month' &&
     Number(plan.duration_value) === 1 &&

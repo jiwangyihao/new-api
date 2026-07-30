@@ -39,7 +39,8 @@ type kyrenProductSyncResponse struct {
 }
 
 type SubscriptionKyrenPayRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId       int    `json:"plan_id"`
+	PurchaseMode string `json:"purchase_mode"`
 }
 
 type kyrenWebhookEvent struct {
@@ -108,6 +109,11 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	purchaseMode, err := model.NormalizeSubscriptionPurchaseMode(req.PurchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
 	if err := ensureKyrenPaymentConfigured(); err != nil {
 		common.ApiError(c, err)
 		return
@@ -136,10 +142,6 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "用户不存在")
 		return
 	}
-	if err := validateSubscriptionPurchaseLimit(userID, plan); err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	expectedAmount, err := formatKyrenAmountFromFloat(plan.PriceAmount)
 	if err != nil {
 		common.ApiError(c, err)
@@ -160,22 +162,30 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	entitlementSnapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshotFromPlan(plan))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
 	amountCents, currency, ok := model.SubscriptionPlanAmountSnapshot(plan)
 	if !ok || currency != kyrenCurrencyCNY {
 		common.ApiError(c, errors.New("Kyren 订阅金额快照无效"))
 		return
 	}
+	preparedSnapshot, err := prepareExternalSubscriptionEntitlementSnapshot(plan, purchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	entitlementSnapshot, err := marshalExternalSubscriptionEntitlementSnapshot(preparedSnapshot, model.PaymentProviderKyren, productID, model.PaymentMethodKyren, amountCents, currency)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	creditGrantAmount, creditTargetPlanID := preparedSnapshot.CreditGrantIdentity()
 	order := &model.SubscriptionOrder{
 		UserId:              userID,
 		PlanId:              plan.Id,
 		Money:               plan.PriceAmount,
 		AmountCents:         amountCents,
 		Currency:            currency,
+		CreditGrantAmount:   creditGrantAmount,
+		CreditTargetPlanID:  creditTargetPlanID,
 		TradeNo:             tradeNo,
 		PaymentMethod:       model.PaymentMethodKyren,
 		PaymentProvider:     model.PaymentProviderKyren,
@@ -344,9 +354,6 @@ func handleKyrenSubscriptionPaid(tradeNo string, event kyrenWebhookEvent, provid
 	}
 	if order.PaymentProvider != model.PaymentProviderKyren {
 		return model.ErrPaymentMethodMismatch
-	}
-	if order.Status == common.TopUpStatusSuccess {
-		return completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo, providerPayload, model.PaymentProviderKyren, model.PaymentMethodKyren)
 	}
 	snapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
 	if err != nil {

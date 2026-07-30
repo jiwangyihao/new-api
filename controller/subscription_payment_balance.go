@@ -71,18 +71,10 @@ func SubscriptionRequestBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, msg)
 		return
 	}
-	targetCreditPlanID := 0
-	if purchaseMode == model.SubscriptionPurchaseModeCreditBalance {
-		creditPlan, err := model.GetCreditBalancePlanTx(model.DB)
-		if err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		if err := model.ValidateCreditBalancePurchaseOption(plan, creditPlan); err != nil {
-			common.ApiErrorMsg(c, err.Error())
-			return
-		}
-		targetCreditPlanID = creditPlan.Id
+	entitlementSnapshot, err := prepareExternalSubscriptionEntitlementSnapshot(plan, purchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
 	}
 	if strings.ToUpper(strings.TrimSpace(plan.Currency)) != "CNY" {
 		common.ApiErrorMsg(c, "账户余额仅支持 CNY 套餐")
@@ -93,9 +85,7 @@ func SubscriptionRequestBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐价格无效")
 		return
 	}
-	entitlementSnapshot := model.NewSubscriptionEntitlementSnapshot(plan, purchaseMode, targetCreditPlanID)
-	entitlementSnapshot.MaxPurchasePerUser = 0
-	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(entitlementSnapshot)
+	snapshot, err := marshalExternalSubscriptionEntitlementSnapshot(entitlementSnapshot, model.PaymentProviderBalance, "", model.PaymentMethodAccountBalance, amountCents, snapshotCurrency)
 	if err != nil {
 		common.ApiError(c, err)
 		return

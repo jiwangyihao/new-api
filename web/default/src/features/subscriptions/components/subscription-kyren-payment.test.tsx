@@ -65,7 +65,7 @@ describe('subscription purchase mode helpers', () => {
     assert.equal(isCreditBalancePurchaseAvailable(eligible, false), false)
     assert.equal(
       isCreditBalancePurchaseAvailable({ ...eligible, currency: 'USD' }, true),
-      false
+      true
     )
     assert.equal(
       isCreditBalancePurchaseAvailable({ ...eligible, enabled: false }, true),
@@ -109,28 +109,42 @@ describe('subscription purchase mode helpers', () => {
 })
 
 describe('subscription Kyren payment helper', () => {
-  test('opens Kyren checkout for a purchasable CNY plan', async () => {
-    const payCalls: Array<{ plan_id: number }> = []
+  test('opens Kyren checkout with the explicit purchase mode', async () => {
+    const payCalls: Array<{
+      plan_id: number
+      purchase_mode: 'timed' | 'credit_balance'
+    }> = []
     const openedUrls: string[] = []
-    const paySubscriptionKyren = async (data: { plan_id: number }) => {
+    const paySubscriptionKyren = async (data: {
+      plan_id: number
+      purchase_mode: 'timed' | 'credit_balance'
+    }) => {
       payCalls.push(data)
       return {
         success: true,
-        data: { checkout_url: 'https://checkout.example/sub' },
+        data: {
+          checkout_url: 'https://checkout.example/sub',
+          order_id: 'kyren-order-1',
+        },
       }
     }
     const openCheckout = (url: string) => {
       openedUrls.push(url)
     }
 
-    await processKyrenSubscriptionPayment({
+    const orderId = await processKyrenSubscriptionPayment({
       planId: 1001,
+      purchaseMode: 'credit_balance',
       paySubscriptionKyren,
       openCheckout,
     })
 
-    assert.deepEqual(payCalls[0], { plan_id: 1001 })
+    assert.deepEqual(payCalls[0], {
+      plan_id: 1001,
+      purchase_mode: 'credit_balance',
+    })
     assert.equal(openedUrls[0], 'https://checkout.example/sub')
+    assert.equal(orderId, 'kyren-order-1')
   })
 
   test('rejects unsafe Kyren checkout URLs', async () => {
@@ -140,10 +154,14 @@ describe('subscription Kyren payment helper', () => {
       () =>
         processKyrenSubscriptionPayment({
           planId: 1001,
+          purchaseMode: 'timed',
           paySubscriptionKyren: async () => ({
             success: true,
             message: 'success',
-            data: { checkout_url: 'javascript:alert(1)' },
+            data: {
+              checkout_url: 'javascript:alert(1)',
+              order_id: 'unsafe-order',
+            },
           }),
           openCheckout: (url) => {
             openedUrls.push(url)
@@ -155,71 +173,47 @@ describe('subscription Kyren payment helper', () => {
     assert.deepEqual(openedUrls, [])
   })
 
-  test('marks Kyren subscription unavailable for trial, non-CNY, free, hidden, disabled, missing product, global disabled, or purchase limit reached plans', () => {
+  test('marks Kyren subscription unavailable for trial, non-CNY, free, hidden, disabled, missing product, or global disabled plans', () => {
     const topupInfo = { enable_kyren_subscription: true }
 
     assert.equal(
       getKyrenSubscriptionAvailability(
         makePlan({ kyren_product_id: '' }),
-        topupInfo,
-        {}
+        topupInfo
       ).available,
       false
     )
     assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan({ currency: 'USD' }),
-        topupInfo,
-        {}
-      ).available,
+      getKyrenSubscriptionAvailability(makePlan({ currency: 'USD' }), topupInfo)
+        .available,
       false
     )
     assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan({ price_amount: 0 }),
-        topupInfo,
-        {}
-      ).available,
+      getKyrenSubscriptionAvailability(makePlan({ price_amount: 0 }), topupInfo)
+        .available,
       false
     )
     assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan({ is_trial: true }),
-        topupInfo,
-        {}
-      ).available,
+      getKyrenSubscriptionAvailability(makePlan({ is_trial: true }), topupInfo)
+        .available,
       false
     )
     assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan({ enabled: false }),
-        topupInfo,
-        {}
-      ).available,
+      getKyrenSubscriptionAvailability(makePlan({ enabled: false }), topupInfo)
+        .available,
       false
     )
     assert.equal(
       getKyrenSubscriptionAvailability(
         makePlan({ public_visible: false }),
-        topupInfo,
-        {}
+        topupInfo
       ).available,
       false
     )
     assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan(),
-        { enable_kyren_subscription: false },
-        {}
-      ).available,
-      false
-    )
-    assert.equal(
-      getKyrenSubscriptionAvailability(
-        makePlan({ max_purchase_per_user: 1 }),
-        topupInfo,
-        { purchaseCount: 1 }
-      ).available,
+      getKyrenSubscriptionAvailability(makePlan(), {
+        enable_kyren_subscription: false,
+      }).available,
       false
     )
   })

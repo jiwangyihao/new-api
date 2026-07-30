@@ -374,7 +374,7 @@ func TestDefaultInvitationRewardRedemptionHandlerUsesFormalService(t *testing.T)
 	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", inviterID).Count(&entitlementCount).Error)
 	assert.Equal(t, int64(0), entitlementCount)
 }
-func TestRedeemSubscriptionCodeRejectsRenewalWhenPurchaseLimitReached(t *testing.T) {
+func TestRedeemSubscriptionCodeAllowsRenewalWhenHistoricalPurchaseLimitReached(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 	userID := 9607
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_limit", Status: common.UserStatusEnabled}).Error)
@@ -387,12 +387,11 @@ func TestRedeemSubscriptionCodeRejectsRenewalWhenPurchaseLimitReached(t *testing
 
 	result, err := model.Redeem("limit-key", userID, model.RedemptionModeTimed)
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, model.ErrRedeemFailed)
-	assert.Nil(t, result)
+	require.NoError(t, err)
+	require.NotNil(t, result)
 	var sub model.UserSubscription
 	require.NoError(t, model.DB.First(&sub, existing.Id).Error)
-	assert.Equal(t, initialEnd, sub.EndTime)
+	assert.Equal(t, initialEnd+7*86400, sub.EndTime)
 	assert.Equal(t, int64(250), sub.TokenUsed)
 	assert.Equal(t, "order", sub.GrantReason)
 	assert.Equal(t, "order", sub.Source)
@@ -401,7 +400,8 @@ func TestRedeemSubscriptionCodeRejectsRenewalWhenPurchaseLimitReached(t *testing
 	assert.Equal(t, int64(1), subCount)
 	var redeemed model.Redemption
 	require.NoError(t, model.DB.Where("`key` = ?", "limit-key").First(&redeemed).Error)
-	assert.Equal(t, common.RedemptionCodeStatusEnabled, redeemed.Status)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, redeemed.Status)
+	assert.Equal(t, userID, redeemed.UsedUserId)
 }
 
 func TestListRedemptionsFiltersByTypeStatusAndBatch(t *testing.T) {

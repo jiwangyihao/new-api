@@ -37,6 +37,7 @@ import type {
   SubscriptionKyrenProductSyncMode,
   UpdateCodexProModeRequest,
   UpdateCodexProModeResponse,
+  SubscriptionOrderStatus,
   SubscriptionBillingStrategy,
 } from './types'
 
@@ -209,6 +210,16 @@ export async function paySubscriptionBalance(
   const res = await api.post(
     '/api/subscription/balance/pay',
     buildSubscriptionBalancePayRequestBody(data),
+    { skipBusinessError: true } as Record<string, unknown>
+  )
+  return res.data
+}
+
+export async function getSubscriptionOrderStatus(
+  tradeNo: string
+): Promise<ApiResponse<SubscriptionOrderStatus>> {
+  const res = await api.get(
+    `/api/subscription/orders/${encodeURIComponent(tradeNo)}`,
     { skipBusinessError: true } as Record<string, unknown>
   )
   return res.data

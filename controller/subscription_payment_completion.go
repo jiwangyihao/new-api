@@ -37,16 +37,20 @@ func SetInvitationRewardOrderHandlerForTest(t testCleanup, handler func(orderId 
 }
 
 type subscriptionProviderAmountPayload struct {
-	AmountTotal any    `json:"amount_total"`
-	Amount      any    `json:"amount"`
-	Money       any    `json:"money"`
-	Currency    string `json:"currency"`
-	Object      struct {
+	AmountTotal       any    `json:"amount_total"`
+	Amount            any    `json:"amount"`
+	Money             any    `json:"money"`
+	Currency          string `json:"currency"`
+	ProviderProductID string `json:"provider_product_id"`
+	Object            struct {
 		Order struct {
 			AmountPaid any    `json:"amount_paid"`
 			Amount     any    `json:"amount"`
 			Currency   string `json:"currency"`
 		} `json:"order"`
+		Product struct {
+			ID string `json:"id"`
+		} `json:"product"`
 	} `json:"object"`
 }
 
@@ -61,11 +65,21 @@ func completeSubscriptionOrderAndEvaluateInvitation(tradeNo string, providerPayl
 	if err := validateSubscriptionOrderProviderAmountSnapshot(order, providerPayload); err != nil {
 		return err
 	}
+	switch order.PaymentProvider {
+	case model.PaymentProviderStripe:
+		if err := validateSubscriptionOrderProviderProductSnapshot(order, providerPayload); err != nil {
+			return err
+		}
+	case model.PaymentProviderCreem:
+		if err := validateSubscriptionOrderProviderProductSnapshot(order, providerPayload); err != nil {
+			return err
+		}
+	}
 	completion, err := model.CompleteSubscriptionOrder(order.TradeNo, providerPayload, expectedPaymentProvider, actualPaymentMethod)
 	if err != nil {
 		return err
 	}
-	if completion != nil {
+	if completion != nil && completion.PurchaseMode == model.SubscriptionPurchaseModeTimed {
 		if err := handleInvitationRewardForCompletedSubscriptionOrder(order.Id); err != nil {
 			common.SysError("failed to handle invitation reward: " + err.Error())
 			return err
@@ -75,7 +89,7 @@ func completeSubscriptionOrderAndEvaluateInvitation(tradeNo string, providerPayl
 }
 
 func validateSubscriptionOrderProviderAmountSnapshot(order *model.SubscriptionOrder, providerPayload string) error {
-	if order == nil || order.Status != common.TopUpStatusPending || !subscriptionOrderRequiresProviderAmountValidation(order) {
+	if order == nil || !subscriptionOrderRequiresProviderAmountValidation(order) {
 		return nil
 	}
 	switch order.PaymentProvider {
@@ -108,6 +122,31 @@ func validateEpaySubscriptionOrderProviderAmountSnapshot(order *model.Subscripti
 		return errSubscriptionOrderAmountSnapshotMismatch
 	}
 	if payloadCurrency := normalizeProviderSnapshotCurrency(payload.Currency); payloadCurrency != "" && payloadCurrency != "CNY" {
+		return errSubscriptionOrderAmountSnapshotMismatch
+	}
+	return nil
+}
+
+func validateSubscriptionOrderProviderProductSnapshot(order *model.SubscriptionOrder, providerPayload string) error {
+	if order == nil || strings.TrimSpace(order.EntitlementSnapshot) == "" {
+		return errSubscriptionOrderAmountSnapshotMismatch
+	}
+	snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(snapshot.ProviderProductID) == "" {
+		return errSubscriptionOrderAmountSnapshotMismatch
+	}
+	var payload subscriptionProviderAmountPayload
+	if err := common.UnmarshalJsonStr(providerPayload, &payload); err != nil {
+		return err
+	}
+	providerProductID := strings.TrimSpace(payload.ProviderProductID)
+	if providerProductID == "" {
+		providerProductID = strings.TrimSpace(payload.Object.Product.ID)
+	}
+	if providerProductID != strings.TrimSpace(snapshot.ProviderProductID) {
 		return errSubscriptionOrderAmountSnapshotMismatch
 	}
 	return nil
@@ -249,6 +288,7 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 	var logMoney float64
 	var logPaymentMethod string
 	var completedOrderID int
+	var completion *model.SubscriptionOrderCompletionResult
 	claimed, leaseTime, err := model.ClaimPendingKyrenSubscriptionOrder(tradeNo)
 	if err != nil {
 		return err
@@ -275,9 +315,15 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 			return model.ErrPaymentMethodMismatch
 		}
 		if order.Status == common.TopUpStatusSuccess {
-			if err := handleInvitationRewardForCompletedSubscriptionOrder(order.Id); err != nil {
-				common.SysError("failed to handle invitation reward: " + err.Error())
+			completion, err := model.CompleteSubscriptionOrder(order.TradeNo, providerPayload, expectedPaymentProvider, actualPaymentMethod)
+			if err != nil {
 				return err
+			}
+			if completion != nil && completion.PurchaseMode == model.SubscriptionPurchaseModeTimed {
+				if err := handleInvitationRewardForCompletedSubscriptionOrder(order.Id); err != nil {
+					common.SysError("failed to handle invitation reward: " + err.Error())
+					return err
+				}
 			}
 			return nil
 		}
@@ -301,8 +347,8 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
 			return model.ErrPaymentMethodMismatch
 		}
-		if order.Status != common.TopUpStatusFailed {
-			return model.ErrSubscriptionOrderStatusInvalid
+		if order.Status != common.TopUpStatusFailed || order.CompleteTime != leaseTime {
+			return model.ErrKyrenSubscriptionOrderLeaseMismatch
 		}
 		paymentSnapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
 		if err != nil {
@@ -312,34 +358,21 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 		if err != nil {
 			return err
 		}
+		restore := tx.Model(&model.SubscriptionOrder{}).
+			Where("id = ? AND payment_provider = ? AND status = ? AND complete_time = ?", order.Id, model.PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
+			Updates(map[string]any{"status": common.TopUpStatusPending, "complete_time": int64(0), "amount_cents": amountCents, "currency": currency})
+		if restore.Error != nil {
+			return restore.Error
+		}
+		if restore.RowsAffected == 0 {
+			return model.ErrKyrenSubscriptionOrderLeaseMismatch
+		}
+		order.Status = common.TopUpStatusPending
+		order.CompleteTime = 0
 		order.AmountCents = amountCents
 		order.Currency = currency
-		snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		completion, err = model.CompleteSubscriptionOrderTx(tx, &order, providerPayload, actualPaymentMethod)
 		if err != nil {
-			return err
-		}
-		plan := kyrenSubscriptionPlanFromEntitlementSnapshot(snapshot)
-		creation, err := model.CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, model.SubscriptionGrantOrder)
-		if err != nil {
-			return err
-		}
-		order.CompleteTime = common.GetTimestamp()
-		if providerPayload != "" {
-			order.ProviderPayload = providerPayload
-		}
-		if actualPaymentMethod != "" && order.PaymentMethod != actualPaymentMethod {
-			order.PaymentMethod = actualPaymentMethod
-		}
-		if err := upsertKyrenSubscriptionTopUpTx(tx, &order); err != nil {
-			return err
-		}
-		if err := tx.Model(&model.SubscriptionOrder{}).Where("id = ?", order.Id).Updates(map[string]any{"amount_cents": order.AmountCents, "currency": order.Currency}).Error; err != nil {
-			return err
-		}
-		if err := model.MarkClaimedKyrenSubscriptionOrderSuccessTx(tx, &order, leaseTime); err != nil {
-			return err
-		}
-		if _, err := model.RecordInvitationRewardEventForSubscriptionOrderTx(tx, &order, plan, creation, true); err != nil {
 			return err
 		}
 		completedOrderID = order.Id
@@ -353,10 +386,15 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 		return err
 	}
 	restoreClaimOnFailure = false
-	if completedOrderID > 0 {
+	if completedOrderID > 0 && completion != nil && completion.PurchaseMode == model.SubscriptionPurchaseModeTimed {
 		if err := handleInvitationRewardForCompletedSubscriptionOrder(completedOrderID); err != nil {
 			common.SysError("failed to handle invitation reward: " + err.Error())
 			return err
+		}
+	}
+	if logUserID > 0 {
+		if cacheErr := model.InvalidateUserCache(logUserID); cacheErr != nil {
+			common.SysLog(fmt.Sprintf("failed to invalidate user cache after Kyren subscription commit user_id=%d trade_no=%s: %s", logUserID, tradeNo, cacheErr.Error()))
 		}
 	}
 	if logUserID > 0 {
@@ -365,69 +403,4 @@ func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo str
 		}
 	}
 	return nil
-}
-
-func kyrenSubscriptionPlanFromEntitlementSnapshot(snapshot model.SubscriptionEntitlementSnapshot) *model.SubscriptionPlan {
-	businessCode := strings.TrimSpace(snapshot.BusinessCode)
-	plan := &model.SubscriptionPlan{
-		Id:                      snapshot.PlanID,
-		TotalAmount:             snapshot.TotalAmount,
-		MonthlyTokenLimit:       snapshot.MonthlyTokenLimit,
-		ConcurrencyLimit:        snapshot.ConcurrencyLimit,
-		QueueCapacity:           snapshot.QueueCapacity,
-		DurationUnit:            snapshot.DurationUnit,
-		DurationValue:           snapshot.DurationValue,
-		CustomSeconds:           snapshot.CustomSeconds,
-		QuotaResetPeriod:        snapshot.QuotaResetPeriod,
-		QuotaResetCustomSeconds: snapshot.QuotaResetCustomSeconds,
-		MaxPurchasePerUser:      snapshot.MaxPurchasePerUser,
-		IsTrial:                 snapshot.IsTrial,
-		InviteTrial:             snapshot.InviteTrial,
-		RewardEligible:          snapshot.RewardEligible,
-	}
-	if businessCode != "" {
-		plan.BusinessCode = &businessCode
-	}
-	return plan
-}
-
-func upsertKyrenSubscriptionTopUpTx(tx *gorm.DB, order *model.SubscriptionOrder) error {
-	if tx == nil || order == nil {
-		return errors.New("invalid subscription order")
-	}
-	now := common.GetTimestamp()
-	var topup model.TopUp
-	if err := tx.Where("trade_no = ?", order.TradeNo).First(&topup).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			topup = model.TopUp{
-				UserId:          order.UserId,
-				Amount:          0,
-				Money:           order.Money,
-				TradeNo:         order.TradeNo,
-				PaymentMethod:   order.PaymentMethod,
-				PaymentProvider: order.PaymentProvider,
-				CreateTime:      order.CreateTime,
-				CompleteTime:    now,
-				Status:          common.TopUpStatusSuccess,
-				KyrenSnapshot:   order.KyrenSnapshot,
-			}
-			return tx.Create(&topup).Error
-		}
-		return err
-	}
-	if topup.PaymentProvider != "" && topup.PaymentProvider != order.PaymentProvider {
-		return model.ErrPaymentMethodMismatch
-	}
-	topup.Money = order.Money
-	topup.PaymentMethod = order.PaymentMethod
-	topup.PaymentProvider = order.PaymentProvider
-	if topup.CreateTime == 0 {
-		topup.CreateTime = order.CreateTime
-	}
-	topup.CompleteTime = now
-	topup.Status = common.TopUpStatusSuccess
-	if topup.KyrenSnapshot == "" {
-		topup.KyrenSnapshot = order.KyrenSnapshot
-	}
-	return tx.Save(&topup).Error
 }

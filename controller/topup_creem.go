@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -285,14 +286,16 @@ func CreemWebhook(c *gin.Context) {
 }
 
 // 处理支付完成事件
-func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
-	// 验证订单状态
-	if event.Object.Order.Status != "paid" {
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订单状态未支付，忽略处理 request_id=%s order_id=%s order_status=%s", event.Object.RequestId, event.Object.Order.Id, event.Object.Order.Status))
-		c.Status(http.StatusOK)
-		return
+func isCreemTerminalPaymentStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "closed", "canceled", "cancelled", "expired":
+		return true
+	default:
+		return false
 	}
+}
 
+func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 	// 获取引用ID（这是我们创建订单时传递的request_id）
 	referenceId := event.Object.RequestId
 	if referenceId == "" {
@@ -301,9 +304,24 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
-	// Try complete subscription order first
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
+
+	if event.Object.Order.Status != "paid" {
+		terminal := isCreemTerminalPaymentStatus(event.Object.Order.Status) || isCreemTerminalPaymentStatus(event.Object.Status)
+		if terminal {
+			if err := model.FailSubscriptionOrder(referenceId, model.PaymentProviderCreem); err != nil && !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
+				logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅订单标记失败 trade_no=%s creem_order_id=%s checkout_status=%s order_status=%s error=%q", referenceId, event.Object.Order.Id, event.Object.Status, event.Object.Order.Status, err.Error()))
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+		}
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订单状态未支付 trade_no=%s order_id=%s checkout_status=%s order_status=%s terminal=%t", referenceId, event.Object.Order.Id, event.Object.Status, event.Object.Order.Status, terminal))
+		c.Status(http.StatusOK)
+		return
+	}
+
+	// Try complete subscription order first
 	if err := completeSubscriptionOrderAndEvaluateInvitation(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err == nil {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订阅订单处理成功 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 		c.Status(http.StatusOK)

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -51,6 +52,31 @@ func getCachedDBTimestamp(tx *gorm.DB) int64 {
 func resetDBTimestampCacheForTest() {
 	dbTimestampCache.Store(0)
 	dbTimestampCacheUnixNano.Store(0)
+}
+
+// getDBTimestampStrictTx returns the database UTC time in whole UNIX seconds.
+// Unlike getDBTimestampTx it never falls back to an application clock.
+func getDBTimestampStrictTx(tx *gorm.DB) (int64, error) {
+	if tx == nil {
+		return 0, fmt.Errorf("database time query requires a transaction")
+	}
+	var ts int64
+	var err error
+	switch {
+	case common.UsingPostgreSQL:
+		err = tx.Raw("SELECT FLOOR(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP))::bigint").Scan(&ts).Error
+	case common.UsingSQLite:
+		err = tx.Raw("SELECT CAST(strftime('%s','now') AS INTEGER)").Scan(&ts).Error
+	default:
+		err = tx.Raw("SELECT UNIX_TIMESTAMP()").Scan(&ts).Error
+	}
+	if err != nil {
+		return 0, fmt.Errorf("query database time: %w", err)
+	}
+	if ts <= 0 {
+		return 0, fmt.Errorf("database returned invalid timestamp %d", ts)
+	}
+	return ts, nil
 }
 
 func getDBTimestampTx(tx *gorm.DB) int64 {

@@ -79,6 +79,9 @@ func ValidateSubscriptionBillingStrategy(strategy string) error {
 
 const (
 	SubscriptionGrantOrder                    = "order"
+	SubscriptionGrantRedemption               = "redemption"
+	SubscriptionGrantAdmin                    = "admin"
+	SubscriptionGrantCompensation             = "compensation"
 	SubscriptionGrantMonthlyInviteEntitlement = "monthly_invite_entitlement"
 )
 
@@ -446,11 +449,15 @@ type UserSubscription struct {
 	AmountTotal int64 `json:"amount_total" gorm:"type:bigint;not null;default:0"`
 	AmountUsed  int64 `json:"amount_used" gorm:"type:bigint;not null;default:0"`
 
-	TokenLimit        int64  `json:"token_limit" gorm:"type:bigint;not null;default:0"`
-	TokenUsed         int64  `json:"token_used" gorm:"type:bigint;not null;default:0"`
-	ConcurrencyLimit  int    `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
-	GrantReason       string `json:"grant_reason" gorm:"type:varchar(32);default:'';index"`
-	GrantSourceUserId int    `json:"grant_source_user_id" gorm:"type:int;default:0;index"`
+	TokenLimit              int64  `json:"token_limit" gorm:"type:bigint;not null;default:0"`
+	TokenUsed               int64  `json:"token_used" gorm:"type:bigint;not null;default:0"`
+	ConcurrencyLimit        int    `json:"concurrency_limit" gorm:"type:int;not null;default:0"`
+	GrantReason             string `json:"grant_reason" gorm:"type:varchar(32);default:'';index"`
+	GrantSourceUserId       int    `json:"grant_source_user_id" gorm:"type:int;default:0;index"`
+	LastGrantedAt           int64  `json:"-" gorm:"type:bigint;not null;default:0;index"`
+	LastGrantCreditSnapshot *int64 `json:"-" gorm:"type:bigint"`
+	LastGrantTimeSource     string `json:"-" gorm:"type:varchar(64);not null;default:''"`
+	LastGrantSource         string `json:"-" gorm:"type:varchar(32);not null;default:''"`
 
 	StartTime int64  `json:"start_time" gorm:"bigint"`
 	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3;index:idx_user_sub_active_order,priority:3"`
@@ -723,7 +730,10 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	if plan.EntitlementType == SubscriptionEntitlementCreditBalance {
 		return nil, errors.New("credit balance entitlements must use the dedicated credit service")
 	}
-	nowUnix := getDBTimestampTx(tx)
+	nowUnix, err := getDBTimestampStrictTx(tx)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Unix(nowUnix, 0)
 	var existing UserSubscription
 	var sameTierPaid UserSubscription
@@ -772,6 +782,7 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	if nextReset > 0 {
 		lastReset = now.Unix()
 	}
+	grantCreditSnapshot := plan.MonthlyTokenLimit
 	if existingQuery.RowsAffected > 0 {
 		existing.EndTime = endUnix
 		existing.TokenLimit = plan.MonthlyTokenLimit
@@ -783,14 +794,21 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 			existing.Source = source
 		}
 		existing.NextResetTime = nextReset
-
-		existing.UpdatedAt = common.GetTimestamp()
+		existing.LastGrantedAt = nowUnix
+		existing.LastGrantCreditSnapshot = &grantCreditSnapshot
+		existing.LastGrantTimeSource = SubscriptionGrantTimeSourceLive
+		existing.LastGrantSource = strings.TrimSpace(source)
+		existing.UpdatedAt = nowUnix
 		fields := []string{
 			"end_time",
 			"token_limit",
 			"concurrency_limit",
 			"next_reset_time",
 			"updated_at",
+			"last_granted_at",
+			"last_grant_credit_snapshot",
+			"last_grant_time_source",
+			"last_grant_source",
 		}
 		if strings.TrimSpace(existing.GrantReason) == source {
 			fields = append(fields, "grant_reason")
@@ -806,25 +824,29 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	}
 
 	sub := &UserSubscription{
-		UserId:           userId,
-		PlanId:           plan.Id,
-		EntitlementType:  plan.EntitlementType,
-		AmountTotal:      plan.TotalAmount,
-		AmountUsed:       0,
-		TokenLimit:       plan.MonthlyTokenLimit,
-		TokenUsed:        0,
-		ConcurrencyLimit: plan.ConcurrencyLimit,
-		GrantReason:      source,
-		StartTime:        now.Unix(),
-		EndTime:          endUnix,
-		Status:           "active",
-		Source:           source,
-		LastResetTime:    lastReset,
-		NextResetTime:    nextReset,
-		UpgradeGroup:     "",
-		PrevUserGroup:    "",
-		CreatedAt:        common.GetTimestamp(),
-		UpdatedAt:        common.GetTimestamp(),
+		UserId:                  userId,
+		PlanId:                  plan.Id,
+		EntitlementType:         plan.EntitlementType,
+		AmountTotal:             plan.TotalAmount,
+		AmountUsed:              0,
+		TokenLimit:              plan.MonthlyTokenLimit,
+		TokenUsed:               0,
+		ConcurrencyLimit:        plan.ConcurrencyLimit,
+		GrantReason:             source,
+		LastGrantedAt:           nowUnix,
+		LastGrantCreditSnapshot: &grantCreditSnapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         strings.TrimSpace(source),
+		StartTime:               now.Unix(),
+		EndTime:                 endUnix,
+		Status:                  "active",
+		Source:                  source,
+		LastResetTime:           lastReset,
+		NextResetTime:           nextReset,
+		UpgradeGroup:            "",
+		PrevUserGroup:           "",
+		CreatedAt:               nowUnix,
+		UpdatedAt:               nowUnix,
 	}
 	if err := tx.Create(sub).Error; err != nil {
 		return nil, err
@@ -842,7 +864,10 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if order.Status != common.TopUpStatusPending {
 		return nil, ErrSubscriptionOrderStatusInvalid
 	}
-	completeTime := common.GetTimestamp()
+	completeTime, completeTimeErr := getDBTimestampStrictTx(tx)
+	if completeTimeErr != nil {
+		return nil, completeTimeErr
+	}
 	updates := map[string]any{
 		"status":        common.TopUpStatusSuccess,
 		"complete_time": completeTime,

@@ -325,6 +325,9 @@ func migrateDB() error {
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
 		return err
 	}
+	if err := BackfillTimedSubscriptionGrantMetadata(); err != nil {
+		return err
+	}
 	if err := migrateLegacyTrialPlanTitle(); err != nil {
 		return err
 	}
@@ -432,6 +435,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
+		return err
+	}
+	if err := BackfillTimedSubscriptionGrantMetadata(); err != nil {
 		return err
 	}
 	if err := migrateLegacyTrialPlanTitle(); err != nil {

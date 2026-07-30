@@ -145,6 +145,15 @@ func GetCreditBalanceLedger(c *gin.Context) {
 	common.ApiSuccess(c, entries)
 }
 
+func GetSubscriptionConversionQuotes(c *gin.Context) {
+	quotes, err := model.ListTimedSubscriptionConversionQuotes(c.GetInt("id"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, toSubscriptionConversionQuoteListResponse(quotes))
+}
+
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
 	settingMap, _ := model.GetUserSetting(userId, false)

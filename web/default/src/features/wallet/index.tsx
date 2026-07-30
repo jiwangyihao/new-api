@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { getSelf } from '@/lib/api'
 import { useStatus } from '@/hooks/use-status'
 import { SectionPageLayout } from '@/components/layout'
+import { TimedSubscriptionConversionQuotesCard } from '@/features/subscription-conversion/components/timed-subscription-conversion-quotes-card'
 import { AffiliateRewardsCard } from './components/affiliate-rewards-card'
 import { BillingHistoryDialog } from './components/dialogs/billing-history-dialog'
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
@@ -318,6 +319,8 @@ export function Wallet(props: WalletProps) {
                 />
               </div>
             </div>
+
+            <TimedSubscriptionConversionQuotesCard />
 
             <AffiliateRewardsCard
               affiliateLink={affiliateLink}

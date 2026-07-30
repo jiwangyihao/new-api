@@ -60,6 +60,10 @@ redemption.expired: "该兑换码已过期"
 redemption.failed: "兑换失败，请稍后重试"
 redemption.not_provided: "未提供兑换码"
 redemption.expire_time_invalid: "过期时间不能早于当前时间"
+redemption.mode_required: "套餐型兑换码必须明确选择兑换模式"
+redemption.mode_invalid: "兑换模式必须是 timed 或 credit_balance"
+redemption.credit_balance_unavailable: "Credit 余额兑换当前不可用"
+redemption.plan_ineligible: "该套餐不符合 Credit 余额兑换资格"
 
 # User messages
 user.password_login_disabled: "管理员关闭了密码登录"

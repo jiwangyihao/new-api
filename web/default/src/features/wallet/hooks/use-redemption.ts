@@ -26,6 +26,30 @@ import type { RedemptionRequest, RedemptionResult } from '../types'
 // ============================================================================
 // Redemption Hook
 // ============================================================================
+export const REDEMPTION_ERROR_MESSAGE_KEYS = {
+  redemption_mode_required:
+    'Subscription redemption codes require a redemption mode',
+  redemption_mode_invalid: 'Redemption mode must be timed or credit_balance',
+  credit_balance_redemption_unavailable:
+    'Credit balance redemption is currently unavailable',
+  redemption_plan_ineligible:
+    'This plan is not eligible for Credit balance redemption',
+  redemption_already_used: 'This redemption code has been used',
+} as const
+
+export function getRedemptionErrorMessageKey(
+  code?: string
+): string | undefined {
+  if (!code) return undefined
+  return REDEMPTION_ERROR_MESSAGE_KEYS[
+    code as keyof typeof REDEMPTION_ERROR_MESSAGE_KEYS
+  ]
+}
+
+function getRedemptionErrorMessage(code?: string, fallback?: string): string {
+  const key = getRedemptionErrorMessageKey(code)
+  return key ? i18next.t(key) : fallback || i18next.t('Redemption failed')
+}
 
 export class RedemptionRequestError extends Error {
   code?: string
@@ -128,7 +152,7 @@ export function useRedemption() {
         }
 
         throw new RedemptionRequestError(
-          response.message || i18next.t('Redemption failed'),
+          getRedemptionErrorMessage(response.code, response.message),
           response.code
         )
       } finally {

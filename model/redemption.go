@@ -439,7 +439,7 @@ func redemptionResultFromFulfillment(redemption *Redemption, userId int) (*Redem
 		return result, ErrRedemptionAlreadyUsed
 	}
 	if result.Type == RedemptionTypeWallet {
-		return result, ErrRedemptionAlreadyUsed
+		return nil, ErrRedeemFailed
 	}
 	if result.RedemptionMode == "" || strings.TrimSpace(redemption.FulfillmentSnapshot) == "" {
 		return result, ErrRedemptionAlreadyUsed

@@ -59,16 +59,20 @@ const (
 
 // Redemption related messages
 const (
-	MsgRedemptionNameLength        = "redemption.name_length"
-	MsgRedemptionCountPositive     = "redemption.count_positive"
-	MsgRedemptionCountMax          = "redemption.count_max"
-	MsgRedemptionCreateFailed      = "redemption.create_failed"
-	MsgRedemptionInvalid           = "redemption.invalid"
-	MsgRedemptionUsed              = "redemption.used"
-	MsgRedemptionExpired           = "redemption.expired"
-	MsgRedemptionFailed            = "redemption.failed"
-	MsgRedemptionNotProvided       = "redemption.not_provided"
-	MsgRedemptionExpireTimeInvalid = "redemption.expire_time_invalid"
+	MsgRedemptionNameLength               = "redemption.name_length"
+	MsgRedemptionCountPositive            = "redemption.count_positive"
+	MsgRedemptionCountMax                 = "redemption.count_max"
+	MsgRedemptionCreateFailed             = "redemption.create_failed"
+	MsgRedemptionInvalid                  = "redemption.invalid"
+	MsgRedemptionUsed                     = "redemption.used"
+	MsgRedemptionExpired                  = "redemption.expired"
+	MsgRedemptionFailed                   = "redemption.failed"
+	MsgRedemptionNotProvided              = "redemption.not_provided"
+	MsgRedemptionExpireTimeInvalid        = "redemption.expire_time_invalid"
+	MsgRedemptionModeRequired             = "redemption.mode_required"
+	MsgRedemptionModeInvalid              = "redemption.mode_invalid"
+	MsgRedemptionCreditBalanceUnavailable = "redemption.credit_balance_unavailable"
+	MsgRedemptionPlanIneligible           = "redemption.plan_ineligible"
 )
 
 // User related messages
@@ -193,7 +197,6 @@ const (
 	MsgVendorNameExists = "vendor.name_exists"
 	MsgVendorIdMissing  = "vendor.id_missing"
 )
-
 
 // Checkin related messages
 const (

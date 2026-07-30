@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -19,7 +20,7 @@ type redemptionRouteResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Code    string `json:"code"`
-	Result  struct {
+	Result  *struct {
 		Type           string                          `json:"type"`
 		RedemptionMode string                          `json:"redemption_mode"`
 		CreditBalance  *model.CreditBalanceGrantResult `json:"credit_balance"`
@@ -62,7 +63,7 @@ func TestTopUpSubscriptionRequiresExplicitRedemptionMode(t *testing.T) {
 	var payload redemptionRouteResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	assert.False(t, payload.Success)
-	assert.Contains(t, payload.Message, "兑换模式")
+	assert.NotEmpty(t, payload.Message)
 	assert.Equal(t, "redemption_mode_required", payload.Code)
 
 	var saved model.Redemption
@@ -224,7 +225,7 @@ func TestTopUpUsedSubscriptionStillRejectsMissingOrInvalidRedemptionMode(t *test
 		t.Run(name, func(t *testing.T) {
 			payload := post(body)
 			assert.False(t, payload.Success)
-			assert.Contains(t, payload.Message, "兑换模式")
+			assert.NotEmpty(t, payload.Message)
 		})
 	}
 
@@ -324,11 +325,14 @@ func TestTopUpWalletKeepsLegacyModeAndReplayContract(t *testing.T) {
 
 	first := post()
 	require.True(t, first.Success, first.Message)
+	require.NotNil(t, first.Result)
 	assert.Equal(t, model.RedemptionTypeWallet, first.Result.Type)
 	assert.Empty(t, first.Result.RedemptionMode)
 	second := post()
 	assert.False(t, second.Success)
-	assert.Contains(t, second.Message, "已被使用")
+	assert.Equal(t, i18n.MsgRedeemFailed, second.Message)
+	assert.Empty(t, second.Code)
+	assert.Nil(t, second.Result)
 
 	var savedUser model.User
 	require.NoError(t, model.DB.Select("quota").First(&savedUser, user.Id).Error)
@@ -443,7 +447,7 @@ func TestTopUpCreditBalanceRejectsClosedGlobalRedemptionEntryWithoutConsumingCod
 	var payload redemptionRouteResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 	assert.False(t, payload.Success)
-	assert.Contains(t, payload.Message, "入口未开启")
+	assert.Equal(t, "credit_balance_redemption_unavailable", payload.Code)
 	var saved model.Redemption
 	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)
@@ -465,20 +469,20 @@ func TestTopUpCreditBalanceRejectsEveryIneligiblePlanShape(t *testing.T) {
 		persistCreditDisabled bool
 		persistOptionDisabled bool
 		rawOptionType         string
-		wantMessage           string
+		wantCode              string
 	}{
-		{name: "balance plan not configured", mutateCredit: func(plan *model.SubscriptionPlan) { plan.CreditBalanceConfigured = false }, wantMessage: "入口未开启"},
-		{name: "balance redemption disabled", mutateCredit: func(plan *model.SubscriptionPlan) { plan.CreditBalanceRedemptionEnabled = false }, wantMessage: "入口未开启"},
-		{name: "balance plan paused", persistCreditDisabled: true, wantMessage: "入口未开启"},
-		{name: "target plan paused", persistOptionDisabled: true, wantMessage: "不符合"},
-		{name: "target is not timed", rawOptionType: "unsupported", wantMessage: "不符合"},
-		{name: "non monthly duration", mutateOption: func(plan *model.SubscriptionPlan) { plan.DurationUnit = model.SubscriptionDurationYear }, wantMessage: "不符合"},
-		{name: "multiple months", mutateOption: func(plan *model.SubscriptionPlan) { plan.DurationValue = 2 }, wantMessage: "不符合"},
-		{name: "non monthly reset", mutateOption: func(plan *model.SubscriptionPlan) { plan.QuotaResetPeriod = model.SubscriptionResetDaily }, wantMessage: "不符合"},
-		{name: "zero monthly Credit", mutateOption: func(plan *model.SubscriptionPlan) { plan.MonthlyTokenLimit = 0 }, wantMessage: "不符合"},
-		{name: "trial plan", mutateOption: func(plan *model.SubscriptionPlan) { plan.IsTrial = true }, wantMessage: "不符合"},
-		{name: "invite trial plan", mutateOption: func(plan *model.SubscriptionPlan) { plan.InviteTrial = true }, wantMessage: "不符合"},
-		{name: "unlimited purchase ineligible", mutateOption: func(plan *model.SubscriptionPlan) { plan.UnlimitedPurchaseEnabled = false }, wantMessage: "不符合"},
+		{name: "balance plan not configured", mutateCredit: func(plan *model.SubscriptionPlan) { plan.CreditBalanceConfigured = false }, wantCode: "credit_balance_redemption_unavailable"},
+		{name: "balance redemption disabled", mutateCredit: func(plan *model.SubscriptionPlan) { plan.CreditBalanceRedemptionEnabled = false }, wantCode: "credit_balance_redemption_unavailable"},
+		{name: "balance plan paused", persistCreditDisabled: true, wantCode: "credit_balance_redemption_unavailable"},
+		{name: "target plan paused", persistOptionDisabled: true, wantCode: "redemption_plan_ineligible"},
+		{name: "target is not timed", rawOptionType: "unsupported", wantCode: "redemption_plan_ineligible"},
+		{name: "non monthly duration", mutateOption: func(plan *model.SubscriptionPlan) { plan.DurationUnit = model.SubscriptionDurationYear }, wantCode: "redemption_plan_ineligible"},
+		{name: "multiple months", mutateOption: func(plan *model.SubscriptionPlan) { plan.DurationValue = 2 }, wantCode: "redemption_plan_ineligible"},
+		{name: "non monthly reset", mutateOption: func(plan *model.SubscriptionPlan) { plan.QuotaResetPeriod = model.SubscriptionResetDaily }, wantCode: "redemption_plan_ineligible"},
+		{name: "zero monthly Credit", mutateOption: func(plan *model.SubscriptionPlan) { plan.MonthlyTokenLimit = 0 }, wantCode: "redemption_plan_ineligible"},
+		{name: "trial plan", mutateOption: func(plan *model.SubscriptionPlan) { plan.IsTrial = true }, wantCode: "redemption_plan_ineligible"},
+		{name: "invite trial plan", mutateOption: func(plan *model.SubscriptionPlan) { plan.InviteTrial = true }, wantCode: "redemption_plan_ineligible"},
+		{name: "unlimited purchase ineligible", mutateOption: func(plan *model.SubscriptionPlan) { plan.UnlimitedPurchaseEnabled = false }, wantCode: "redemption_plan_ineligible"},
 	}
 
 	for _, test := range tests {
@@ -534,7 +538,7 @@ func TestTopUpCreditBalanceRejectsEveryIneligiblePlanShape(t *testing.T) {
 			var payload redemptionRouteResponse
 			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
 			assert.False(t, payload.Success)
-			assert.Contains(t, payload.Message, test.wantMessage)
+			assert.Equal(t, test.wantCode, payload.Code)
 			var saved model.Redemption
 			require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
 			assert.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)

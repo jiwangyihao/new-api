@@ -5669,6 +5669,11 @@
     "Credit balance history": "Credit 残高履歴",
     "Redemption": "交換",
     "Purchase": "購入",
+    "Subscription redemption codes require a redemption mode": "サブスクリプション交換コードでは交換モードの選択が必要です",
+    "Redemption mode must be timed or credit_balance": "交換モードは timed または credit_balance である必要があります",
+    "Credit balance redemption is currently unavailable": "Credit 残高への交換は現在利用できません",
+    "This plan is not eligible for Credit balance redemption": "このプランは Credit 残高への交換対象ではありません",
+    "This redemption code has been used": "この交換コードは使用済みです",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT は超低価格で安定した GPT サービスです。私の招待リンクから登録すると、1 日無料で無制限トークンを試せます："
   }
 }

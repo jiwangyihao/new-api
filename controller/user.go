@@ -1156,29 +1156,49 @@ func TopUp(c *gin.Context) {
 	}
 	redemption, err := model.Redeem(req.Key, id, req.RedemptionMode)
 	if err != nil {
-		if errors.Is(err, model.ErrRedemptionAlreadyUsed) && redemption != nil {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": err.Error(),
-				"result": gin.H{
-					"type":            redemption.Type,
-					"redemption_id":   redemption.RedemptionId,
-					"redemption_mode": redemption.RedemptionMode,
-					"replayed":        redemption.Replayed,
-				},
-			})
-			return
-		}
 		if errors.Is(err, model.ErrRedeemFailed) {
 			common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
 			return
 		}
-		if errors.Is(err, model.ErrRedemptionModeRequired) || errors.Is(err, model.ErrRedemptionModeInvalid) {
-			code := "redemption_mode_invalid"
-			if errors.Is(err, model.ErrRedemptionModeRequired) {
-				code = "redemption_mode_required"
+		if errors.Is(err, model.ErrRedemptionAlreadyUsed) {
+			response := gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, i18n.MsgRedemptionUsed),
+				"code":    "redemption_already_used",
 			}
-			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "code": code})
+			if redemption != nil {
+				response["result"] = gin.H{
+					"type":            redemption.Type,
+					"redemption_id":   redemption.RedemptionId,
+					"redemption_mode": redemption.RedemptionMode,
+					"replayed":        redemption.Replayed,
+				}
+			}
+			c.JSON(http.StatusOK, response)
+			return
+		}
+		code := ""
+		messageKey := ""
+		switch {
+		case errors.Is(err, model.ErrRedemptionModeRequired):
+			code = "redemption_mode_required"
+			messageKey = i18n.MsgRedemptionModeRequired
+		case errors.Is(err, model.ErrRedemptionModeInvalid):
+			code = "redemption_mode_invalid"
+			messageKey = i18n.MsgRedemptionModeInvalid
+		case errors.Is(err, model.ErrCreditBalanceRedemptionUnavailable):
+			code = "credit_balance_redemption_unavailable"
+			messageKey = i18n.MsgRedemptionCreditBalanceUnavailable
+		case errors.Is(err, model.ErrRedemptionPlanIneligible):
+			code = "redemption_plan_ineligible"
+			messageKey = i18n.MsgRedemptionPlanIneligible
+		}
+		if code != "" {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": common.TranslateMessage(c, messageKey),
+				"code":    code,
+			})
 			return
 		}
 		common.ApiError(c, err)

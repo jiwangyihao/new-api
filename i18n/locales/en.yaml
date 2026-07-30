@@ -59,6 +59,10 @@ redemption.expired: "This redemption code has expired"
 redemption.failed: "Redemption failed, please try again later"
 redemption.not_provided: "Redemption code not provided"
 redemption.expire_time_invalid: "Expiration time cannot be earlier than current time"
+redemption.mode_required: "Subscription redemption codes require a redemption mode"
+redemption.mode_invalid: "Redemption mode must be timed or credit_balance"
+redemption.credit_balance_unavailable: "Credit balance redemption is currently unavailable"
+redemption.plan_ineligible: "This plan is not eligible for Credit balance redemption"
 
 # User messages
 user.password_login_disabled: "Password login has been disabled by administrator"

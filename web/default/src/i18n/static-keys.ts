@@ -216,6 +216,11 @@ export const STATIC_I18N_KEYS = [
   'Expired time cannot be earlier than current time',
   'Quota must be a positive number',
   'Successfully created {{count}} redemption codes',
+  'Subscription redemption codes require a redemption mode',
+  'Redemption mode must be timed or credit_balance',
+  'Credit balance redemption is currently unavailable',
+  'This plan is not eligible for Credit balance redemption',
+  'This redemption code has been used',
 
   // Home page (constants-driven labels)
   'Token Tracking',

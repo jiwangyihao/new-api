@@ -13,7 +13,9 @@ import (
 
 const (
 	CreditBalanceLedgerSourceSubscriptionOrder = "subscription_order"
+	CreditBalanceLedgerSourceRedemption        = "redemption"
 	CreditBalanceLedgerTypePurchase            = "purchase"
+	CreditBalanceLedgerTypeRedemption          = "redemption"
 )
 
 const (
@@ -30,6 +32,7 @@ type CreditBalanceLedger struct {
 	IdempotencyKey       string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
 	SourceType           string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
 	SourceId             int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
+	SourceSnapshot       string `json:"source_snapshot,omitempty" gorm:"type:text"`
 	GrossCredit          int64  `json:"gross_credit" gorm:"type:bigint;not null"`
 	DebtOffset           int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
 	BalanceBefore        int64  `json:"balance_before" gorm:"type:bigint;not null"`
@@ -55,6 +58,7 @@ type CreditBalanceGrantRequest struct {
 	IdempotencyKey string
 	SourceType     string
 	SourceId       int
+	SourceSnapshot string
 	Type           string
 	TargetPlanId   int
 	OperatorUserId int
@@ -159,6 +163,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.SourceType = strings.TrimSpace(request.SourceType)
 	request.Type = strings.TrimSpace(request.Type)
+	request.SourceSnapshot = strings.TrimSpace(request.SourceSnapshot)
 	request.Reason = strings.TrimSpace(request.Reason)
 	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.Type == "" || request.TargetPlanId <= 0 {
 		return nil, errors.New("invalid credit balance grant")
@@ -233,6 +238,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		IdempotencyKey:       request.IdempotencyKey,
 		SourceType:           request.SourceType,
 		SourceId:             request.SourceId,
+		SourceSnapshot:       request.SourceSnapshot,
 		GrossCredit:          request.GrossCredit,
 		DebtOffset:           debtOffset,
 		BalanceBefore:        balanceBefore,
@@ -258,7 +264,7 @@ func findCreditBalanceGrantResultTx(tx *gorm.DB, request CreditBalanceGrantReque
 	if query.RowsAffected == 0 {
 		return nil, false, nil
 	}
-	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type {
+	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot {
 		return nil, false, errors.New("credit balance idempotency key mismatch")
 	}
 	var balance UserSubscription
@@ -427,6 +433,22 @@ func ValidateCreditBalancePurchaseOption(plan *SubscriptionPlan, creditPlan *Sub
 	}
 	if !creditPlan.Enabled || !creditPlan.CreditBalanceConfigured || !creditPlan.CreditBalancePurchaseEnabled {
 		return errors.New("Credit 余额购买入口未开启")
+	}
+	return nil
+}
+
+func ValidateCreditBalanceRedemptionOption(plan *SubscriptionPlan, creditPlan *SubscriptionPlan) error {
+	if plan == nil || creditPlan == nil {
+		return ErrCreditBalanceRedemptionUnavailable
+	}
+	if !creditPlan.Enabled || !creditPlan.CreditBalanceConfigured || !creditPlan.CreditBalanceRedemptionEnabled {
+		return ErrCreditBalanceRedemptionUnavailable
+	}
+	if !plan.Enabled || strings.TrimSpace(plan.EntitlementType) != SubscriptionEntitlementTimed {
+		return ErrRedemptionPlanIneligible
+	}
+	if plan.DurationUnit != SubscriptionDurationMonth || plan.DurationValue != 1 || NormalizeResetPeriod(plan.QuotaResetPeriod) != SubscriptionResetMonthly || plan.MonthlyTokenLimit <= 0 || plan.IsTrial || plan.InviteTrial || !plan.UnlimitedPurchaseEnabled {
+		return ErrRedemptionPlanIneligible
 	}
 	return nil
 }

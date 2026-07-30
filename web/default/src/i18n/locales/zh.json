@@ -5656,6 +5656,19 @@
     "{{seconds}} seconds of conversion cooldown remaining": "转换冷却期还剩 {{seconds}} 秒",
     "{{seconds}} seconds of conversion grace remaining": "转换宽限期还剩 {{seconds}} 秒",
     "{{seconds}} seconds remaining": "剩余 {{seconds}} 秒",
+    "Choose redemption mode": "选择兑换模式",
+    "Subscription codes require an explicit benefit mode. Account balance codes keep their existing value.": "套餐兑换码必须明确选择权益模式。普通账户余额兑换码仍按原有方式兑换。",
+    "Redemption receipt": "兑换回执",
+    "Account balance redemption completed": "账户余额兑换完成",
+    "Redemption mode": "兑换模式",
+    "Choose the benefit you want before redeeming.": "兑换前请选择要获得的权益。",
+    "Keep the plan duration, reset cycle, and service limits.": "保留套餐时长、重置周期和服务限制。",
+    "Add the latest monthly Credit to the non-expiring balance; service limits come from the Credit balance plan.": "将最新的月度 Credit 加入不过期余额；服务限制以 Credit 余额套餐为准。",
+    "Confirm redemption": "确认兑换",
+    "Redemption successful! Gross Credit: {{gross}}, debt offset: {{debt}}, available Credit balance: {{available}}": "兑换成功！Credit 毛入账：{{gross}}，欠额抵扣：{{debt}}，可用 Credit 余额：{{available}}",
+    "Credit balance history": "Credit 余额历史",
+    "Redemption": "兑换",
+    "Purchase": "购买",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token："
   }
 }

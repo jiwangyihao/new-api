@@ -5656,6 +5656,19 @@
     "{{seconds}} seconds of conversion cooldown remaining": "変換のクールダウンは残り{{seconds}}秒です",
     "{{seconds}} seconds of conversion grace remaining": "変換猶予期間は残り{{seconds}}秒です",
     "{{seconds}} seconds remaining": "残り{{seconds}}秒",
+    "Choose redemption mode": "交換モードを選択",
+    "Subscription codes require an explicit benefit mode. Account balance codes keep their existing value.": "サブスクリプションコードでは特典モードを明示的に選択する必要があります。アカウント残高コードは従来どおりの価値を維持します。",
+    "Redemption receipt": "交換明細",
+    "Account balance redemption completed": "アカウント残高の交換が完了しました",
+    "Redemption mode": "交換モード",
+    "Choose the benefit you want before redeeming.": "交換前に受け取る特典を選択してください。",
+    "Keep the plan duration, reset cycle, and service limits.": "プラン期間、リセット周期、サービス制限を維持します。",
+    "Add the latest monthly Credit to the non-expiring balance; service limits come from the Credit balance plan.": "最新の月間 Credit を有効期限のない残高に追加します。サービス制限は Credit 残高プランに従います。",
+    "Confirm redemption": "交換を確定",
+    "Redemption successful! Gross Credit: {{gross}}, debt offset: {{debt}}, available Credit balance: {{available}}": "交換成功！総 Credit：{{gross}}、債務相殺：{{debt}}、利用可能な Credit 残高：{{available}}",
+    "Credit balance history": "Credit 残高履歴",
+    "Redemption": "交換",
+    "Purchase": "購入",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT は超低価格で安定した GPT サービスです。私の招待リンクから登録すると、1 日無料で無制限トークンを試せます："
   }
 }

@@ -460,6 +460,7 @@ export interface CreditBalanceLedgerEntry {
   available_credit_after: number
   settlement_debt_after: number
   reason: string
+  source_snapshot?: string
   created_at: number
 }
 

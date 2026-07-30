@@ -1132,57 +1132,21 @@ func EmailBind(c *gin.Context) {
 }
 
 type topUpRequest struct {
-	Key string `json:"key"`
+	Key            string `json:"key"`
+	RedemptionMode string `json:"redemption_mode"`
 }
 
 var topUpLocks sync.Map
-var topUpCreateLock sync.Mutex
 
-type topUpTryLock struct {
-	ch chan struct{}
-}
-
-func newTopUpTryLock() *topUpTryLock {
-	return &topUpTryLock{ch: make(chan struct{}, 1)}
-}
-
-func (l *topUpTryLock) TryLock() bool {
-	select {
-	case l.ch <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (l *topUpTryLock) Unlock() {
-	select {
-	case <-l.ch:
-	default:
-	}
-}
-
-func getTopUpLock(userID int) *topUpTryLock {
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	topUpCreateLock.Lock()
-	defer topUpCreateLock.Unlock()
-	if v, ok := topUpLocks.Load(userID); ok {
-		return v.(*topUpTryLock)
-	}
-	l := newTopUpTryLock()
-	topUpLocks.Store(userID, l)
-	return l
+func getTopUpLock(userID int) *sync.Mutex {
+	lock, _ := topUpLocks.LoadOrStore(userID, &sync.Mutex{})
+	return lock.(*sync.Mutex)
 }
 
 func TopUp(c *gin.Context) {
 	id := c.GetInt("id")
 	lock := getTopUpLock(id)
-	if !lock.TryLock() {
-		common.ApiErrorI18n(c, i18n.MsgUserTopUpProcessing)
-		return
-	}
+	lock.Lock()
 	defer lock.Unlock()
 	req := topUpRequest{}
 	err := c.ShouldBindJSON(&req)
@@ -1190,27 +1154,55 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	redemption, err := model.Redeem(req.Key, id)
+	redemption, err := model.Redeem(req.Key, id, req.RedemptionMode)
 	if err != nil {
+		if errors.Is(err, model.ErrRedemptionAlreadyUsed) && redemption != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+				"result": gin.H{
+					"type":            redemption.Type,
+					"redemption_id":   redemption.RedemptionId,
+					"redemption_mode": redemption.RedemptionMode,
+					"replayed":        redemption.Replayed,
+				},
+			})
+			return
+		}
 		if errors.Is(err, model.ErrRedeemFailed) {
 			common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
+			return
+		}
+		if errors.Is(err, model.ErrRedemptionModeRequired) || errors.Is(err, model.ErrRedemptionModeInvalid) {
+			code := "redemption_mode_invalid"
+			if errors.Is(err, model.ErrRedemptionModeRequired) {
+				code = "redemption_mode_required"
+			}
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": err.Error(), "code": code})
 			return
 		}
 		common.ApiError(c, err)
 		return
 	}
-	if redemption.Type == model.RedemptionTypeSubscription && redemption.RedemptionId > 0 {
+	if redemption.Type == model.RedemptionTypeSubscription && redemption.RedemptionMode == model.RedemptionModeTimed && !redemption.Replayed && redemption.RedemptionId > 0 {
 		if err := handleInvitationRewardForSubscriptionRedemption(redemption.RedemptionId); err != nil {
 			common.SysError("failed to handle invitation reward for redemption: " + err.Error())
 		}
 	}
 	response := gin.H{
-		"type":  redemption.Type,
-		"quota": redemption.Quota,
-		"data":  redemption.Quota,
+		"type":                        redemption.Type,
+		"quota":                       redemption.Quota,
+		"data":                        redemption.Quota,
+		"redemption_id":               redemption.RedemptionId,
+		"redemption_mode":             redemption.RedemptionMode,
+		"fulfillment_subscription_id": redemption.FulfillmentSubscriptionId,
+		"replayed":                    redemption.Replayed,
 	}
 	if redemption.Plan != nil {
 		response["plan"] = redemption.Plan
+	}
+	if redemption.CreditBalance != nil {
+		response["credit_balance"] = redemption.CreditBalance
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

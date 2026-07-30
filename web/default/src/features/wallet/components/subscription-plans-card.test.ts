@@ -476,9 +476,9 @@ describe('wallet subscription React Query rendering', () => {
           id: 61,
           user_id: 1,
           user_subscription_id: 51,
-          type: 'purchase',
-          idempotency_key: 'credit-order-61',
-          source_type: 'subscription_order',
+          type: 'redemption',
+          idempotency_key: 'redemption:62',
+          source_type: 'redemption',
           source_id: 62,
           gross_credit: 1000,
           debt_offset: 250,
@@ -486,7 +486,8 @@ describe('wallet subscription React Query rendering', () => {
           balance_after: 750,
           available_credit_after: 750,
           settlement_debt_after: 0,
-          reason: 'purchase',
+          reason: 'redemption',
+          source_snapshot: '{}',
           created_at: 1,
         },
       ],
@@ -504,7 +505,9 @@ describe('wallet subscription React Query rendering', () => {
       assert.match(html, /Available Credit balance/)
       assert.match(html, /Settlement debt/)
       assert.match(html, /exhausted/)
-      assert.match(html, /Credit purchase history/)
+      assert.match(html, /Credit balance history/)
+      assert.match(html, /Redemption/)
+      assert.doesNotMatch(html, /Credit purchase history/)
       assert.match(html, /\+<!-- -->1000/)
       assert.match(html, /Debt offset<!-- --> <!-- -->250/)
       assert.match(html, /Credit balance<!-- -->:<!-- --> <!-- -->0 credits/)

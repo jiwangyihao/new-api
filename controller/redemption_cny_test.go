@@ -203,7 +203,7 @@ func TestRedeemSubscriptionCodeCreatesUserSubscription(t *testing.T) {
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9605, Title: "Redeem Subscription", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &code}).Error)
 	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "sub", Key: "sub-key", Type: model.RedemptionTypeSubscription, PlanId: 9605, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
 
-	result, err := model.Redeem("sub-key", userID)
+	result, err := model.Redeem("sub-key", userID, model.RedemptionModeTimed)
 
 	require.NoError(t, err)
 	assert.Equal(t, model.RedemptionTypeSubscription, result.Type)
@@ -253,7 +253,7 @@ func TestRedeemWalletCodeIgnoresCacheInvalidationFailure(t *testing.T) {
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_wallet_broken_cache", Quota: 1000, Status: common.UserStatusEnabled}).Error)
 	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "wallet-broken-cache", Key: "wallet-broken-cache-key", Type: model.RedemptionTypeWallet, Quota: 4000, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
 
-	result, err := model.Redeem("wallet-broken-cache-key", userID)
+	result, err := model.Redeem("wallet-broken-cache-key", userID, "")
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -289,7 +289,7 @@ func TestRedeemSubscriptionCodeResponseIncludesPlanResult(t *testing.T) {
 	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "sub-response", Key: "sub-response-key", Type: model.RedemptionTypeSubscription, PlanId: 9610, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"sub-response-key"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"sub-response-key","redemption_mode":"timed"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("id", userID)
 
@@ -330,7 +330,7 @@ func TestRedeemSubscriptionRedemptionInvokesInvitationRewardHandlerAfterCommit(t
 	})
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"sub-handler-key"}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"sub-handler-key","redemption_mode":"timed"}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	ctx.Set("id", inviteeID)
 
@@ -385,7 +385,7 @@ func TestRedeemSubscriptionCodeRejectsRenewalWhenPurchaseLimitReached(t *testing
 	require.NoError(t, model.DB.Create(existing).Error)
 	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "limit", Key: "limit-key", Type: model.RedemptionTypeSubscription, PlanId: 9608, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
 
-	result, err := model.Redeem("limit-key", userID)
+	result, err := model.Redeem("limit-key", userID, model.RedemptionModeTimed)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, model.ErrRedeemFailed)

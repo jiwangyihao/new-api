@@ -27,6 +27,7 @@ export interface ApiResponse<T = unknown> {
   success?: boolean
   message?: string
   data?: T
+  code?: string
 }
 
 /**
@@ -286,14 +287,37 @@ export interface PresetAmount {
 /**
  * Redemption code request
  */
+export type RedemptionMode = 'timed' | 'credit_balance'
+
+export interface RedemptionCreditBalanceResult {
+  user_subscription_id: number
+  plan_id: number
+  gross_credit: number
+  debt_offset: number
+  available_credit: number
+  settlement_debt: number
+  balance_before: number
+  balance_after: number
+  active: boolean
+  ledger_id: number
+  status: 'available' | 'exhausted' | 'debt'
+}
+
 export interface RedemptionRequest {
   /** Redemption code key */
   key: string
+  /** Explicit benefit mode for subscription codes */
+  redemption_mode?: RedemptionMode
 }
 
 export interface RedemptionResult {
   type: 'wallet' | 'subscription'
   quota: number
+  redemption_id?: number
+  redemption_mode?: RedemptionMode
+  fulfillment_subscription_id?: number
+  replayed?: boolean
+  credit_balance?: RedemptionCreditBalanceResult
   plan?: {
     id: number
     title: string

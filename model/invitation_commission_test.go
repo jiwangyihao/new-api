@@ -307,7 +307,7 @@ func TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent(t *testing.T) 
 	redemption := Redemption{Id: 9224, Key: "redeem-source-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, PlanId: 9223, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()}
 	require.NoError(t, DB.Create(&redemption).Error)
 
-	result, err := Redeem("redeem-source-key", 9222)
+	result, err := Redeem("redeem-source-key", 9222, RedemptionModeTimed)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -337,7 +337,7 @@ func TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan(t *test
 	redemption := Redemption{Id: 9228, Key: "redeem-ineligible-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, PlanId: 9227, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()}
 	require.NoError(t, DB.Create(&redemption).Error)
 
-	result, err := Redeem("redeem-ineligible-key", 9226)
+	result, err := Redeem("redeem-ineligible-key", 9226, RedemptionModeTimed)
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -498,7 +498,7 @@ func TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAnd
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			result, err := Redeem("redeem-race-key", userID)
+			result, err := Redeem("redeem-race-key", userID, RedemptionModeTimed)
 			if err != nil {
 				errs <- err
 				return

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { getSelf } from '@/lib/api'
 import { useStatus } from '@/hooks/use-status'
 import { SectionPageLayout } from '@/components/layout'
@@ -27,10 +28,12 @@ import { BillingHistoryDialog } from './components/dialogs/billing-history-dialo
 import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
+import { RedemptionDialog } from './components/redemption-dialog'
 import { SubscriptionPlansCard } from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
 import { DEFAULT_DISCOUNT_RATE } from './constants'
 import {
+  submitInitialRedemption,
   useTopupInfo,
   usePayment,
   useAffiliate,
@@ -50,6 +53,8 @@ import type {
   PresetAmount,
   CreemProduct,
   KyrenTopUpProduct,
+  RedemptionRequest,
+  RedemptionResult,
 } from './types'
 
 interface WalletProps {
@@ -68,6 +73,7 @@ export function Wallet(props: WalletProps) {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
   const [billingDialogOpen, setBillingDialogOpen] = useState(false)
   const [redemptionCode, setRedemptionCode] = useState('')
+  const [redemptionDialogOpen, setRedemptionDialogOpen] = useState(false)
   const [creemDialogOpen, setCreemDialogOpen] = useState(false)
   const [selectedCreemProduct, setSelectedCreemProduct] =
     useState<CreemProduct | null>(null)
@@ -190,15 +196,30 @@ export function Wallet(props: WalletProps) {
     }
   }
 
-  // Handle redemption
+  // Wallet codes keep the existing mode-free request. Subscription codes ask
+  // for an explicit mode only after the authenticated API identifies them.
   const handleRedeem = async () => {
     if (!redemptionCode) return
 
-    const success = await redeemCode(redemptionCode)
-    if (success) {
-      setRedemptionCode('')
-      await fetchUser()
-    }
+    await submitInitialRedemption({
+      key: redemptionCode,
+      redeem: redeemCode,
+      onRedeemed: async () => {
+        setRedemptionCode('')
+        await fetchUser()
+      },
+      onModeRequired: () => setRedemptionDialogOpen(true),
+      onError: (message) => toast.error(message),
+      fallbackError: t('Redemption failed'),
+    })
+  }
+
+  const handleRedemptionModeSubmit = async (
+    request: RedemptionRequest
+  ): Promise<RedemptionResult> => {
+    const result = await redeemCode(request)
+    await fetchUser()
+    return result
   }
 
   // Handle Creem product selection
@@ -331,6 +352,17 @@ export function Wallet(props: WalletProps) {
           </div>
         </SectionPageLayout.Content>
       </SectionPageLayout>
+
+      <RedemptionDialog
+        open={redemptionDialogOpen}
+        code={redemptionCode}
+        redeeming={redeeming}
+        onOpenChange={(open) => {
+          setRedemptionDialogOpen(open)
+          if (!open) setRedemptionCode('')
+        }}
+        onSubmit={handleRedemptionModeSubmit}
+      />
 
       <PaymentConfirmDialog
         open={confirmDialogOpen}

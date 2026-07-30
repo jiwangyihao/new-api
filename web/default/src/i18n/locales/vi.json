@@ -5656,6 +5656,19 @@
     "{{seconds}} seconds of conversion cooldown remaining": "Còn {{seconds}} giây trong thời gian chờ chuyển đổi",
     "{{seconds}} seconds of conversion grace remaining": "Còn {{seconds}} giây trong thời gian gia hạn chuyển đổi",
     "{{seconds}} seconds remaining": "Còn {{seconds}} giây",
+    "Choose redemption mode": "Chọn chế độ đổi mã",
+    "Subscription codes require an explicit benefit mode. Account balance codes keep their existing value.": "Mã gói đăng ký yêu cầu chọn rõ chế độ quyền lợi. Mã số dư tài khoản vẫn giữ giá trị hiện tại.",
+    "Redemption receipt": "Biên nhận đổi mã",
+    "Account balance redemption completed": "Đã hoàn tất đổi mã vào số dư tài khoản",
+    "Redemption mode": "Chế độ đổi mã",
+    "Choose the benefit you want before redeeming.": "Hãy chọn quyền lợi bạn muốn trước khi đổi mã.",
+    "Keep the plan duration, reset cycle, and service limits.": "Giữ nguyên thời hạn gói, chu kỳ đặt lại và giới hạn dịch vụ.",
+    "Add the latest monthly Credit to the non-expiring balance; service limits come from the Credit balance plan.": "Thêm Credit hàng tháng mới nhất vào số dư không hết hạn; giới hạn dịch vụ theo gói số dư Credit.",
+    "Confirm redemption": "Xác nhận đổi mã",
+    "Redemption successful! Gross Credit: {{gross}}, debt offset: {{debt}}, available Credit balance: {{available}}": "Đổi mã thành công! Credit gộp: {{gross}}, bù khoản nợ: {{debt}}, số dư Credit khả dụng: {{available}}",
+    "Credit balance history": "Lịch sử số dư Credit",
+    "Redemption": "Đổi mã",
+    "Purchase": "Mua",
     "赔钱GPT超低价稳定GPT服务，用我邀请链接注册可免费试用一天无限token：": "PeiqianGPT cung cấp dịch vụ GPT ổn định với giá siêu thấp. Đăng ký bằng liên kết giới thiệu của tôi để dùng thử miễn phí 1 ngày với token không giới hạn:"
   }
 }

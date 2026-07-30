@@ -670,7 +670,7 @@ export function SubscriptionPlansCard({
                 0 && (
                 <div className='sm:col-span-3'>
                   <div className='text-muted-foreground mb-1'>
-                    {t('Credit purchase history')}
+                    {t('Credit balance history')}
                   </div>
                   <div className='max-h-28 space-y-1 overflow-y-auto'>
                     {selfSubscriptionData.credit_balance_ledger?.map(
@@ -680,6 +680,10 @@ export function SubscriptionPlansCard({
                           className='flex flex-wrap justify-between gap-2'
                         >
                           <span>
+                            {entry.source_type === 'redemption'
+                              ? t('Redemption')
+                              : t('Purchase')}{' '}
+                            ·{' '}
                             {new Date(entry.created_at * 1000).toLocaleString()}
                           </span>
                           <span>

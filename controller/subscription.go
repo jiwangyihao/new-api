@@ -849,18 +849,58 @@ func AdminBindSubscription(c *gin.Context) {
 
 // ---- Admin: user subscription management ----
 
+type adminSubscriptionConversionAuditResponse struct {
+	ConversionId         string `json:"conversion_id"`
+	SourceSubscriptionId string `json:"source_subscription_id"`
+	TargetSubscriptionId string `json:"target_subscription_id"`
+	SourceStatusBefore   string `json:"source_status_before"`
+	SourceStatusAfter    string `json:"source_status_after"`
+	TargetStatus         string `json:"target_status"`
+	ConvertedAt          string `json:"converted_at"`
+}
+
+type adminUserSubscriptionResponse struct {
+	Subscription    *model.UserSubscription                   `json:"subscription"`
+	Plan            *model.SubscriptionPlan                   `json:"plan,omitempty"`
+	ConversionAudit *adminSubscriptionConversionAuditResponse `json:"conversion_audit,omitempty"`
+}
+
+func toAdminUserSubscriptionResponses(input []model.AdminSubscriptionSummary) []adminUserSubscriptionResponse {
+	output := make([]adminUserSubscriptionResponse, 0, len(input))
+	for _, summary := range input {
+		item := adminUserSubscriptionResponse{
+			Subscription: summary.Subscription,
+			Plan:         summary.Plan,
+		}
+		if summary.ConversionAudit != nil {
+			audit := summary.ConversionAudit
+			item.ConversionAudit = &adminSubscriptionConversionAuditResponse{
+				ConversionId:         strconv.Itoa(audit.ConversionId),
+				SourceSubscriptionId: strconv.Itoa(audit.SourceSubscriptionId),
+				TargetSubscriptionId: strconv.Itoa(audit.TargetSubscriptionId),
+				SourceStatusBefore:   audit.SourceStatusBefore,
+				SourceStatusAfter:    audit.SourceStatusAfter,
+				TargetStatus:         audit.TargetStatus,
+				ConvertedAt:          strconv.FormatInt(audit.ConvertedAt, 10),
+			}
+		}
+		output = append(output, item)
+	}
+	return output
+}
+
 func AdminListUserSubscriptions(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	if userId <= 0 {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
-	subs, err := model.GetAllUserSubscriptions(userId)
+	subs, err := model.GetAdminUserSubscriptions(userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, subs)
+	common.ApiSuccess(c, toAdminUserSubscriptionResponses(subs))
 }
 
 type AdminCreateUserSubscriptionRequest struct {

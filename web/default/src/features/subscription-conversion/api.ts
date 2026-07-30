@@ -18,6 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 import type {
+  SubscriptionConversionConfirmRequest,
+  SubscriptionConversionConfirmResponse,
+  SubscriptionConversionConfirmResult,
   SubscriptionConversionQuoteList,
   SubscriptionConversionQuoteResponse,
 } from './types'
@@ -29,6 +32,19 @@ export async function getSubscriptionConversionQuotes(): Promise<SubscriptionCon
   )
   if (!response.data.success || !response.data.data) {
     throw new Error(response.data.message || 'Unable to load conversion quotes')
+  }
+  return response.data.data
+}
+
+export async function confirmSubscriptionConversion(
+  request: SubscriptionConversionConfirmRequest
+): Promise<SubscriptionConversionConfirmResult> {
+  const response = await api.post<SubscriptionConversionConfirmResponse>(
+    '/api/subscription/self/conversions',
+    request
+  )
+  if (!response.data.success || !response.data.data) {
+    throw new Error(response.data.message || 'Unable to convert subscription')
   }
   return response.data.data
 }

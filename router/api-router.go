@@ -191,6 +191,7 @@ func SetApiRouter(router *gin.Engine) {
 			subscriptionRoute.GET("/self/credit-balance/ledger", controller.GetCreditBalanceLedger)
 			subscriptionRoute.GET("/self/conversion-quotes", controller.GetSubscriptionConversionQuotes)
 			subscriptionRoute.GET("/orders/:trade_no", controller.GetSubscriptionOrderStatus)
+			subscriptionRoute.POST("/self/conversions", controller.ConfirmSubscriptionConversion)
 			subscriptionRoute.PUT("/self/preference", controller.UpdateSubscriptionPreference)
 			subscriptionRoute.PUT("/self/billing-strategy", controller.UpdateSubscriptionBillingStrategy)
 			subscriptionRoute.PUT("/self/active", controller.SetActiveSubscription)

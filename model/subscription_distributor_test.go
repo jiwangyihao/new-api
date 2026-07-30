@@ -1299,6 +1299,22 @@ func TestPostConsumeUserSubscriptionDeltaDoesNotPreLockRead(t *testing.T) {
 	assert.Equal(t, int64(17), got.TokenUsed)
 }
 
+func TestPostConsumeUserSubscriptionDeltaSupportsLegacyNullStatus(t *testing.T) {
+	truncateTables(t)
+	require.NoError(t, DB.Create(&User{Id: 7644, Username: "delta_null_status_user", Status: common.UserStatusEnabled, AffCode: "aff7644"}).Error)
+	seedDistributorSubscriptionPlanForTest(t, 7645, "delta-null-status", 100)
+	require.NoError(t, DB.Exec("INSERT INTO user_subscriptions (id, user_id, plan_id, entitlement_type, token_limit, token_used, status) VALUES (?, ?, ?, ?, ?, ?, NULL)", 7646, 7644, 7645, SubscriptionEntitlementTimed, 100, 10).Error)
+
+	require.NoError(t, PostConsumeUserSubscriptionDelta(7646, 7))
+	var got UserSubscription
+	require.NoError(t, DB.First(&got, 7646).Error)
+	assert.Equal(t, int64(17), got.TokenUsed)
+
+	require.NoError(t, PostConsumeUserSubscriptionDelta(7646, -5))
+	require.NoError(t, DB.First(&got, 7646).Error)
+	assert.Equal(t, int64(12), got.TokenUsed)
+}
+
 func TestPreConsumeUserSubscriptionDoesNotClobberConcurrentPostDelta(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)

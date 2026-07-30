@@ -43,6 +43,12 @@ const (
 	creditBalancePlanSingletonKey        = "global"
 	creditBalanceUserSingletonKey        = "credit_balance"
 )
+const (
+	SubscriptionStatusActive    = "active"
+	SubscriptionStatusExpired   = "expired"
+	SubscriptionStatusCancelled = "cancelled"
+	SubscriptionStatusConverted = "converted"
+)
 
 const (
 	SubscriptionPurchaseModeTimed         = SubscriptionEntitlementTimed
@@ -261,6 +267,7 @@ type SubscriptionPlan struct {
 	CreditBalanceConversionEnabled bool    `json:"credit_balance_conversion_enabled" gorm:"not null;default:false"`
 	UnlimitedPurchaseEnabled       bool    `json:"unlimited_purchase_enabled" gorm:"not null;default:false"`
 	TimedConversionEnabled         bool    `json:"timed_conversion_enabled" gorm:"not null;default:false"`
+	ConversionGuardVersion         int64   `json:"-" gorm:"type:bigint;not null;default:0"`
 
 	// Quota reset period for plan
 	QuotaResetPeriod        string `json:"quota_reset_period" gorm:"type:varchar(16);default:'never'"`
@@ -462,9 +469,12 @@ type UserSubscription struct {
 	LastGrantTimeSource     string `json:"-" gorm:"type:varchar(64);not null;default:''"`
 	LastGrantSource         string `json:"-" gorm:"type:varchar(32);not null;default:''"`
 
-	StartTime int64  `json:"start_time" gorm:"bigint"`
-	EndTime   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3;index:idx_user_sub_active_order,priority:3"`
-	Status    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2;index:idx_user_sub_active_order,priority:2"` // active/expired/cancelled
+	StartTime                 int64  `json:"start_time" gorm:"bigint"`
+	EndTime                   int64  `json:"end_time" gorm:"bigint;index;index:idx_user_sub_active,priority:3;index:idx_user_sub_active_order,priority:3"`
+	Status                    string `json:"status" gorm:"type:varchar(32);index;index:idx_user_sub_active,priority:2;index:idx_user_sub_active_order,priority:2"` // active/expired/cancelled
+	ConvertedAt               int64  `json:"converted_at,omitempty" gorm:"type:bigint;not null;default:0;index"`
+	ConversionId              int    `json:"-" gorm:"not null;default:0;index"`
+	ConvertedToSubscriptionId int    `json:"-" gorm:"not null;default:0;index"`
 
 	Source string `json:"source" gorm:"type:varchar(32);default:'order'"` // order/admin
 
@@ -530,6 +540,22 @@ type SubscriptionOrderCompletionResult struct {
 type SubscriptionSummary struct {
 	Subscription *UserSubscription `json:"subscription"`
 	Plan         *SubscriptionPlan `json:"plan,omitempty"`
+}
+
+type SubscriptionConversionAudit struct {
+	ConversionId         int
+	SourceSubscriptionId int
+	TargetSubscriptionId int
+	SourceStatusBefore   string
+	SourceStatusAfter    string
+	TargetStatus         string
+	ConvertedAt          int64
+}
+
+type AdminSubscriptionSummary struct {
+	Subscription    *UserSubscription
+	Plan            *SubscriptionPlan
+	ConversionAudit *SubscriptionConversionAudit
 }
 
 type PublicUserSubscription struct {
@@ -1491,6 +1517,64 @@ func GetAllUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 	return buildSubscriptionSummaries(subs)
 }
 
+func GetAdminUserSubscriptions(userId int) ([]AdminSubscriptionSummary, error) {
+	summaries, err := GetAllUserSubscriptions(userId)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AdminSubscriptionSummary, 0, len(summaries))
+	if len(summaries) == 0 {
+		return result, nil
+	}
+
+	statusBySubscriptionId := make(map[int]string, len(summaries))
+	convertedSourceIds := make([]int, 0)
+	for _, summary := range summaries {
+		if summary.Subscription == nil {
+			continue
+		}
+		statusBySubscriptionId[summary.Subscription.Id] = summary.Subscription.Status
+		if summary.Subscription.Status == SubscriptionStatusConverted {
+			convertedSourceIds = append(convertedSourceIds, summary.Subscription.Id)
+		}
+	}
+
+	conversionsBySourceId := make(map[int]SubscriptionConversion, len(convertedSourceIds))
+	if len(convertedSourceIds) > 0 {
+		var conversions []SubscriptionConversion
+		if err := DB.Where("user_id = ? AND source_subscription_id IN ?", userId, convertedSourceIds).Find(&conversions).Error; err != nil {
+			return nil, err
+		}
+		for _, conversion := range conversions {
+			conversionsBySourceId[conversion.SourceSubscriptionId] = conversion
+		}
+	}
+
+	for _, summary := range summaries {
+		adminSummary := AdminSubscriptionSummary{
+			Subscription: summary.Subscription,
+			Plan:         summary.Plan,
+		}
+		if summary.Subscription != nil && summary.Subscription.Status == SubscriptionStatusConverted {
+			conversion, found := conversionsBySourceId[summary.Subscription.Id]
+			if !found {
+				return nil, fmt.Errorf("conversion audit missing for subscription %d", summary.Subscription.Id)
+			}
+			adminSummary.ConversionAudit = &SubscriptionConversionAudit{
+				ConversionId:         conversion.Id,
+				SourceSubscriptionId: conversion.SourceSubscriptionId,
+				TargetSubscriptionId: conversion.TargetSubscriptionId,
+				SourceStatusBefore:   conversion.SourceStatus,
+				SourceStatusAfter:    summary.Subscription.Status,
+				TargetStatus:         statusBySubscriptionId[conversion.TargetSubscriptionId],
+				ConvertedAt:          conversion.ConvertedAt,
+			}
+		}
+		result = append(result, adminSummary)
+	}
+	return result, nil
+}
+
 func buildSubscriptionSummaries(subs []UserSubscription) ([]SubscriptionSummary, error) {
 	if len(subs) == 0 {
 		return []SubscriptionSummary{}, nil
@@ -1632,6 +1716,9 @@ func AdminInvalidateUserSubscription(userSubscriptionId int) (string, error) {
 		if sub.EntitlementType == SubscriptionEntitlementCreditBalance {
 			return errors.New("Credit 余额权益不能通过普通接口失效")
 		}
+		if sub.Status == SubscriptionStatusConverted {
+			return errors.New("converted 权益不能通过普通接口失效")
+		}
 
 		if err := tx.Model(&sub).Updates(map[string]interface{}{
 			"status":     "cancelled",
@@ -1663,6 +1750,9 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 		}
 		if sub.EntitlementType == SubscriptionEntitlementCreditBalance {
 			return errors.New("Credit 余额权益不能通过普通接口删除")
+		}
+		if sub.Status == SubscriptionStatusConverted {
+			return errors.New("converted 权益不能通过普通接口删除")
 		}
 
 		if err := tx.Where("id = ?", userSubscriptionId).Delete(&UserSubscription{}).Error; err != nil {
@@ -2188,7 +2278,7 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 }
 
 func setCachedPrimaryBillableSubscription(userId int, setting string, selection *primaryBillableSubscription) {
-	if selection == nil {
+	if selection == nil || selection.Subscription.Status != SubscriptionStatusActive {
 		return
 	}
 	loaded := *selection
@@ -2200,7 +2290,7 @@ func ClearPrimaryBillableSubscriptionCacheForTest() {
 }
 
 func cachePrimaryBillableSelectionTx(tx *gorm.DB, userId int, sub *UserSubscription, plan *SubscriptionPlan, distributor bool) {
-	if tx == nil || sub == nil || userId <= 0 {
+	if tx == nil || sub == nil || userId <= 0 || sub.Status != SubscriptionStatusActive {
 		return
 	}
 	var user User
@@ -2960,6 +3050,24 @@ func applySubscriptionPreConsumeUpdateTx(tx *gorm.DB, userSubscriptionId int, di
 	return res.RowsAffected, res.Error
 }
 
+const convertedSubscriptionSettlementMaxAttempts = 20
+
+var ErrConvertedSubscriptionSettlementConflict = errors.New("converted subscription target changed during settlement")
+
+func isRetryableConvertedSubscriptionSettlementError(err error) bool {
+	if errors.Is(err, ErrConvertedSubscriptionSettlementConflict) {
+		return true
+	}
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "sqlite_busy") ||
+		strings.Contains(message, "sqlite_locked")
+}
+
 // Update subscription token_used by delta (positive consume more, negative refund).
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
 	return PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)
@@ -2982,9 +3090,28 @@ func PostConsumeUserSubscriptionTokenDelta(userSubscriptionId int, delta int64) 
 }
 
 func postConsumeUserSubscriptionTokenDeltaDirect(userSubscriptionId int, delta int64) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
+	return runConvertedSubscriptionSettlementWithRetry(func() error {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			return postConsumeUserSubscriptionDeltaTx(tx, userSubscriptionId, delta)
+		})
 	})
+}
+
+func runConvertedSubscriptionSettlementWithRetry(run func() error) error {
+	if run == nil {
+		return errors.New("converted subscription settlement is nil")
+	}
+	var lastErr error
+	for attempt := range convertedSubscriptionSettlementMaxAttempts {
+		lastErr = run()
+		if !isRetryableConvertedSubscriptionSettlementError(lastErr) {
+			return lastErr
+		}
+		if attempt+1 < convertedSubscriptionSettlementMaxAttempts {
+			time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+		}
+	}
+	return lastErr
 }
 
 func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, delta int64) error {
@@ -2996,7 +3123,8 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 		"token_used": tokenUsedDeltaExpr(delta),
 		"updated_at": updatedAt,
 	}
-	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
+	query := tx.Model(&UserSubscription{}).
+		Where("id = ? AND (status IS NULL OR status <> ?)", userSubscriptionId, SubscriptionStatusConverted)
 	if delta > 0 {
 		query = query.Where("entitlement_type = ? OR token_limit <= 0 OR token_used + ? <= token_limit", SubscriptionEntitlementCreditBalance, delta)
 	}
@@ -3004,8 +3132,71 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if res.Error != nil {
 		return res.Error
 	}
-	if res.RowsAffected == 0 && delta > 0 {
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	var source UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "status", "conversion_id", "converted_to_subscription_id").
+		Where("id = ?", userSubscriptionId).First(&source).Error; err != nil {
+		return err
+	}
+	if source.Status == SubscriptionStatusConverted {
+		return applyConvertedSubscriptionTokenDeltaTx(tx, &source, delta)
+	}
+	if delta > 0 {
 		return fmt.Errorf("subscription token used exceeds limit, delta=%d", delta)
+	}
+	return nil
+}
+
+func applyConvertedSubscriptionTokenDeltaTx(tx *gorm.DB, source *UserSubscription, delta int64) error {
+	if tx == nil || source == nil || source.Id <= 0 || source.ConversionId <= 0 || source.ConvertedToSubscriptionId <= 0 {
+		return errors.New("invalid converted subscription mapping")
+	}
+	var conversion SubscriptionConversion
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND source_subscription_id = ? AND target_subscription_id = ?", source.ConversionId, source.Id, source.ConvertedToSubscriptionId).
+		First(&conversion).Error; err != nil {
+		return err
+	}
+	var target UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "entitlement_type", "token_limit", "token_used").
+		Where("id = ?", conversion.TargetSubscriptionId).First(&target).Error; err != nil {
+		return err
+	}
+	if target.EntitlementType != SubscriptionEntitlementCreditBalance {
+		return errors.New("converted subscription target is not Credit balance")
+	}
+	updatedTokenLimit := target.TokenLimit
+	updatedTokenUsed, ok := checkedAddInt64(target.TokenUsed, delta)
+	if !ok {
+		return errors.New("converted subscription settlement overflow")
+	}
+	if updatedTokenUsed < 0 {
+		refundedBeyondUsage, ok := checkedSubInt64(0, updatedTokenUsed)
+		if !ok {
+			return errors.New("converted subscription refund overflow")
+		}
+		updatedTokenLimit, ok = checkedAddInt64(target.TokenLimit, refundedBeyondUsage)
+		if !ok {
+			return errors.New("converted subscription refund overflow")
+		}
+		updatedTokenUsed = 0
+	}
+	update := tx.Model(&UserSubscription{}).
+		Where("id = ? AND entitlement_type = ? AND token_limit = ? AND token_used = ?", target.Id, SubscriptionEntitlementCreditBalance, target.TokenLimit, target.TokenUsed).
+		Updates(map[string]any{
+			"token_limit": updatedTokenLimit,
+			"token_used":  updatedTokenUsed,
+			"updated_at":  common.GetTimestamp(),
+		})
+	if update.Error != nil {
+		return update.Error
+	}
+	if update.RowsAffected != 1 {
+		return fmt.Errorf("%w: target=%d", ErrConvertedSubscriptionSettlementConflict, target.Id)
 	}
 	return nil
 }
@@ -3017,8 +3208,10 @@ func PostConsumeUserSubscriptionAmountDelta(userSubscriptionId int, delta int64)
 	if delta == 0 {
 		return nil
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
-		return postConsumeUserSubscriptionAmountDeltaTx(tx, userSubscriptionId, delta)
+	return runConvertedSubscriptionSettlementWithRetry(func() error {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			return postConsumeUserSubscriptionAmountDeltaTx(tx, userSubscriptionId, delta)
+		})
 	})
 }
 
@@ -3031,7 +3224,8 @@ func postConsumeUserSubscriptionAmountDeltaTx(tx *gorm.DB, userSubscriptionId in
 		"amount_used": amountUsedDeltaExpr(delta),
 		"updated_at":  updatedAt,
 	}
-	query := tx.Model(&UserSubscription{}).Where("id = ?", userSubscriptionId)
+	query := tx.Model(&UserSubscription{}).
+		Where("id = ? AND (status IS NULL OR status <> ?)", userSubscriptionId, SubscriptionStatusConverted)
 	if delta > 0 {
 		query = query.Where("amount_total <= 0 OR amount_used + ? <= amount_total", delta)
 	}
@@ -3039,7 +3233,19 @@ func postConsumeUserSubscriptionAmountDeltaTx(tx *gorm.DB, userSubscriptionId in
 	if res.Error != nil {
 		return res.Error
 	}
-	if res.RowsAffected == 0 && delta > 0 {
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	var source UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "status", "conversion_id", "converted_to_subscription_id").
+		Where("id = ?", userSubscriptionId).First(&source).Error; err != nil {
+		return err
+	}
+	if source.Status == SubscriptionStatusConverted {
+		return applyConvertedSubscriptionTokenDeltaTx(tx, &source, delta)
+	}
+	if delta > 0 {
 		return fmt.Errorf("subscription used exceeds total, delta=%d", delta)
 	}
 	return nil

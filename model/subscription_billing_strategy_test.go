@@ -232,6 +232,44 @@ func TestSingleActiveBillingStrategyRepairsCancelledCachedActiveSubscription(t *
 	assert.Equal(t, 7955, persisted.GetSetting().ActiveSubscriptionId)
 }
 
+func TestSingleActiveBillingStrategyRejectsConvertedCachedSubscription(t *testing.T) {
+	truncateTables(t)
+	ensureSubscriptionPreConsumeRecordTableForTest(t)
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	t.Cleanup(ClearPrimaryBillableSubscriptionCacheForTest)
+
+	user := User{Id: 7956, Username: "single-active-converted-cache", Status: common.UserStatusEnabled}
+	setting := user.GetSetting()
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategySingleActive
+	setting.ActiveSubscriptionId = 7959
+	user.SetSetting(setting)
+	require.NoError(t, DB.Create(&user).Error)
+	activeCode := "single-active-converted"
+	fallbackCode := "single-active-after-conversion"
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7957, Title: "Cached then converted", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &activeCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7958, Title: "After conversion", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &fallbackCode}).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7959, UserId: user.Id, PlanId: 7957, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+	require.NoError(t, DB.Create(&UserSubscription{Id: 7960, UserId: user.Id, PlanId: 7958, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, TokenLimit: 100, EndTime: now + 7200, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+
+	first, err := PreConsumeUserSubscription("single-active-converted-first", user.Id, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7959, first.UserSubscriptionId)
+	_, cached := primaryBillableSubscriptionCache.Load(primaryBillableSubscriptionCacheKey(user.Id))
+	require.True(t, cached)
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", 7959).Updates(map[string]any{"status": SubscriptionStatusConverted, "converted_at": now, "conversion_id": 1, "converted_to_subscription_id": 7960}).Error)
+
+	second, err := PreConsumeUserSubscription("single-active-converted-second", user.Id, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7960, second.UserSubscriptionId)
+	var persisted User
+	require.NoError(t, DB.First(&persisted, user.Id).Error)
+	assert.Equal(t, 7960, persisted.GetSetting().ActiveSubscriptionId)
+	var source UserSubscription
+	require.NoError(t, DB.First(&source, 7959).Error)
+	assert.Equal(t, int64(5), source.TokenUsed)
+}
+
 func TestExpiredActiveSubscriptionRepairCommitsWhenReplacementRejectsModel(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)

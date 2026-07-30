@@ -55,6 +55,7 @@ const (
 	ConversionQuoteReasonSourceNotEligible    = "source_not_eligible"
 	ConversionQuoteReasonPlanDisabled         = "plan_conversion_disabled"
 	ConversionQuoteReasonStatusNotEligible    = "status_not_eligible"
+	ConversionQuoteReasonNotStarted           = "subscription_not_started"
 	ConversionQuoteReasonOutsideGrace         = "outside_grace_period"
 	ConversionQuoteReasonGrantTimeMissing     = "grant_time_missing"
 	ConversionQuoteReasonCooldownActive       = "cooldown_active"
@@ -120,6 +121,7 @@ type TimedSubscriptionConversionQuote struct {
 type TimedSubscriptionConversionQuoteList struct {
 	DatabaseNow int64                              `json:"database_now"`
 	Quotes      []TimedSubscriptionConversionQuote `json:"quotes"`
+	Conversions []SubscriptionConversion           `json:"conversions"`
 }
 
 const timedSubscriptionConversionQuoteSelect = `
@@ -148,7 +150,10 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 	if DB == nil {
 		return nil, errors.New("database is nil")
 	}
-	result := &TimedSubscriptionConversionQuoteList{Quotes: []TimedSubscriptionConversionQuote{}}
+	result := &TimedSubscriptionConversionQuoteList{
+		Quotes:      []TimedSubscriptionConversionQuote{},
+		Conversions: []SubscriptionConversion{},
+	}
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		databaseNow, err := getDBTimestampStrictTx(tx)
 		if err != nil {
@@ -157,7 +162,7 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 		result.DatabaseNow = databaseNow
 		var subscriptions []UserSubscription
 		if err := tx.Select(timedSubscriptionConversionQuoteSelect).
-			Where("user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?)", userId, SubscriptionEntitlementCreditBalance).
+			Where("user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
 			Order("id asc").Find(&subscriptions).Error; err != nil {
 			return err
 		}
@@ -168,6 +173,9 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 				return err
 			}
 			result.Quotes = append(result.Quotes, *quote)
+		}
+		if err := tx.Where("user_id = ?", userId).Order("id desc").Limit(100).Find(&result.Conversions).Error; err != nil {
+			return err
 		}
 		return nil
 	}, &sql.TxOptions{ReadOnly: true})
@@ -264,6 +272,9 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		if plan.InviteTrial {
 			quote.addReason(ConversionQuoteReasonMonthlyInvitePlan, nil)
 		}
+		if !plan.Enabled {
+			quote.addReason(ConversionQuoteReasonPlanDisabled, nil)
+		}
 		if !plan.TimedConversionEnabled {
 			quote.addReason(ConversionQuoteReasonPlanDisabled, nil)
 		}
@@ -277,6 +288,13 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		quote.addReason(ConversionQuoteReasonMonthlyInviteSource, map[string]any{"source": quote.GrantSource})
 	default:
 		quote.addReason(ConversionQuoteReasonSourceNotEligible, map[string]any{"source": quote.GrantSource})
+	}
+
+	if subscription.StartTime > dbNow {
+		quote.addReason(ConversionQuoteReasonNotStarted, map[string]any{
+			"start_time":   subscription.StartTime,
+			"database_now": dbNow,
+		})
 	}
 
 	remainingSeconds, ok := checkedNonNegativeDifference(subscription.EndTime, dbNow)

@@ -17,12 +17,20 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { getSubscriptionConversionQuotes } from '../api'
-import type { SubscriptionConversionQuoteList } from '../types'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { subscriptionQueryKeys } from '@/features/subscriptions/query-keys'
+import {
+  confirmSubscriptionConversion,
+  getSubscriptionConversionQuotes,
+} from '../api'
+import type {
+  SubscriptionConversionConfirmRequest,
+  SubscriptionConversionConfirmResult,
+  SubscriptionConversionQuoteList,
+} from '../types'
 
-export const CONVERSION_QUOTE_REFETCH_MS = 5000
-export const subscriptionConversionQuoteQueryKey = [
+const CONVERSION_QUOTE_REFETCH_MS = 5000
+const subscriptionConversionQuoteQueryKey = [
   'subscriptions',
   'self',
   'conversion-quotes',
@@ -49,4 +57,28 @@ export function useSubscriptionConversionQuotes(
   }, [refetch])
 
   return query
+}
+
+export function useConfirmSubscriptionConversion(
+  mutationFn: (
+    request: SubscriptionConversionConfirmRequest
+  ) => Promise<SubscriptionConversionConfirmResult> = confirmSubscriptionConversion
+) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn,
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: subscriptionConversionQuoteQueryKey,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: subscriptionQueryKeys.selfSummary,
+        }),
+        queryClient.invalidateQueries({
+          queryKey: subscriptionQueryKeys.dashboardSelfSubscriptions,
+        }),
+      ])
+    },
+  })
 }

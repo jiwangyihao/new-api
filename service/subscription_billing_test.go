@@ -245,6 +245,120 @@ func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
 	assert.Equal(t, int64(18), relayInfo.SubscriptionPostDelta)
 }
 
+func TestBillingSessionSettlesAndRefundsRequestsStartedBeforeSubscriptionConversion(t *testing.T) {
+	tests := []struct {
+		name       string
+		settle     func(t *testing.T, session *BillingSession)
+		wantLimit  int64
+		wantUsed   int64
+		wantStatus string
+	}{
+		{
+			name: "positive settlement creates debt and rejects a new request",
+			settle: func(t *testing.T, session *BillingSession) {
+				require.NoError(t, session.SettleWithInput(BillingSettleInput{SubscriptionTokens: 250}))
+			},
+			wantLimit: 90,
+			wantUsed:  240,
+		},
+		{
+			name: "refund restores Credit without rewriting source usage",
+			settle: func(t *testing.T, session *BillingSession) {
+				session.refundSync()
+			},
+			wantLimit:  100,
+			wantUsed:   0,
+			wantStatus: "refunded",
+		},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			truncate(t)
+			userID := 8_061 + index*10
+			tokenID := userID + 1
+			timedPlanID := userID + 2
+			creditPlanID := userID + 3
+			sourceID := userID + 4
+			requestID := fmt.Sprintf("converted-billing-session-%d", index)
+			tokenKey := fmt.Sprintf("sk-converted-billing-session-%d", index)
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, tokenKey, 10_000)
+			ensureSubscriptionBillingTables(t)
+			timedCode := fmt.Sprintf("converted-billing-timed-%d", index)
+			creditCode := fmt.Sprintf("converted-billing-credit-%d", index)
+			require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+				Id: timedPlanID, Title: "Convertible billing plan", Enabled: true,
+				EntitlementType: model.SubscriptionEntitlementTimed, BusinessCode: &timedCode,
+				DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+				QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+				TimedConversionEnabled: true,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+				Id: creditPlanID, Title: "Credit balance", Enabled: true,
+				EntitlementType: model.SubscriptionEntitlementCreditBalance, BusinessCode: &creditCode,
+				CreditBalanceConfigured: true, CreditBalanceConversionEnabled: true,
+			}).Error)
+			now := model.GetDBTimestamp()
+			basis := int64(100)
+			require.NoError(t, model.DB.Create(&model.UserSubscription{
+				Id: sourceID, UserId: userID, PlanId: timedPlanID,
+				EntitlementType: model.SubscriptionEntitlementTimed, TokenLimit: 100,
+				GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+				StartTime: now - 48*60*60, EndTime: now + 60*60,
+				Status: model.SubscriptionStatusActive, LastGrantedAt: now - 48*60*60,
+				LastGrantCreditSnapshot: &basis,
+				LastGrantTimeSource:     model.SubscriptionGrantTimeSourceLive,
+				LastGrantSource:         model.SubscriptionGrantOrder,
+			}).Error)
+			require.NoError(t, model.SetUserActiveSubscription(userID, sourceID))
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, tokenKey, requestID, "subscription_only")
+			relayInfo.SetEstimatePromptTokens(10)
+			preConsumeForBillingTest(t, ctx, relayInfo, 10)
+			session, ok := relayInfo.Billing.(*BillingSession)
+			require.True(t, ok)
+			require.Equal(t, sourceID, session.funding.(*SubscriptionFunding).subscriptionId)
+
+			conversion, err := model.ConfirmTimedSubscriptionConversion(userID, sourceID, fmt.Sprintf("billing-session-conversion-%d", index))
+			require.NoError(t, err)
+			targetID := conversion.Conversion.TargetSubscriptionId
+			test.settle(t, session)
+
+			var source model.UserSubscription
+			require.NoError(t, model.DB.First(&source, sourceID).Error)
+			assert.Equal(t, model.SubscriptionStatusConverted, source.Status)
+			assert.Equal(t, int64(10), source.TokenUsed)
+			var target model.UserSubscription
+			require.NoError(t, model.DB.First(&target, targetID).Error)
+			assert.Equal(t, test.wantLimit, target.TokenLimit)
+			assert.Equal(t, test.wantUsed, target.TokenUsed)
+			var preConsume model.SubscriptionPreConsumeRecord
+			require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+			assert.Equal(t, sourceID, preConsume.UserSubscriptionId)
+			if test.wantStatus != "" {
+				assert.Equal(t, test.wantStatus, preConsume.Status)
+			}
+
+			if target.TokenUsed > target.TokenLimit {
+				newRelayInfo := newBillingTestRelayInfo(userID, tokenID, tokenKey, requestID+"-new", "subscription_only")
+				newRelayInfo.SetEstimatePromptTokens(1)
+				apiErr := PreConsumeBilling(ctx, 1, newRelayInfo)
+				require.NotNil(t, apiErr)
+				var unchangedTarget model.UserSubscription
+				require.NoError(t, model.DB.First(&unchangedTarget, targetID).Error)
+				assert.Equal(t, target.TokenLimit, unchangedTarget.TokenLimit)
+				assert.Equal(t, target.TokenUsed, unchangedTarget.TokenUsed)
+				var newRecordCount int64
+				require.NoError(t, model.DB.Model(&model.SubscriptionPreConsumeRecord{}).
+					Where("request_id = ?", requestID+"-new").Count(&newRecordCount).Error)
+				assert.Zero(t, newRecordCount)
+			}
+		})
+	}
+}
+
 func TestSubscriptionBillingPreConsumeUsesReturnedPlanMetadata(t *testing.T) {
 	truncate(t)
 	const userID = 8041

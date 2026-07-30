@@ -105,6 +105,9 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 		if err != nil {
 			return err
 		}
+		if sub.Status == model.SubscriptionStatusConverted {
+			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
+		}
 		if sub.EntitlementType == model.SubscriptionEntitlementCreditBalance {
 			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
 		}
@@ -136,6 +139,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 				other[k] = v
 			}
 		}
+	}
+	if taskIsSubscription(task) {
+		other["billing_source"] = BillingSourceSubscription
+		other["subscription_id"] = task.PrivateData.SubscriptionId
 	}
 	props := task.Properties
 	if props.UpstreamModelName != "" && props.UpstreamModelName != props.OriginModelName {

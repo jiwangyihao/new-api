@@ -38,11 +38,18 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
-import { useSubscriptionConversionQuotes } from '../hooks/use-subscription-conversion-quotes'
+import { Spinner } from '@/components/ui/spinner'
+import {
+  useConfirmSubscriptionConversion,
+  useSubscriptionConversionQuotes,
+} from '../hooks/use-subscription-conversion-quotes'
 import { deriveLiveConversionQuote } from '../live-quote'
 import type {
   ConversionQuoteCategory,
   LiveSubscriptionConversionQuote,
+  SubscriptionConversionConfirmRequest,
+  SubscriptionConversionConfirmResult,
+  SubscriptionConversionHistory,
   SubscriptionConversionQuote,
   SubscriptionConversionQuoteReason,
   SubscriptionConversionQuoteList,
@@ -123,6 +130,8 @@ function reasonText(
       return t('Conversion is disabled for this plan')
     case 'status_not_eligible':
       return t('The subscription status is not eligible for conversion')
+    case 'subscription_not_started':
+      return t('The source subscription has not started yet')
     case 'outside_grace_period':
       return t('The 336-hour conversion grace period has ended')
     case 'grant_time_missing':
@@ -305,10 +314,92 @@ function liveQuoteReasons(
   return reasons
 }
 
+function defaultConversionIdempotencyKey(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return globalThis.crypto.randomUUID()
+  }
+  return `conversion-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function ConversionResultSummary({
+  conversion,
+}: {
+  conversion: SubscriptionConversionHistory
+}) {
+  const { t } = useTranslation()
+  const formula = `${conversion.full_31_day_blocks} × ${conversion.credit_basis} + ${conversion.current_remaining_credit} = ${conversion.gross_credit}`
+  return (
+    <article
+      className='bg-background rounded-lg border p-3'
+      aria-label={t('Converted subscription #{{id}}', {
+        id: conversion.source_subscription_id,
+      })}
+    >
+      <h4 className='font-medium'>{conversion.source_plan_title}</h4>
+      <p className='text-muted-foreground mt-0.5 text-xs'>
+        {t('Subscription #{{id}}', {
+          id: conversion.source_subscription_id,
+        })}
+      </p>
+      <code className='bg-muted mt-2 block overflow-x-auto rounded px-2 py-1.5 text-xs'>
+        {formula}
+      </code>
+      <dl className='mt-3 grid gap-2 text-xs sm:grid-cols-2'>
+        <div>
+          <dt className='text-muted-foreground'>{t('Gross Credit')}</dt>
+          <dd>{formatCredit(BigInt(conversion.gross_credit))}</dd>
+        </div>
+        <div>
+          <dt className='text-muted-foreground'>{t('Debt offset')}</dt>
+          <dd>{formatCredit(BigInt(conversion.debt_offset))}</dd>
+        </div>
+        <div>
+          <dt className='text-muted-foreground'>{t('Net available Credit')}</dt>
+          <dd>{formatCredit(BigInt(conversion.net_available_credit))}</dd>
+        </div>
+        <div>
+          <dt className='text-muted-foreground'>
+            {t('Target Credit balance')}
+          </dt>
+          <dd>{formatCredit(BigInt(conversion.available_credit_after))}</dd>
+        </div>
+      </dl>
+    </article>
+  )
+}
+
+function ConversionResultCard({
+  title,
+  conversion,
+  role,
+}: {
+  title: string
+  conversion: SubscriptionConversionHistory
+  role?: 'status'
+}) {
+  const { t } = useTranslation()
+  return (
+    <Card role={role} aria-label={title}>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+        <CardDescription>
+          {t('The server recalculated and committed the latest values.')}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ConversionResultSummary conversion={conversion} />
+      </CardContent>
+    </Card>
+  )
+}
+
 interface ConversionPreviewDialogProps {
   quote: SubscriptionConversionQuote | null
   elapsedSeconds: bigint
   open: boolean
+  confirming: boolean
+  confirmationError: string | null
+  onConfirm: () => void
   onOpenChange: (open: boolean) => void
 }
 
@@ -316,6 +407,9 @@ function ConversionPreviewDialog({
   quote,
   elapsedSeconds,
   open,
+  confirming,
+  confirmationError,
+  onConfirm,
   onOpenChange,
 }: ConversionPreviewDialogProps) {
   const { t } = useTranslation()
@@ -452,7 +546,7 @@ function ConversionPreviewDialog({
               <AlertDescription className='space-y-1'>
                 <p>
                   {t(
-                    'Converting is irreversible and removes the source timed subscription.'
+                    'Converting is irreversible. The source timed subscription remains as a converted history record, and in-flight requests settle to the target Credit balance.'
                   )}
                 </p>
                 <p>
@@ -462,6 +556,13 @@ function ConversionPreviewDialog({
                 </p>
               </AlertDescription>
             </Alert>
+
+            {confirmationError && (
+              <Alert variant='destructive' role='alert'>
+                <AlertTitle>{t('Unable to convert subscription')}</AlertTitle>
+                <AlertDescription>{confirmationError}</AlertDescription>
+              </Alert>
+            )}
           </div>
         )}
 
@@ -469,10 +570,19 @@ function ConversionPreviewDialog({
           <Button
             type='button'
             variant='outline'
+            disabled={confirming}
             onClick={() => onOpenChange(false)}
           >
             {t('Close preview')}
           </Button>
+          {live?.canConfirm && (
+            <Button type='button' disabled={confirming} onClick={onConfirm}>
+              {confirming && <Spinner aria-hidden data-icon='inline-start' />}
+              {confirming
+                ? t('Converting subscription')
+                : t('Submit conversion')}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -481,13 +591,20 @@ function ConversionPreviewDialog({
 interface TimedSubscriptionConversionQuotesCardProps {
   now?: () => number
   loadQuotes?: () => Promise<SubscriptionConversionQuoteList>
+  confirmConversion?: (
+    request: SubscriptionConversionConfirmRequest
+  ) => Promise<SubscriptionConversionConfirmResult>
+  createIdempotencyKey?: () => string
 }
 export function TimedSubscriptionConversionQuotesCard({
   now = Date.now,
   loadQuotes,
+  confirmConversion,
+  createIdempotencyKey = defaultConversionIdempotencyKey,
 }: TimedSubscriptionConversionQuotesCardProps = {}) {
   const { t } = useTranslation()
   const quotesQuery = useSubscriptionConversionQuotes(loadQuotes)
+  const confirmMutation = useConfirmSubscriptionConversion(confirmConversion)
   const [clockMs, setClockMs] = useState(() => now())
   const [receivedAtMs, setReceivedAtMs] = useState(() => now())
   const [previewSelection, setPreviewSelection] = useState<{
@@ -497,6 +614,14 @@ export function TimedSubscriptionConversionQuotesCard({
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewingId, setPreviewingId] = useState<string | null>(null)
   const previewRequestId = useRef(0)
+  const idempotencyKeys = useRef(new Map<string, string>())
+  const confirmationInFlight = useRef(false)
+  const [confirmationError, setConfirmationError] = useState<string | null>(
+    null
+  )
+  const [confirming, setConfirming] = useState(false)
+  const [latestConversion, setLatestConversion] =
+    useState<SubscriptionConversionHistory | null>(null)
 
   useEffect(() => {
     const interval = setInterval(() => setClockMs(now()), 1000)
@@ -555,6 +680,72 @@ export function TimedSubscriptionConversionQuotesCard({
     }
   }
 
+  const handleConfirm = async () => {
+    const selected = previewSelection?.quote
+    if (!selected || confirmationInFlight.current) return
+    confirmationInFlight.current = true
+    setConfirming(true)
+    setConfirmationError(null)
+    try {
+      const refreshed = await quotesQuery.refetch()
+      const latest = refreshed.data?.quotes.find(
+        (quote) =>
+          quote.source_subscription_id === selected.source_subscription_id
+      )
+      if (!latest) {
+        setConfirmationError(
+          t('The source subscription is no longer convertible')
+        )
+        return
+      }
+      const refreshedAt = now()
+      setReceivedAtMs(refreshedAt)
+      setClockMs(refreshedAt)
+      setPreviewSelection({ quote: latest, receivedAtMs: refreshedAt })
+      if (!latest.can_confirm) {
+        setConfirmationError(t('The latest quote cannot be confirmed'))
+        return
+      }
+      let idempotencyKey = idempotencyKeys.current.get(
+        selected.source_subscription_id
+      )
+      if (!idempotencyKey) {
+        idempotencyKey = createIdempotencyKey()
+        idempotencyKeys.current.set(
+          selected.source_subscription_id,
+          idempotencyKey
+        )
+      }
+      const result = await confirmMutation.mutateAsync({
+        subscription_id: selected.source_subscription_id,
+        idempotency_key: idempotencyKey,
+      })
+      setLatestConversion(result.conversion)
+      setPreviewOpen(false)
+      await quotesQuery.refetch()
+    } catch (error) {
+      setConfirmationError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to convert subscription')
+      )
+      const refreshed = await quotesQuery.refetch()
+      const latest = refreshed.data?.quotes.find(
+        (quote) =>
+          quote.source_subscription_id === selected.source_subscription_id
+      )
+      if (latest) {
+        const refreshedAt = now()
+        setReceivedAtMs(refreshedAt)
+        setClockMs(refreshedAt)
+        setPreviewSelection({ quote: latest, receivedAtMs: refreshedAt })
+      }
+    } finally {
+      confirmationInFlight.current = false
+      setConfirming(false)
+    }
+  }
+
   if (quotesQuery.isLoading) {
     return (
       <Skeleton
@@ -582,10 +773,19 @@ export function TimedSubscriptionConversionQuotesCard({
     )
   }
 
-  if (quotes.length === 0) return null
+  const conversions = quotesQuery.data?.conversions ?? []
+  if (quotes.length === 0 && conversions.length === 0 && !latestConversion)
+    return null
 
   return (
     <>
+      {latestConversion && (
+        <ConversionResultCard
+          title={t('Latest conversion result')}
+          conversion={latestConversion}
+          role='status'
+        />
+      )}
       <Card>
         <CardHeader className='border-b'>
           <div className='flex flex-wrap items-start justify-between gap-3'>
@@ -612,7 +812,7 @@ export function TimedSubscriptionConversionQuotesCard({
             </p>
           </div>
         </CardHeader>
-        <CardContent className='space-y-5'>
+        <CardContent className='flex flex-col gap-5'>
           {categorySections.map((section) => {
             const sectionQuotes = liveQuoteEntries.filter(
               (entry) =>
@@ -647,6 +847,21 @@ export function TimedSubscriptionConversionQuotesCard({
               </section>
             )
           })}
+          {conversions.length > 0 && (
+            <section aria-labelledby='subscription-conversion-history'>
+              <h3 id='subscription-conversion-history' className='font-medium'>
+                {t('Conversion history')}
+              </h3>
+              <div className='mt-3 grid gap-3 lg:grid-cols-2'>
+                {conversions.map((conversion) => (
+                  <ConversionResultSummary
+                    key={conversion.id}
+                    conversion={conversion}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
         </CardContent>
       </Card>
 
@@ -654,7 +869,15 @@ export function TimedSubscriptionConversionQuotesCard({
         quote={previewSelection?.quote ?? null}
         elapsedSeconds={previewElapsedSeconds}
         open={previewOpen}
-        onOpenChange={setPreviewOpen}
+        confirming={confirming}
+        confirmationError={confirmationError}
+        onConfirm={handleConfirm}
+        onOpenChange={(open) => {
+          if (!confirming) {
+            setPreviewOpen(open)
+            if (!open) setConfirmationError(null)
+          }
+        }}
       />
     </>
   )

@@ -1,0 +1,314 @@
+package model
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/QuantumNous/new-api/common"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+type subscriptionConversionHookPhase string
+
+const (
+	subscriptionConversionAfterQuotePhase            subscriptionConversionHookPhase = "after_quote"
+	subscriptionConversionAfterEligibilityGuardPhase subscriptionConversionHookPhase = "after_eligibility_guard"
+)
+
+type subscriptionConversionHooks struct {
+	at func(subscriptionConversionHookPhase) error
+}
+
+type SubscriptionConversion struct {
+	Id                     int    `json:"id"`
+	UserId                 int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_subscription_conversion_user_key,priority:1"`
+	IdempotencyKey         string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_subscription_conversion_user_key,priority:2"`
+	SourceSubscriptionId   int    `json:"source_subscription_id" gorm:"not null;uniqueIndex;index"`
+	SourcePlanId           int    `json:"source_plan_id" gorm:"not null;index"`
+	SourcePlanTitle        string `json:"source_plan_title" gorm:"type:varchar(255);not null"`
+	TargetSubscriptionId   int    `json:"target_subscription_id" gorm:"not null;index"`
+	TargetPlanId           int    `json:"target_plan_id" gorm:"not null;index"`
+	LedgerId               int    `json:"ledger_id" gorm:"not null;uniqueIndex"`
+	SourceStatus           string `json:"source_status" gorm:"type:varchar(32);not null"`
+	GrantSource            string `json:"grant_source" gorm:"type:varchar(32);not null"`
+	DatabaseNow            int64  `json:"database_now" gorm:"type:bigint;not null"`
+	SourceStartTime        int64  `json:"source_start_time" gorm:"type:bigint;not null"`
+	SourceEndTime          int64  `json:"source_end_time" gorm:"type:bigint;not null"`
+	RemainingSeconds       int64  `json:"remaining_seconds" gorm:"type:bigint;not null"`
+	Full31DayBlocks        int64  `json:"full_31_day_blocks" gorm:"type:bigint;not null"`
+	CreditBasis            int64  `json:"credit_basis" gorm:"type:bigint;not null"`
+	CreditBasisSource      string `json:"credit_basis_source" gorm:"type:varchar(32);not null"`
+	CurrentRemainingCredit int64  `json:"current_remaining_credit" gorm:"type:bigint;not null"`
+	GrossCredit            int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	DebtOffset             int64  `json:"debt_offset" gorm:"type:bigint;not null"`
+	NetAvailableCredit     int64  `json:"net_available_credit" gorm:"type:bigint;not null"`
+	AvailableCreditAfter   int64  `json:"available_credit_after" gorm:"type:bigint;not null"`
+	SettlementDebtAfter    int64  `json:"settlement_debt_after" gorm:"type:bigint;not null"`
+	BalanceBefore          int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	BalanceAfter           int64  `json:"balance_after" gorm:"type:bigint;not null"`
+	LastGrantedAt          int64  `json:"last_granted_at" gorm:"type:bigint;not null"`
+	LastGrantTimeSource    string `json:"last_grant_time_source" gorm:"type:varchar(64);not null"`
+	LastGrantSource        string `json:"last_grant_source" gorm:"type:varchar(32);not null"`
+	ConvertedAt            int64  `json:"converted_at" gorm:"type:bigint;not null;index"`
+	CreatedAt              int64  `json:"created_at" gorm:"type:bigint;not null"`
+}
+
+func (c *SubscriptionConversion) BeforeUpdate(_ *gorm.DB) error {
+	return errors.New("subscription conversion is immutable")
+}
+
+func (c *SubscriptionConversion) BeforeDelete(_ *gorm.DB) error {
+	return errors.New("subscription conversion is immutable")
+}
+
+type SubscriptionConversionResult struct {
+	Conversion *SubscriptionConversion `json:"conversion"`
+	Replayed   bool                    `json:"replayed"`
+}
+
+func ConfirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversionResult, error) {
+	return confirmTimedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey, nil)
+}
+
+func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string, hooks *subscriptionConversionHooks) (*SubscriptionConversionResult, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if userId <= 0 || sourceSubscriptionId <= 0 || idempotencyKey == "" || len(idempotencyKey) > 128 {
+		return nil, errors.New("invalid subscription conversion request")
+	}
+	if DB == nil {
+		return nil, errors.New("database is nil")
+	}
+
+	var result *SubscriptionConversionResult
+	run := func(tx *gorm.DB) error {
+		result = nil
+		var user User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "setting").Where("id = ?", userId).First(&user).Error; err != nil {
+			return err
+		}
+
+		if replay, found, err := findSubscriptionConversionByIdempotencyTx(tx, userId, idempotencyKey); err != nil {
+			return err
+		} else if found {
+			if replay.SourceSubscriptionId != sourceSubscriptionId {
+				return errors.New("subscription conversion idempotency key mismatch")
+			}
+			result = &SubscriptionConversionResult{Conversion: replay, Replayed: true}
+			return nil
+		}
+		if existing, found, err := findSubscriptionConversionBySourceTx(tx, sourceSubscriptionId); err != nil {
+			return err
+		} else if found {
+			if existing.UserId == userId && existing.IdempotencyKey == idempotencyKey {
+				result = &SubscriptionConversionResult{Conversion: existing, Replayed: true}
+				return nil
+			}
+			return errors.New("source subscription already converted")
+		}
+
+		var source UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ? AND user_id = ?", sourceSubscriptionId, userId).First(&source).Error; err != nil {
+			return err
+		}
+		dbNow, err := getDBTimestampStrictTx(tx)
+		if err != nil {
+			return err
+		}
+		quote, err := RecalculateTimedSubscriptionConversionQuoteTx(tx, userId, sourceSubscriptionId, dbNow)
+		if err != nil {
+			return err
+		}
+		if hooks != nil && hooks.at != nil {
+			if err := hooks.at(subscriptionConversionAfterQuotePhase); err != nil {
+				return err
+			}
+		}
+		if !quote.CanConfirm {
+			return subscriptionConversionRejection(quote)
+		}
+
+		creditPlan, err := GetCreditBalancePlanTx(tx)
+		if err != nil {
+			return err
+		}
+		if err := guardSubscriptionConversionPlansTx(tx, quote.PlanId, creditPlan.Id); err != nil {
+			return err
+		}
+		if hooks != nil && hooks.at != nil {
+			if err := hooks.at(subscriptionConversionAfterEligibilityGuardPhase); err != nil {
+				return err
+			}
+		}
+		quote, err = RecalculateTimedSubscriptionConversionQuoteTx(tx, userId, sourceSubscriptionId, dbNow)
+		if err != nil {
+			return err
+		}
+		if !quote.CanConfirm {
+			return subscriptionConversionRejection(quote)
+		}
+		snapshotBytes, err := common.Marshal(quote)
+		if err != nil {
+			return err
+		}
+		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
+			UserId:                  userId,
+			GrossCredit:             quote.GrossCredit,
+			IdempotencyKey:          fmt.Sprintf("subscription_conversion:%d", sourceSubscriptionId),
+			SourceType:              CreditBalanceLedgerSourceSubscriptionConversion,
+			SourceId:                sourceSubscriptionId,
+			SourceSnapshot:          string(snapshotBytes),
+			Type:                    CreditBalanceLedgerTypeSubscriptionConversion,
+			TargetPlanId:            creditPlan.Id,
+			Reason:                  "计时套餐转换为 Credit 余额",
+			PreserveActiveSelection: true,
+		})
+		if err != nil {
+			return err
+		}
+
+		conversion := &SubscriptionConversion{
+			UserId: userId, IdempotencyKey: idempotencyKey,
+			SourceSubscriptionId: sourceSubscriptionId, SourcePlanId: quote.PlanId, SourcePlanTitle: quote.PlanTitle,
+			TargetSubscriptionId: grant.UserSubscriptionId, TargetPlanId: grant.PlanId, LedgerId: grant.LedgerId,
+			SourceStatus: quote.Status, GrantSource: quote.GrantSource, DatabaseNow: quote.DatabaseNow,
+			SourceStartTime: quote.StartTime, SourceEndTime: quote.EndTime, RemainingSeconds: quote.RemainingSeconds,
+			Full31DayBlocks: quote.Full31DayBlocks, CreditBasis: quote.CreditBasis, CreditBasisSource: quote.CreditBasisSource,
+			CurrentRemainingCredit: quote.CurrentRemainingCredit, GrossCredit: quote.GrossCredit,
+			DebtOffset: grant.DebtOffset, NetAvailableCredit: quote.GrossCredit - grant.DebtOffset,
+			AvailableCreditAfter: grant.AvailableCredit, SettlementDebtAfter: grant.SettlementDebt,
+			BalanceBefore: grant.BalanceBefore, BalanceAfter: grant.BalanceAfter,
+			LastGrantedAt: quote.LastGrantedAt, LastGrantTimeSource: quote.LastGrantTimeSource, LastGrantSource: quote.LastGrantSource,
+			ConvertedAt: dbNow, CreatedAt: dbNow,
+		}
+		if err := tx.Create(conversion).Error; err != nil {
+			return err
+		}
+		statusUpdate := tx.Model(&UserSubscription{}).
+			Where("id = ? AND user_id = ? AND status = ?", sourceSubscriptionId, userId, source.Status).
+			Updates(map[string]any{
+				"status":                       SubscriptionStatusConverted,
+				"converted_at":                 dbNow,
+				"conversion_id":                conversion.Id,
+				"converted_to_subscription_id": grant.UserSubscriptionId,
+				"updated_at":                   dbNow,
+			})
+		if statusUpdate.Error != nil {
+			return statusUpdate.Error
+		}
+		if statusUpdate.RowsAffected != 1 {
+			return errors.New("source subscription changed during conversion")
+		}
+
+		setting := user.GetSetting()
+		if source.Status == SubscriptionStatusActive && setting.ActiveSubscriptionId == sourceSubscriptionId {
+			setting.ActiveSubscriptionId = grant.UserSubscriptionId
+			settingBytes, err := common.Marshal(setting)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&User{}).Where("id = ?", userId).Update("setting", string(settingBytes)).Error; err != nil {
+				return err
+			}
+		}
+		result = &SubscriptionConversionResult{Conversion: conversion, Replayed: false}
+		return nil
+	}
+
+	err := transactionWithUserSettingCASRetry(run)
+	if err != nil {
+		if replay, replayErr := findCommittedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey); replayErr == nil && replay != nil {
+			return &SubscriptionConversionResult{Conversion: replay, Replayed: true}, nil
+		}
+		return nil, err
+	}
+	primaryBillableSubscriptionCache.Delete(primaryBillableSubscriptionCacheKey(userId))
+	if err := InvalidateUserCache(userId); err != nil {
+		common.SysLog(fmt.Sprintf("failed to invalidate subscription conversion user cache for user %d: %s", userId, err.Error()))
+	}
+	return result, nil
+}
+
+func guardSubscriptionConversionPlansTx(tx *gorm.DB, sourcePlanId int, targetPlanId int) error {
+	if tx == nil || sourcePlanId <= 0 || targetPlanId <= 0 || sourcePlanId == targetPlanId {
+		return errors.New("invalid subscription conversion plan guard")
+	}
+	sourceGuard := tx.Model(&SubscriptionPlan{}).
+		Where("id = ? AND enabled = ? AND timed_conversion_enabled = ?", sourcePlanId, true, true).
+		UpdateColumn("conversion_guard_version", gorm.Expr("conversion_guard_version + ?", 1))
+	if sourceGuard.Error != nil {
+		return sourceGuard.Error
+	}
+	if sourceGuard.RowsAffected != 1 {
+		return fmt.Errorf("subscription conversion rejected: %s", ConversionQuoteReasonPlanDisabled)
+	}
+	targetGuard := tx.Model(&SubscriptionPlan{}).
+		Where("id = ? AND enabled = ? AND credit_balance_configured = ? AND credit_balance_conversion_enabled = ?", targetPlanId, true, true, true).
+		UpdateColumn("conversion_guard_version", gorm.Expr("conversion_guard_version + ?", 1))
+	if targetGuard.Error != nil {
+		return targetGuard.Error
+	}
+	if targetGuard.RowsAffected != 1 {
+		return fmt.Errorf("subscription conversion rejected: %s", ConversionQuoteReasonGlobalDisabled)
+	}
+	return nil
+}
+
+func subscriptionConversionRejection(quote *TimedSubscriptionConversionQuote) error {
+	if quote == nil {
+		return errors.New("subscription conversion rejected")
+	}
+	if quote.CalculationErrorCode != "" {
+		return fmt.Errorf("subscription conversion rejected: %s", quote.CalculationErrorCode)
+	}
+	return fmt.Errorf("subscription conversion rejected: %s", strings.Join(quote.ReasonCodes, ","))
+}
+
+func findSubscriptionConversionByIdempotencyTx(tx *gorm.DB, userId int, idempotencyKey string) (*SubscriptionConversion, bool, error) {
+	var conversion SubscriptionConversion
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND idempotency_key = ?", userId, idempotencyKey).Limit(1).Find(&conversion)
+	return &conversion, query.RowsAffected > 0, query.Error
+}
+
+func findSubscriptionConversionBySourceTx(tx *gorm.DB, sourceSubscriptionId int) (*SubscriptionConversion, bool, error) {
+	var conversion SubscriptionConversion
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
+	return &conversion, query.RowsAffected > 0, query.Error
+}
+
+func findCommittedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversion, error) {
+	var conversion SubscriptionConversion
+	query := DB.Where("user_id = ? AND idempotency_key = ?", userId, idempotencyKey).Limit(1).Find(&conversion)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if query.RowsAffected > 0 {
+		if conversion.SourceSubscriptionId != sourceSubscriptionId {
+			return nil, errors.New("subscription conversion idempotency key mismatch")
+		}
+		return &conversion, nil
+	}
+	query = DB.Where("source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if query.RowsAffected > 0 {
+		return nil, errors.New("source subscription already converted")
+	}
+	return nil, gorm.ErrRecordNotFound
+}
+
+func ListSubscriptionConversions(userId int, limit int) ([]SubscriptionConversion, error) {
+	if userId <= 0 {
+		return nil, errors.New("invalid user id")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	var conversions []SubscriptionConversion
+	if err := DB.Where("user_id = ?", userId).Order("id desc").Limit(limit).Find(&conversions).Error; err != nil {
+		return nil, err
+	}
+	return conversions, nil
+}

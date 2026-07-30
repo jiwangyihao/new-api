@@ -72,6 +72,37 @@ func TestRecalculateTimedSubscriptionConversionQuoteFormulaBoundaries(t *testing
 	}
 }
 
+func TestRecalculateTimedSubscriptionConversionQuoteRejectsFutureSubscription(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	seedConversionQuoteTimedPlan(t, 20_100, 100)
+	snapshot := int64(100)
+	subscription := seedConversionQuoteSubscription(
+		t,
+		30_100,
+		10_100,
+		20_100,
+		SubscriptionGrantOrder,
+		conversionQuoteTestNow+TimedSubscriptionConversionBlockSeconds,
+		&snapshot,
+	)
+	require.NoError(t, DB.Model(&UserSubscription{}).
+		Where("id = ?", subscription.Id).
+		UpdateColumn("start_time", conversionQuoteTestNow+1).Error)
+
+	quote, err := RecalculateTimedSubscriptionConversionQuoteTx(
+		DB,
+		subscription.UserId,
+		subscription.Id,
+		conversionQuoteTestNow,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, quote)
+	assert.False(t, quote.Eligible)
+	assert.False(t, quote.CanConfirm)
+	assert.Equal(t, ConversionQuoteCategoryExcluded, quote.Category)
+	assert.Contains(t, quote.ReasonCodes, ConversionQuoteReasonNotStarted)
+}
+
 func TestListTimedSubscriptionConversionQuotesHandlesNullableLegacyEntitlement(t *testing.T) {
 	oldDB := DB
 	oldLogDB := LOG_DB
@@ -116,16 +147,17 @@ func TestListTimedSubscriptionConversionQuotesHandlesNullableLegacyEntitlement(t
 		source varchar(32)
 	)`).Error)
 	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}))
+	require.NoError(t, db.AutoMigrate(&SubscriptionConversion{}))
 	seedConversionQuoteCreditBalancePlan(t)
 	seedConversionQuoteTimedPlan(t, 29_101, 100)
 	require.NoError(t, db.Exec(
-		"INSERT INTO user_subscriptions (id, user_id, plan_id, entitlement_type, token_limit, token_used, grant_reason, last_granted_at, last_grant_credit_snapshot, last_grant_time_source, last_grant_source, start_time, end_time, status, source) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		"INSERT INTO user_subscriptions (id, user_id, plan_id, entitlement_type, token_limit, token_used, grant_reason, last_granted_at, last_grant_credit_snapshot, last_grant_time_source, last_grant_source, start_time, end_time, status, source) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
 		39_101, 19_101, 29_101, 100, 25, SubscriptionGrantOrder,
 		conversionQuoteTestNow-TimedSubscriptionConversionCooldownSeconds, 100,
 		SubscriptionGrantTimeSourceLive, SubscriptionGrantOrder,
 		conversionQuoteTestNow-TimedSubscriptionConversionBlockSeconds,
 		conversionQuoteTestNow+TimedSubscriptionConversionBlockSeconds,
-		"active", SubscriptionGrantOrder,
+		SubscriptionGrantOrder,
 	).Error)
 
 	result, err := ListTimedSubscriptionConversionQuotes(19_101)
@@ -134,6 +166,23 @@ func TestListTimedSubscriptionConversionQuotesHandlesNullableLegacyEntitlement(t
 	assert.Empty(t, result.Quotes[0].EntitlementType)
 	assert.False(t, result.Quotes[0].CanConfirm)
 	assert.Contains(t, result.Quotes[0].ReasonCodes, ConversionQuoteReasonEntitlementNotTimed)
+	assert.Empty(t, result.Quotes[0].Status)
+}
+
+func TestListTimedSubscriptionConversionQuotesLimitsConversionHistory(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	const userID = 19_102
+	for index := range 105 {
+		require.NoError(t, DB.Create(&SubscriptionConversion{
+			UserId: userID, IdempotencyKey: fmt.Sprintf("history-%d", index),
+			SourceSubscriptionId: 40_000 + index, LedgerId: 50_000 + index,
+		}).Error)
+	}
+
+	result, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, result.Conversions, 100)
+	assert.Greater(t, result.Conversions[0].Id, result.Conversions[99].Id)
 }
 
 func TestUserSubscriptionGrantMetadataIsNotSerialized(t *testing.T) {
@@ -599,16 +648,21 @@ func setupSubscriptionConversionQuoteTestDB(t *testing.T) {
 	oldUsingSQLite := common.UsingSQLite
 	oldUsingMySQL := common.UsingMySQL
 	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldRedisEnabled := common.RedisEnabled
 
 	common.UsingSQLite = true
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+	resetDBTimestampCacheForTest()
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	ClearSubscriptionPlanCacheForTest()
 	dsn := fmt.Sprintf("file:%s_conversion_quote?mode=memory&cache=shared", strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name()))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	DB = db
 	LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &Redemption{}, &InvitationRewardEvent{}, &CreditBalanceLedger{}))
+	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &Redemption{}, &InvitationRewardEvent{}, &CreditBalanceLedger{}, &SubscriptionConversion{}))
 	seedConversionQuoteCreditBalancePlan(t)
 
 	t.Cleanup(func() {
@@ -621,6 +675,9 @@ func setupSubscriptionConversionQuoteTestDB(t *testing.T) {
 		common.UsingSQLite = oldUsingSQLite
 		common.UsingMySQL = oldUsingMySQL
 		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.RedisEnabled = oldRedisEnabled
+		resetDBTimestampCacheForTest()
+		ClearPrimaryBillableSubscriptionCacheForTest()
 		ClearSubscriptionPlanCacheForTest()
 	})
 }

@@ -314,6 +314,7 @@ export const userSubscriptionSchema = z.object({
   is_active_selected: z.boolean().optional(),
   can_reset_quota: z.boolean().optional(),
   source_label: z.string().optional(),
+  converted_at: z.number().optional(),
 })
 
 export type UserSubscription = Omit<
@@ -323,10 +324,21 @@ export type UserSubscription = Omit<
   entitlement_type?: 'timed' | 'credit_balance'
 }
 
+export interface SubscriptionConversionAudit {
+  conversion_id: string
+  source_subscription_id: string
+  target_subscription_id: string
+  source_status_before: string
+  source_status_after: string
+  target_status: string
+  converted_at: string
+}
+
 export interface UserSubscriptionRecord {
   subscription: UserSubscription
   plan_title?: string
   plan?: SubscriptionPlan
+  conversion_audit?: SubscriptionConversionAudit
 }
 
 // ============================================================================

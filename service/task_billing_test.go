@@ -49,6 +49,8 @@ func TestMain(m *testing.M) {
 		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
 		&model.SubscriptionPlan{},
+		&model.SubscriptionConversion{},
+		&model.CreditBalanceLedger{},
 		&model.TrialCode{},
 		&model.TrialRedemption{},
 		&model.OAuthProviderLock{},
@@ -81,6 +83,8 @@ func truncate(t *testing.T) {
 			"subscription_orders",
 			"user_subscriptions",
 			"subscription_plans",
+			"subscription_conversions",
+			"credit_balance_ledgers",
 			"abilities",
 			"log_aggregation_events",
 			"log_usage_hourly",
@@ -94,8 +98,11 @@ func truncate(t *testing.T) {
 				model.DB.Exec("DELETE FROM " + tableName)
 			}
 		}
+		model.ClearPrimaryBillableSubscriptionCacheForTest()
+		model.ClearSubscriptionPlanCacheForTest()
 	})
 	model.ClearPrimaryBillableSubscriptionCacheForTest()
+	model.ClearSubscriptionPlanCacheForTest()
 }
 
 func seedUser(t *testing.T, id int, quota int) {
@@ -409,6 +416,54 @@ func TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections(t *testing.T) {
 	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, subID))
 	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
 	require.Equal(t, int64(9), sub.AmountUsed)
+}
+
+func TestConvertedTimedTaskSettlementKeepsSourceIdentityAndAdjustsCreditBalance(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+	const userID, tokenID, channelID, sourceID, targetID, conversionID = 84, 84, 84, 84, 85, 86
+	seedUser(t, userID, 0)
+	seedToken(t, tokenID, userID, "sk-converted-task", 8_000)
+	seedChannel(t, channelID)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: sourceID, UserId: userID, EntitlementType: model.SubscriptionEntitlementTimed,
+		AmountTotal: 1_000, AmountUsed: 100, TokenLimit: 100, TokenUsed: 10,
+		Status:       model.SubscriptionStatusConverted,
+		ConversionId: conversionID, ConvertedToSubscriptionId: targetID,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: targetID, UserId: userID, EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		TokenLimit: 100, TokenUsed: 20, Status: model.SubscriptionStatusActive,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionConversion{
+		Id: conversionID, UserId: userID, IdempotencyKey: "converted-task",
+		SourceSubscriptionId: sourceID, TargetSubscriptionId: targetID,
+		ConvertedAt: time.Now().Unix(), CreatedAt: time.Now().Unix(),
+	}).Error)
+
+	settleTask := makeTask(userID, channelID, 10, tokenID, BillingSourceSubscription, sourceID)
+	RecalculateTaskQuota(ctx, settleTask, 35, "converted task settle")
+	require.Equal(t, int64(45), getSubscriptionTokenUsedForTaskTest(t, targetID))
+	require.Equal(t, int64(100), getSubscriptionUsed(t, sourceID))
+	require.Equal(t, sourceID, settleTask.PrivateData.SubscriptionId)
+	settleLog := getLastLog(t)
+	require.NotNil(t, settleLog)
+	require.NotNil(t, settleLog.SubscriptionID)
+	assert.Equal(t, sourceID, *settleLog.SubscriptionID)
+	require.NotNil(t, settleLog.BillingSource)
+	assert.Equal(t, BillingSourceSubscription, *settleLog.BillingSource)
+
+	refundTask := makeTask(userID, channelID, 15, tokenID, BillingSourceSubscription, sourceID)
+	RefundTaskQuota(ctx, refundTask, "converted task refund")
+	require.Equal(t, int64(30), getSubscriptionTokenUsedForTaskTest(t, targetID))
+	require.Equal(t, int64(100), getSubscriptionUsed(t, sourceID))
+	require.Equal(t, sourceID, refundTask.PrivateData.SubscriptionId)
+	refundLog := getLastLog(t)
+	require.NotNil(t, refundLog)
+	require.NotNil(t, refundLog.SubscriptionID)
+	assert.Equal(t, sourceID, *refundLog.SubscriptionID)
+	require.NotNil(t, refundLog.BillingSource)
+	assert.Equal(t, BillingSourceSubscription, *refundLog.BillingSource)
 }
 
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {

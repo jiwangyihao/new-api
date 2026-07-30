@@ -50,10 +50,15 @@ type subscriptionConversionQuoteItemResponse struct {
 type subscriptionConversionQuoteListResponse struct {
 	DatabaseNow string                                    `json:"database_now"`
 	Quotes      []subscriptionConversionQuoteItemResponse `json:"quotes"`
+	Conversions []subscriptionConversionHistoryResponse   `json:"conversions"`
 }
 
 func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionConversionQuoteList) subscriptionConversionQuoteListResponse {
-	response := subscriptionConversionQuoteListResponse{DatabaseNow: "0", Quotes: []subscriptionConversionQuoteItemResponse{}}
+	response := subscriptionConversionQuoteListResponse{
+		DatabaseNow: "0",
+		Quotes:      []subscriptionConversionQuoteItemResponse{},
+		Conversions: []subscriptionConversionHistoryResponse{},
+	}
 	if input == nil {
 		return response
 	}
@@ -103,6 +108,10 @@ func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionCon
 			Reasons:                  reasons,
 			CalculationErrorCode:     quote.CalculationErrorCode,
 		})
+	}
+	response.Conversions = make([]subscriptionConversionHistoryResponse, 0, len(input.Conversions))
+	for i := range input.Conversions {
+		response.Conversions = append(response.Conversions, toSubscriptionConversionHistoryResponse(&input.Conversions[i]))
 	}
 	return response
 }

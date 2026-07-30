@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	CreditBalanceLedgerSourceSubscriptionOrder = "subscription_order"
-	CreditBalanceLedgerSourceRedemption        = "redemption"
-	CreditBalanceLedgerTypePurchase            = "purchase"
-	CreditBalanceLedgerTypeRedemption          = "redemption"
+	CreditBalanceLedgerSourceSubscriptionOrder      = "subscription_order"
+	CreditBalanceLedgerSourceRedemption             = "redemption"
+	CreditBalanceLedgerSourceSubscriptionConversion = "subscription_conversion"
+	CreditBalanceLedgerTypePurchase                 = "purchase"
+	CreditBalanceLedgerTypeRedemption               = "redemption"
+	CreditBalanceLedgerTypeSubscriptionConversion   = "subscription_conversion"
 )
 
 const (
@@ -60,17 +62,18 @@ func (l *CreditBalanceLedger) BeforeDelete(_ *gorm.DB) error {
 }
 
 type CreditBalanceGrantRequest struct {
-	UserId             int
-	GrossCredit        int64
-	IdempotencyKey     string
-	SourceType         string
-	SourceId           int
-	SourceSnapshot     string
-	Type               string
-	TargetPlanId       int
-	OperatorUserId     int
-	Reason             string
-	TargetPlanSnapshot *SubscriptionPlan
+	UserId                  int
+	GrossCredit             int64
+	IdempotencyKey          string
+	SourceType              string
+	SourceId                int
+	SourceSnapshot          string
+	Type                    string
+	TargetPlanId            int
+	OperatorUserId          int
+	Reason                  string
+	TargetPlanSnapshot      *SubscriptionPlan
+	PreserveActiveSelection bool
 }
 
 type CreditBalanceGrantResult struct {
@@ -255,7 +258,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	balance.TokenLimit = newLimit
 
 	setting := user.GetSetting()
-	if !hadUsableSubscription {
+	if !hadUsableSubscription && !request.PreserveActiveSelection {
 		setting.ActiveSubscriptionId = balance.Id
 		settingJSON, err := marshalUserSetting(setting)
 		if err != nil {
@@ -414,7 +417,16 @@ func getOrCreateCreditBalanceSubscriptionTx(tx *gorm.DB, userId int, plan *Subsc
 		LastResetTime:    0,
 		NextResetTime:    0,
 	}
-	if err := tx.Create(&balance).Error; err != nil {
+	create := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&balance)
+	if create.Error != nil {
+		return nil, create.Error
+	}
+	if create.RowsAffected == 1 {
+		return &balance, nil
+	}
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("user_id = ? AND entitlement_type = ?", userId, SubscriptionEntitlementCreditBalance).
+		First(&balance).Error; err != nil {
 		return nil, err
 	}
 	return &balance, nil

@@ -69,13 +69,58 @@ export interface SubscriptionConversionQuote {
   calculation_error_code?: string
 }
 
+export interface SubscriptionConversionHistory {
+  id: string
+  source_subscription_id: string
+  source_plan_id: string
+  source_plan_title: string
+  target_subscription_id: string
+  target_plan_id: string
+  ledger_id: string
+  source_status: string
+  grant_source: string
+  database_now: string
+  source_start_time: string
+  source_end_time: string
+  remaining_seconds: string
+  full_31_day_blocks: string
+  credit_basis: string
+  credit_basis_source: ConversionQuoteCreditBasisSource
+  current_remaining_credit: string
+  gross_credit: string
+  debt_offset: string
+  net_available_credit: string
+  available_credit_after: string
+  settlement_debt_after: string
+  balance_before: string
+  balance_after: string
+  last_granted_at: string
+  last_grant_time_source: string
+  last_grant_source: string
+  converted_at: string
+}
+
+export interface SubscriptionConversionConfirmRequest {
+  subscription_id: string
+  idempotency_key: string
+}
+
+export interface SubscriptionConversionConfirmResult {
+  replayed: boolean
+  conversion: SubscriptionConversionHistory
+}
+
 export interface SubscriptionConversionQuoteList {
   database_now: string
   quotes: SubscriptionConversionQuote[]
+  conversions: SubscriptionConversionHistory[]
 }
 
 export type SubscriptionConversionQuoteResponse =
   ApiResponse<SubscriptionConversionQuoteList>
+
+export type SubscriptionConversionConfirmResponse =
+  ApiResponse<SubscriptionConversionConfirmResult>
 
 export interface LiveSubscriptionConversionQuote {
   sourceSubscriptionId: string

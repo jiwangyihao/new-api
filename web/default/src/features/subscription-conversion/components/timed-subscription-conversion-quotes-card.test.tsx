@@ -1,3 +1,4 @@
+/** @jsxImportSource react */
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -24,19 +25,23 @@ import {
   render,
   waitFor,
   within,
+  type RenderResult,
 } from '@testing-library/react/pure'
 import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
-import { CONVERSION_QUOTE_REFETCH_MS } from '../hooks/use-subscription-conversion-quotes'
 import { deriveLiveConversionQuote } from '../live-quote'
 import type {
+  SubscriptionConversionConfirmRequest,
+  SubscriptionConversionConfirmResult,
+  SubscriptionConversionHistory,
   SubscriptionConversionQuote,
   SubscriptionConversionQuoteList,
 } from '../types'
 import { TimedSubscriptionConversionQuotesCard } from './timed-subscription-conversion-quotes-card'
 
+const activeQueryClients = new Set<QueryClient>()
 const originalSetInterval = globalThis.setInterval
 const originalClearInterval = globalThis.clearInterval
 
@@ -47,32 +52,42 @@ type CapturedInterval = {
 }
 
 let currentTimeMs = 1_000_000
-let nextIntervalId = 1
+let nextIntervalId = -1
 let capturedIntervals: CapturedInterval[] = []
 
 beforeEach(() => {
   currentTimeMs = 1_000_000
-  nextIntervalId = 1
+  nextIntervalId = -1
   capturedIntervals = []
   globalThis.setInterval = ((callback: TimerHandler, delay?: number) => {
-    const id = nextIntervalId++
+    const numericDelay = Number(delay || 0)
+    if (numericDelay !== 1000 && numericDelay !== 5000) {
+      return originalSetInterval(callback, delay)
+    }
+    const id = nextIntervalId--
     capturedIntervals.push({
       id,
-      delay: Number(delay || 0),
+      delay: numericDelay,
       callback: callback as () => void,
     })
     return id
   }) as typeof setInterval
   globalThis.clearInterval = ((id?: number | NodeJS.Timeout) => {
     const numericId = Number(id)
-    capturedIntervals = capturedIntervals.filter(
-      (entry) => entry.id !== numericId
-    )
+    if (capturedIntervals.some((entry) => entry.id === numericId)) {
+      capturedIntervals = capturedIntervals.filter(
+        (entry) => entry.id !== numericId
+      )
+      return
+    }
+    originalClearInterval(id)
   }) as unknown as typeof clearInterval
 })
 
 afterEach(() => {
   cleanup()
+  for (const queryClient of activeQueryClients) queryClient.clear()
+  activeQueryClients.clear()
   globalThis.setInterval = originalSetInterval
   globalThis.clearInterval = originalClearInterval
 })
@@ -118,13 +133,59 @@ function makeQuote(
 }
 
 function makeQuoteList(
-  quotes: SubscriptionConversionQuote[] = [makeQuote()]
+  quotes: SubscriptionConversionQuote[] = [makeQuote()],
+  conversions: SubscriptionConversionHistory[] = []
 ): SubscriptionConversionQuoteList {
-  return { database_now: '1800000000', quotes }
+  return { database_now: '1800000000', quotes, conversions }
+}
+
+function makeConversion(
+  overrides: Partial<SubscriptionConversionHistory> = {}
+): SubscriptionConversionHistory {
+  return {
+    id: '1',
+    source_subscription_id: '7001',
+    source_plan_id: '7101',
+    source_plan_title: 'Monthly Pro',
+    target_subscription_id: '7201',
+    target_plan_id: '7301',
+    ledger_id: '7401',
+    source_status: 'active',
+    grant_source: 'order',
+    database_now: '1800000010',
+    source_start_time: '1797000000',
+    source_end_time: '1802678400',
+    remaining_seconds: '2678390',
+    full_31_day_blocks: '0',
+    credit_basis: '100',
+    credit_basis_source: 'grant_snapshot',
+    current_remaining_credit: '20',
+    gross_credit: '20',
+    debt_offset: '5',
+    net_available_credit: '15',
+    available_credit_after: '115',
+    settlement_debt_after: '0',
+    balance_before: '100',
+    balance_after: '115',
+    last_granted_at: '1797000000',
+    last_grant_time_source: 'live_grant',
+    last_grant_source: 'order',
+    converted_at: '1800000010',
+    ...overrides,
+  }
+}
+
+interface QuotesCardTestView extends Pick<RenderResult, 'getByRole'> {
+  getRequestCount: () => number
 }
 
 async function renderQuotesCard(
-  response: SubscriptionConversionQuoteList = makeQuoteList()
+  response: SubscriptionConversionQuoteList = makeQuoteList(),
+  options: {
+    confirmConversion?: (
+      request: SubscriptionConversionConfirmRequest
+    ) => Promise<SubscriptionConversionConfirmResult>
+  } = {}
 ) {
   const i18n = createInstance()
   await i18n.init({
@@ -136,11 +197,24 @@ async function renderQuotesCard(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: Infinity } },
   })
+  activeQueryClients.add(queryClient)
   let requestCount = 0
+  const confirmRequests: SubscriptionConversionConfirmRequest[] = []
   let currentResponse = response
   const loadQuotes = async () => {
     requestCount += 1
     return currentResponse
+  }
+  const confirmConversion = async (
+    request: SubscriptionConversionConfirmRequest
+  ): Promise<SubscriptionConversionConfirmResult> => {
+    confirmRequests.push(request)
+    return (
+      options.confirmConversion?.(request) ?? {
+        replayed: false,
+        conversion: makeConversion(),
+      }
+    )
   }
   const view = render(
     <I18nextProvider i18n={i18n}>
@@ -148,6 +222,8 @@ async function renderQuotesCard(
         <TimedSubscriptionConversionQuotesCard
           now={() => currentTimeMs}
           loadQuotes={loadQuotes}
+          confirmConversion={confirmConversion}
+          createIdempotencyKey={() => 'conversion-client-key'}
         />
       </QueryClientProvider>
     </I18nextProvider>
@@ -159,10 +235,19 @@ async function renderQuotesCard(
   return {
     ...view,
     getRequestCount: () => requestCount,
+    getConfirmRequests: () => confirmRequests,
     setResponse: (next: SubscriptionConversionQuoteList) => {
       currentResponse = next
     },
   }
+}
+
+async function openConversionPreview(view: QuotesCardTestView) {
+  const button = view.getByRole('button', { name: 'Preview conversion' })
+  await waitFor(() => assert.equal(button.getAttribute('disabled'), null))
+  fireEvent.click(button)
+  await waitFor(() => assert.ok(view.getRequestCount() >= 2))
+  return waitFor(() => view.getByRole('dialog'))
 }
 
 function runCapturedInterval(delay: number) {
@@ -172,6 +257,127 @@ function runCapturedInterval(delay: number) {
 }
 
 describe('timed subscription conversion quotes', () => {
+  test('refreshes before confirmation and submits only source identity plus a client idempotency key', async () => {
+    const view = await renderQuotesCard()
+    const dialog = await openConversionPreview(view)
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => assert.ok(view.getRequestCount() >= 3))
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    assert.deepEqual(view.getConfirmRequests()[0], {
+      subscription_id: '7001',
+      idempotency_key: 'conversion-client-key',
+    })
+    const result = await waitFor(() =>
+      view.getByRole('status', { name: 'Latest conversion result' })
+    )
+    assert.ok(within(result).getByText('Monthly Pro'))
+    assert.ok(within(result).getByText('20'))
+    assert.ok(within(result).getByText('5'))
+    assert.ok(within(result).getByText('15'))
+    assert.ok(within(result).getByText('115'))
+  })
+
+  test('keeps the submit disabled while pending and prevents duplicate confirmation', async () => {
+    let resolveConfirmation:
+      | ((value: SubscriptionConversionConfirmResult) => void)
+      | undefined
+    const pending = new Promise<SubscriptionConversionConfirmResult>(
+      (resolve) => {
+        resolveConfirmation = resolve
+      }
+    )
+    const view = await renderQuotesCard(makeQuoteList(), {
+      confirmConversion: () => pending,
+    })
+    const dialog = await openConversionPreview(view)
+    const submit = within(dialog).getByRole('button', {
+      name: 'Submit conversion',
+    })
+    fireEvent.click(submit)
+    const pendingSubmit = await waitFor(() =>
+      within(dialog).getByRole('button', { name: 'Converting subscription' })
+    )
+    assert.equal(pendingSubmit.getAttribute('disabled'), '')
+    fireEvent.click(pendingSubmit)
+    assert.equal(view.getConfirmRequests().length, 1)
+
+    resolveConfirmation?.({ replayed: false, conversion: makeConversion() })
+    await waitFor(() =>
+      view.getByRole('status', { name: 'Latest conversion result' })
+    )
+  })
+
+  test('refreshes the server quote and recovers after confirmation failure', async () => {
+    const view = await renderQuotesCard(makeQuoteList(), {
+      confirmConversion: async () => {
+        throw new Error('Conversion conflict')
+      },
+    })
+    const dialog = await openConversionPreview(view)
+    view.setResponse(
+      makeQuoteList([
+        makeQuote({
+          plan_title: 'Monthly Pro latest after conflict',
+          current_remaining_credit: '10',
+          gross_credit: '110',
+          net_available_credit: '90',
+        }),
+      ])
+    )
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => within(dialog).getByText('Conversion conflict'))
+    await waitFor(() =>
+      within(dialog).getByText('Monthly Pro latest after conflict')
+    )
+    assert.ok(view.getRequestCount() >= 4)
+    assert.ok(within(dialog).getByRole('button', { name: 'Submit conversion' }))
+  })
+
+  test('renders converted subscriptions in history without a reverse action', async () => {
+    const view = await renderQuotesCard(makeQuoteList([], [makeConversion()]))
+    assert.ok(view.getByRole('heading', { name: 'Conversion history' }))
+    const history = view.getByLabelText('Converted subscription #7001')
+    assert.ok(within(history).getByText('0 × 100 + 20 = 20'))
+    assert.equal(view.queryByRole('button', { name: /restore/i }), null)
+  })
+
+  test('shows the explicit reason for a subscription that has not started', async () => {
+    const view = await renderQuotesCard(
+      makeQuoteList([
+        makeQuote({
+          start_time: '1800000001',
+          category: 'excluded',
+          eligible: false,
+          can_confirm: false,
+          reason_codes: ['subscription_not_started'],
+          reasons: [{ code: 'subscription_not_started' }],
+        }),
+      ])
+    )
+
+    assert.ok(view.getByRole('heading', { name: 'Excluded subscriptions' }))
+    assert.ok(view.getByText('The source subscription has not started yet'))
+  })
+  test('submits subscription identifiers above Number.MAX_SAFE_INTEGER without precision loss', async () => {
+    const unsafeId = '9007199254740993'
+    const view = await renderQuotesCard(
+      makeQuoteList([makeQuote({ source_subscription_id: unsafeId })])
+    )
+    const dialog = await openConversionPreview(view)
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    assert.equal(view.getConfirmRequests()[0]?.subscription_id, unsafeId)
+  })
+
   test('uses BigInt for every formula integer beyond Number.MAX_SAFE_INTEGER', () => {
     const unsafe = '9007199254740993'
     const live = deriveLiveConversionQuote(
@@ -207,9 +413,8 @@ describe('timed subscription conversion quotes', () => {
 
   test('refreshes with React Query every five seconds, on focus, and before preview opens', async () => {
     const view = await renderQuotesCard()
-    assert.equal(CONVERSION_QUOTE_REFETCH_MS, 5000)
 
-    await act(async () => runCapturedInterval(CONVERSION_QUOTE_REFETCH_MS))
+    await act(async () => runCapturedInterval(5000))
     await waitFor(() => assert.equal(view.getRequestCount(), 2))
 
     await act(async () => window.dispatchEvent(new Event('focus')))
@@ -399,7 +604,7 @@ describe('timed subscription conversion quotes', () => {
     assert.ok(within(dialog).getByText('1 × 100 + 25 = 125'))
     assert.ok(
       within(dialog).getByText(
-        'Converting is irreversible and removes the source timed subscription.'
+        'Converting is irreversible. The source timed subscription remains as a converted history record, and in-flight requests settle to the target Credit balance.'
       )
     )
     assert.ok(
@@ -407,10 +612,7 @@ describe('timed subscription conversion quotes', () => {
         'The final submission will recalculate using the latest values.'
       )
     )
-    assert.equal(
-      within(dialog).queryByRole('button', { name: 'Submit conversion' }),
-      null
-    )
+    assert.ok(within(dialog).getByRole('button', { name: 'Submit conversion' }))
     assert.ok(within(dialog).getByRole('button', { name: 'Close preview' }))
   })
 })

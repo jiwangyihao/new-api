@@ -28,12 +28,25 @@ type subscriptionConversionQuoteRouteItem struct {
 	CanConfirm             bool     `json:"can_confirm"`
 	ReasonCodes            []string `json:"reason_codes"`
 }
+type subscriptionConversionHistoryRouteItem struct {
+	Id                     string `json:"id"`
+	SourceSubscriptionId   string `json:"source_subscription_id"`
+	SourcePlanTitle        string `json:"source_plan_title"`
+	TargetSubscriptionId   string `json:"target_subscription_id"`
+	Full31DayBlocks        string `json:"full_31_day_blocks"`
+	CreditBasis            string `json:"credit_basis"`
+	CurrentRemainingCredit string `json:"current_remaining_credit"`
+	GrossCredit            string `json:"gross_credit"`
+	DebtOffset             string `json:"debt_offset"`
+	NetAvailableCredit     string `json:"net_available_credit"`
+}
 
 type subscriptionConversionQuoteRouteResponse struct {
 	Success bool `json:"success"`
 	Data    struct {
-		DatabaseNow string                                 `json:"database_now"`
-		Quotes      []subscriptionConversionQuoteRouteItem `json:"quotes"`
+		DatabaseNow string                                   `json:"database_now"`
+		Quotes      []subscriptionConversionQuoteRouteItem   `json:"quotes"`
+		Conversions []subscriptionConversionHistoryRouteItem `json:"conversions"`
 	} `json:"data"`
 }
 
@@ -48,12 +61,14 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 		&model.Redemption{},
 		&model.InvitationRewardEvent{},
 		&model.CreditBalanceLedger{},
+		&model.SubscriptionConversion{},
 	))
 
 	const userID = 9951
 	const sourceSubscriptionID = 9952
 	const expiredSubscriptionID = 9953
 	const excludedSubscriptionID = 9954
+	const futureSubscriptionID = 9956
 	const balanceSubscriptionID = 9955
 	accessToken := "conversion-quotes-route-token"
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "conversion-quotes-route", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}).Error)
@@ -107,6 +122,13 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 			LastGrantedAt: databaseNow - 40*24*60*60, LastGrantTimeSource: model.SubscriptionGrantTimeSourceLive, LastGrantSource: model.SubscriptionGrantMonthlyInviteEntitlement,
 		},
 		{
+			Id: futureSubscriptionID, UserId: userID, PlanId: 9961,
+			EntitlementType: model.SubscriptionEntitlementTimed,
+			TokenLimit:      100, TokenUsed: 0, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+			StartTime: databaseNow + 60, EndTime: databaseNow + model.TimedSubscriptionConversionBlockSeconds + 60, Status: model.SubscriptionStatusActive,
+			LastGrantedAt: databaseNow - 40*24*60*60, LastGrantCreditSnapshot: &snapshot, LastGrantTimeSource: model.SubscriptionGrantTimeSourceLive, LastGrantSource: model.SubscriptionGrantOrder,
+		},
+		{
 			Id: balanceSubscriptionID, UserId: userID, PlanId: 9960,
 			EntitlementType: model.SubscriptionEntitlementCreditBalance,
 			TokenLimit:      50, TokenUsed: 75, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder, Status: "active",
@@ -124,7 +146,7 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 
 	before := snapshotConversionQuoteRouteState(t, userID)
 	first := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
-	require.Len(t, first.Data.Quotes, 3)
+	require.Len(t, first.Data.Quotes, 4)
 	byID := conversionQuoteRouteItemsByID(first.Data.Quotes)
 	assert.Equal(t, model.ConversionQuoteCategoryConvertible, byID[strconv.Itoa(sourceSubscriptionID)].Category)
 	assert.Equal(t, "100", byID[strconv.Itoa(sourceSubscriptionID)].CreditBasis)
@@ -137,6 +159,9 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	assert.Equal(t, model.ConversionQuoteCategoryGrace, byID[strconv.Itoa(expiredSubscriptionID)].Category)
 	assert.True(t, byID[strconv.Itoa(expiredSubscriptionID)].CanConfirm)
 	assert.Contains(t, byID[strconv.Itoa(excludedSubscriptionID)].ReasonCodes, model.ConversionQuoteReasonMonthlyInviteSource)
+	assert.Equal(t, model.ConversionQuoteCategoryExcluded, byID[strconv.Itoa(futureSubscriptionID)].Category)
+	assert.False(t, byID[strconv.Itoa(futureSubscriptionID)].CanConfirm)
+	assert.Contains(t, byID[strconv.Itoa(futureSubscriptionID)].ReasonCodes, model.ConversionQuoteReasonNotStarted)
 	_, exposedBalance := byID[strconv.Itoa(balanceSubscriptionID)]
 	assert.False(t, exposedBalance)
 	assertConversionQuoteRouteStateUnchanged(t, userID, before)
@@ -158,7 +183,8 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	byID = conversionQuoteRouteItemsByID(third.Data.Quotes)
 	assert.Equal(t, "9007199254740993", byID[strconv.Itoa(sourceSubscriptionID)].CreditBasis)
 	assert.Equal(t, "9007199254740993", byID[strconv.Itoa(sourceSubscriptionID)].GrossCredit)
-	assert.False(t, model.DB.Migrator().HasTable("subscription_conversions"))
+	assert.True(t, model.DB.Migrator().HasTable("subscription_conversions"))
+	assert.Empty(t, third.Data.Conversions)
 }
 
 type conversionQuoteRouteState struct {

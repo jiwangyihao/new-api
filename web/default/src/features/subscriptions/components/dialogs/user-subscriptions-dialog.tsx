@@ -71,6 +71,14 @@ function SubscriptionStatusBadge(props: {
   const now = Date.now() / 1000
   const isExpired = (props.sub.end_time || 0) > 0 && props.sub.end_time < now
   const isActive = props.sub.status === 'active' && !isExpired
+  if (props.sub.status === 'converted')
+    return (
+      <StatusBadge
+        label={props.t('Converted')}
+        variant='info'
+        copyable={false}
+      />
+    )
   if (isActive)
     return (
       <StatusBadge
@@ -199,7 +207,7 @@ export function UserSubscriptionsDialog(props: Props) {
             </SheetDescription>
           </SheetHeader>
 
-          <div className='mt-4 space-y-4'>
+          <div className='mt-4 flex flex-col gap-4'>
             <div className='flex gap-2'>
               <Select
                 items={[
@@ -234,7 +242,7 @@ export function UserSubscriptionsDialog(props: Props) {
                 onClick={handleCreate}
                 disabled={creating || !selectedPlanId}
               >
-                <Plus className='mr-1 h-4 w-4' />
+                <Plus data-icon='inline-start' />
                 {t('Add subscription')}
               </Button>
             </div>
@@ -276,6 +284,7 @@ export function UserSubscriptionsDialog(props: Props) {
                       const isActive = sub.status === 'active' && !isExpired
                       const total = Number(sub.amount_total || 0)
                       const used = Number(sub.amount_used || 0)
+                      const isConverted = sub.status === 'converted'
 
                       return (
                         <TableRow key={sub.id}>
@@ -289,6 +298,51 @@ export function UserSubscriptionsDialog(props: Props) {
                               <div className='text-muted-foreground text-xs'>
                                 {t('Source')}: {sub.source || '-'}
                               </div>
+                              {record.conversion_audit && (
+                                <div className='text-muted-foreground mt-1 flex flex-col gap-0.5 text-xs'>
+                                  <div>
+                                    {t('Conversion ID')}: #
+                                    {record.conversion_audit.conversion_id}
+                                  </div>
+                                  <div>
+                                    {t('Source subscription')}: #
+                                    {
+                                      record.conversion_audit
+                                        .source_subscription_id
+                                    }{' '}
+                                    → {t('Target Credit balance')}: #
+                                    {
+                                      record.conversion_audit
+                                        .target_subscription_id
+                                    }
+                                  </div>
+                                  <div>
+                                    {t('Status')}:{' '}
+                                    {
+                                      record.conversion_audit
+                                        .source_status_before
+                                    }{' '}
+                                    →{' '}
+                                    {
+                                      record.conversion_audit
+                                        .source_status_after
+                                    }
+                                  </div>
+                                  <div>
+                                    {t('Target Credit balance')}:{' '}
+                                    {record.conversion_audit.target_status ||
+                                      '-'}
+                                  </div>
+                                  <div>
+                                    {t('Converted at')}:{' '}
+                                    {formatTimestamp(
+                                      Number(
+                                        record.conversion_audit.converted_at
+                                      )
+                                    )}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell>
@@ -325,6 +379,7 @@ export function UserSubscriptionsDialog(props: Props) {
                               <Button
                                 size='sm'
                                 variant='destructive'
+                                disabled={isConverted}
                                 onClick={() =>
                                   setConfirmAction({
                                     type: 'delete',

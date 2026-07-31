@@ -65,6 +65,29 @@ func TestSubscriptionBalancePayRequiresExplicitPurchaseMode(t *testing.T) {
 	assert.Zero(t, orderCount)
 }
 
+func TestSubscriptionBalancePayRejectsDisabledPlan(t *testing.T) {
+	setupSubscriptionBalancePurchaseTestDB(t)
+	userID := 9506
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "disabled_plan_buyer", Quota: 10000, Status: common.UserStatusEnabled}).Error)
+	code := "disabled-plan-purchase"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9507, Title: "Stopped", PriceAmount: 40, Currency: "CNY", Enabled: false, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 9507).Update("enabled", false).Error)
+	model.InvalidateSubscriptionPlanCache(9507)
+
+	recorder := performBalancePayRequest(t, userID, `{"plan_id":9507,"idempotency_key":"disabled-plan"}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "套餐未启用")
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, 10000, user.Quota)
+	var orderCount, subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ?", userID).Count(&orderCount).Error)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&subscriptionCount).Error)
+	assert.Zero(t, orderCount)
+	assert.Zero(t, subscriptionCount)
+}
+
 func TestSubscriptionBalancePayAmountUsesCents(t *testing.T) {
 	amount, err := subscriptionBalancePayAmount(39.9)
 	require.NoError(t, err)

@@ -159,7 +159,7 @@ func TestActiveFallbackBillingStrategyDoesNotFallBackOnModelRestriction(t *testi
 	assert.Zero(t, fallback.TokenUsed)
 }
 
-func TestSingleActiveBillingStrategyRepairsDisabledCachedActiveSubscription(t *testing.T) {
+func TestSingleActiveBillingStrategyKeepsExistingEntitlementWhenPlanDisabled(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
@@ -173,7 +173,7 @@ func TestSingleActiveBillingStrategyRepairsDisabledCachedActiveSubscription(t *t
 	activeCode := "single-active-disabled"
 	fallbackCode := "single-active-repair"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7942, Title: "Active then disabled", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &activeCode}).Error)
-	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7943, Title: "Repair target", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &fallbackCode}).Error)
+	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7943, Title: "Fallback target", Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 100, ConcurrencyLimit: 1, BusinessCode: &fallbackCode}).Error)
 	now := common.GetTimestamp()
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7944, UserId: user.Id, PlanId: 7942, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7945, UserId: user.Id, PlanId: 7943, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
@@ -181,20 +181,21 @@ func TestSingleActiveBillingStrategyRepairsDisabledCachedActiveSubscription(t *t
 	first, err := PreConsumeUserSubscription("single-active-disabled-first", user.Id, "gpt-4o", 0, 5)
 	require.NoError(t, err)
 	assert.Equal(t, 7944, first.UserSubscriptionId)
-	_, cachedBeforeDisable := primaryBillableSubscriptionCache.Load(primaryBillableSubscriptionCacheKey(user.Id))
-	require.True(t, cachedBeforeDisable)
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", 7942).Update("enabled", false).Error)
 	InvalidateSubscriptionPlanCache(7942)
-	_, cachedAfterPlanInvalidation := primaryBillableSubscriptionCache.Load(primaryBillableSubscriptionCacheKey(user.Id))
-	require.True(t, cachedAfterPlanInvalidation, "plan cache invalidation must preserve the warmed primary selection")
 
 	second, err := PreConsumeUserSubscription("single-active-disabled-second", user.Id, "gpt-4o", 0, 5)
 
 	require.NoError(t, err)
-	assert.Equal(t, 7945, second.UserSubscriptionId)
+	assert.Equal(t, 7944, second.UserSubscriptionId)
 	var persisted User
 	require.NoError(t, DB.First(&persisted, user.Id).Error)
-	assert.Equal(t, 7945, persisted.GetSetting().ActiveSubscriptionId)
+	assert.Equal(t, 7944, persisted.GetSetting().ActiveSubscriptionId)
+	var active, fallback UserSubscription
+	require.NoError(t, DB.First(&active, 7944).Error)
+	require.NoError(t, DB.First(&fallback, 7945).Error)
+	assert.Equal(t, int64(10), active.TokenUsed)
+	assert.Zero(t, fallback.TokenUsed)
 }
 
 func TestSingleActiveBillingStrategyRepairsCancelledCachedActiveSubscription(t *testing.T) {
@@ -742,7 +743,7 @@ func TestSubscriptionBillingStrategySelectionMatrix(t *testing.T) {
 			wantOrder:          []int{1},
 		},
 		{
-			name:        "active fallback repairs disabled active and orders timed before credit",
+			name:        "active fallback keeps disabled plan entitlement and orders timed before credit",
 			strategy:    SubscriptionBillingStrategyActiveFallback,
 			activeIndex: 0,
 			candidates: []candidateSpec{
@@ -753,9 +754,9 @@ func TestSubscriptionBillingStrategySelectionMatrix(t *testing.T) {
 			},
 			modelName:          "gpt-4o",
 			requiredTokens:     5,
-			wantSelectionIndex: 1,
-			wantActiveIndex:    1,
-			wantOrder:          []int{1, 2, 3},
+			wantSelectionIndex: 0,
+			wantActiveIndex:    0,
+			wantOrder:          []int{0, 1, 2, 3},
 		},
 		{
 			name:        "single active repairs expired timed benefit to credit balance",

@@ -204,6 +204,47 @@ func TestGetSubscriptionSelfReturnsSummaryAndCompatFields(t *testing.T) {
 	assert.False(t, summaryBool(t, summary, "gpt_abuse_limit_enabled"))
 }
 
+func TestGetSubscriptionSelfSummaryKeepsExistingEntitlementWhenPlanDisabled(t *testing.T) {
+	setupSubscriptionSelfSummaryTestDB(t)
+	const userID = 8131
+	const planID = 8132
+	const subscriptionID = 8133
+	seedSubscriptionSelfSummaryUser(t, userID, "disabled_plan_self_summary")
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	setting := user.GetSetting()
+	setting.SubscriptionBillingStrategy = model.SubscriptionBillingStrategyActiveFallback
+	user.SetSetting(setting)
+	require.NoError(t, model.DB.Save(&user).Error)
+	seedSubscriptionSelfSummaryPlan(t, planID, "Stopped Existing Plan", "stopped-existing-plan", 10_000_000_000, 50, false, false)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Update("enabled", false).Error)
+	model.InvalidateSubscriptionPlanCache(planID)
+	seedSubscriptionSelfSummarySubscription(t, subscriptionID, userID, planID, 10_000_000_000, 520_720_000, 50, model.SubscriptionGrantAdmin, 30*86400)
+
+	directSummary, err := model.GetSubscriptionSelfSummary(userID)
+	require.NoError(t, err)
+	assert.Equal(t, subscriptionID, directSummary.ActiveSubscriptionId)
+	assert.Equal(t, 1, directSummary.ActiveCount)
+	assert.Equal(t, subscriptionID, directSummary.SubscriptionId)
+	assert.Equal(t, planID, directSummary.PlanId)
+	assert.Equal(t, "Stopped Existing Plan", directSummary.PrimaryPlanTitle)
+	assert.Equal(t, int64(9_479_280_000), directSummary.TokenRemaining)
+	assert.Equal(t, 50, directSummary.ConcurrencyLimit)
+	assert.Equal(t, []int{subscriptionID}, directSummary.BillingCandidateIds)
+
+	recorder := performGetSubscriptionSelfSummaryRequest(t, userID)
+
+	data := subscriptionSelfSummaryData(t, recorder)
+	assert.Equal(t, float64(subscriptionID), data["active_subscription_id"])
+	summary := requireSubscriptionSelfSummary(t, data)
+	assert.Equal(t, int64(1), summaryInt64(t, summary, "active_count"))
+	assert.Equal(t, int64(subscriptionID), summaryInt64(t, summary, "subscription_id"))
+	assert.Equal(t, int64(planID), summaryInt64(t, summary, "plan_id"))
+	assert.Equal(t, "Stopped Existing Plan", summaryString(t, summary, "primary_plan_title"))
+	assert.Equal(t, int64(9_479_280_000), summaryInt64(t, summary, "token_remaining"))
+	assert.Equal(t, int64(50), summaryInt64(t, summary, "concurrency_limit"))
+}
+
 func TestGetSubscriptionSelfReturnsCreditBalanceStateHistoryAndPreference(t *testing.T) {
 	setupSubscriptionSelfSummaryTestDB(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.CreditBalanceLedger{}))

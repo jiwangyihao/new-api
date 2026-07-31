@@ -2105,9 +2105,6 @@ func loadBillableSubscriptionCandidatesTx(tx *gorm.DB, userId int, now int64, fo
 		if err != nil {
 			return nil, err
 		}
-		if !plan.Enabled {
-			continue
-		}
 		if resetDue {
 			if err := maybeResetUserSubscriptionWithPlanTx(tx, &subscription, plan, now); err != nil {
 				return nil, err
@@ -2310,9 +2307,6 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 	}
 	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)
 	if err != nil {
-		return nil, false
-	}
-	if !plan.Enabled {
 		return nil, false
 	}
 	selection.Plan = plan

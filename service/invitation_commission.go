@@ -745,6 +745,7 @@ func invitationRewardEventSourceEligibleTx(tx *gorm.DB, event *model.InvitationR
 		Status         string
 		StartTime      int64
 		EndTime        int64
+		ConvertedAt    int64
 		GrantReason    string
 		Source         string
 		RewardEligible bool
@@ -753,14 +754,18 @@ func invitationRewardEventSourceEligibleTx(tx *gorm.DB, event *model.InvitationR
 		BusinessCode   *string
 	}
 	err := tx.Table("user_subscriptions").
-		Select("user_subscriptions.id AS subscription_id, user_subscriptions.status, user_subscriptions.start_time, user_subscriptions.end_time, user_subscriptions.grant_reason, user_subscriptions.source, subscription_plans.reward_eligible, subscription_plans.is_trial, subscription_plans.invite_trial, subscription_plans.business_code").
+		Select("user_subscriptions.id AS subscription_id, user_subscriptions.status, user_subscriptions.start_time, user_subscriptions.end_time, user_subscriptions.converted_at, user_subscriptions.grant_reason, user_subscriptions.source, subscription_plans.reward_eligible, subscription_plans.is_trial, subscription_plans.invite_trial, subscription_plans.business_code").
 		Joins("JOIN subscription_plans ON subscription_plans.id = user_subscriptions.plan_id").
 		Where("user_subscriptions.id = ?", event.SourceSubscriptionId).
+		Where("user_subscriptions.entitlement_type = ?", model.SubscriptionEntitlementTimed).
+		Where("subscription_plans.entitlement_type = ?", model.SubscriptionEntitlementTimed).
 		Scan(&row).Error
 	if err != nil {
 		return false, err
 	}
-	if row.SubscriptionId == 0 || row.Status != "active" || row.StartTime > now || row.EndTime <= now {
+	activeNow := row.Status == model.SubscriptionStatusActive && row.StartTime <= now && row.EndTime > now
+	convertedHistory := row.Status == model.SubscriptionStatusConverted && row.ConvertedAt > 0 && event.CreatedAt > 0 && event.CreatedAt < row.ConvertedAt
+	if row.SubscriptionId == 0 || (!activeNow && !convertedHistory) {
 		return false, nil
 	}
 	if !row.RewardEligible || row.IsTrial || row.InviteTrial {

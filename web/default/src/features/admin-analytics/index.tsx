@@ -3,6 +3,7 @@ import { useQueries } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,6 +27,10 @@ import {
   fetchAdminAnalyticsDescriptor,
 } from './lib/page-contract'
 import {
+  adminAnalyticsCreditOverviewValues,
+  adminAnalyticsLifecycleLabelKeys,
+  adminAnalyticsCreditRankingValue,
+  adminAnalyticsSubscriptionHistoryValues,
   invitationPaidInviteeCardValues,
   invitationPaidInviterCardValues,
   invitationPaidSubscriptionCardValues,
@@ -37,6 +42,7 @@ import {
 import type {
   AdminAnalyticsCanonicalFilters,
   AdminAnalyticsDrilldownTarget,
+  AdminAnalyticsDrilldownSubscriptionsResponse,
   AdminAnalyticsInvitationRewardsResponse,
   AdminAnalyticsOverviewResponse,
   AdminAnalyticsPanelResponse,
@@ -81,6 +87,11 @@ type PaidSubscriptionValuePanelResponses = {
   sources?: PanelApiResponse<PaidSubscriptionValueResponse>
 }
 
+type ConversionPanelResponses = {
+  summary?: PanelApiResponse<AdminAnalyticsSubscriptionConversionResponse>
+  subscriptions?: PanelApiResponse<AdminAnalyticsDrilldownSubscriptionsResponse>
+}
+
 type InvitationPaidSubscriptionsPanelResponses = {
   summary?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
   inviters?: PanelApiResponse<InvitationPaidSubscriptionsResponse>
@@ -121,14 +132,15 @@ export function AdminAnalyticsPage(
   props: AdminAnalyticsPageProps
 ): JSX.Element {
   const { t } = useTranslation()
+  const { search, onSearchChange } = props
   const descriptors = useMemo(
-    () => buildAdminAnalyticsRequestDescriptors(props.search),
-    [props.search]
+    () => buildAdminAnalyticsRequestDescriptors(search),
+    [search]
   )
   const queries = useQueries({
     queries: descriptors.map((descriptor) => ({
-      queryKey: descriptor.queryKey,
-      queryFn: () => fetchAdminAnalyticsDescriptor(descriptor, props.search),
+      queryKey: [...descriptor.queryKey, search],
+      queryFn: () => fetchAdminAnalyticsDescriptor(descriptor, search),
       enabled: descriptor.enabled,
     })),
   })
@@ -138,16 +150,20 @@ export function AdminAnalyticsPage(
   )
   const hasNetworkError = queries.some((query) => query.isError)
   const hasResponseError = queries.some((query) => panelFailed(query.data))
+  const queryLoadingStates = queries.map((query) => query.isLoading)
+  const queryErrorStates = queries.map(
+    (query) => query.isError || panelFailed(query.data)
+  )
   const summarySnapshot = hasPanelData(queries[0]?.data)
     ? queries[0].data.data.range.snapshot_at
     : undefined
 
   useEffect(() => {
-    if (!isPaidSubscriptionAnalyticsTab(props.search.tab)) return
-    if (props.search.snapshot_at !== undefined) return
+    if (!isPaidSubscriptionAnalyticsTab(search.tab)) return
+    if (search.snapshot_at !== undefined) return
     if (summarySnapshot === undefined) return
-    props.onSearchChange({ ...props.search, snapshot_at: summarySnapshot })
-  }, [props.search, props.onSearchChange, summarySnapshot])
+    onSearchChange({ ...search, snapshot_at: summarySnapshot })
+  }, [search, onSearchChange, summarySnapshot])
 
   return (
     <SectionPageLayout>
@@ -160,32 +176,39 @@ export function AdminAnalyticsPage(
       <SectionPageLayout.Content>
         <div className='space-y-4'>
           <AdminAnalyticsTabs
-            value={props.search.tab}
+            value={search.tab}
             onChange={(tab) =>
-              props.onSearchChange(switchAdminAnalyticsTab(props.search, tab))
+              onSearchChange(switchAdminAnalyticsTab(search, tab))
             }
           />
           <AdminAnalyticsFilterBar
-            value={props.search}
-            onApply={props.onSearchChange}
+            value={search}
+            onApply={onSearchChange}
           />
           {isFetching ? (
-            <div className='text-muted-foreground text-xs'>
+            <div
+              className='text-muted-foreground text-xs'
+              role='status'
+              aria-live='polite'
+            >
               {t('adminAnalytics.refreshing')}
             </div>
           ) : null}
-          {hasNetworkError || hasResponseError ? (
+          {search.tab !== 'conversion' &&
+          (hasNetworkError || hasResponseError) ? (
             <ErrorState
               title={t('adminAnalytics.failedToLoad')}
               description={t('Try adjusting the time range or filters')}
             />
           ) : null}
           <ActivePanel
-            tab={props.search.tab}
+            tab={search.tab}
             responses={queries.map((query) => query.data)}
             loading={isLoading}
             error={hasNetworkError || hasResponseError}
-            filters={props.search}
+            queryLoadingStates={queryLoadingStates}
+            queryErrorStates={queryErrorStates}
+            filters={search}
             onDrilldown={props.onDrilldown}
           />
         </div>
@@ -731,6 +754,8 @@ function ActivePanel(props: {
   responses: Array<UnknownPanelResponse | undefined>
   loading: boolean
   error: boolean
+  queryLoadingStates: boolean[]
+  queryErrorStates: boolean[]
   filters: AdminAnalyticsCanonicalFilters
   onDrilldown: (target: FrontendAdminAnalyticsDrilldownTarget) => void
 }): JSX.Element {
@@ -758,6 +783,32 @@ function ActivePanel(props: {
         error={props.error}
       >
         <UsagePanel responses={usageResponses} onDrilldown={handleDrilldown} />
+      </PanelCard>
+    )
+  }
+
+  if (props.tab === 'conversion') {
+    const responses: ConversionPanelResponses = {
+      summary: props.responses[0] as
+        | PanelApiResponse<AdminAnalyticsSubscriptionConversionResponse>
+        | undefined,
+      subscriptions: props.responses[1] as
+        | PanelApiResponse<AdminAnalyticsDrilldownSubscriptionsResponse>
+        | undefined,
+    }
+    return (
+      <PanelCard
+        titleKey='adminAnalytics.tabs.conversion'
+        loading={false}
+        error={false}
+      >
+        <ConversionPanel
+          responses={responses}
+          summaryLoading={props.queryLoadingStates[0] ?? false}
+          summaryError={props.queryErrorStates[0] ?? false}
+          subscriptionsLoading={props.queryLoadingStates[1] ?? false}
+          subscriptionsError={props.queryErrorStates[1] ?? false}
+        />
       </PanelCard>
     )
   }
@@ -853,7 +904,13 @@ function PanelCard(props: {
       </CardHeader>
       <CardContent>
         {props.loading ? (
-          <div className='text-muted-foreground text-sm'>{t('Loading...')}</div>
+          <div
+            className='text-muted-foreground text-sm'
+            role='status'
+            aria-live='polite'
+          >
+            {t('Loading...')}
+          </div>
         ) : props.error ? (
           <ErrorState
             title={t('adminAnalytics.failedToLoad')}
@@ -901,13 +958,7 @@ function SinglePanel(props: {
         />
       )
     case 'conversion':
-      return (
-        <ConversionPanel
-          data={panelData(
-            props.response as PanelApiResponse<AdminAnalyticsSubscriptionConversionResponse>
-          )}
-        />
-      )
+      return <EmptyAnalyticsPanel />
     case 'invitations':
       return (
         <InvitationsPanel
@@ -944,6 +995,10 @@ function OverviewPanel(props: {
   data: AdminAnalyticsOverviewResponse | undefined
 }): JSX.Element {
   if (!props.data) return <EmptyAnalyticsPanel />
+  const creditValues = adminAnalyticsCreditOverviewValues(
+    props.data.summary.quota,
+    props.data.summary.subscriptions
+  )
   return (
     <MetricGrid>
       <Metric
@@ -954,6 +1009,13 @@ function OverviewPanel(props: {
         labelKey='adminAnalytics.metrics.activeSubscriptions'
         value={props.data.summary.subscriptions.active_count}
       />
+      {creditValues.map((value) => (
+        <Metric
+          key={value.labelKey}
+          labelKey={value.labelKey}
+          value={value.value}
+        />
+      ))}
       <Metric
         labelKey='adminAnalytics.metrics.tokenUsed'
         value={props.data.summary.quota.token_used}
@@ -1011,6 +1073,7 @@ function QuotaPanel(props: {
   data: AdminAnalyticsQuotaDistributionResponse | undefined
   onDrilldown: DrilldownHandler
 }): JSX.Element {
+  const { t } = useTranslation()
   if (!props.data || props.data.buckets.length === 0)
     return <EmptyAnalyticsPanel />
   return (
@@ -1030,12 +1093,15 @@ function QuotaPanel(props: {
       </div>
       <RankingList
         titleKey='adminAnalytics.rankings.highUsageUsers'
-        items={props.data.high_usage_users.items.map((item) => ({
-          key: String(item.subscription_id),
-          label: item.username,
-          value: formatAdminPercent(item.usage_rate),
-          drilldown: item.drilldown,
-        }))}
+        items={props.data.high_usage_users.items.map((item) => {
+          const value = adminAnalyticsCreditRankingValue(item)
+          return {
+            key: String(item.subscription_id),
+            label: `${item.username} · ${t(value.labelKey)}`,
+            value: value.value,
+            drilldown: item.drilldown,
+          }
+        })}
         onDrilldown={props.onDrilldown}
       />
     </div>
@@ -1081,29 +1147,108 @@ function UsersPanel(props: {
   )
 }
 
-function ConversionPanel(props: {
-  data: AdminAnalyticsSubscriptionConversionResponse | undefined
+export function ConversionPanel(props: {
+  responses: ConversionPanelResponses
+  summaryLoading: boolean
+  summaryError: boolean
+  subscriptionsLoading: boolean
+  subscriptionsError: boolean
 }): JSX.Element {
-  if (!props.data) return <EmptyAnalyticsPanel />
+  const { t } = useTranslation()
+  const summary = panelData(props.responses.summary)
+  const subscriptions =
+    panelData(props.responses.subscriptions)?.subscriptions?.items ?? []
+
   return (
-    <MetricGrid>
-      <Metric
-        labelKey='adminAnalytics.metrics.trialUsers'
-        value={props.data.summary.trial_users}
-      />
-      <Metric
-        labelKey='adminAnalytics.metrics.paidUsers'
-        value={props.data.summary.paid_users}
-      />
-      <Metric
-        labelKey='adminAnalytics.metrics.trialToPaidRate'
-        value={formatAdminPercent(props.data.summary.trial_to_paid_rate)}
-      />
-      <Metric
-        labelKey='adminAnalytics.metrics.renewalUsers'
-        value={props.data.summary.renewal_users}
-      />
-    </MetricGrid>
+    <div className='flex flex-col gap-4'>
+      <section
+        aria-labelledby='admin-analytics-conversion-summary'
+        aria-busy={props.summaryLoading}
+        aria-live='polite'
+      >
+        <div
+          id='admin-analytics-conversion-summary'
+          className='mb-2 text-sm font-medium'
+        >
+          {t('adminAnalytics.conversion.summary')}
+        </div>
+        {props.summaryLoading ? (
+          <div className='text-muted-foreground text-sm' role='status'>
+            {t('adminAnalytics.conversion.summaryLoading')}
+          </div>
+        ) : props.summaryError ? (
+          <Alert variant='destructive'>
+            <AlertTitle>
+              {t('adminAnalytics.conversion.summaryFailed')}
+            </AlertTitle>
+            <AlertDescription>
+              {t('Try adjusting the time range or filters')}
+            </AlertDescription>
+          </Alert>
+        ) : summary ? (
+          <MetricGrid>
+            <Metric
+              labelKey='adminAnalytics.metrics.trialUsers'
+              value={summary.summary.trial_users}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.paidUsers'
+              value={summary.summary.paid_users}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.trialToPaidRate'
+              value={formatAdminPercent(summary.summary.trial_to_paid_rate)}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.renewalUsers'
+              value={summary.summary.renewal_users}
+            />
+          </MetricGrid>
+        ) : (
+          <EmptyAnalyticsPanel />
+        )}
+      </section>
+
+      <section
+        aria-labelledby='admin-analytics-conversion-history'
+        aria-busy={props.subscriptionsLoading}
+        aria-live='polite'
+      >
+        <div
+          id='admin-analytics-conversion-history'
+          className='mb-2 text-sm font-medium'
+        >
+          {t('adminAnalytics.rankings.subscriptionConversionHistory')}
+        </div>
+        {props.subscriptionsLoading ? (
+          <div className='text-muted-foreground text-sm' role='status'>
+            {t('adminAnalytics.conversion.historyLoading')}
+          </div>
+        ) : props.subscriptionsError ? (
+          <Alert variant='destructive'>
+            <AlertTitle>
+              {t('adminAnalytics.conversion.historyFailed')}
+            </AlertTitle>
+            <AlertDescription>
+              {t('Try adjusting the time range or filters')}
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <AnalyticsCardGrid
+            titleKey='adminAnalytics.rankings.subscriptionConversionHistory'
+            hideTitle
+            items={subscriptions.map((item) => ({
+              key: String(item.subscription_id),
+              title: `${item.username || item.user_id} · ${item.plan_title}`,
+              description: t(
+                adminAnalyticsLifecycleLabelKeys[item.lifecycle_state]
+              ),
+              values: adminAnalyticsSubscriptionHistoryValues(item),
+            }))}
+          />
+        )}
+      </section>
+    </div>
   )
 }
 
@@ -1339,6 +1484,7 @@ function InvitationPaidSubscriptionsPanel(props: {
 
 function AnalyticsCardGrid(props: {
   titleKey: string
+  hideTitle?: boolean
   items: Array<{
     key: string
     title: string
@@ -1352,7 +1498,9 @@ function AnalyticsCardGrid(props: {
   if (props.items.length === 0) return <EmptyAnalyticsPanel />
   return (
     <div className='space-y-2'>
-      <div className='text-sm font-medium'>{t(props.titleKey)}</div>
+      {props.hideTitle ? null : (
+        <div className='text-sm font-medium'>{t(props.titleKey)}</div>
+      )}
       <div className='grid gap-3 md:grid-cols-2 xl:grid-cols-3'>
         {props.items.map((item) => (
           <DrilldownCard

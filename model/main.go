@@ -705,28 +705,38 @@ const (
 )
 
 type creditBalanceMySQLConstraintDDL struct {
+	model          any
 	tableName      string
 	indexName      string
 	addColumnSQL   string
 	createIndexSQL string
 }
 
-func creditBalancePartialUniqueIndexDDL() []string {
+func creditBalancePostgreSQLPartialUniqueIndexDDL() []string {
 	return []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS "` + creditBalancePlanIdentityIndex + `" ON "subscription_plans" ("entitlement_type") WHERE "entitlement_type" = 'credit_balance'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS "` + creditBalanceUserIdentityIndex + `" ON "user_subscriptions" ("user_id") WHERE "entitlement_type" = 'credit_balance'`,
 	}
 }
 
+func creditBalanceSQLitePartialUniqueIndexDDL() []string {
+	return []string{
+		"CREATE UNIQUE INDEX IF NOT EXISTS `" + creditBalancePlanIdentityIndex + "` ON `subscription_plans` (`entitlement_type`) WHERE `entitlement_type` = 'credit_balance'",
+		"CREATE UNIQUE INDEX IF NOT EXISTS `" + creditBalanceUserIdentityIndex + "` ON `user_subscriptions` (`user_id`) WHERE `entitlement_type` = 'credit_balance'",
+	}
+}
+
 func creditBalanceMySQL57ConstraintDDL() []creditBalanceMySQLConstraintDDL {
 	return []creditBalanceMySQLConstraintDDL{
 		{
+			model:          &SubscriptionPlan{},
 			tableName:      "subscription_plans",
 			indexName:      creditBalancePlanIdentityIndex,
 			addColumnSQL:   "ALTER TABLE `subscription_plans` ADD COLUMN `" + creditBalanceIdentityGuardColumn + "` TINYINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN 1 ELSE NULL END) STORED",
 			createIndexSQL: "CREATE UNIQUE INDEX `" + creditBalancePlanIdentityIndex + "` ON `subscription_plans` (`" + creditBalanceIdentityGuardColumn + "`)",
 		},
 		{
+			model:          &UserSubscription{},
 			tableName:      "user_subscriptions",
 			indexName:      creditBalanceUserIdentityIndex,
 			addColumnSQL:   "ALTER TABLE `user_subscriptions` ADD COLUMN `" + creditBalanceIdentityGuardColumn + "` BIGINT GENERATED ALWAYS AS (CASE WHEN `entitlement_type` = 'credit_balance' THEN `user_id` ELSE NULL END) STORED",
@@ -739,11 +749,20 @@ func ensureCreditBalanceSingletonConstraints() error {
 	if DB == nil {
 		return fmt.Errorf("database is nil")
 	}
-	if common.UsingMySQL {
+	switch {
+	case common.UsingMySQL:
 		return ensureCreditBalanceSingletonConstraintsMySQL()
+	case common.UsingPostgreSQL:
+		return ensureCreditBalancePartialUniqueIndexes(creditBalancePostgreSQLPartialUniqueIndexDDL())
+	case common.UsingSQLite:
+		return ensureCreditBalancePartialUniqueIndexes(creditBalanceSQLitePartialUniqueIndexDDL())
+	default:
+		return fmt.Errorf("unsupported database dialect for Credit balance singleton constraints: %s", DB.Dialector.Name())
 	}
+}
 
-	for _, statement := range creditBalancePartialUniqueIndexDDL() {
+func ensureCreditBalancePartialUniqueIndexes(statements []string) error {
+	for _, statement := range statements {
 		if err := DB.Exec(statement).Error; err != nil {
 			return err
 		}
@@ -753,12 +772,12 @@ func ensureCreditBalanceSingletonConstraints() error {
 
 func ensureCreditBalanceSingletonConstraintsMySQL() error {
 	for _, constraint := range creditBalanceMySQL57ConstraintDDL() {
-		if !DB.Migrator().HasColumn(constraint.tableName, creditBalanceIdentityGuardColumn) {
+		if !DB.Migrator().HasColumn(constraint.model, creditBalanceIdentityGuardColumn) {
 			if err := DB.Exec(constraint.addColumnSQL).Error; err != nil {
 				return err
 			}
 		}
-		if !DB.Migrator().HasIndex(constraint.tableName, constraint.indexName) {
+		if !DB.Migrator().HasIndex(constraint.model, constraint.indexName) {
 			if err := DB.Exec(constraint.createIndexSQL).Error; err != nil {
 				return err
 			}

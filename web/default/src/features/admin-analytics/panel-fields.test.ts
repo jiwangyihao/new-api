@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  adminAnalyticsCreditOverviewValues,
+  adminAnalyticsCreditRankingValue,
+  adminAnalyticsSubscriptionHistoryValues,
   invitationPaidInviteeCardValues,
   invitationPaidInviterCardValues,
   invitationPaidSubscriptionCardValues,
@@ -10,6 +13,10 @@ import {
   paidSubscriptionValueUserCardValues,
 } from './lib/panel-fields'
 import type {
+  AdminAnalyticsDrilldownSubscriptionItem,
+  AdminAnalyticsOverviewQuota,
+  AdminAnalyticsOverviewSubscriptions,
+  AdminAnalyticsSubscriptionRankingItem,
   InvitationPaidInvitee,
   InvitationPaidInviter,
   InvitationPaidSubscriptionRecord,
@@ -273,5 +280,120 @@ test('invitation paid records expose entitlement order and completion fields', (
     'adminAnalytics.fields.orderRecordedAmount',
     'adminAnalytics.fields.orderStatus',
     'adminAnalytics.fields.completeTime',
+  ])
+})
+
+test('Credit overview values keep availability debt and lifecycle counts separate', () => {
+  const quota: AdminAnalyticsOverviewQuota = {
+    token_limit: 1_000,
+    token_used: 700,
+    remaining_tokens: 300,
+    usage_rate: 0.7,
+    available_credit: 125,
+    settlement_debt: 30,
+  }
+  const subscriptions: AdminAnalyticsOverviewSubscriptions = {
+    active_count: 4,
+    expired_count: 2,
+    trial_count: 1,
+    paid_count: 3,
+    reward_count: 0,
+    timed_active_count: 2,
+    credit_balance_count: 3,
+    credit_available_count: 1,
+    credit_exhausted_count: 1,
+    credit_debt_count: 1,
+  }
+
+  const values = adminAnalyticsCreditOverviewValues(quota, subscriptions)
+
+  assert.deepEqual(labelKeys(values), [
+    'adminAnalytics.metrics.availableCredit',
+    'adminAnalytics.metrics.settlementDebt',
+    'adminAnalytics.metrics.timedActiveSubscriptions',
+    'adminAnalytics.metrics.creditBalanceCount',
+    'adminAnalytics.metrics.creditAvailableCount',
+    'adminAnalytics.metrics.creditExhaustedCount',
+    'adminAnalytics.metrics.creditDebtCount',
+  ])
+  assert.deepEqual(
+    values.map((value) => value.value),
+    ['125', '30', '2', '3', '1', '1', '1']
+  )
+})
+
+test('quota ranking value exposes the entitlement lifecycle instead of treating Credit as timed quota', () => {
+  const credit: AdminAnalyticsSubscriptionRankingItem = {
+    subscription_id: 31,
+    user_id: 7,
+    username: 'credit-user',
+    plan_id: 9,
+    plan_title: 'Credit',
+    source: 'order',
+    status: 'active',
+    start_time: 1,
+    end_time: 0,
+    token_limit: 100,
+    token_used: 130,
+    remaining_tokens: 0,
+    usage_rate: 1.3,
+    request_count: 4,
+    entitlement_type: 'credit_balance',
+    lifecycle_state: 'credit_debt',
+    available_credit: 0,
+    settlement_debt: 30,
+  }
+
+  assert.deepEqual(adminAnalyticsCreditRankingValue(credit), {
+    labelKey: 'adminAnalytics.lifecycle.creditDebt',
+    value: '30',
+  })
+})
+
+test('subscription history cards expose source lifecycle conversion and validated target fields', () => {
+  const item: AdminAnalyticsDrilldownSubscriptionItem = {
+    subscription_id: 41,
+    user_id: 8,
+    username: 'converted-user',
+    plan_id: 10,
+    plan_title: 'Timed Pro',
+    source: 'order',
+    status: 'converted',
+    start_time: 1_700_000_000,
+    end_time: 1_700_100_000,
+    token_limit: 1_000,
+    token_used: 200,
+    remaining_tokens: 800,
+    usage_rate: 0.2,
+    entitlement_type: 'timed',
+    lifecycle_state: 'converted',
+    available_credit: 0,
+    settlement_debt: 0,
+    grace_remaining_seconds: 0,
+    conversion_id: 51,
+    target_subscription_id: 42,
+    target_user_id: 8,
+    target_plan_id: 11,
+    target_plan_title: 'Credit Balance',
+  }
+
+  assert.deepEqual(labelKeys(adminAnalyticsSubscriptionHistoryValues(item)), [
+    'adminAnalytics.fields.subscriptionId',
+    'adminAnalytics.fields.userId',
+    'adminAnalytics.fields.planId',
+    'adminAnalytics.fields.entitlementType',
+    'adminAnalytics.fields.lifecycleState',
+    'adminAnalytics.fields.status',
+    'adminAnalytics.fields.sourceAttribution',
+    'adminAnalytics.fields.availableCredit',
+    'adminAnalytics.fields.settlementDebt',
+    'adminAnalytics.fields.graceRemainingSeconds',
+    'adminAnalytics.fields.conversionId',
+    'adminAnalytics.fields.targetSubscriptionId',
+    'adminAnalytics.fields.targetUserId',
+    'adminAnalytics.fields.targetPlanId',
+    'adminAnalytics.fields.targetPlanTitle',
+    'adminAnalytics.fields.startTime',
+    'adminAnalytics.fields.endTime',
   ])
 })

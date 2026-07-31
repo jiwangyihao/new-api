@@ -68,7 +68,7 @@ func GetAdminAnalyticsDrilldownUsers(query AdminAnalyticsQuery, filter AdminAnal
 
 func GetAdminAnalyticsDrilldownSubscriptions(query AdminAnalyticsQuery, filter AdminAnalyticsDrilldownFilter) (dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownSubscriptionsResponse], error) {
 	query = normalizeAdminAnalyticsQuery(query)
-	rows, err := loadAdminActiveSubscriptions(query)
+	rows, err := loadAdminAnalyticsDrilldownSubscriptionRows(query)
 	if err != nil {
 		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownSubscriptionsResponse]{}, err
 	}
@@ -81,11 +81,13 @@ func GetAdminAnalyticsDrilldownSubscriptions(query AdminAnalyticsQuery, filter A
 		if filter.PlanID > 0 && row.Subscription.PlanId != filter.PlanID {
 			continue
 		}
-		remaining := int64(0)
-		if row.Quota.RemainingTokens != nil {
-			remaining = *row.Quota.RemainingTokens
+		if filter.Status != "" && row.Subscription.Status != filter.Status {
+			continue
 		}
-		items = append(items, dto.AdminAnalyticsDrilldownSubscriptionItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate})
+		items = append(items, buildAdminAnalyticsDrilldownSubscriptionItem(row, query.SnapshotAt))
+	}
+	if err := enrichAdminAnalyticsConversionTargets(items); err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownSubscriptionsResponse]{}, err
 	}
 	sort.Slice(items, func(i, j int) bool {
 		return adminDrilldownSubscriptionLess(items[i], items[j], query.SortBy, query.SortOrder)
@@ -93,6 +95,121 @@ func GetAdminAnalyticsDrilldownSubscriptions(query AdminAnalyticsQuery, filter A
 	paged, page := paginateAdminAnalyticsList(items, query.Limit, query.Offset)
 	data := dto.AdminAnalyticsDrilldownSubscriptionsResponse{Subscriptions: dto.AdminAnalyticsList[dto.AdminAnalyticsDrilldownSubscriptionItem]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownSubscriptionsResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil
+}
+
+func loadAdminAnalyticsDrilldownSubscriptionRows(query AdminAnalyticsQuery) ([]adminActiveSubscriptionRow, error) {
+	db := DB.Model(&UserSubscription{}).
+		Where("start_time <= ?", query.SnapshotAt).
+		Where("(status = ? AND ((entitlement_type = ?) OR (entitlement_type = ? AND end_time > ?))) OR (entitlement_type = ? AND status = ?) OR (entitlement_type = ? AND status = ? AND end_time >= ? AND end_time <= ?)",
+			SubscriptionStatusActive, SubscriptionEntitlementCreditBalance, SubscriptionEntitlementTimed, query.SnapshotAt,
+			SubscriptionEntitlementTimed, SubscriptionStatusConverted,
+			SubscriptionEntitlementTimed, SubscriptionStatusExpired, query.SnapshotAt-TimedSubscriptionConversionGraceSeconds, query.SnapshotAt)
+	if statuses := adminActiveSubscriptionStatuses(query); len(statuses) > 0 {
+		db = db.Where("status IN ?", statuses)
+	}
+	return loadAdminSubscriptionRows(query, db)
+}
+
+func buildAdminAnalyticsDrilldownSubscriptionItem(row adminActiveSubscriptionRow, snapshotAt int64) dto.AdminAnalyticsDrilldownSubscriptionItem {
+	remaining := int64(0)
+	if row.Quota.RemainingTokens != nil {
+		remaining = *row.Quota.RemainingTokens
+	}
+	item := dto.AdminAnalyticsDrilldownSubscriptionItem{
+		SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username,
+		PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source,
+		Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime,
+		TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining,
+		UsageRate: row.Quota.UsageRate, EntitlementType: row.Subscription.EntitlementType,
+	}
+	classification := classifyAdminCreditLifecycle(row.Subscription.TokenLimit, row.Subscription.TokenUsed)
+	switch {
+	case row.Subscription.EntitlementType == SubscriptionEntitlementCreditBalance:
+		item.LifecycleState = classification.State
+		item.AvailableCredit = classification.AvailableCredit
+		item.SettlementDebt = classification.SettlementDebt
+	case row.Subscription.Status == SubscriptionStatusConverted:
+		item.LifecycleState = SubscriptionStatusConverted
+		item.ConversionID = row.Subscription.ConversionId
+		item.TargetSubscriptionID = row.Subscription.ConvertedToSubscriptionId
+	case row.Subscription.Status == SubscriptionStatusExpired:
+		item.LifecycleState = ConversionQuoteCategoryGrace
+		item.GraceRemainingSeconds = row.Subscription.EndTime + TimedSubscriptionConversionGraceSeconds - snapshotAt
+	default:
+		item.LifecycleState = "active_timed"
+	}
+	return item
+}
+
+func enrichAdminAnalyticsConversionTargets(items []dto.AdminAnalyticsDrilldownSubscriptionItem) error {
+	conversionIDs := make([]int, 0)
+	expectedTargetBySource := make(map[int]int, len(items))
+	for i := range items {
+		if items[i].ConversionID > 0 {
+			conversionIDs = append(conversionIDs, items[i].ConversionID)
+		}
+		expectedTargetBySource[items[i].SubscriptionID] = items[i].TargetSubscriptionID
+		items[i].TargetSubscriptionID = 0
+		items[i].TargetUserID = 0
+		items[i].TargetPlanID = 0
+		items[i].TargetPlanTitle = ""
+	}
+	var conversions []SubscriptionConversion
+	if len(conversionIDs) > 0 {
+		if err := DB.Where("id IN ?", adminUniquePositiveInts(conversionIDs)).Find(&conversions).Error; err != nil {
+			return err
+		}
+	}
+	conversionByID := make(map[int]SubscriptionConversion, len(conversions))
+	for i := range conversions {
+		conversionByID[conversions[i].Id] = conversions[i]
+	}
+	validConversionBySource := make(map[int]SubscriptionConversion, len(conversions))
+	targetIDs := make([]int, 0, len(conversions))
+	for i := range items {
+		conversion, ok := conversionByID[items[i].ConversionID]
+		expectedTargetID := expectedTargetBySource[items[i].SubscriptionID]
+		if !ok || conversion.SourceSubscriptionId != items[i].SubscriptionID || conversion.SourcePlanId != items[i].PlanID || conversion.UserId != items[i].UserID || expectedTargetID <= 0 || conversion.TargetSubscriptionId != expectedTargetID {
+			continue
+		}
+		validConversionBySource[items[i].SubscriptionID] = conversion
+		targetIDs = append(targetIDs, conversion.TargetSubscriptionId)
+	}
+	var targets []UserSubscription
+	if len(targetIDs) > 0 {
+		if err := DB.Where("id IN ?", adminUniquePositiveInts(targetIDs)).Find(&targets).Error; err != nil {
+			return err
+		}
+	}
+	targetByID := make(map[int]UserSubscription, len(targets))
+	planIDs := make([]int, 0, len(targets))
+	for i := range targets {
+		targetByID[targets[i].Id] = targets[i]
+		planIDs = append(planIDs, targets[i].PlanId)
+	}
+	plans, err := adminPlansByID(planIDs)
+	if err != nil {
+		return err
+	}
+	for i := range items {
+		conversion, ok := validConversionBySource[items[i].SubscriptionID]
+		if !ok {
+			continue
+		}
+		target, ok := targetByID[conversion.TargetSubscriptionId]
+		if !ok || target.UserId != items[i].UserID || target.PlanId != conversion.TargetPlanId || target.EntitlementType != SubscriptionEntitlementCreditBalance {
+			continue
+		}
+		plan, ok := plans[target.PlanId]
+		if !ok || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
+			continue
+		}
+		items[i].TargetSubscriptionID = target.Id
+		items[i].TargetUserID = target.UserId
+		items[i].TargetPlanID = target.PlanId
+		items[i].TargetPlanTitle = plan.Title
+	}
+	return nil
 }
 
 func GetAdminAnalyticsDrilldownInvitations(query AdminAnalyticsQuery, filter AdminAnalyticsDrilldownFilter) (dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsDrilldownInvitationsResponse], error) {

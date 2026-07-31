@@ -182,7 +182,11 @@ func selectAdminOpsPrimarySubscription(userID int, user User, now int64) (*prima
 	if len(subs) == 0 {
 		return nil, nil
 	}
-	activeID := user.GetSetting().ActiveSubscriptionId
+	setting := user.GetSetting()
+	activeID := setting.ActiveSubscriptionId
+	if NormalizeSubscriptionBillingStrategy(setting.SubscriptionBillingStrategy) == SubscriptionBillingStrategyTimedFirst {
+		activeID = 0
+	}
 	defaultCandidate, rewardCandidate, err := buildAdminOpsSubscriptionCandidates(subs, activeID)
 	if err != nil {
 		return nil, err
@@ -218,6 +222,7 @@ func buildAdminOpsSubscriptionCandidates(subs []UserSubscription, activeID int) 
 	if len(candidates) == 0 {
 		return nil, nil, nil
 	}
+	sortAutomaticBillingCandidates(candidates)
 	defaultCandidate := candidates[0]
 	if isPaidEquivalentSubscription(&defaultCandidate.sub, defaultCandidate.plan) {
 		tier := subscriptionTierKey(defaultCandidate.plan)

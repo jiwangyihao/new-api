@@ -121,7 +121,7 @@ func adminAnalyticsRangeMeta(query AdminAnalyticsQuery) dto.AdminAnalyticsRangeM
 }
 
 func applyAdminActiveSubscriptionScope(tx *gorm.DB, snapshotAt int64) *gorm.DB {
-	return tx.Where("status = ? AND start_time <= ? AND end_time > ?", "active", snapshotAt, snapshotAt)
+	return tx.Where("status = ? AND start_time <= ? AND ((entitlement_type = ? AND token_limit > token_used) OR (entitlement_type = ? AND end_time > ?))", SubscriptionStatusActive, snapshotAt, SubscriptionEntitlementCreditBalance, SubscriptionEntitlementTimed, snapshotAt)
 }
 
 func adminActiveSubscriptionStatuses(query AdminAnalyticsQuery) []string {
@@ -203,6 +203,24 @@ func normalizeAdminSubscriptionSource(grantReason string, source string) dto.Adm
 	}
 }
 
+type adminCreditLifecycle struct {
+	State           string
+	AvailableCredit int64
+	SettlementDebt  int64
+}
+
+func classifyAdminCreditLifecycle(tokenLimit int64, tokenUsed int64) adminCreditLifecycle {
+	signedBalance := tokenLimit - tokenUsed
+	switch {
+	case signedBalance > 0:
+		return adminCreditLifecycle{State: "active_credit", AvailableCredit: signedBalance}
+	case signedBalance < 0:
+		return adminCreditLifecycle{State: "credit_debt", SettlementDebt: -signedBalance}
+	default:
+		return adminCreditLifecycle{State: "exhausted_credit"}
+	}
+}
+
 type adminQuotaClass struct {
 	UsageRate       *float64
 	RemainingTokens *int64
@@ -254,14 +272,28 @@ type adminActiveSubscriptionRow struct {
 
 func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubscriptionRow, error) {
 	query = normalizeAdminAnalyticsQuery(query)
-	var subs []UserSubscription
 	statuses := adminActiveSubscriptionStatuses(query)
-	var db *gorm.DB
+	db := applyAdminActiveSubscriptionScope(DB.Model(&UserSubscription{}), query.SnapshotAt)
 	if len(statuses) > 0 {
-		db = DB.Model(&UserSubscription{}).Where("status IN ?", statuses)
-	} else {
-		db = applyAdminActiveSubscriptionScope(DB.Model(&UserSubscription{}), query.SnapshotAt)
+		db = db.Where("status IN ?", statuses)
 	}
+	return loadAdminSubscriptionRows(query, db)
+}
+
+func loadAdminCreditBalanceSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubscriptionRow, error) {
+	query = normalizeAdminAnalyticsQuery(query)
+	db := DB.Model(&UserSubscription{}).
+		Where("entitlement_type = ? AND start_time <= ?", SubscriptionEntitlementCreditBalance, query.SnapshotAt)
+	statuses := adminActiveSubscriptionStatuses(query)
+	if len(statuses) > 0 {
+		db = db.Where("status IN ?", statuses)
+	} else {
+		db = db.Where("status = ?", SubscriptionStatusActive)
+	}
+	return loadAdminSubscriptionRows(query, db)
+}
+
+func loadAdminSubscriptionRows(query AdminAnalyticsQuery, db *gorm.DB) ([]adminActiveSubscriptionRow, error) {
 	if len(query.PlanIDs) > 0 {
 		db = db.Where("plan_id IN ?", query.PlanIDs)
 	}
@@ -283,6 +315,7 @@ func loadAdminActiveSubscriptions(query AdminAnalyticsQuery) ([]adminActiveSubsc
 	if query.NextResetEndTimestamp > 0 {
 		db = db.Where("next_reset_time <= ?", query.NextResetEndTimestamp)
 	}
+	var subs []UserSubscription
 	if err := db.Find(&subs).Error; err != nil {
 		return nil, err
 	}
@@ -463,12 +496,33 @@ func GetAdminAnalyticsOverview(query AdminAnalyticsQuery) (dto.AdminAnalyticsPan
 	}
 	activeUsers := map[int]struct{}{}
 	activePlans := map[int]struct{}{}
-	var tokenLimit, tokenUsed, remaining int64
-	var trialCount, paidCount, rewardCount int
+	var tokenLimit, tokenUsed, remaining, availableCredit, settlementDebt int64
+	var trialCount, paidCount, rewardCount, timedActiveCount, creditBalanceCount, creditAvailableCount, creditExhaustedCount, creditDebtCount int
+	creditRows, err := loadAdminCreditBalanceSubscriptions(query)
+	if err != nil {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsOverviewResponse]{}, err
+	}
+	for i := range creditRows {
+		creditBalanceCount++
+		classification := classifyAdminCreditLifecycle(creditRows[i].Subscription.TokenLimit, creditRows[i].Subscription.TokenUsed)
+		switch classification.State {
+		case "active_credit":
+			creditAvailableCount++
+			availableCredit += classification.AvailableCredit
+		case "credit_debt":
+			creditDebtCount++
+			settlementDebt += classification.SettlementDebt
+		default:
+			creditExhaustedCount++
+		}
+	}
 	for i := range rows {
 		row := rows[i]
 		activeUsers[row.Subscription.UserId] = struct{}{}
 		activePlans[row.Subscription.PlanId] = struct{}{}
+		if row.Subscription.EntitlementType == SubscriptionEntitlementTimed {
+			timedActiveCount++
+		}
 		if row.Subscription.TokenLimit > 0 {
 			tokenLimit += row.Subscription.TokenLimit
 			tokenUsed += row.Subscription.TokenUsed
@@ -497,10 +551,10 @@ func GetAdminAnalyticsOverview(query AdminAnalyticsQuery) (dto.AdminAnalyticsPan
 	data := dto.AdminAnalyticsOverviewResponse{Summary: dto.AdminAnalyticsOverviewSummary{
 		Users:         dto.AdminAnalyticsOverviewUsers{TotalUsers: int(totalUsers), ActiveUsers: len(activeUsers), NewUsers: int(newUsers), DisabledUsers: int(disabledUsers)},
 		Plans:         dto.AdminAnalyticsOverviewPlans{TotalPlans: int(totalPlans), EnabledPlans: int(enabledPlans), TrialPlans: int(trialPlans), PublicPlans: int(publicPlans)},
-		Quota:         dto.AdminAnalyticsOverviewQuota{TokenLimit: tokenLimit, TokenUsed: tokenUsed, RemainingTokens: remaining, UsageRate: usageRate},
+		Quota:         dto.AdminAnalyticsOverviewQuota{TokenLimit: tokenLimit, TokenUsed: tokenUsed, RemainingTokens: remaining, AvailableCredit: availableCredit, SettlementDebt: settlementDebt, UsageRate: usageRate},
 		Conversion:    dto.AdminAnalyticsOverviewConversion{TrialUsers: trialCount, PaidUsers: paidCount},
 		Invitations:   invitationSummary,
-		Subscriptions: dto.AdminAnalyticsOverviewSubscriptions{ActiveCount: len(rows), TrialCount: trialCount, PaidCount: paidCount, RewardCount: rewardCount},
+		Subscriptions: dto.AdminAnalyticsOverviewSubscriptions{ActiveCount: len(rows), TrialCount: trialCount, PaidCount: paidCount, RewardCount: rewardCount, TimedActiveCount: timedActiveCount, CreditBalanceCount: creditBalanceCount, CreditAvailableCount: creditAvailableCount, CreditExhaustedCount: creditExhaustedCount, CreditDebtCount: creditDebtCount},
 	}}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsOverviewResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil
 }
@@ -578,7 +632,16 @@ func GetAdminAnalyticsQuotaDistribution(query AdminAnalyticsQuery) (dto.AdminAna
 		if row.Quota.RemainingTokens != nil {
 			remaining = *row.Quota.RemainingTokens
 		}
-		rankings = append(rankings, dto.AdminAnalyticsSubscriptionRankingItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate, Drilldown: &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_users", UserID: &userID, PlanID: &planID}})
+		lifecycleState := "active_timed"
+		availableCredit := int64(0)
+		settlementDebt := int64(0)
+		if row.Subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
+			classification := classifyAdminCreditLifecycle(row.Subscription.TokenLimit, row.Subscription.TokenUsed)
+			lifecycleState = classification.State
+			availableCredit = classification.AvailableCredit
+			settlementDebt = classification.SettlementDebt
+		}
+		rankings = append(rankings, dto.AdminAnalyticsSubscriptionRankingItem{SubscriptionID: row.Subscription.Id, UserID: row.Subscription.UserId, Username: row.User.Username, PlanID: row.Subscription.PlanId, PlanTitle: row.Plan.Title, Source: row.Source, Status: row.Subscription.Status, StartTime: row.Subscription.StartTime, EndTime: row.Subscription.EndTime, TokenLimit: row.Subscription.TokenLimit, TokenUsed: row.Subscription.TokenUsed, RemainingTokens: remaining, UsageRate: row.Quota.UsageRate, EntitlementType: row.Subscription.EntitlementType, LifecycleState: lifecycleState, AvailableCredit: availableCredit, SettlementDebt: settlementDebt, Drilldown: &dto.AdminAnalyticsDrilldownTarget{Kind: "admin_users", UserID: &userID, PlanID: &planID}})
 	}
 	buckets := make([]dto.AdminAnalyticsQuotaBucket, 0, len(bucketsByName))
 	for _, bucket := range bucketsByName {

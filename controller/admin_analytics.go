@@ -689,7 +689,7 @@ func parseAdminAnalyticsQuery(c *gin.Context) (model.AdminAnalyticsQuery, error)
 	if err != nil {
 		return model.AdminAnalyticsQuery{}, err
 	}
-	subscriptionStatuses, err := parseAdminAnalyticsEnumList(c, "subscription_statuses", map[string]struct{}{"active": {}, "expired": {}, "cancelled": {}, "inactive": {}})
+	subscriptionStatuses, err := parseAdminAnalyticsEnumList(c, "subscription_statuses", map[string]struct{}{"active": {}, "expired": {}, "cancelled": {}, "inactive": {}, "converted": {}})
 	if err != nil {
 		return model.AdminAnalyticsQuery{}, err
 	}

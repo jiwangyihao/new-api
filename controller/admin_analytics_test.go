@@ -139,6 +139,15 @@ func TestAdminAnalyticsOverviewParserStillDefaultsToThirtyDays(t *testing.T) {
 	require.False(t, query.TimeRangeExplicit)
 }
 
+func TestAdminAnalyticsParserAcceptsConvertedAndExpiredStatuses(t *testing.T) {
+	ctx, _ := newAdminAnalyticsParserContext(t, "/api/admin-analytics/drilldown/subscriptions?subscription_statuses=converted&subscription_statuses=expired")
+
+	query, err := parseAdminAnalyticsQuery(ctx)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"converted", "expired"}, query.SubscriptionStatuses)
+}
+
 func TestAdminAnalyticsParserDefaultsToConservativeLimit(t *testing.T) {
 	ctx, _ := newAdminAnalyticsParserContext(t, "/api/admin-analytics/overview")
 

@@ -72,6 +72,7 @@
   "Xunfei": "Xunfei",
   "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]": "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]",
   "[{\"name\":\"支付宝\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]": "[{\"name\":\"Alipay\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]",
+  "adminAnalytics.lifecycle.converted": "converted",
   "adminAnalytics.sort.active_invitation_paid_amount": "Active invitation paid amount",
   "adminAnalytics.sort.active_invitation_remaining_value": "Active invitation remaining value",
   "adminAnalytics.sort.active_paid_invitee_count": "Active paid invitee count",

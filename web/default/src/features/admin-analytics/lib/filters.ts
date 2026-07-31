@@ -36,6 +36,7 @@ const subscriptionStatuses = new Set<string>([
   'expired',
   'cancelled',
   'inactive',
+  'converted',
 ])
 const userStatuses = new Set<string>(['enabled', 'disabled'])
 const logStatuses = new Set<string>(['success', 'error'])

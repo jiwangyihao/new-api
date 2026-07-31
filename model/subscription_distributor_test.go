@@ -2,6 +2,7 @@ package model
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -491,7 +492,7 @@ func TestCreditBalanceMySQL57MigrationDDLUsesStoredGeneratedColumns(t *testing.T
 }
 
 func TestCreditBalancePostgres96MigrationDDLUsesPartialUniqueIndexes(t *testing.T) {
-	statements := creditBalancePartialUniqueIndexDDL()
+	statements := creditBalancePostgreSQLPartialUniqueIndexDDL()
 	require.Equal(t, []string{
 		`CREATE UNIQUE INDEX IF NOT EXISTS "idx_subscription_plans_credit_balance_identity" ON "subscription_plans" ("entitlement_type") WHERE "entitlement_type" = 'credit_balance'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS "idx_user_subscriptions_credit_balance_identity" ON "user_subscriptions" ("user_id") WHERE "entitlement_type" = 'credit_balance'`,
@@ -693,6 +694,511 @@ func TestEnsureSubscriptionPlanTableSQLiteUpgradesLegacyRowsToTimed(t *testing.T
 	var count int64
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Count(&count).Error)
 	assert.Equal(t, int64(1), count)
+}
+
+func TestCreditBalanceProductionMigrationUpgradesLegacySQLiteSchema(t *testing.T) {
+	oldDB := DB
+	oldLogDB := LOG_DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldLogSQLType := common.LogSqlType
+	oldRedisEnabled := common.RedisEnabled
+
+	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared&_pragma=busy_timeout(5000)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	DB = db
+	LOG_DB = db
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.LogSqlType = common.DatabaseTypeSQLite
+	common.RedisEnabled = false
+	initCol()
+	resetDBTimestampCacheForTest()
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	ClearSubscriptionPlanCacheForTest()
+	t.Setenv("LOG_SQL_DSN", "")
+	t.Cleanup(func() {
+		DB = oldDB
+		LOG_DB = oldLogDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.LogSqlType = oldLogSQLType
+		common.RedisEnabled = oldRedisEnabled
+		initCol()
+		resetDBTimestampCacheForTest()
+		ClearPrimaryBillableSubscriptionCacheForTest()
+		ClearSubscriptionPlanCacheForTest()
+		_ = sqlDB.Close()
+	})
+
+	type legacyUserSubscription struct {
+		Id          int    `gorm:"primaryKey"`
+		UserId      int    `gorm:"index"`
+		PlanId      int    `gorm:"index"`
+		TokenLimit  int64  `gorm:"type:bigint;not null;default:0"`
+		TokenUsed   int64  `gorm:"type:bigint;not null;default:0"`
+		GrantReason string `gorm:"type:varchar(32);default:''"`
+		StartTime   int64  `gorm:"bigint"`
+		EndTime     int64  `gorm:"bigint;index"`
+		Status      string `gorm:"type:varchar(32);index"`
+		Source      string `gorm:"type:varchar(32);default:'order'"`
+	}
+	type legacySubscriptionOrder struct {
+		Id              int `gorm:"primaryKey"`
+		UserId          int `gorm:"index"`
+		PlanId          int `gorm:"index"`
+		Money           float64
+		TradeNo         string `gorm:"unique;type:varchar(255);index"`
+		PaymentMethod   string `gorm:"type:varchar(50)"`
+		PaymentProvider string `gorm:"type:varchar(50);default:''"`
+		Status          string
+		CreateTime      int64
+		CompleteTime    int64
+	}
+	type legacyRedemption struct {
+		Id           int `gorm:"primaryKey"`
+		UserId       int
+		Key          string `gorm:"type:char(32);uniqueIndex"`
+		Status       int    `gorm:"default:1"`
+		Name         string `gorm:"index"`
+		Quota        int    `gorm:"default:100"`
+		CreatedTime  int64  `gorm:"bigint"`
+		RedeemedTime int64  `gorm:"bigint"`
+		UsedUserId   int
+		ExpiredTime  int64 `gorm:"bigint"`
+	}
+	type legacyLog struct {
+		Id        int `gorm:"primaryKey"`
+		UserId    int `gorm:"index"`
+		CreatedAt int64
+		Type      int
+		Content   string
+	}
+	legacyTables := []struct {
+		name  string
+		model any
+	}{
+		{name: "users", model: &User{}},
+		{name: "user_subscriptions", model: &legacyUserSubscription{}},
+		{name: "subscription_orders", model: &legacySubscriptionOrder{}},
+		{name: "redemptions", model: &legacyRedemption{}},
+		{name: "logs", model: &legacyLog{}},
+	}
+	for _, table := range legacyTables {
+		require.NoError(t, DB.Table(table.name).AutoMigrate(table.model), table.name)
+	}
+	legacyDDL := []string{
+		`CREATE TABLE subscription_plans (
+			id integer PRIMARY KEY,
+			title varchar(128) NOT NULL,
+			price_amount decimal(10,6) NOT NULL,
+			monthly_token_limit bigint NOT NULL DEFAULT 0,
+			is_trial numeric DEFAULT 0,
+			invite_trial numeric DEFAULT 0,
+			business_code varchar(64)
+		)`,
+	}
+	for _, statement := range legacyDDL {
+		require.NoError(t, DB.Exec(statement).Error)
+	}
+
+	now := common.GetTimestamp()
+	require.NoError(t, DB.Exec(`INSERT INTO users (id, username, password, status, aff_code, inviter_id, setting) VALUES
+		(101, 'legacy-order-user', 'password', 1, 'legacy-order-aff', 100, ''),
+		(102, 'legacy-admin-user', 'password', 1, 'legacy-admin-aff', 0, '')`).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO subscription_plans (id, title, price_amount, monthly_token_limit, is_trial, invite_trial, business_code)
+		VALUES (11, 'Legacy timed plan', 40, 500, 0, 0, 'legacy-timed')`).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO user_subscriptions
+		(id, user_id, plan_id, token_limit, token_used, grant_reason, start_time, end_time, status, source) VALUES
+		(21, 101, 11, 500, 100, 'order', ?, ?, 'active', 'order'),
+		(22, 102, 11, 500, 50, 'admin', ?, ?, 'active', 'admin')`, now-1000, now+1000, now-900, now+1100).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO subscription_orders
+		(id, user_id, plan_id, money, trade_no, payment_method, payment_provider, status, create_time, complete_time)
+		VALUES (31, 101, 11, 40, 'legacy-order', 'alipay', 'epay', 'success', ?, ?)`, now-800, now-700).Error)
+
+	require.NoError(t, migrateDB())
+
+	requiredColumns := map[string][]string{
+		"subscription_plans":                     {"entitlement_type", "singleton_key", "credit_balance_configured", "credit_balance_purchase_enabled", "credit_balance_redemption_enabled", "credit_balance_conversion_enabled", "timed_conversion_enabled", "conversion_guard_version"},
+		"user_subscriptions":                     {"entitlement_type", "singleton_key", "last_granted_at", "last_grant_credit_snapshot", "last_grant_time_source", "last_grant_source", "conversion_id", "converted_to_subscription_id", "converted_at"},
+		"subscription_orders":                    {"credit_grant_amount", "credit_target_plan_id", "fulfilled_subscription_id", "recovery_type", "recovery_time", "recovery_ledger_id", "recovery_reason", "provider_transaction_id", "provider_order_id", "provider_invoice_id", "provider_subscription_id", "entitlement_snapshot"},
+		"redemptions":                            {"type", "plan_id", "amount_cents", "currency", "fulfillment_mode", "fulfillment_snapshot", "fulfillment_subscription_id"},
+		"credit_balance_ledgers":                 {"idempotency_key", "source_type", "source_id", "parameter_fingerprint", "debt_offset", "debt_formed", "available_credit_after", "settlement_debt_after"},
+		"credit_balance_adjustments":             {"idempotency_key", "parameter_fingerprint", "ledger_id"},
+		"subscription_conversions":               {"user_id", "idempotency_key", "source_subscription_id", "target_subscription_id", "ledger_id", "last_granted_at", "last_grant_time_source", "last_grant_source"},
+		"subscription_plan_credit_change_audits": {"plan_id", "admin_user_id", "old_monthly_credit", "new_monthly_credit", "risk_confirmed", "risk_reason"},
+		"invitation_monthly_entitlements":        {"inviter_id", "reward_month", "reward_subscription_id", "status"},
+		"invitation_reward_events":               {"source_type", "source_id", "source_order_id", "source_redemption_id", "source_subscription_id", "source_amount_cents", "source_currency", "status"},
+		"invitation_commission_records":          {"event_id", "source_type", "source_id", "reversal_status", "recovered_cents", "unrecovered_cents", "reversal_reason", "reversed_at"},
+		"invitation_commission_ledgers":          {"reference_type", "reference_id", "available_after_cents", "pending_after_cents"},
+		"invitation_commission_withdrawals":      {"status", "reviewer_id", "reviewed_at", "completed_by", "completed_at"},
+		"logs":                                   {"subscription_id", "subscription_tokens_consumed", "billing_source", "endpoint", "request_id", "upstream_request_id"},
+	}
+	for table, columns := range requiredColumns {
+		for _, column := range columns {
+			require.True(t, DB.Migrator().HasColumn(table, column), "%s.%s", table, column)
+		}
+	}
+	for table, index := range map[string]string{
+		"subscription_plans":       creditBalancePlanIdentityIndex,
+		"user_subscriptions":       creditBalanceUserIdentityIndex,
+		"credit_balance_ledgers":   "idx_credit_balance_ledger_user_key",
+		"subscription_conversions": "idx_subscription_conversion_user_key",
+	} {
+		require.True(t, DB.Migrator().HasIndex(table, index), "%s.%s", table, index)
+	}
+
+	var legacyPlan SubscriptionPlan
+	require.NoError(t, DB.First(&legacyPlan, 11).Error)
+	assert.Equal(t, SubscriptionEntitlementTimed, legacyPlan.EntitlementType)
+	assert.Nil(t, legacyPlan.SingletonKey)
+	var reliable UserSubscription
+	require.NoError(t, DB.First(&reliable, 21).Error)
+	assert.Equal(t, SubscriptionEntitlementTimed, reliable.EntitlementType)
+	assert.Equal(t, now-700, reliable.LastGrantedAt)
+	assert.Equal(t, SubscriptionGrantTimeSourceOrder, reliable.LastGrantTimeSource)
+	assert.Equal(t, SubscriptionGrantOrder, reliable.LastGrantSource)
+	var conservative UserSubscription
+	require.NoError(t, DB.First(&conservative, 22).Error)
+	assert.Equal(t, SubscriptionEntitlementTimed, conservative.EntitlementType)
+	assert.Positive(t, conservative.LastGrantedAt)
+	assert.Equal(t, SubscriptionGrantTimeSourceConservative, conservative.LastGrantTimeSource)
+	assert.Equal(t, SubscriptionGrantAdmin, conservative.LastGrantSource)
+
+	var creditPlans []SubscriptionPlan
+	require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Find(&creditPlans).Error)
+	require.Len(t, creditPlans, 1)
+	require.NotNil(t, creditPlans[0].SingletonKey)
+	assert.Equal(t, creditBalancePlanSingletonKey, *creditPlans[0].SingletonKey)
+	require.Error(t, DB.Exec(`INSERT INTO subscription_plans (title, price_amount, entitlement_type) VALUES ('Duplicate Credit', 0, 'credit_balance')`).Error)
+	require.NoError(t, DB.Exec(`INSERT INTO user_subscriptions (user_id, plan_id, entitlement_type, singleton_key, status) VALUES (999, ?, 'credit_balance', 'legacy-credit', 'active')`, creditPlans[0].Id).Error)
+	require.Error(t, DB.Exec(`INSERT INTO user_subscriptions (user_id, plan_id, entitlement_type, status) VALUES (999, ?, 'credit_balance', 'active')`, creditPlans[0].Id).Error)
+
+	var invitationEvent InvitationRewardEvent
+	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceLegacySubscription, 21).First(&invitationEvent).Error)
+	assert.Equal(t, 100, invitationEvent.InviterId)
+	assert.Equal(t, 101, invitationEvent.InviteeId)
+	assert.Equal(t, 21, invitationEvent.SourceSubscriptionId)
+
+	reliableBefore := reliable.LastGrantedAt
+	conservativeBefore := conservative.LastGrantedAt
+	creditPlanID := creditPlans[0].Id
+	require.NoError(t, migrateDB())
+	require.NoError(t, DB.First(&reliable, 21).Error)
+	require.NoError(t, DB.First(&conservative, 22).Error)
+	assert.Equal(t, reliableBefore, reliable.LastGrantedAt)
+	assert.Equal(t, conservativeBefore, conservative.LastGrantedAt)
+	require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Find(&creditPlans).Error)
+	require.Len(t, creditPlans, 1)
+	assert.Equal(t, creditPlanID, creditPlans[0].Id)
+	var invitationEventCount int64
+	require.NoError(t, DB.Model(&InvitationRewardEvent{}).Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceLegacySubscription, 21).Count(&invitationEventCount).Error)
+	assert.Equal(t, int64(1), invitationEventCount)
+
+	require.NoError(t, DB.Create(&User{Id: 103, Username: "first-credit-user", Password: "password", Status: common.UserStatusEnabled, AffCode: "first-credit-aff"}).Error)
+	request := CreditBalanceGrantRequest{UserId: 103, GrossCredit: 250, IdempotencyKey: "first-credit-grant", SourceType: CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 50_001, Type: CreditBalanceLedgerTypePurchase, TargetPlanId: creditPlanID}
+	const concurrentGrants = 2
+	sqlDB.SetMaxOpenConns(concurrentGrants + 1)
+	start := make(chan struct{})
+	grantResults := make(chan *CreditBalanceGrantResult, concurrentGrants)
+	grantErrors := make(chan error, concurrentGrants)
+	var grantWaitGroup sync.WaitGroup
+	for range concurrentGrants {
+		grantWaitGroup.Add(1)
+		go func() {
+			defer grantWaitGroup.Done()
+			<-start
+			var result *CreditBalanceGrantResult
+			err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+				var grantErr error
+				result, grantErr = GrantCreditBalanceTx(tx, request)
+				return grantErr
+			})
+			grantResults <- result
+			grantErrors <- err
+		}()
+	}
+	close(start)
+	grantWaitGroup.Wait()
+	close(grantResults)
+	close(grantErrors)
+	for grantErr := range grantErrors {
+		require.NoError(t, grantErr)
+	}
+	results := make([]*CreditBalanceGrantResult, 0, concurrentGrants)
+	for result := range grantResults {
+		require.NotNil(t, result)
+		results = append(results, result)
+	}
+	require.Len(t, results, concurrentGrants)
+	firstGrant := results[0]
+	assert.Equal(t, firstGrant.LedgerId, results[1].LedgerId)
+	assert.Equal(t, firstGrant.UserSubscriptionId, results[1].UserSubscriptionId)
+	var grantedBalance UserSubscription
+	require.NoError(t, DB.First(&grantedBalance, firstGrant.UserSubscriptionId).Error)
+	assert.Equal(t, int64(250), grantedBalance.TokenLimit)
+	assert.Zero(t, grantedBalance.TokenUsed)
+	var firstGrantBalanceCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND entitlement_type = ?", 103, SubscriptionEntitlementCreditBalance).Count(&firstGrantBalanceCount).Error)
+	assert.Equal(t, int64(1), firstGrantBalanceCount)
+	var firstGrantLedgerCount int64
+	require.NoError(t, DB.Model(&CreditBalanceLedger{}).Where("user_id = ? AND idempotency_key = ?", 103, request.IdempotencyKey).Count(&firstGrantLedgerCount).Error)
+	assert.Equal(t, int64(1), firstGrantLedgerCount)
+
+	ledger := CreditBalanceLedger{UserId: 103, UserSubscriptionId: grantedBalance.Id, Type: CreditBalanceLedgerTypePurchase, IdempotencyKey: "migration-ledger-key", SourceType: CreditBalanceLedgerSourceRedemption, SourceId: 50_002, GrossCredit: 1, BalanceBefore: 250, BalanceAfter: 251, AvailableCreditAfter: 251, CreatedAt: now}
+	require.NoError(t, DB.Create(&ledger).Error)
+	duplicateUserKey := ledger
+	duplicateUserKey.Id = 0
+	duplicateUserKey.SourceId = 50_003
+	require.Error(t, DB.Create(&duplicateUserKey).Error)
+	duplicateSource := ledger
+	duplicateSource.Id = 0
+	duplicateSource.UserId = 104
+	duplicateSource.IdempotencyKey = "migration-ledger-other-user"
+	require.Error(t, DB.Create(&duplicateSource).Error)
+
+	conversion := SubscriptionConversion{UserId: 103, IdempotencyKey: "migration-conversion-key", SourceSubscriptionId: 21, SourcePlanId: 11, SourcePlanTitle: "Legacy timed plan", TargetSubscriptionId: grantedBalance.Id, TargetPlanId: creditPlanID, LedgerId: firstGrant.LedgerId, SourceStatus: SubscriptionStatusActive, GrantSource: SubscriptionGrantOrder, DatabaseNow: now, SourceStartTime: now - 1000, SourceEndTime: now + 1000, RemainingSeconds: 1000, CreditBasis: 500, CreditBasisSource: ConversionCreditBasisCurrentPlan, CurrentRemainingCredit: 400, GrossCredit: 400, NetAvailableCredit: 400, AvailableCreditAfter: 650, BalanceBefore: 250, BalanceAfter: 650, LastGrantedAt: now - 700, LastGrantTimeSource: SubscriptionGrantTimeSourceOrder, LastGrantSource: SubscriptionGrantOrder, ConvertedAt: now, CreatedAt: now}
+	require.NoError(t, DB.Create(&conversion).Error)
+	duplicateConversionKey := conversion
+	duplicateConversionKey.Id = 0
+	duplicateConversionKey.SourceSubscriptionId = 23
+	duplicateConversionKey.LedgerId = ledger.Id
+	require.Error(t, DB.Create(&duplicateConversionKey).Error)
+	duplicateConversionSource := conversion
+	duplicateConversionSource.Id = 0
+	duplicateConversionSource.UserId = 104
+	duplicateConversionSource.IdempotencyKey = "migration-conversion-other-user"
+	duplicateConversionSource.LedgerId = ledger.Id
+	require.Error(t, DB.Create(&duplicateConversionSource).Error)
+	duplicateConversionLedger := conversion
+	duplicateConversionLedger.Id = 0
+	duplicateConversionLedger.UserId = 104
+	duplicateConversionLedger.IdempotencyKey = "migration-conversion-other-ledger"
+	duplicateConversionLedger.SourceSubscriptionId = 23
+	require.Error(t, DB.Create(&duplicateConversionLedger).Error)
+
+	adjustment := CreditBalanceAdjustment{IdempotencyKey: "migration-adjustment-key", ParameterFingerprint: "migration-fingerprint", UserId: 103, Operation: CreditBalanceAdjustmentIncrease, Amount: 1, OperatorUserId: 1, Reason: "migration verification", LedgerId: ledger.Id, CreatedAt: now}
+	require.NoError(t, DB.Create(&adjustment).Error)
+	duplicateAdjustment := adjustment
+	duplicateAdjustment.Id = 0
+	duplicateAdjustment.LedgerId = firstGrant.LedgerId
+	require.Error(t, DB.Create(&duplicateAdjustment).Error)
+}
+
+type creditBalanceExternalLegacyPlan struct {
+	Id                int     `gorm:"primaryKey"`
+	Title             string  `gorm:"type:varchar(128);not null"`
+	PriceAmount       float64 `gorm:"precision:10;scale:6;not null;default:0"`
+	MonthlyTokenLimit int64   `gorm:"type:bigint;not null;default:0"`
+	IsTrial           bool    `gorm:"default:false"`
+	InviteTrial       bool    `gorm:"default:false"`
+	BusinessCode      *string `gorm:"type:varchar(64)"`
+}
+
+func (creditBalanceExternalLegacyPlan) TableName() string { return "subscription_plans" }
+
+type creditBalanceExternalLegacySubscription struct {
+	Id          int    `gorm:"primaryKey"`
+	UserId      int    `gorm:"index"`
+	PlanId      int    `gorm:"index"`
+	TokenLimit  int64  `gorm:"type:bigint;not null;default:0"`
+	TokenUsed   int64  `gorm:"type:bigint;not null;default:0"`
+	GrantReason string `gorm:"type:varchar(32);default:''"`
+	StartTime   int64  `gorm:"bigint"`
+	EndTime     int64  `gorm:"bigint;index"`
+	Status      string `gorm:"type:varchar(32);index"`
+	Source      string `gorm:"type:varchar(32);default:'order'"`
+}
+
+func (creditBalanceExternalLegacySubscription) TableName() string { return "user_subscriptions" }
+
+func TestCreditBalanceProductionMigrationExternalDatabases(t *testing.T) {
+	tests := []struct {
+		name    string
+		envName string
+		open    func(string) (*gorm.DB, error)
+	}{
+		{
+			name:    common.DatabaseTypeMySQL,
+			envName: "TEST_MYSQL_DSN",
+			open: func(dsn string) (*gorm.DB, error) {
+				return gorm.Open(mysql.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			},
+		},
+		{
+			name:    common.DatabaseTypePostgreSQL,
+			envName: "TEST_POSTGRES_DSN",
+			open: func(dsn string) (*gorm.DB, error) {
+				return gorm.Open(postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true}), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dsn := strings.TrimSpace(os.Getenv(test.envName))
+			if dsn == "" {
+				t.Skipf("set %s to run the real %s migration compatibility test", test.envName, test.name)
+			}
+			db, err := test.open(dsn)
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			var serverVersion string
+			require.NoError(t, db.Raw("SELECT VERSION()").Scan(&serverVersion).Error)
+			t.Logf("%s server version: %s", test.name, serverVersion)
+			existingTables, err := db.Migrator().GetTables()
+			require.NoError(t, err)
+			if len(existingTables) != 0 {
+				_ = sqlDB.Close()
+				t.Skipf("refusing to run against a non-empty %s database: %v", test.name, existingTables)
+			}
+
+			oldDB := DB
+			oldLogDB := LOG_DB
+			oldUsingSQLite := common.UsingSQLite
+			oldUsingMySQL := common.UsingMySQL
+			oldUsingPostgreSQL := common.UsingPostgreSQL
+			oldLogSQLType := common.LogSqlType
+			oldRedisEnabled := common.RedisEnabled
+			DB = db
+			LOG_DB = db
+			common.UsingSQLite = false
+			common.UsingMySQL = test.name == common.DatabaseTypeMySQL
+			common.UsingPostgreSQL = test.name == common.DatabaseTypePostgreSQL
+			common.LogSqlType = test.name
+			common.RedisEnabled = false
+			initCol()
+			resetDBTimestampCacheForTest()
+			ClearPrimaryBillableSubscriptionCacheForTest()
+			ClearSubscriptionPlanCacheForTest()
+			t.Setenv("LOG_SQL_DSN", "")
+			t.Cleanup(func() {
+				createdTables, tableErr := db.Migrator().GetTables()
+				if tableErr == nil {
+					for index := len(createdTables) - 1; index >= 0; index-- {
+						_ = db.Migrator().DropTable(createdTables[index])
+					}
+				}
+				DB = oldDB
+				LOG_DB = oldLogDB
+				common.UsingSQLite = oldUsingSQLite
+				common.UsingMySQL = oldUsingMySQL
+				common.UsingPostgreSQL = oldUsingPostgreSQL
+				common.LogSqlType = oldLogSQLType
+				common.RedisEnabled = oldRedisEnabled
+				initCol()
+				resetDBTimestampCacheForTest()
+				ClearPrimaryBillableSubscriptionCacheForTest()
+				ClearSubscriptionPlanCacheForTest()
+				_ = sqlDB.Close()
+			})
+
+			require.NoError(t, DB.AutoMigrate(&creditBalanceExternalLegacyPlan{}, &creditBalanceExternalLegacySubscription{}))
+			businessCode := "external-legacy-timed"
+			require.NoError(t, DB.Create(&creditBalanceExternalLegacyPlan{Id: 501, Title: "External legacy timed", PriceAmount: 40, MonthlyTokenLimit: 500, BusinessCode: &businessCode}).Error)
+			now := common.GetTimestamp()
+			require.NoError(t, DB.Create(&creditBalanceExternalLegacySubscription{Id: 601, UserId: 701, PlanId: 501, TokenLimit: 500, TokenUsed: 100, GrantReason: SubscriptionGrantAdmin, StartTime: now - 1000, EndTime: now + 1000, Status: SubscriptionStatusActive, Source: SubscriptionGrantAdmin}).Error)
+
+			t.Log("legacy schema seeded")
+			require.NoError(t, migrateDB())
+			t.Log("production migration completed")
+			requiredColumns := []struct {
+				table   string
+				model   any
+				columns []string
+			}{
+				{table: "subscription_plans", model: &SubscriptionPlan{}, columns: []string{"entitlement_type", "singleton_key", "credit_balance_configured"}},
+				{table: "user_subscriptions", model: &UserSubscription{}, columns: []string{"entitlement_type", "singleton_key", "last_granted_at", "conversion_id"}},
+				{table: "subscription_orders", model: &SubscriptionOrder{}, columns: []string{"credit_grant_amount", "fulfilled_subscription_id", "recovery_ledger_id"}},
+				{table: "redemptions", model: &Redemption{}, columns: []string{"fulfillment_mode", "fulfillment_subscription_id"}},
+				{table: "credit_balance_ledgers", model: &CreditBalanceLedger{}, columns: []string{"idempotency_key", "source_type", "source_id"}},
+				{table: "subscription_conversions", model: &SubscriptionConversion{}, columns: []string{"idempotency_key", "source_subscription_id", "ledger_id"}},
+				{table: "invitation_reward_events", model: &InvitationRewardEvent{}, columns: []string{"source_subscription_id", "source_amount_cents"}},
+				{table: "invitation_commission_records", model: &InvitationCommissionRecord{}, columns: []string{"reversal_status", "recovered_cents", "unrecovered_cents"}},
+				{table: "credit_balance_adjustments", model: &CreditBalanceAdjustment{}, columns: []string{"idempotency_key", "parameter_fingerprint", "ledger_id"}},
+			}
+			for _, required := range requiredColumns {
+				for _, column := range required.columns {
+					require.True(t, DB.Migrator().HasColumn(required.model, column), "%s.%s", required.table, column)
+				}
+			}
+			require.True(t, DB.Migrator().HasIndex(&SubscriptionPlan{}, creditBalancePlanIdentityIndex))
+			require.True(t, DB.Migrator().HasIndex(&UserSubscription{}, creditBalanceUserIdentityIndex))
+			assert.Equal(t, test.name == common.DatabaseTypeMySQL, DB.Migrator().HasColumn(&SubscriptionPlan{}, creditBalanceIdentityGuardColumn))
+			assert.Equal(t, test.name == common.DatabaseTypeMySQL, DB.Migrator().HasColumn(&UserSubscription{}, creditBalanceIdentityGuardColumn))
+
+			t.Log("schema and singleton constraints verified")
+			var migrated UserSubscription
+			require.NoError(t, DB.First(&migrated, 601).Error)
+			assert.Equal(t, SubscriptionEntitlementTimed, migrated.EntitlementType)
+			assert.Equal(t, SubscriptionGrantTimeSourceConservative, migrated.LastGrantTimeSource)
+			assert.Positive(t, migrated.LastGrantedAt)
+			var creditPlan SubscriptionPlan
+			require.NoError(t, DB.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).First(&creditPlan).Error)
+			require.Error(t, DB.Exec("INSERT INTO subscription_plans (title, price_amount, entitlement_type) VALUES (?, ?, ?)", "Duplicate Credit", 0, SubscriptionEntitlementCreditBalance).Error)
+			require.NoError(t, DB.Exec("INSERT INTO user_subscriptions (user_id, plan_id, entitlement_type, singleton_key, status) VALUES (?, ?, ?, ?, ?)", 702, creditPlan.Id, SubscriptionEntitlementCreditBalance, creditBalanceUserSingletonKey, SubscriptionStatusActive).Error)
+			require.Error(t, DB.Exec("INSERT INTO user_subscriptions (user_id, plan_id, entitlement_type, status) VALUES (?, ?, ?, ?)", 702, creditPlan.Id, SubscriptionEntitlementCreditBalance, SubscriptionStatusActive).Error)
+
+			t.Log("legacy row backfill and duplicate constraints verified")
+			const concurrentGrants = 2
+			require.NoError(t, DB.Create(&User{Id: 703, Username: "external-concurrent-credit-user", Password: "password", Status: common.UserStatusEnabled, AffCode: "external-concurrent-credit-aff"}).Error)
+			request := CreditBalanceGrantRequest{UserId: 703, GrossCredit: 250, IdempotencyKey: "external-concurrent-first-grant", SourceType: CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 50_101, Type: CreditBalanceLedgerTypePurchase, TargetPlanId: creditPlan.Id}
+			sqlDB.SetMaxOpenConns(concurrentGrants + 1)
+			start := make(chan struct{})
+			grantResults := make(chan *CreditBalanceGrantResult, concurrentGrants)
+			grantErrors := make(chan error, concurrentGrants)
+			var grantWaitGroup sync.WaitGroup
+			for range concurrentGrants {
+				grantWaitGroup.Add(1)
+				go func() {
+					defer grantWaitGroup.Done()
+					<-start
+					var result *CreditBalanceGrantResult
+					err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+						var grantErr error
+						result, grantErr = GrantCreditBalanceTx(tx, request)
+						return grantErr
+					})
+					grantResults <- result
+					grantErrors <- err
+				}()
+			}
+			close(start)
+			grantWaitGroup.Wait()
+			close(grantResults)
+			close(grantErrors)
+			for grantErr := range grantErrors {
+				require.NoError(t, grantErr)
+			}
+			results := make([]*CreditBalanceGrantResult, 0, concurrentGrants)
+			for result := range grantResults {
+				require.NotNil(t, result)
+				results = append(results, result)
+			}
+			require.Len(t, results, concurrentGrants)
+			assert.Equal(t, results[0].LedgerId, results[1].LedgerId)
+			assert.Equal(t, results[0].UserSubscriptionId, results[1].UserSubscriptionId)
+			var concurrentBalance UserSubscription
+			require.NoError(t, DB.First(&concurrentBalance, results[0].UserSubscriptionId).Error)
+			assert.Equal(t, int64(250), concurrentBalance.TokenLimit)
+			assert.Zero(t, concurrentBalance.TokenUsed)
+			var concurrentBalanceCount int64
+			require.NoError(t, DB.Model(&UserSubscription{}).Where("user_id = ? AND entitlement_type = ?", request.UserId, SubscriptionEntitlementCreditBalance).Count(&concurrentBalanceCount).Error)
+			assert.Equal(t, int64(1), concurrentBalanceCount)
+			var concurrentLedgerCount int64
+			require.NoError(t, DB.Model(&CreditBalanceLedger{}).Where("user_id = ? AND idempotency_key = ?", request.UserId, request.IdempotencyKey).Count(&concurrentLedgerCount).Error)
+			assert.Equal(t, int64(1), concurrentLedgerCount)
+			t.Log("concurrent first-grant convergence verified")
+		})
+	}
 }
 
 func TestEnsureSubscriptionPlanTableSQLite_CreatesBusinessCodeUniqueIndexOnFreshTable(t *testing.T) {

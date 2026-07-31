@@ -49,6 +49,7 @@ type DescriptorOptions = {
   includeUsage?: boolean
   includeSort?: boolean
   sortBy?: string | null
+  defaultSubscriptionStatuses?: string[]
 }
 
 const paidSubscriptionSortByByDescriptor: Record<
@@ -125,21 +126,37 @@ function descriptor(
   const includeSubscriptionID = options.includeSubscriptionID ?? false
   const includeUsage = options.includeUsage ?? false
   const includeSort = options.includeSort ?? false
+  const effectiveFilters =
+    options.defaultSubscriptionStatuses !== undefined &&
+    filters.subscription_statuses.length === 0
+      ? {
+          ...filters,
+          subscription_statuses: options.defaultSubscriptionStatuses,
+        }
+      : filters
   return {
     id,
     enabled: options.enabled ?? true,
-    queryKey: ['admin-analytics', filters.tab, id, filters] as const,
+    queryKey: ['admin-analytics', filters.tab, id, effectiveFilters] as const,
     includeTimeRange,
     includeSubscriptionID,
     includeUsage,
     includeSort,
     buildParams: (nextFilters) => {
+      const requestFilters =
+        options.defaultSubscriptionStatuses !== undefined &&
+        nextFilters.subscription_statuses.length === 0
+          ? {
+              ...nextFilters,
+              subscription_statuses: options.defaultSubscriptionStatuses,
+            }
+          : nextFilters
       const sortBy =
-        options.sortBy === undefined ? nextFilters.sort_by : options.sortBy
+        options.sortBy === undefined ? requestFilters.sort_by : options.sortBy
       return buildAdminAnalyticsApiParams(
         sortBy === null
-          ? { ...nextFilters, sort_by: undefined }
-          : { ...nextFilters, sort_by: sortBy },
+          ? { ...requestFilters, sort_by: undefined }
+          : { ...requestFilters, sort_by: sortBy },
         {
           includeTimeRange,
           includeSubscriptionID,
@@ -160,6 +177,7 @@ export function adminAnalyticsTabLabelKey(tab: AdminAnalyticsTab): string {
 
 const adminAnalyticsDescriptorIDs = new Set([
   ...Object.values(singleEndpointByTab),
+  'drilldown/subscriptions',
   'usage-consumption/summary',
   'usage-consumption/timeseries',
   'usage-consumption/breakdown',
@@ -188,6 +206,15 @@ export function buildAdminAnalyticsRequestDescriptors(
       descriptor(filters, 'usage-consumption/breakdown', {
         includeUsage: true,
         includeSort: true,
+      }),
+    ]
+  }
+  if (filters.tab === 'conversion') {
+    return [
+      descriptor(filters, 'subscription-conversion'),
+      descriptor(filters, 'drilldown/subscriptions', {
+        includeSort: true,
+        defaultSubscriptionStatuses: ['converted', 'expired'],
       }),
     ]
   }

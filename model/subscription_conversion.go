@@ -25,7 +25,7 @@ type SubscriptionConversion struct {
 	Id                     int    `json:"id"`
 	UserId                 int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_subscription_conversion_user_key,priority:1"`
 	IdempotencyKey         string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_subscription_conversion_user_key,priority:2"`
-	SourceSubscriptionId   int    `json:"source_subscription_id" gorm:"not null;uniqueIndex;index"`
+	SourceSubscriptionId   int    `json:"source_subscription_id" gorm:"not null;uniqueIndex:idx_subscription_conversions_source_subscription_id"`
 	SourcePlanId           int    `json:"source_plan_id" gorm:"not null;index"`
 	SourcePlanTitle        string `json:"source_plan_title" gorm:"type:varchar(255);not null"`
 	TargetSubscriptionId   int    `json:"target_subscription_id" gorm:"not null;index"`

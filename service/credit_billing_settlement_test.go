@@ -33,6 +33,18 @@ func freezeCreditBillingForServiceTest(t *testing.T, ctx *gin.Context, relayInfo
 func seedCreditBillingRuntime(t *testing.T, userID, tokenID, planID, subID, channelID int, tokenKey string, subLimit, subUsed int64) {
 	t.Helper()
 	seedRuntimeDistributorBilling(t, userID, tokenID, planID, subID, tokenKey, subLimit, subUsed)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Updates(map[string]any{
+		"entitlement_type":                 model.SubscriptionEntitlementCreditBalance,
+		"credit_balance_configured":        true,
+		"credit_balance_purchase_enabled":  false,
+		"credit_balance_redemption_enabled": false,
+		"credit_balance_conversion_enabled": false,
+	}).Error)
+	model.InvalidateSubscriptionPlanCache(planID)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", subID).Updates(map[string]any{
+		"entitlement_type": model.SubscriptionEntitlementCreditBalance,
+		"end_time":         0,
+	}).Error)
 	seedChannel(t, channelID)
 }
 

@@ -104,7 +104,7 @@ func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionCon
 			WithinGrace:              quote.WithinGrace,
 			Eligible:                 quote.Eligible,
 			CanConfirm:               quote.CanConfirm,
-			ReasonCodes:              append([]string(nil), quote.ReasonCodes...),
+			ReasonCodes:              append([]string{}, quote.ReasonCodes...),
 			Reasons:                  reasons,
 			CalculationErrorCode:     quote.CalculationErrorCode,
 		})

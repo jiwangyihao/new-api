@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -73,6 +74,334 @@ func setInvitationCommissionSettingForTest(t *testing.T, value operation_setting
 	t.Cleanup(func() { *setting = old })
 }
 
+func TestCreateInvitationCommissionRequiresTimedPlanAndSubscriptionIdentity(t *testing.T) {
+	tests := []struct {
+		name                    string
+		planEntitlement         string
+		subscriptionEntitlement string
+	}{
+		{name: "Credit plan with timed subscription", planEntitlement: model.SubscriptionEntitlementCreditBalance, subscriptionEntitlement: model.SubscriptionEntitlementTimed},
+		{name: "timed plan with Credit subscription", planEntitlement: model.SubscriptionEntitlementTimed, subscriptionEntitlement: model.SubscriptionEntitlementCreditBalance},
+		{name: "Credit plan with Credit subscription", planEntitlement: model.SubscriptionEntitlementCreditBalance, subscriptionEntitlement: model.SubscriptionEntitlementCreditBalance},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupInvitationCommissionServiceDB(t)
+			setInvitationCommissionSettingForTest(t, operation_setting.InvitationCommissionSetting{Enabled: true, RateBps: 1000, MinimumTransferCents: 1, MinimumWithdrawCents: 1000})
+			event := seedCommissionRewardEvent(t, 9391, 9392, 9393, 10000, "CNY")
+			require.NoError(t, model.DB.Model(&model.UserSubscription{}).
+				Where("id = ?", event.SourceSubscriptionId).
+				UpdateColumn("entitlement_type", test.subscriptionEntitlement).Error)
+			require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).
+				Where("id = ?", event.SourceId+100000).
+				UpdateColumn("entitlement_type", test.planEntitlement).Error)
+
+			require.NoError(t, CreateInvitationCommissionForRewardEvent(event.Id))
+			require.NoError(t, CreateInvitationCommissionForRewardEvent(event.Id))
+
+			var records int64
+			require.NoError(t, model.DB.Model(&model.InvitationCommissionRecord{}).Where("event_id = ?", event.Id).Count(&records).Error)
+			assert.Zero(t, records)
+			var accounts int64
+			require.NoError(t, model.DB.Model(&model.InvitationCommissionAccount{}).Where("user_id = ?", event.InviterId).Count(&accounts).Error)
+			assert.Zero(t, accounts)
+		})
+	}
+}
+
+func TestConvertedTimedPurchasePreservesRewardHistoryUntilRealRefund(t *testing.T) {
+	setupInvitationCommissionServiceDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditBalanceLedger{}, &model.SubscriptionConversion{}))
+	setInvitationCommissionSettingForTest(t, operation_setting.InvitationCommissionSetting{Enabled: true, RateBps: 1000, MinimumTransferCents: 1, MinimumWithdrawCents: 1000})
+
+	const inviterID = 9_901
+	const convertedInviteeID = 9_902
+	const activeInviteeID = 9_903
+	const timedPlanID = 9_904
+	const creditPlanID = 9_905
+	const sourceSubscriptionID = 9_906
+	now := common.GetTimestamp()
+	timedCode := "converted-invitation-history"
+	creditCode := "converted-invitation-credit"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "Converted invitation history", EntitlementType: model.SubscriptionEntitlementTimed,
+		Enabled: true, RewardEligible: true, BusinessCode: &timedCode,
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+		TimedConversionEnabled: true,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: creditPlanID, Title: "Converted invitation Credit", EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Enabled: true, BusinessCode: &creditCode, CreditBalanceConfigured: true,
+		CreditBalanceConversionEnabled: true,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: inviterID, Username: "converted-history-inviter", Status: common.UserStatusEnabled,
+		AffCode: "converted-history-inviter", InvitationRewardMode: model.InvitationRewardModeCommission,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: convertedInviteeID, Username: "converted-history-invitee", Status: common.UserStatusEnabled,
+		AffCode: "converted-history-invitee", InviterId: inviterID,
+	}).Error)
+	basis := int64(100)
+	source := model.UserSubscription{
+		Id: sourceSubscriptionID, UserId: convertedInviteeID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive,
+		TokenLimit: 100, TokenUsed: 10, StartTime: now - 48*60*60, EndTime: now + 60*60,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+		LastGrantedAt: now - 48*60*60, LastGrantCreditSnapshot: &basis,
+		LastGrantTimeSource: model.SubscriptionGrantTimeSourceLive, LastGrantSource: model.SubscriptionGrantOrder,
+	}
+	require.NoError(t, model.DB.Create(&source).Error)
+	snapshot := model.NewSubscriptionEntitlementSnapshot(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "Converted invitation history", EntitlementType: model.SubscriptionEntitlementTimed,
+		Enabled: true, RewardEligible: true, BusinessCode: &timedCode,
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+		TimedConversionEnabled: true,
+	}, model.SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(model.PaymentProviderStripe, "price-converted-invitation", model.PaymentMethodStripe, 10000, "CNY")
+	snapshotJSON, err := model.MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := model.SubscriptionOrder{
+		UserId: convertedInviteeID, PlanId: timedPlanID, TradeNo: "converted-invitation-order",
+		AmountCents: 10000, Currency: "CNY", PaymentProvider: model.PaymentProviderStripe,
+		PaymentMethod: model.PaymentMethodStripe, Status: common.TopUpStatusSuccess, CompleteTime: now,
+		FulfilledSubscriptionID: sourceSubscriptionID, EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, model.DB.Create(&order).Error)
+	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+		_, recordErr := model.RecordInvitationRewardEventForSubscriptionOrderTx(tx, &order, &model.SubscriptionPlan{
+			Id: timedPlanID, Title: "Converted invitation history", EntitlementType: model.SubscriptionEntitlementTimed,
+			Enabled: true, RewardEligible: true, BusinessCode: &timedCode,
+			DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+			QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+			TimedConversionEnabled: true,
+		}, &model.UserSubscriptionCreationResult{
+			Subscription: &source, EventStartTime: now - 60, EventEndTime: now + 60*60,
+		}, true)
+		return recordErr
+	}))
+	var event model.InvitationRewardEvent
+	require.NoError(t, model.DB.Where("source_type = ? AND source_id = ?", model.InvitationRewardEventSourceSubscriptionOrder, order.Id).First(&event).Error)
+	historicalEventCreatedAt := now - 10
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("id = ?", event.Id).UpdateColumn("created_at", historicalEventCreatedAt).Error)
+	event.CreatedAt = historicalEventCreatedAt
+	require.NoError(t, CreateInvitationCommissionForRewardEvent(event.Id))
+	var commission model.InvitationCommissionRecord
+	require.NoError(t, model.DB.Where("event_id = ?", event.Id).First(&commission).Error)
+	require.Equal(t, model.InvitationCommissionStatusAvailable, commission.Status)
+	var account model.InvitationCommissionAccount
+	require.NoError(t, model.DB.Where("user_id = ?", inviterID).First(&account).Error)
+	require.Equal(t, int64(1000), account.AvailableCents)
+
+	delayedOrder := model.SubscriptionOrder{
+		Id: 90_001, UserId: convertedInviteeID, PlanId: timedPlanID, TradeNo: "converted-invitation-delayed-order",
+		AmountCents: 5000, Currency: "CNY", PaymentProvider: model.PaymentProviderStripe,
+		PaymentMethod: model.PaymentMethodStripe, Status: common.TopUpStatusSuccess, CompleteTime: now - 5,
+		FulfilledSubscriptionID: sourceSubscriptionID, EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, model.DB.Create(&delayedOrder).Error)
+	delayedEvent := model.InvitationRewardEvent{
+		InviterId: inviterID, InviteeId: convertedInviteeID,
+		SourceType: model.InvitationRewardEventSourceSubscriptionOrder, SourceId: delayedOrder.Id,
+		SourceOrderId: delayedOrder.Id, SourceSubscriptionId: sourceSubscriptionID,
+		SourceAmountCents: delayedOrder.AmountCents, SourceCurrency: delayedOrder.Currency,
+		EventStartTime: now - 5, EventEndTime: now + 60*60,
+		Status: model.InvitationRewardEventStatusActive, CreatedAt: now - 5, UpdatedAt: now - 5,
+	}
+	require.NoError(t, model.DB.Create(&delayedEvent).Error)
+
+	conversion, err := model.ConfirmTimedSubscriptionConversion(convertedInviteeID, sourceSubscriptionID, "converted-invitation-history")
+	require.NoError(t, err)
+	require.False(t, conversion.Replayed)
+	require.Less(t, event.CreatedAt, conversion.Conversion.ConvertedAt)
+	require.Less(t, delayedEvent.CreatedAt, conversion.Conversion.ConvertedAt)
+	require.NoError(t, model.DB.First(&event, event.Id).Error)
+	assert.Equal(t, model.InvitationRewardEventStatusActive, event.Status)
+	require.NoError(t, model.DB.First(&commission, commission.Id).Error)
+	assert.Equal(t, model.InvitationCommissionStatusAvailable, commission.Status)
+	assert.Equal(t, int64(1000), commission.CommissionCents)
+	require.NoError(t, model.DB.First(&account, account.Id).Error)
+	assert.Equal(t, int64(1000), account.AvailableCents)
+
+	require.NoError(t, CreateInvitationCommissionForRewardEvent(delayedEvent.Id))
+	var delayedCommission model.InvitationCommissionRecord
+	require.NoError(t, model.DB.Where("event_id = ?", delayedEvent.Id).First(&delayedCommission).Error)
+	assert.Equal(t, model.InvitationCommissionStatusAvailable, delayedCommission.Status)
+	assert.Equal(t, int64(500), delayedCommission.CommissionCents)
+	require.NoError(t, model.DB.First(&account, account.Id).Error)
+	assert.Equal(t, int64(1500), account.AvailableCents)
+	var eventCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("invitee_id = ?", convertedInviteeID).Count(&eventCount).Error)
+	assert.Equal(t, int64(2), eventCount, "conversion must not create another reward event")
+	for index, createdAt := range []int64{conversion.Conversion.ConvertedAt, conversion.Conversion.ConvertedAt + 1} {
+		futureEvent := model.InvitationRewardEvent{
+			InviterId: inviterID, InviteeId: convertedInviteeID,
+			SourceType: model.InvitationRewardEventSourceSubscriptionOrder, SourceId: order.Id + 100_000 + index,
+			SourceSubscriptionId: sourceSubscriptionID, SourceAmountCents: 10000, SourceCurrency: "CNY",
+			EventStartTime: createdAt, EventEndTime: createdAt + 60,
+			Status: model.InvitationRewardEventStatusActive, CreatedAt: createdAt, UpdatedAt: createdAt,
+		}
+		require.NoError(t, model.DB.Create(&futureEvent).Error)
+		require.NoError(t, CreateInvitationCommissionForRewardEvent(futureEvent.Id))
+		var futureCommissionCount int64
+		require.NoError(t, model.DB.Model(&model.InvitationCommissionRecord{}).Where("event_id = ?", futureEvent.Id).Count(&futureCommissionCount).Error)
+		assert.Zero(t, futureCommissionCount, "events created at or after conversion must not earn commission")
+	}
+
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", inviterID).Update("invitation_reward_mode", model.InvitationRewardModeSubscription).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: activeInviteeID, Username: "converted-history-active", Status: common.UserStatusEnabled,
+		AffCode: "converted-history-active", InviterId: inviterID,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 19_907, UserId: activeInviteeID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive,
+		StartTime: now - 60, EndTime: now + 60*60,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+	}).Error)
+	qualification, err := EnsureMonthlyInvitationEntitlement(inviterID, time.Unix(now, 0).UTC())
+	require.NoError(t, err)
+	assert.Equal(t, 2, qualification.DirectInviteCount)
+	assert.Equal(t, 1, qualification.QualifiedActiveCount)
+	assert.False(t, qualification.Entitled)
+	assert.Zero(t, qualification.RewardSubscriptionId)
+
+	recovery, err := model.RecoverSubscriptionOrder(model.SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: model.PaymentProviderStripe,
+		RecoveryType: model.SubscriptionOrderRecoveryRefund, Reason: "real payment refund after conversion",
+	})
+	require.NoError(t, err)
+	require.False(t, recovery.Replayed)
+	require.NoError(t, model.DB.First(&event, event.Id).Error)
+	assert.Equal(t, model.InvitationRewardEventStatusCancelled, event.Status)
+	require.NoError(t, model.DB.First(&commission, commission.Id).Error)
+	assert.Equal(t, model.InvitationCommissionStatusCancelled, commission.Status)
+	assert.Equal(t, model.InvitationCommissionReversalStatusRecovered, commission.ReversalStatus)
+	assert.Equal(t, int64(1000), commission.RecoveredCents)
+	require.NoError(t, model.DB.First(&account, account.Id).Error)
+	assert.Equal(t, int64(500), account.AvailableCents)
+	require.NoError(t, model.DB.First(&delayedCommission, delayedCommission.Id).Error)
+	assert.Equal(t, model.InvitationCommissionStatusAvailable, delayedCommission.Status)
+	require.NoError(t, model.DB.First(&delayedEvent, delayedEvent.Id).Error)
+	assert.Equal(t, model.InvitationRewardEventStatusActive, delayedEvent.Status)
+}
+
+func TestCreditFulfillmentPathsDoNotCreateInvitationBenefits(t *testing.T) {
+	tests := []struct {
+		name string
+		kind string
+	}{
+		{name: "paid Credit purchase", kind: "purchase"},
+		{name: "Credit redemption", kind: "redemption"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupInvitationCommissionServiceDB(t)
+			require.NoError(t, model.DB.AutoMigrate(&model.CreditBalanceLedger{}, &model.Log{}))
+			setInvitationCommissionSettingForTest(t, operation_setting.InvitationCommissionSetting{Enabled: true, RateBps: 1000, MinimumTransferCents: 1, MinimumWithdrawCents: 1000})
+
+			const inviterID = 20_001
+			const creditInviteeID = 20_002
+			const timedInviteeID = 20_003
+			const optionPlanID = 20_004
+			const creditPlanID = 20_005
+			now := common.GetTimestamp()
+			optionCode := "credit-invitation-option"
+			creditCode := "credit-invitation-balance"
+			optionPlan := model.SubscriptionPlan{
+				Id: optionPlanID, Title: "Credit invitation option", EntitlementType: model.SubscriptionEntitlementTimed,
+				Enabled: true, RewardEligible: true, BusinessCode: &optionCode,
+				DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+				QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 500,
+				UnlimitedPurchaseEnabled: true,
+			}
+			creditPlan := model.SubscriptionPlan{
+				Id: creditPlanID, Title: "Credit invitation balance", EntitlementType: model.SubscriptionEntitlementCreditBalance,
+				Enabled: true, RewardEligible: true, BusinessCode: &creditCode,
+				CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true,
+				CreditBalanceRedemptionEnabled: true,
+			}
+			require.NoError(t, model.DB.Create(&optionPlan).Error)
+			require.NoError(t, model.DB.Create(&creditPlan).Error)
+			require.NoError(t, model.DB.Create(&model.User{
+				Id: inviterID, Username: "credit-path-inviter", Status: common.UserStatusEnabled,
+				AffCode: "credit-path-inviter", InvitationRewardMode: model.InvitationRewardModeCommission,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.User{
+				Id: creditInviteeID, Username: "credit-path-invitee", Status: common.UserStatusEnabled,
+				AffCode: "credit-path-invitee", InviterId: inviterID,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.User{
+				Id: timedInviteeID, Username: "credit-path-control", Status: common.UserStatusEnabled,
+				AffCode: "credit-path-control", InviterId: inviterID,
+			}).Error)
+			require.NoError(t, model.DB.Create(&model.UserSubscription{
+				Id: 20_006, UserId: timedInviteeID, PlanId: optionPlanID,
+				EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive,
+				StartTime: now - 60, EndTime: now + 60*60,
+				GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+			}).Error)
+
+			switch test.kind {
+			case "purchase":
+				snapshot := model.NewSubscriptionEntitlementSnapshot(&optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlanID)
+				snapshot.SetTargetCreditBalancePlanSnapshot(&creditPlan)
+				snapshot.SetPaymentSnapshot(model.PaymentProviderStripe, "price-credit-invitation", model.PaymentMethodStripe, 3000, "CNY")
+				snapshotJSON, err := model.MarshalSubscriptionEntitlementSnapshot(snapshot)
+				require.NoError(t, err)
+				order := model.SubscriptionOrder{
+					UserId: creditInviteeID, PlanId: optionPlanID, TradeNo: "credit-invitation-purchase",
+					AmountCents: 3000, Currency: "CNY", CreditGrantAmount: 500, CreditTargetPlanID: creditPlanID,
+					PaymentProvider: model.PaymentProviderStripe, PaymentMethod: model.PaymentMethodStripe,
+					Status: common.TopUpStatusPending, EntitlementSnapshot: snapshotJSON,
+				}
+				require.NoError(t, model.DB.Create(&order).Error)
+				completion, err := model.CompleteSubscriptionOrder(order.TradeNo, "", model.PaymentProviderStripe, model.PaymentMethodStripe)
+				require.NoError(t, err)
+				require.NotNil(t, completion)
+				require.NotNil(t, completion.CreditBalance)
+				assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, completion.PurchaseMode)
+				require.NoError(t, HandleInvitationRewardForCompletedSubscriptionOrder(order.Id))
+			case "redemption":
+				redemption := model.Redemption{
+					Id: 20_007, Key: "credit-invitation-redemption", Type: model.RedemptionTypeSubscription,
+					PlanId: optionPlanID, Status: common.RedemptionCodeStatusEnabled,
+					AmountCents: 3000, Currency: "CNY", CreatedTime: now,
+				}
+				require.NoError(t, model.DB.Create(&redemption).Error)
+				result, err := model.Redeem(redemption.Key, creditInviteeID, model.RedemptionModeCreditBalance)
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.NotNil(t, result.CreditBalance)
+				assert.Equal(t, model.RedemptionModeCreditBalance, result.RedemptionMode)
+				require.NoError(t, HandleInvitationRewardForSubscriptionRedemption(redemption.Id))
+			default:
+				t.Fatalf("unknown Credit fulfillment kind %q", test.kind)
+			}
+
+			var balances []model.UserSubscription
+			require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", creditInviteeID, model.SubscriptionEntitlementCreditBalance).Find(&balances).Error)
+			require.Len(t, balances, 1)
+			var rewardEvents int64
+			require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("invitee_id = ?", creditInviteeID).Count(&rewardEvents).Error)
+			assert.Zero(t, rewardEvents)
+			var commissions int64
+			require.NoError(t, model.DB.Model(&model.InvitationCommissionRecord{}).Where("invitee_id = ?", creditInviteeID).Count(&commissions).Error)
+			assert.Zero(t, commissions)
+			var commissionAccounts int64
+			require.NoError(t, model.DB.Model(&model.InvitationCommissionAccount{}).Where("user_id = ?", inviterID).Count(&commissionAccounts).Error)
+			assert.Zero(t, commissionAccounts)
+			qualification, err := EnsureMonthlyInvitationEntitlement(inviterID, time.Unix(now, 0).UTC())
+			require.NoError(t, err)
+			assert.Equal(t, 2, qualification.DirectInviteCount)
+			assert.Equal(t, 1, qualification.QualifiedActiveCount)
+			assert.False(t, qualification.Entitled)
+			assert.Zero(t, qualification.RewardSubscriptionId)
+		})
+	}
+}
 func TestCreateInvitationCommissionForRewardEventCreditsAvailableOnce(t *testing.T) {
 	setupInvitationCommissionServiceDB(t)
 	setInvitationCommissionSettingForTest(t, operation_setting.InvitationCommissionSetting{Enabled: true, RateBps: 1000, MinimumTransferCents: 1, MinimumWithdrawCents: 1000})

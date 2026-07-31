@@ -1852,7 +1852,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 	}
 	now := GetDBTimestamp()
 	var subs []UserSubscription
-	if err := DB.Where("status = ? AND end_time > 0 AND end_time <= ?", "active", now).
+	if err := DB.Where("status = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND end_time > 0 AND end_time <= ?", "active", SubscriptionEntitlementCreditBalance, now).
 		Order("end_time asc, id asc").
 		Limit(limit).
 		Find(&subs).Error; err != nil {
@@ -1872,7 +1872,7 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 
 		err := DB.Transaction(func(tx *gorm.DB) error {
 			res := tx.Model(&UserSubscription{}).
-				Where("user_id = ? AND status = ? AND end_time > 0 AND end_time <= ?", userId, "active", now).
+				Where("user_id = ? AND status = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND end_time > 0 AND end_time <= ?", userId, "active", SubscriptionEntitlementCreditBalance, now).
 				Updates(map[string]interface{}{
 					"status":     "expired",
 					"updated_at": common.GetTimestamp(),
@@ -2670,6 +2670,9 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	if tx == nil || sub == nil || plan == nil {
 		return errors.New("invalid reset args")
 	}
+	if sub.EntitlementType == SubscriptionEntitlementCreditBalance || plan.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return nil
+	}
 	if sub.NextResetTime > 0 && sub.NextResetTime > now {
 		return nil
 	}
@@ -2995,7 +2998,7 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	}
 	now := GetDBTimestamp()
 	var subs []UserSubscription
-	if err := DB.Where("next_reset_time > 0 AND next_reset_time <= ? AND status = ?", now, "active").
+	if err := DB.Where("next_reset_time > 0 AND next_reset_time <= ? AND status = ? AND (entitlement_type IS NULL OR entitlement_type <> ?)", now, "active", SubscriptionEntitlementCreditBalance).
 		Order("next_reset_time asc").
 		Limit(limit).
 		Find(&subs).Error; err != nil {
@@ -3014,7 +3017,7 @@ func ResetDueSubscriptions(limit int) (int, error) {
 		err = DB.Transaction(func(tx *gorm.DB) error {
 			var locked UserSubscription
 			if err := tx.Set("gorm:query_option", "FOR UPDATE").
-				Where("id = ? AND next_reset_time > 0 AND next_reset_time <= ?", subCopy.Id, now).
+				Where("id = ? AND next_reset_time > 0 AND next_reset_time <= ? AND status = ? AND (entitlement_type IS NULL OR entitlement_type <> ?)", subCopy.Id, now, "active", SubscriptionEntitlementCreditBalance).
 				First(&locked).Error; err != nil {
 				return nil
 			}

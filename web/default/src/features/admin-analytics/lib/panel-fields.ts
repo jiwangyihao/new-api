@@ -1,5 +1,10 @@
 import { formatTimestampToDate } from '@/lib/format'
 import type {
+  AdminAnalyticsDrilldownSubscriptionItem,
+  AdminAnalyticsOverviewQuota,
+  AdminAnalyticsOverviewSubscriptions,
+  AdminAnalyticsSubscriptionLifecycleState,
+  AdminAnalyticsSubscriptionRankingItem,
   InvitationPaidInvitee,
   InvitationPaidInviter,
   InvitationPaidSubscriptionRecord,
@@ -29,6 +34,91 @@ export function formatAdminAnalyticsOptionalValue(
 ): string {
   if (value === null || value === undefined || value === '') return '—'
   return String(value)
+}
+
+export const adminAnalyticsLifecycleLabelKeys: Record<
+  AdminAnalyticsSubscriptionLifecycleState,
+  string
+> = {
+  active_timed: 'adminAnalytics.lifecycle.activeTimed',
+  active_credit: 'adminAnalytics.lifecycle.activeCredit',
+  exhausted_credit: 'adminAnalytics.lifecycle.exhaustedCredit',
+  credit_debt: 'adminAnalytics.lifecycle.creditDebt',
+  expired_grace: 'adminAnalytics.lifecycle.expiredGrace',
+  converted: 'adminAnalytics.lifecycle.converted',
+}
+
+export function adminAnalyticsCreditOverviewValues(
+  quota: AdminAnalyticsOverviewQuota,
+  subscriptions: AdminAnalyticsOverviewSubscriptions
+): AdminAnalyticsCardValue[] {
+  return [
+    {
+      labelKey: 'adminAnalytics.metrics.availableCredit',
+      value: formatAdminTokens(quota.available_credit),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.settlementDebt',
+      value: formatAdminTokens(quota.settlement_debt),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.timedActiveSubscriptions',
+      value: formatAdminTokens(subscriptions.timed_active_count),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.creditBalanceCount',
+      value: formatAdminTokens(subscriptions.credit_balance_count),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.creditAvailableCount',
+      value: formatAdminTokens(subscriptions.credit_available_count),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.creditExhaustedCount',
+      value: formatAdminTokens(subscriptions.credit_exhausted_count),
+    },
+    {
+      labelKey: 'adminAnalytics.metrics.creditDebtCount',
+      value: formatAdminTokens(subscriptions.credit_debt_count),
+    },
+  ]
+}
+
+export function adminAnalyticsCreditRankingValue(
+  item: AdminAnalyticsSubscriptionRankingItem
+): AdminAnalyticsCardValue {
+  const labelKey = adminAnalyticsLifecycleLabelKeys[item.lifecycle_state]
+  const amount =
+    item.lifecycle_state === 'credit_debt'
+      ? item.settlement_debt
+      : item.entitlement_type === 'credit_balance'
+        ? item.available_credit
+        : item.remaining_tokens
+  return { labelKey, value: formatAdminTokens(amount) }
+}
+
+export function adminAnalyticsSubscriptionHistoryValues(
+  item: AdminAnalyticsDrilldownSubscriptionItem
+): AdminAnalyticsCardValue[] {
+  return [
+    { labelKey: 'adminAnalytics.fields.subscriptionId', value: formatAdminAnalyticsOptionalValue(item.subscription_id) },
+    { labelKey: 'adminAnalytics.fields.userId', value: formatAdminAnalyticsOptionalValue(item.user_id) },
+    { labelKey: 'adminAnalytics.fields.planId', value: formatAdminAnalyticsOptionalValue(item.plan_id) },
+    { labelKey: 'adminAnalytics.fields.entitlementType', value: formatAdminAnalyticsOptionalValue(item.entitlement_type) },
+    { labelKey: 'adminAnalytics.fields.lifecycleState', value: formatAdminAnalyticsOptionalValue(item.lifecycle_state) },
+    { labelKey: 'adminAnalytics.fields.status', value: formatAdminAnalyticsOptionalValue(item.status) },
+    { labelKey: 'adminAnalytics.fields.sourceAttribution', value: formatAdminAnalyticsOptionalValue(item.source) },
+    { labelKey: 'adminAnalytics.fields.availableCredit', value: formatAdminTokens(item.available_credit) },
+    { labelKey: 'adminAnalytics.fields.settlementDebt', value: formatAdminTokens(item.settlement_debt) },
+    { labelKey: 'adminAnalytics.fields.graceRemainingSeconds', value: formatAdminTokens(item.grace_remaining_seconds) },
+    { labelKey: 'adminAnalytics.fields.conversionId', value: formatAdminAnalyticsOptionalValue(item.conversion_id) },
+    { labelKey: 'adminAnalytics.fields.targetSubscriptionId', value: formatAdminAnalyticsOptionalValue(item.target_subscription_id) },
+    { labelKey: 'adminAnalytics.fields.targetUserId', value: formatAdminAnalyticsOptionalValue(item.target_user_id) },
+    { labelKey: 'adminAnalytics.fields.targetPlanId', value: formatAdminAnalyticsOptionalValue(item.target_plan_id) },
+    { labelKey: 'adminAnalytics.fields.targetPlanTitle', value: formatAdminAnalyticsOptionalValue(item.target_plan_title) },
+    { labelKey: 'adminAnalytics.fields.startTime', value: formatAdminAnalyticsTimestamp(item.start_time) },
+    { labelKey: 'adminAnalytics.fields.endTime', value: formatAdminAnalyticsTimestamp(item.end_time) },
+  ]
 }
 
 export function paidSubscriptionValueUserCardValues(

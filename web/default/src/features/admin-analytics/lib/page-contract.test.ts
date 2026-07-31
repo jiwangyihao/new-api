@@ -33,6 +33,68 @@ test('usage tab maps to three endpoints', () => {
     ]
   )
 })
+
+test('conversion tab loads summary and subscription history endpoints', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'conversion',
+    snapshot_at: 123,
+    subscription_statuses: ['converted', 'expired'],
+  })
+  const descriptors = buildAdminAnalyticsRequestDescriptors(filters)
+
+  assert.deepEqual(
+    descriptors.map((descriptor) => descriptor.id),
+    ['subscription-conversion', 'drilldown/subscriptions']
+  )
+  assert.equal(descriptors[1].enabled, true)
+  assert.equal(descriptors[1].includeSort, true)
+  assert.deepEqual(descriptors[1].queryKey, [
+    'admin-analytics',
+    'conversion',
+    'drilldown/subscriptions',
+    filters,
+  ])
+  assert.deepEqual(
+    descriptors[1].buildParams(filters).getAll('subscription_statuses'),
+    ['converted', 'expired']
+  )
+})
+
+test('conversion history defaults to converted and in-grace expired statuses', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({ tab: 'conversion' })
+  const history = buildAdminAnalyticsRequestDescriptors(filters)[1]
+
+  assert.ok(history)
+  assert.deepEqual(history.buildParams(filters).getAll('subscription_statuses'), [
+    'converted',
+    'expired',
+  ])
+  assert.deepEqual(history.queryKey, [
+    'admin-analytics',
+    'conversion',
+    'drilldown/subscriptions',
+    { ...filters, subscription_statuses: ['converted', 'expired'] },
+  ])
+})
+
+test('explicit conversion history statuses override the lifecycle default', () => {
+  const filters = buildAdminAnalyticsCanonicalFilters({
+    tab: 'conversion',
+    subscription_statuses: ['expired'],
+  })
+  const history = buildAdminAnalyticsRequestDescriptors(filters)[1]
+
+  assert.ok(history)
+  assert.deepEqual(history.buildParams(filters).getAll('subscription_statuses'), [
+    'expired',
+  ])
+  assert.deepEqual(history.queryKey, [
+    'admin-analytics',
+    'conversion',
+    'drilldown/subscriptions',
+    filters,
+  ])
+})
 test('admin analytics tab labels come from tab descriptors', () => {
   assert.equal(
     adminAnalyticsTabLabelKey('paid-subscription-value'),

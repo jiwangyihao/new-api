@@ -166,6 +166,8 @@ type AdminAnalyticsOverviewQuota struct {
 	TokenUsed       int64    `json:"token_used"`
 	RemainingTokens int64    `json:"remaining_tokens"`
 	UsageRate       *float64 `json:"usage_rate"`
+	AvailableCredit int64    `json:"available_credit"`
+	SettlementDebt  int64    `json:"settlement_debt"`
 }
 
 type AdminAnalyticsOverviewConversion struct {
@@ -206,11 +208,16 @@ type AdminAnalyticsOverviewRisks struct {
 }
 
 type AdminAnalyticsOverviewSubscriptions struct {
-	ActiveCount  int `json:"active_count"`
-	ExpiredCount int `json:"expired_count"`
-	TrialCount   int `json:"trial_count"`
-	PaidCount    int `json:"paid_count"`
-	RewardCount  int `json:"reward_count"`
+	ActiveCount          int `json:"active_count"`
+	ExpiredCount         int `json:"expired_count"`
+	TrialCount           int `json:"trial_count"`
+	PaidCount            int `json:"paid_count"`
+	RewardCount          int `json:"reward_count"`
+	TimedActiveCount     int `json:"timed_active_count"`
+	CreditBalanceCount   int `json:"credit_balance_count"`
+	CreditAvailableCount int `json:"credit_available_count"`
+	CreditExhaustedCount int `json:"credit_exhausted_count"`
+	CreditDebtCount      int `json:"credit_debt_count"`
 }
 
 type AdminAnalyticsOverviewTrendPoint struct {
@@ -302,6 +309,10 @@ type AdminAnalyticsSubscriptionRankingItem struct {
 	UsageRate       *float64                       `json:"usage_rate"`
 	RequestCount    int                            `json:"request_count"`
 	Drilldown       *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+	EntitlementType string                         `json:"entitlement_type"`
+	LifecycleState  string                         `json:"lifecycle_state"`
+	AvailableCredit int64                          `json:"available_credit"`
+	SettlementDebt  int64                          `json:"settlement_debt"`
 }
 
 type AdminAnalyticsUserLifecycleResponse struct {
@@ -703,19 +714,29 @@ type AdminAnalyticsDrilldownSubscriptionsResponse struct {
 }
 
 type AdminAnalyticsDrilldownSubscriptionItem struct {
-	SubscriptionID  int                  `json:"subscription_id"`
-	UserID          int                  `json:"user_id"`
-	Username        string               `json:"username"`
-	PlanID          int                  `json:"plan_id"`
-	PlanTitle       string               `json:"plan_title"`
-	Source          AdminAnalyticsSource `json:"source"`
-	Status          string               `json:"status"`
-	StartTime       int64                `json:"start_time"`
-	EndTime         int64                `json:"end_time"`
-	TokenLimit      int64                `json:"token_limit"`
-	TokenUsed       int64                `json:"token_used"`
-	RemainingTokens int64                `json:"remaining_tokens"`
-	UsageRate       *float64             `json:"usage_rate"`
+	SubscriptionID        int                  `json:"subscription_id"`
+	UserID                int                  `json:"user_id"`
+	Username              string               `json:"username"`
+	PlanID                int                  `json:"plan_id"`
+	PlanTitle             string               `json:"plan_title"`
+	Source                AdminAnalyticsSource `json:"source"`
+	Status                string               `json:"status"`
+	StartTime             int64                `json:"start_time"`
+	EndTime               int64                `json:"end_time"`
+	TokenLimit            int64                `json:"token_limit"`
+	TokenUsed             int64                `json:"token_used"`
+	RemainingTokens       int64                `json:"remaining_tokens"`
+	UsageRate             *float64             `json:"usage_rate"`
+	EntitlementType       string               `json:"entitlement_type"`
+	LifecycleState        string               `json:"lifecycle_state"`
+	AvailableCredit       int64                `json:"available_credit"`
+	SettlementDebt        int64                `json:"settlement_debt"`
+	GraceRemainingSeconds int64                `json:"grace_remaining_seconds"`
+	ConversionID          int                  `json:"conversion_id"`
+	TargetSubscriptionID  int                  `json:"target_subscription_id"`
+	TargetUserID          int                  `json:"target_user_id"`
+	TargetPlanID          int                  `json:"target_plan_id"`
+	TargetPlanTitle       string               `json:"target_plan_title"`
 }
 
 type AdminAnalyticsDrilldownInvitationsResponse struct {

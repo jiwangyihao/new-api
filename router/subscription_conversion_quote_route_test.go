@@ -150,6 +150,7 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	byID := conversionQuoteRouteItemsByID(first.Data.Quotes)
 	assert.Equal(t, model.ConversionQuoteCategoryConvertible, byID[strconv.Itoa(sourceSubscriptionID)].Category)
 	assert.Equal(t, "100", byID[strconv.Itoa(sourceSubscriptionID)].CreditBasis)
+	assert.NotNil(t, byID[strconv.Itoa(sourceSubscriptionID)].ReasonCodes)
 	assert.Equal(t, model.ConversionCreditBasisCurrentPlan, byID[strconv.Itoa(sourceSubscriptionID)].CreditBasisSource)
 	assert.Equal(t, "75", byID[strconv.Itoa(sourceSubscriptionID)].CurrentRemainingCredit)
 	assert.Equal(t, "175", byID[strconv.Itoa(sourceSubscriptionID)].GrossCredit)

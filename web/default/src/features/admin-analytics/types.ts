@@ -167,6 +167,8 @@ export interface AdminAnalyticsOverviewQuota {
   token_used: number
   remaining_tokens: number
   usage_rate: number | null
+  available_credit: number
+  settlement_debt: number
 }
 
 export interface AdminAnalyticsOverviewConversion {
@@ -212,6 +214,11 @@ export interface AdminAnalyticsOverviewSubscriptions {
   trial_count: number
   paid_count: number
   reward_count: number
+  timed_active_count: number
+  credit_balance_count: number
+  credit_available_count: number
+  credit_exhausted_count: number
+  credit_debt_count: number
 }
 
 export interface AdminAnalyticsOverviewSummary {
@@ -310,6 +317,14 @@ export interface AdminAnalyticsSubscriptionRankingItem {
   usage_rate: number | null
   request_count: number
   drilldown?: AdminAnalyticsDrilldownTarget
+  entitlement_type: 'timed' | 'credit_balance'
+  lifecycle_state:
+    | 'active_timed'
+    | 'active_credit'
+    | 'exhausted_credit'
+    | 'credit_debt'
+  available_credit: number
+  settlement_debt: number
 }
 
 export interface AdminAnalyticsQuotaDistributionResponse {
@@ -390,6 +405,44 @@ export interface AdminAnalyticsSubscriptionConversionResponse {
   trial_to_paid: AdminAnalyticsConversionTrendPoint[]
   renewals: AdminAnalyticsConversionTrendPoint[]
   migration_matrix: AdminAnalyticsPlanMigrationItem[]
+}
+
+export type AdminAnalyticsSubscriptionLifecycleState =
+  | 'active_timed'
+  | 'active_credit'
+  | 'exhausted_credit'
+  | 'credit_debt'
+  | 'expired_grace'
+  | 'converted'
+
+export interface AdminAnalyticsDrilldownSubscriptionItem {
+  subscription_id: number
+  user_id: number
+  username: string
+  plan_id: number
+  plan_title: string
+  source: AdminAnalyticsSource
+  status: string
+  start_time: number
+  end_time: number
+  token_limit: number
+  token_used: number
+  remaining_tokens: number
+  usage_rate: number | null
+  entitlement_type: 'timed' | 'credit_balance'
+  lifecycle_state: AdminAnalyticsSubscriptionLifecycleState
+  available_credit: number
+  settlement_debt: number
+  grace_remaining_seconds: number
+  conversion_id: number
+  target_subscription_id: number
+  target_user_id: number
+  target_plan_id: number
+  target_plan_title: string
+}
+
+export interface AdminAnalyticsDrilldownSubscriptionsResponse {
+  subscriptions: AdminAnalyticsList<AdminAnalyticsDrilldownSubscriptionItem>
 }
 
 export interface AdminAnalyticsInvitationRewardsSummary {

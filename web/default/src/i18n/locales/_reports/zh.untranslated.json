@@ -71,6 +71,7 @@
   "Worker URL": "Worker URL",
   "Xinference": "Xinference",
   "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]": "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]",
+  "adminAnalytics.lifecycle.converted": "converted",
   "adminOps.healthSummary.goroutines": "Goroutines",
   "checkout.session.completed": "checkout.session.completed",
   "checkout.session.expired": "checkout.session.expired",

@@ -172,6 +172,94 @@ func TestMonthlyInvitationEntitlement(t *testing.T) {
 	})
 }
 
+func TestConvertedTimedInviteePreservesGrantedRewardAndLosesFutureQualification(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(
+		&model.InvitationMonthlyEntitlement{},
+		&model.CreditBalanceLedger{},
+		&model.SubscriptionConversion{},
+	))
+	at := time.Unix(common.GetTimestamp(), 0).UTC()
+	const inviterID = 15_701
+	const convertedInviteeID = 15_702
+	const activeInviteeID = 15_703
+	const timedPlanID = 25_701
+	const creditPlanID = 25_702
+	const convertedSourceID = 35_701
+	seedInvitationRewardUsers(t, inviterID, convertedInviteeID, activeInviteeID)
+	timedCode := "conversion-reward-history"
+	creditCode := "conversion-reward-credit"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "Conversion reward history", EntitlementType: model.SubscriptionEntitlementTimed,
+		Enabled: true, RewardEligible: true, BusinessCode: &timedCode,
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+		ConcurrencyLimit: 1, TimedConversionEnabled: true,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: creditPlanID, Title: "Conversion reward Credit", EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Enabled: true, BusinessCode: &creditCode, CreditBalanceConfigured: true,
+		CreditBalanceConversionEnabled: true,
+	}).Error)
+	basis := int64(100)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: convertedSourceID, UserId: convertedInviteeID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive,
+		TokenLimit: 100, TokenUsed: 10, StartTime: at.Add(-48 * time.Hour).Unix(), EndTime: at.AddDate(0, 2, 0).Unix(),
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+		LastGrantedAt: at.Add(-48 * time.Hour).Unix(), LastGrantCreditSnapshot: &basis,
+		LastGrantTimeSource: model.SubscriptionGrantTimeSourceLive, LastGrantSource: model.SubscriptionGrantOrder,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 35_702, UserId: activeInviteeID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive,
+		TokenLimit: 100, StartTime: at.Add(-48 * time.Hour).Unix(), EndTime: at.AddDate(0, 2, 0).Unix(),
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+	}).Error)
+
+	granted, err := EnsureMonthlyInvitationEntitlement(inviterID, at)
+	require.NoError(t, err)
+	require.True(t, granted.Entitled)
+	require.Equal(t, 2, granted.QualifiedActiveCount)
+	require.Positive(t, granted.RewardSubscriptionId)
+	var rewardBefore model.UserSubscription
+	require.NoError(t, model.DB.First(&rewardBefore, granted.RewardSubscriptionId).Error)
+	require.Equal(t, model.SubscriptionStatusActive, rewardBefore.Status)
+	var historyBefore model.InvitationMonthlyEntitlement
+	require.NoError(t, model.DB.Where("inviter_id = ? AND reward_month = ?", inviterID, granted.RewardMonth).First(&historyBefore).Error)
+	require.Equal(t, model.InvitationEntitlementStatusQualified, historyBefore.Status)
+	require.Equal(t, rewardBefore.Id, historyBefore.RewardSubscriptionId)
+
+	conversion, err := model.ConfirmTimedSubscriptionConversion(convertedInviteeID, convertedSourceID, "conversion-reward-history")
+	require.NoError(t, err)
+	require.False(t, conversion.Replayed)
+	var rewardAfter model.UserSubscription
+	require.NoError(t, model.DB.First(&rewardAfter, rewardBefore.Id).Error)
+	assert.Equal(t, rewardBefore.Status, rewardAfter.Status)
+	assert.Equal(t, rewardBefore.PlanId, rewardAfter.PlanId)
+	assert.Equal(t, rewardBefore.StartTime, rewardAfter.StartTime)
+	assert.Equal(t, rewardBefore.EndTime, rewardAfter.EndTime)
+	assert.Equal(t, rewardBefore.TokenLimit, rewardAfter.TokenLimit)
+	assert.Equal(t, rewardBefore.GrantReason, rewardAfter.GrantReason)
+	var historyAfter model.InvitationMonthlyEntitlement
+	require.NoError(t, model.DB.First(&historyAfter, historyBefore.Id).Error)
+	assert.Equal(t, model.InvitationEntitlementStatusQualified, historyAfter.Status)
+	assert.Equal(t, historyBefore.RewardSubscriptionId, historyAfter.RewardSubscriptionId)
+	assert.Equal(t, historyBefore.QualifiedActiveCount, historyAfter.QualifiedActiveCount)
+
+	futureAt := at.AddDate(0, 1, 0)
+	future, err := EnsureMonthlyInvitationEntitlement(inviterID, futureAt)
+	require.NoError(t, err)
+	assert.Equal(t, 1, future.QualifiedActiveCount)
+	assert.False(t, future.Entitled)
+	assert.Zero(t, future.RewardSubscriptionId)
+	var futureHistoryCount int64
+	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).
+		Where("inviter_id = ? AND reward_month = ?", inviterID, future.RewardMonth).
+		Count(&futureHistoryCount).Error)
+	assert.Zero(t, futureHistoryCount)
+}
+
 func TestMonthlyInvitationEntitlementUsesTopTwoPaidInviteeOverlapEndTime(t *testing.T) {
 	truncate(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))

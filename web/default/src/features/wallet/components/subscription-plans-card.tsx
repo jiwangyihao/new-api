@@ -42,12 +42,14 @@ import {
   textColorMap,
 } from '@/components/status-badge'
 import {
+  getCreditBalanceLedger,
   getPublicPlans,
   getSelfSubscriptionFull,
   resetSubscriptionQuota,
   setActiveSubscription,
   updateSubscriptionBillingStrategy,
 } from '@/features/subscriptions/api'
+import { CreditBalanceLedger } from '@/features/subscriptions/components/credit-balance-ledger'
 import { SubscriptionPurchaseDialog } from '@/features/subscriptions/components/dialogs/subscription-purchase-dialog'
 import {
   formatConcurrencyLimit,
@@ -62,6 +64,7 @@ import type {
   SelfSubscriptionData,
   UserSubscriptionRecord,
   SubscriptionBillingStrategy,
+  CreditBalanceLedgerFilters,
 } from '@/features/subscriptions/types'
 import {
   formatPlanChannelEquivalent,
@@ -439,6 +442,12 @@ export function SubscriptionPlansCard({
     queryFn: getSelfSubscriptionFull,
   })
 
+  const loadSelfCreditLedger = useMemo(
+    () => (filters: CreditBalanceLedgerFilters) =>
+      getCreditBalanceLedger(filters),
+    []
+  )
+
   const plans = plansQuery.data?.success ? (plansQuery.data.data ?? []) : []
   const selfSubscriptionData = selfSubscriptionQuery.data?.success
     ? (selfSubscriptionQuery.data.data ?? null)
@@ -653,40 +662,14 @@ export function SubscriptionPlansCard({
                     : ''}
                 </div>
               </div>
-              {(selfSubscriptionData.credit_balance_ledger?.length || 0) >
-                0 && (
-                <div className='sm:col-span-3'>
-                  <div className='text-muted-foreground mb-1'>
-                    {t('Credit balance history')}
-                  </div>
-                  <div className='max-h-28 space-y-1 overflow-y-auto'>
-                    {selfSubscriptionData.credit_balance_ledger?.map(
-                      (entry) => (
-                        <div
-                          key={entry.id}
-                          className='flex flex-wrap justify-between gap-2'
-                        >
-                          <span>
-                            {entry.source_type === 'redemption'
-                              ? t('Redemption')
-                              : t('Purchase')}{' '}
-                            ·{' '}
-                            {new Date(entry.created_at * 1000).toLocaleString()}
-                          </span>
-                          {entry.payment_provider && (
-                            <span>{entry.payment_provider} · </span>
-                          )}
-                          <span>
-                            +{entry.gross_credit} · {t('Debt offset')}{' '}
-                            {entry.debt_offset} · {t('Available')}{' '}
-                            {entry.available_credit_after}
-                          </span>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </div>
-              )}
+              <div className='sm:col-span-3'>
+                <CreditBalanceLedger
+                  loadEntries={loadSelfCreditLedger}
+                  initialEntries={
+                    selfSubscriptionData.credit_balance_ledger || []
+                  }
+                />
+              </div>
             </div>
           )}
 

@@ -176,6 +176,67 @@ func TestConvertedSubscriptionRefundBeyondTargetUsageRestoresAvailableCredit(t *
 	assert.Equal(t, int64(10), source.TokenUsed)
 }
 
+func TestCompletedTimedOrderConvertsThenRefundsThroughPersistedMapping(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&User{}))
+
+	const userID = 10_131
+	const sourceID = 10_132
+	const planID = 10_133
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "converted-order-refund", Status: common.UserStatusEnabled}).Error)
+	plan := seedConversionQuoteTimedPlan(t, planID, 100)
+	now := GetDBTimestamp()
+	basis := int64(100)
+	source := UserSubscription{
+		Id: sourceID, UserId: userID, PlanId: planID, EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit: 100, TokenUsed: 10, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime: now - 48*60*60, EndTime: now + 60*60, Status: SubscriptionStatusActive,
+		LastGrantedAt: now - 48*60*60, LastGrantCreditSnapshot: &basis,
+		LastGrantTimeSource: SubscriptionGrantTimeSourceLive, LastGrantSource: SubscriptionGrantOrder,
+	}
+	require.NoError(t, DB.Create(&source).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(PaymentProviderStripe, "price_converted_refund", PaymentMethodStripe, 2000, "CNY")
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		UserId: userID, PlanId: planID, TradeNo: "converted-order-real-flow",
+		AmountCents: 2000, Currency: "CNY", PaymentProvider: PaymentProviderStripe,
+		PaymentMethod: PaymentMethodStripe, Status: common.TopUpStatusSuccess,
+		CompleteTime: now, FulfilledSubscriptionID: sourceID, EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	converted, err := ConfirmTimedSubscriptionConversion(userID, sourceID, "converted-order-real-flow")
+	require.NoError(t, err)
+	require.False(t, converted.Replayed)
+	require.Equal(t, sourceID, converted.Conversion.SourceSubscriptionId)
+	var balance UserSubscription
+	require.NoError(t, DB.First(&balance, converted.Conversion.TargetSubscriptionId).Error)
+	require.Equal(t, int64(90), balance.TokenLimit)
+	require.Zero(t, balance.TokenUsed)
+
+	recovered, err := RecoverSubscriptionOrder(SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderStripe,
+		RecoveryType: SubscriptionOrderRecoveryRefund, Reason: "provider refund after conversion",
+	})
+	require.NoError(t, err)
+	assert.False(t, recovered.Replayed)
+	assert.Equal(t, int64(100), recovered.GrossCredit)
+	assert.Equal(t, int64(10), recovered.SettlementDebt)
+	require.NoError(t, DB.First(&balance, balance.Id).Error)
+	assert.Equal(t, int64(90), balance.TokenLimit)
+	assert.Equal(t, int64(100), balance.TokenUsed)
+	require.NoError(t, DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
+	assert.Equal(t, recovered.LedgerId, order.RecoveryLedgerID)
+	var recoveryLedgerCount int64
+	require.NoError(t, DB.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryLedgerCount).Error)
+	assert.Equal(t, int64(1), recoveryLedgerCount)
+}
+
 func TestExpiredNonActiveConversionDoesNotAutoSelectCreditBalance(t *testing.T) {
 	setupSubscriptionConversionQuoteTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&User{}))

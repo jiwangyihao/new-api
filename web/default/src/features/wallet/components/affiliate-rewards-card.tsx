@@ -61,11 +61,12 @@ function formatCommissionTime(seconds: number): string {
   return new Date(seconds * 1000).toLocaleDateString()
 }
 
-function commissionRecordStatusLabel(
+export function commissionRecordStatusLabel(
   status: InvitationCommissionRecord['status']
 ): string {
   if (status === 'available') return 'Available'
   if (status === 'skipped') return 'Skipped'
+  if (status === 'unrecoverable') return 'Unrecoverable commission'
   return 'Cancelled'
 }
 

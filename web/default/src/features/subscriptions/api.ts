@@ -39,6 +39,13 @@ import type {
   UpdateCodexProModeResponse,
   SubscriptionOrderStatus,
   SubscriptionBillingStrategy,
+  CreditBalanceAdjustmentRequest,
+  CreditBalanceAdjustmentResult,
+  CreditBalanceLedgerEntry,
+  CreditBalanceLedgerFilters,
+  SubscriptionOrderRecoveryRequest,
+  SubscriptionOrderRecoveryPreview,
+  SubscriptionOrderRecoveryResult,
 } from './types'
 
 export interface SetActiveSubscriptionRequest {
@@ -135,6 +142,68 @@ export async function deleteUserSubscription(
 ): Promise<ApiResponse> {
   const res = await api.delete(
     `/api/subscription/admin/user_subscriptions/${subId}`
+  )
+  return res.data
+}
+
+function creditBalanceLedgerQuery(filters: CreditBalanceLedgerFilters = {}) {
+  const params = new URLSearchParams()
+  if (filters.source_type) params.set('source_type', filters.source_type)
+  if (filters.type) params.set('type', filters.type)
+  if (filters.start_time) params.set('start_time', String(filters.start_time))
+  if (filters.end_time) params.set('end_time', String(filters.end_time))
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+export async function getAdminCreditBalanceLedger(
+  userId: number,
+  filters: CreditBalanceLedgerFilters = {}
+): Promise<ApiResponse<CreditBalanceLedgerEntry[]>> {
+  const res = await api.get(
+    `/api/subscription/admin/users/${userId}/credit-balance/ledger${creditBalanceLedgerQuery(filters)}`
+  )
+  return res.data
+}
+
+export async function adjustUserCreditBalance(
+  userId: number,
+  data: CreditBalanceAdjustmentRequest
+): Promise<ApiResponse<CreditBalanceAdjustmentResult>> {
+  const res = await api.post(
+    `/api/subscription/admin/users/${userId}/credit-balance/adjustments`,
+    data
+  )
+  return res.data
+}
+
+export async function getSubscriptionOrderRecoveryPreview(
+  userId: number,
+  tradeNo: string
+): Promise<ApiResponse<SubscriptionOrderRecoveryPreview>> {
+  const res = await api.get(
+    `/api/subscription/admin/users/${userId}/orders/${encodeURIComponent(tradeNo)}/recovery-preview`
+  )
+  return res.data
+}
+
+export async function recoverSubscriptionOrder(
+  userId: number,
+  tradeNo: string,
+  data: SubscriptionOrderRecoveryRequest
+): Promise<ApiResponse<SubscriptionOrderRecoveryResult>> {
+  const res = await api.post(
+    `/api/subscription/admin/users/${userId}/orders/${encodeURIComponent(tradeNo)}/recovery`,
+    data
+  )
+  return res.data
+}
+
+export async function getCreditBalanceLedger(
+  filters: CreditBalanceLedgerFilters = {}
+): Promise<ApiResponse<CreditBalanceLedgerEntry[]>> {
+  const res = await api.get(
+    `/api/subscription/self/credit-balance/ledger${creditBalanceLedgerQuery(filters)}`
   )
   return res.data
 }

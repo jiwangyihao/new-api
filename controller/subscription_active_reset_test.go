@@ -122,3 +122,28 @@ func TestResetSubscriptionQuotaEndpointResetsAndConsumesPaidMonth(t *testing.T) 
 	assert.Equal(t, int64(0), sub.TokenUsed)
 	assert.Less(t, sub.EndTime, end)
 }
+
+func TestResetSubscriptionQuotaEndpointRejectsCreditBalance(t *testing.T) {
+	setupSubscriptionActiveResetTestDB(t)
+	const userID = 9714
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "reset_credit_balance", Status: common.UserStatusEnabled}).Error)
+	code := "reset_credit_balance"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: 9715, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Enabled: true, CreditBalanceConfigured: true, BusinessCode: &code,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 9716, UserId: userID, PlanId: 9715, EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Status: model.SubscriptionStatusActive, TokenLimit: 1000, TokenUsed: 400,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+	}).Error)
+
+	recorder := performResetSubscriptionQuotaRequest(t, userID, "9716")
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Credit balance quota cannot be reset")
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.First(&balance, 9716).Error)
+	assert.Equal(t, int64(1000), balance.TokenLimit)
+	assert.Equal(t, int64(400), balance.TokenUsed)
+}

@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"io"
 	"net/http"
@@ -174,10 +175,18 @@ type CreemWebhookEvent struct {
 	EventType string `json:"eventType"`
 	CreatedAt int64  `json:"created_at"`
 	Object    struct {
-		Id        string `json:"id"`
-		Object    string `json:"object"`
-		RequestId string `json:"request_id"`
-		Order     struct {
+		Id          string `json:"id"`
+		Object      string `json:"object"`
+		RequestId   string `json:"request_id"`
+		Transaction struct {
+			Id     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"transaction"`
+		Subscription struct {
+			Id     string `json:"id"`
+			Status string `json:"status"`
+		} `json:"subscription"`
+		Order struct {
 			Object      string `json:"object"`
 			Id          string `json:"id"`
 			Customer    string `json:"customer"`
@@ -279,10 +288,72 @@ func CreemWebhook(c *gin.Context) {
 	switch webhookEvent.EventType {
 	case "checkout.completed":
 		handleCheckoutCompleted(c, &webhookEvent)
+	case "refund.created":
+		handleCreemSubscriptionRecovery(c, &webhookEvent, model.SubscriptionOrderRecoveryRefund)
+	case "dispute.created":
+		handleCreemSubscriptionRecovery(c, &webhookEvent, model.SubscriptionOrderRecoveryChargeback)
 	default:
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem webhook 忽略事件 event_type=%s event_id=%s", webhookEvent.EventType, webhookEvent.Id))
 		c.Status(http.StatusOK)
 	}
+}
+
+func handleCreemSubscriptionRecovery(c *gin.Context, event *CreemWebhookEvent, recoveryType string) {
+	if recoveryType == model.SubscriptionOrderRecoveryRefund && !strings.EqualFold(strings.TrimSpace(event.Object.Status), "succeeded") && !strings.EqualFold(strings.TrimSpace(event.Object.Transaction.Status), "refunded") {
+		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 退款尚未成功，忽略回收 event_id=%s status=%s", event.Id, event.Object.Status))
+		c.Status(http.StatusOK)
+		return
+	}
+	tradeNo := strings.TrimSpace(event.Object.RequestId)
+	identity := model.SubscriptionOrderProviderIdentity{
+		TransactionID:  strings.TrimSpace(event.Object.Transaction.Id),
+		OrderID:        strings.TrimSpace(event.Object.Order.Id),
+		SubscriptionID: strings.TrimSpace(event.Object.Subscription.Id),
+	}
+	if tradeNo == "" {
+		order, err := model.FindSubscriptionOrderByProviderIdentity(model.PaymentProviderCreem, identity)
+		if err == nil {
+			tradeNo = order.TradeNo
+		} else if !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 财务终态订单关联失败 event_id=%s error=%q", event.Id, err.Error()))
+			c.AbortWithStatus(http.StatusInternalServerError)
+			return
+		}
+	}
+	if tradeNo == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Creem 财务终态缺少可靠订单关联 event_id=%s event_type=%s", event.Id, event.EventType))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	if model.GetSubscriptionOrderByTradeNo(tradeNo) == nil {
+		if topUp := model.GetTopUpByTradeNo(tradeNo); topUp != nil && topUp.PaymentProvider == model.PaymentProviderCreem {
+			logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 普通充值财务终态保持既有人工处理 trade_no=%s event_type=%s", tradeNo, event.EventType))
+			c.Status(http.StatusOK)
+			return
+		}
+	}
+	payload := common.GetJsonString(map[string]any{
+		"event_id": event.Id, "event_type": event.EventType,
+		"provider_transaction_id":  identity.TransactionID,
+		"provider_order_id":        identity.OrderID,
+		"provider_subscription_id": identity.SubscriptionID,
+	})
+	if _, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
+		TradeNo: tradeNo, ExpectedPaymentProvider: model.PaymentProviderCreem,
+		RecoveryType: recoveryType, ProviderPayload: payload,
+		Reason:             "Creem provider " + recoveryType,
+		CreditRecoveryOnly: true,
+	}); err != nil {
+		if errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable) {
+			logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 财务终态无需 Credit 回收 trade_no=%s event_type=%s", tradeNo, event.EventType))
+			c.Status(http.StatusOK)
+			return
+		}
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Creem 订阅订单财务回收失败 trade_no=%s event_type=%s error=%q", tradeNo, event.EventType, err.Error()))
+		c.AbortWithStatus(http.StatusInternalServerError)
+		return
+	}
+	c.Status(http.StatusOK)
 }
 
 // 处理支付完成事件
@@ -321,8 +392,13 @@ func handleCheckoutCompleted(c *gin.Context, event *CreemWebhookEvent) {
 		return
 	}
 
+	providerPayload := common.GetJsonString(map[string]any{
+		"object":                  event.Object,
+		"provider_transaction_id": event.Object.Order.Transaction,
+		"provider_order_id":       event.Object.Order.Id,
+	})
 	// Try complete subscription order first
-	if err := completeSubscriptionOrderAndEvaluateInvitation(referenceId, common.GetJsonString(event), model.PaymentProviderCreem, ""); err == nil {
+	if err := completeSubscriptionOrderAndEvaluateInvitation(referenceId, providerPayload, model.PaymentProviderCreem, ""); err == nil {
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Creem 订阅订单处理成功 trade_no=%s creem_order_id=%s", referenceId, event.Object.Order.Id))
 		c.Status(http.StatusOK)
 		return

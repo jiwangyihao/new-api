@@ -98,6 +98,11 @@ type InvitationCommissionRecordResponse struct {
 	CreatedAt         int64  `json:"created_at"`
 	AvailableAt       int64  `json:"available_at"`
 	CancelledAt       int64  `json:"cancelled_at"`
+	ReversalStatus    string `json:"reversal_status,omitempty"`
+	RecoveredCents    int64  `json:"recovered_cents,omitempty"`
+	UnrecoveredCents  int64  `json:"unrecovered_cents,omitempty"`
+	ReversalReason    string `json:"reversal_reason,omitempty"`
+	ReversedAt        int64  `json:"reversed_at,omitempty"`
 }
 
 type InvitationCommissionWithdrawalResponse struct {
@@ -923,6 +928,11 @@ func invitationCommissionRecordResponse(record model.InvitationCommissionRecord)
 		CreatedAt:         record.CreatedAt,
 		AvailableAt:       record.AvailableAt,
 		CancelledAt:       record.CancelledAt,
+		ReversalStatus:    record.ReversalStatus,
+		RecoveredCents:    record.RecoveredCents,
+		UnrecoveredCents:  record.UnrecoveredCents,
+		ReversalReason:    record.ReversalReason,
+		ReversedAt:        record.ReversedAt,
 	}
 }
 

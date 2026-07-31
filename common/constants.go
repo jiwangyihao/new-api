@@ -140,6 +140,7 @@ var SMTPOAuthEnabled = false
 var SMTPOAuthClientId = ""
 var SMTPOAuthTenantId = "common"
 var SMTPOAuthRefreshToken = ""
+
 // SMTPOAuthAccessToken / SMTPOAuthAccessExpiry cache the short-lived access
 // token in memory so we don't refresh on every send. Not persisted as options.
 var SMTPOAuthAccessToken = ""
@@ -276,8 +277,10 @@ const (
 )
 
 const (
-	TopUpStatusPending = "pending"
-	TopUpStatusSuccess = "success"
-	TopUpStatusFailed  = "failed"
-	TopUpStatusExpired = "expired"
+	TopUpStatusPending    = "pending"
+	TopUpStatusSuccess    = "success"
+	TopUpStatusFailed     = "failed"
+	TopUpStatusExpired    = "expired"
+	TopUpStatusRefunded   = "refunded"
+	TopUpStatusChargeback = "chargeback"
 )

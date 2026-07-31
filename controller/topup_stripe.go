@@ -13,8 +13,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	stripecharge "github.com/stripe/stripe-go/v81/charge"
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -153,6 +155,48 @@ func RequestStripePay(c *gin.Context) {
 	stripeAdaptor.RequestPay(c, &req)
 }
 
+type stripeFinancialChargeIdentity struct {
+	Identity model.SubscriptionOrderProviderIdentity
+	TradeNo  string
+}
+
+type stripeFinancialChargeIdentityLoader func(chargeID string) (stripeFinancialChargeIdentity, error)
+
+var loadStripeFinancialChargeIdentity stripeFinancialChargeIdentityLoader = defaultStripeFinancialChargeIdentity
+
+func SetStripeFinancialChargeIdentityForTest(t stripeTestHandle, fake stripeFinancialChargeIdentityLoader) {
+	t.Helper()
+	previous := loadStripeFinancialChargeIdentity
+	loadStripeFinancialChargeIdentity = fake
+	t.Cleanup(func() { loadStripeFinancialChargeIdentity = previous })
+}
+
+func defaultStripeFinancialChargeIdentity(chargeID string) (stripeFinancialChargeIdentity, error) {
+	chargeID = strings.TrimSpace(chargeID)
+	if chargeID == "" {
+		return stripeFinancialChargeIdentity{}, nil
+	}
+	stripe.Key = setting.StripeApiSecret
+	params := &stripe.ChargeParams{}
+	params.AddExpand("invoice.subscription")
+	value, err := stripecharge.Get(chargeID, params)
+	if err != nil {
+		return stripeFinancialChargeIdentity{}, err
+	}
+	result := stripeFinancialChargeIdentity{}
+	if value.PaymentIntent != nil {
+		result.Identity.TransactionID = value.PaymentIntent.ID
+	}
+	if value.Invoice != nil {
+		result.Identity.InvoiceID = value.Invoice.ID
+		if value.Invoice.Subscription != nil {
+			result.Identity.SubscriptionID = value.Invoice.Subscription.ID
+			result.TradeNo = strings.TrimSpace(value.Invoice.Subscription.Metadata[stripeSubscriptionReferenceMetadataKey])
+		}
+	}
+	return result, nil
+}
+
 func StripeWebhook(c *gin.Context) {
 	ctx := c.Request.Context()
 	if !isStripeWebhookEnabled() {
@@ -191,6 +235,10 @@ func StripeWebhook(c *gin.Context) {
 		err = sessionAsyncPaymentSucceeded(ctx, event, callerIp)
 	case stripe.EventTypeCheckoutSessionAsyncPaymentFailed:
 		sessionAsyncPaymentFailed(ctx, event, callerIp)
+	case stripe.EventTypeChargeRefunded, stripe.EventTypeRefundCreated, stripe.EventTypeRefundUpdated:
+		err = recoverStripeSubscriptionOrder(ctx, event, model.SubscriptionOrderRecoveryRefund, callerIp)
+	case stripe.EventTypeChargeDisputeCreated:
+		err = recoverStripeSubscriptionOrder(ctx, event, model.SubscriptionOrderRecoveryChargeback, callerIp)
 	default:
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe webhook 忽略事件 event_type=%s client_ip=%s", string(event.Type), callerIp))
 	}
@@ -200,6 +248,147 @@ func StripeWebhook(c *gin.Context) {
 		return
 	}
 	c.Status(http.StatusOK)
+}
+
+func stripeEventBoolValue(event stripe.Event, path ...string) (bool, bool) {
+	var current any
+	if event.Data != nil {
+		current = event.Data.Object
+	}
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return false, false
+		}
+		current, ok = object[key]
+		if !ok {
+			return false, false
+		}
+	}
+	value, ok := current.(bool)
+	return value, ok
+}
+
+func stripeEventStringValue(event stripe.Event, path ...string) string {
+	var current any
+	if event.Data != nil {
+		current = event.Data.Object
+	}
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current, ok = object[key]
+		if !ok {
+			return ""
+		}
+	}
+	switch value := current.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case map[string]any:
+		if id, ok := value["id"].(string); ok {
+			return strings.TrimSpace(id)
+		}
+	}
+	return ""
+}
+
+func stripeRefundEventIsTerminal(event stripe.Event) bool {
+	if event.Type == stripe.EventTypeRefundCreated || event.Type == stripe.EventTypeRefundUpdated {
+		return strings.EqualFold(stripeEventStringValue(event, "status"), "succeeded")
+	}
+	if event.Type == stripe.EventTypeChargeRefunded {
+		refunded, ok := stripeEventBoolValue(event, "refunded")
+		return ok && refunded
+	}
+	return true
+}
+
+func recoverStripeSubscriptionOrder(ctx context.Context, event stripe.Event, recoveryType string, callerIp string) error {
+	if recoveryType == model.SubscriptionOrderRecoveryRefund && !stripeRefundEventIsTerminal(event) {
+		logger.LogInfo(ctx, fmt.Sprintf("Stripe 退款尚未成功，忽略回收 event_type=%s event_id=%s", event.Type, event.ID))
+		return nil
+	}
+	tradeNo := stripeEventStringValue(event, "metadata", stripeSubscriptionReferenceMetadataKey)
+	identity := model.SubscriptionOrderProviderIdentity{
+		TransactionID:  stripeEventStringValue(event, "payment_intent"),
+		InvoiceID:      stripeEventStringValue(event, "invoice"),
+		SubscriptionID: stripeEventStringValue(event, "subscription"),
+	}
+	chargeID := stripeEventStringValue(event, "charge")
+	if event.Type == stripe.EventTypeChargeRefunded {
+		chargeID = stripeEventStringValue(event, "id")
+	}
+	if identity.TransactionID == "" {
+		identity.TransactionID = stripeEventStringValue(event, "charge", "payment_intent")
+	}
+	if identity.InvoiceID == "" {
+		identity.InvoiceID = stripeEventStringValue(event, "charge", "invoice")
+	}
+	if identity.SubscriptionID == "" {
+		identity.SubscriptionID = stripeEventStringValue(event, "charge", "invoice", "subscription")
+	}
+	if tradeNo == "" {
+		order, lookupErr := model.FindSubscriptionOrderByProviderIdentity(model.PaymentProviderStripe, identity)
+		if lookupErr == nil {
+			tradeNo = order.TradeNo
+		} else if !errors.Is(lookupErr, model.ErrSubscriptionOrderNotFound) {
+			return lookupErr
+		}
+	}
+	if tradeNo == "" && chargeID != "" {
+		loaded, loadErr := loadStripeFinancialChargeIdentity(chargeID)
+		if loadErr != nil {
+			return loadErr
+		}
+		tradeNo = strings.TrimSpace(loaded.TradeNo)
+		if tradeNo == "" {
+			order, lookupErr := model.FindSubscriptionOrderByProviderIdentity(model.PaymentProviderStripe, loaded.Identity)
+			if lookupErr == nil {
+				tradeNo = order.TradeNo
+			} else if !errors.Is(lookupErr, model.ErrSubscriptionOrderNotFound) {
+				return lookupErr
+			}
+		}
+		if tradeNo != "" {
+			if identity.TransactionID == "" {
+				identity.TransactionID = loaded.Identity.TransactionID
+			}
+			if identity.InvoiceID == "" {
+				identity.InvoiceID = loaded.Identity.InvoiceID
+			}
+			if identity.SubscriptionID == "" {
+				identity.SubscriptionID = loaded.Identity.SubscriptionID
+			}
+		}
+	}
+	if tradeNo == "" {
+		logger.LogInfo(ctx, fmt.Sprintf("Stripe 财务终态不属于本地订阅订单 event_type=%s client_ip=%s", event.Type, callerIp))
+		return nil
+	}
+	payload := common.GetJsonString(map[string]any{
+		"event_id": event.ID, "event_type": event.Type,
+		"provider_transaction_id":  identity.TransactionID,
+		"provider_invoice_id":      identity.InvoiceID,
+		"provider_subscription_id": identity.SubscriptionID,
+	})
+	if _, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
+		TradeNo: tradeNo, ExpectedPaymentProvider: model.PaymentProviderStripe,
+		RecoveryType: recoveryType, ProviderPayload: payload,
+		Reason:             "Stripe provider " + recoveryType,
+		CreditRecoveryOnly: true,
+	}); err != nil {
+		if errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable) {
+			logger.LogInfo(ctx, fmt.Sprintf("Stripe 财务终态无需 Credit 回收 trade_no=%s event_type=%s", tradeNo, event.Type))
+			return nil
+		}
+		logger.LogError(ctx, fmt.Sprintf("Stripe 订阅订单财务回收失败 trade_no=%s event_type=%s error=%q", tradeNo, event.Type, err.Error()))
+		return err
+	}
+	logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单财务回收成功 trade_no=%s event_type=%s", tradeNo, event.Type))
+	return nil
 }
 
 func sessionCompleted(ctx context.Context, event stripe.Event, callerIp string) error {
@@ -284,11 +473,15 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 	LockOrder(referenceId)
 	defer UnlockOrder(referenceId)
 	payload := map[string]any{
-		"customer":            customerId,
-		"amount_total":        event.GetObjectValue("amount_total"),
-		"currency":            strings.ToUpper(event.GetObjectValue("currency")),
-		"event_type":          string(event.Type),
-		"provider_product_id": event.GetObjectValue("metadata", stripeSubscriptionProductMetadataKey),
+		"customer":                 customerId,
+		"amount_total":             event.GetObjectValue("amount_total"),
+		"currency":                 strings.ToUpper(event.GetObjectValue("currency")),
+		"event_type":               string(event.Type),
+		"provider_product_id":      event.GetObjectValue("metadata", stripeSubscriptionProductMetadataKey),
+		"provider_transaction_id":  event.GetObjectValue("payment_intent"),
+		"provider_order_id":        event.GetObjectValue("id"),
+		"provider_invoice_id":      event.GetObjectValue("invoice"),
+		"provider_subscription_id": event.GetObjectValue("subscription"),
 	}
 	if err := completeSubscriptionOrderAndEvaluateInvitation(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单处理成功 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))

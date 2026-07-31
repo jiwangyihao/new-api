@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -13,15 +14,17 @@ import (
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupSubscriptionAdminPlanFieldsTest(t *testing.T) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionPlanCreditChangeAudit{}, &model.Log{}))
 }
 
 func performAdminSubscriptionPlanUpdate(t *testing.T, id int, body string) *httptest.ResponseRecorder {
@@ -31,6 +34,8 @@ func performAdminSubscriptionPlanUpdate(t *testing.T, id int, body string) *http
 	ctx.Params = gin.Params{{Key: "id", Value: strconv.Itoa(id)}}
 	ctx.Request = httptest.NewRequest(http.MethodPut, "/api/subscription/admin/plans", bytes.NewBufferString(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", 9910)
+	ctx.Set("username", "credit-risk-admin")
 	AdminUpdateSubscriptionPlan(ctx)
 	return recorder
 }
@@ -290,6 +295,153 @@ func TestAdminTimedPlanCreditEligibilitySwitchesRemainIndependent(t *testing.T) 
 	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
 	assert.True(t, plan.UnlimitedPurchaseEnabled)
 	assert.False(t, plan.TimedConversionEnabled)
+}
+
+func TestAdminPlanMonthlyCreditChangeRequiresActiveEntitlementRiskConfirmation(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	code := "credit_risk_active"
+	plan := model.SubscriptionPlan{
+		Id: 8910, Title: "Risk plan", EntitlementType: model.SubscriptionEntitlementTimed,
+		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000,
+		Enabled: true, BusinessCode: &code,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 8911, UserId: 8912, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementTimed,
+		Status: model.SubscriptionStatusActive, EndTime: common.GetTimestamp() + 86400,
+	}).Error)
+	body := `{"plan":{"title":"Risk plan","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_active"}}`
+
+	rejected := performAdminSubscriptionPlanUpdate(t, plan.Id, body)
+	assert.Contains(t, rejected.Body.String(), "需要确认续期归并风险并填写原因")
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(1000), plan.MonthlyTokenLimit)
+
+	confirmed := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"risk_confirmed":true,"risk_reason":"已核对逐订单退款差值","plan":{"title":"Risk plan","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_active"}}`)
+	require.Equal(t, http.StatusOK, confirmed.Code, confirmed.Body.String())
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(2000), plan.MonthlyTokenLimit)
+	var audit model.SubscriptionPlanCreditChangeAudit
+	require.NoError(t, model.DB.Where("plan_id = ?", plan.Id).First(&audit).Error)
+	assert.Equal(t, int64(1000), audit.OldMonthlyCredit)
+	assert.Equal(t, int64(2000), audit.NewMonthlyCredit)
+	assert.Equal(t, int64(1), audit.ExistingTimedEntitlementCount)
+	assert.True(t, audit.RiskConfirmed)
+	assert.Equal(t, "已核对逐订单退款差值", audit.RiskReason)
+}
+
+func TestAdminPlanMonthlyCreditChangeRequiresGraceEntitlementRiskConfirmation(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	code := "credit_risk_grace"
+	plan := model.SubscriptionPlan{
+		Id: 8913, Title: "Grace risk plan", EntitlementType: model.SubscriptionEntitlementTimed,
+		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000,
+		Enabled: true, BusinessCode: &code,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 8914, UserId: 8915, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementTimed,
+		Status: model.SubscriptionStatusExpired, EndTime: common.GetTimestamp() - 1,
+	}).Error)
+	body := `{"plan":{"title":"Grace risk plan","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_grace"}}`
+
+	rejected := performAdminSubscriptionPlanUpdate(t, plan.Id, body)
+	assert.Contains(t, rejected.Body.String(), "需要确认续期归并风险并填写原因")
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(1000), plan.MonthlyTokenLimit)
+
+	confirmed := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"risk_confirmed":true,"risk_reason":"已核对宽限期退款差值","plan":{"title":"Grace risk plan","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_grace"}}`)
+	require.Equal(t, http.StatusOK, confirmed.Code, confirmed.Body.String())
+	var audit model.SubscriptionPlanCreditChangeAudit
+	require.NoError(t, model.DB.Where("plan_id = ?", plan.Id).First(&audit).Error)
+	assert.Equal(t, int64(1), audit.ExistingTimedEntitlementCount)
+}
+
+func TestAdminPlanMonthlyCreditChangeIgnoresEntitlementsOutsideGrace(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	code := "credit_risk_outside_grace"
+	plan := model.SubscriptionPlan{
+		Id: 8922, Title: "Outside grace risk plan", EntitlementType: model.SubscriptionEntitlementTimed,
+		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000,
+		Enabled: true, BusinessCode: &code,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 8923, UserId: 8924, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementTimed,
+		Status: model.SubscriptionStatusExpired, EndTime: model.GetDBTimestamp() - model.TimedSubscriptionConversionGraceSeconds - 60,
+	}).Error)
+
+	updated := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Outside grace risk plan","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_outside_grace"}}`)
+	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(2000), plan.MonthlyTokenLimit)
+	var auditCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlanCreditChangeAudit{}).Count(&auditCount).Error)
+	assert.Zero(t, auditCount)
+}
+
+func TestAdminPlanMonthlyCreditRiskAuditSupportsSeparateLogDatabase(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	primaryDB := model.DB
+	oldLogDB := model.LOG_DB
+	separateLogDB, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"_logs?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	require.NoError(t, separateLogDB.AutoMigrate(&model.Log{}))
+	model.LOG_DB = separateLogDB
+	t.Cleanup(func() {
+		model.LOG_DB = oldLogDB
+		if sqlDB, dbErr := separateLogDB.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	code := "credit_risk_split_log"
+	plan := model.SubscriptionPlan{
+		Id: 8916, Title: "Split log risk", EntitlementType: model.SubscriptionEntitlementTimed,
+		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000,
+		Enabled: true, BusinessCode: &code,
+	}
+	require.NoError(t, primaryDB.Create(&plan).Error)
+	require.NoError(t, primaryDB.Create(&model.UserSubscription{
+		Id: 8917, UserId: 8918, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementTimed,
+		Status: model.SubscriptionStatusActive, EndTime: common.GetTimestamp() + 86400,
+	}).Error)
+
+	updated := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"risk_confirmed":true,"risk_reason":"独立日志库已核对","plan":{"title":"Split log risk","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_split_log"}}`)
+	require.Equal(t, http.StatusOK, updated.Code, updated.Body.String())
+	require.NoError(t, primaryDB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(2000), plan.MonthlyTokenLimit)
+	var audit model.SubscriptionPlanCreditChangeAudit
+	require.NoError(t, primaryDB.Where("plan_id = ?", plan.Id).First(&audit).Error)
+	assert.Equal(t, "独立日志库已核对", audit.RiskReason)
+}
+
+func TestAdminPlanMonthlyCreditRollsBackWhenPrimaryAuditInsertFails(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	code := "credit_risk_audit_failure"
+	plan := model.SubscriptionPlan{
+		Id: 8919, Title: "Audit failure risk", EntitlementType: model.SubscriptionEntitlementTimed,
+		Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000,
+		Enabled: true, BusinessCode: &code,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 8920, UserId: 8921, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementTimed,
+		Status: model.SubscriptionStatusActive, EndTime: common.GetTimestamp() + 86400,
+	}).Error)
+	require.NoError(t, model.DB.Exec(`CREATE TRIGGER reject_plan_credit_audit_insert BEFORE INSERT ON subscription_plan_credit_change_audits BEGIN SELECT RAISE(FAIL, 'injected audit failure'); END`).Error)
+
+	failed := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"risk_confirmed":true,"risk_reason":"应整体回滚","plan":{"title":"Audit failure risk","price_amount":0,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":2000,"enabled":true,"business_code":"credit_risk_audit_failure"}}`)
+	assert.Contains(t, failed.Body.String(), "injected audit failure")
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, int64(1000), plan.MonthlyTokenLimit)
+	var auditCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlanCreditChangeAudit{}).Count(&auditCount).Error)
+	assert.Zero(t, auditCount)
 }
 
 func TestAdminPlanListExcludesDedicatedCreditBalancePlan(t *testing.T) {

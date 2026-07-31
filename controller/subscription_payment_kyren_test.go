@@ -74,6 +74,7 @@ func setupKyrenPaymentControllerTestDB(t *testing.T) {
 		&model.SubscriptionPlan{},
 		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
+		&model.SubscriptionConversion{},
 		&model.TopUp{},
 		&model.Log{},
 		&model.Option{},

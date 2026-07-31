@@ -44,6 +44,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import {
@@ -55,6 +56,7 @@ import {
 } from '../../api'
 import { formatPlanPrice, formatTimestamp } from '../../lib'
 import type { PlanRecord, UserSubscriptionRecord } from '../../types'
+import { AdminCreditBalancePanel } from '../admin-credit-balance-panel'
 
 interface Props {
   open: boolean
@@ -207,198 +209,227 @@ export function UserSubscriptionsDialog(props: Props) {
             </SheetDescription>
           </SheetHeader>
 
-          <div className='mt-4 flex flex-col gap-4'>
-            <div className='flex gap-2'>
-              <Select
-                items={[
-                  ...plans.map((p) => ({
-                    value: String(p.plan.id),
-                    label: (
-                      <>
-                        {p.plan.title}(
-                        {formatPlanPrice(p.plan.price_amount, p.plan.currency)})
-                      </>
-                    ),
-                  })),
-                ]}
-                value={selectedPlanId}
-                onValueChange={(v) => v !== null && setSelectedPlanId(v)}
-              >
-                <SelectTrigger className='flex-1'>
-                  <SelectValue placeholder={t('Select subscription plan')} />
-                </SelectTrigger>
-                <SelectContent alignItemWithTrigger={false}>
-                  <SelectGroup>
-                    {plans.map((p) => (
-                      <SelectItem key={p.plan.id} value={String(p.plan.id)}>
-                        {p.plan.title} (
-                        {formatPlanPrice(p.plan.price_amount, p.plan.currency)})
-                      </SelectItem>
-                    ))}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-              <Button
-                onClick={handleCreate}
-                disabled={creating || !selectedPlanId}
-              >
-                <Plus data-icon='inline-start' />
-                {t('Add subscription')}
-              </Button>
-            </div>
+          <Tabs defaultValue='subscriptions' className='mt-4'>
+            <TabsList className='w-full'>
+              <TabsTrigger value='subscriptions'>
+                {t('Subscriptions')}
+              </TabsTrigger>
+              <TabsTrigger value='credit-finance'>
+                {t('Credit finance')}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value='subscriptions' className='flex flex-col gap-4'>
+              <div className='flex gap-2'>
+                <Select
+                  items={[
+                    ...plans.map((p) => ({
+                      value: String(p.plan.id),
+                      label: (
+                        <>
+                          {p.plan.title}(
+                          {formatPlanPrice(
+                            p.plan.price_amount,
+                            p.plan.currency
+                          )}
+                          )
+                        </>
+                      ),
+                    })),
+                  ]}
+                  value={selectedPlanId}
+                  onValueChange={(v) => v !== null && setSelectedPlanId(v)}
+                >
+                  <SelectTrigger className='flex-1'>
+                    <SelectValue placeholder={t('Select subscription plan')} />
+                  </SelectTrigger>
+                  <SelectContent alignItemWithTrigger={false}>
+                    <SelectGroup>
+                      {plans.map((p) => (
+                        <SelectItem key={p.plan.id} value={String(p.plan.id)}>
+                          {p.plan.title} (
+                          {formatPlanPrice(
+                            p.plan.price_amount,
+                            p.plan.currency
+                          )}
+                          )
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <Button
+                  onClick={handleCreate}
+                  disabled={creating || !selectedPlanId}
+                >
+                  <Plus data-icon='inline-start' />
+                  {t('Add subscription')}
+                </Button>
+              </div>
 
-            <div className='rounded-md border'>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ID</TableHead>
-                    <TableHead>{t('Plan')}</TableHead>
-                    <TableHead>{t('Status')}</TableHead>
-                    <TableHead>{t('Validity')}</TableHead>
-                    <TableHead>{t('Total Credits')}</TableHead>
-                    <TableHead className='text-right'>{t('Actions')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {loading ? (
+              <div className='rounded-md border'>
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={6} className='py-8 text-center'>
-                        {t('Loading...')}
-                      </TableCell>
+                      <TableHead>ID</TableHead>
+                      <TableHead>{t('Plan')}</TableHead>
+                      <TableHead>{t('Status')}</TableHead>
+                      <TableHead>{t('Validity')}</TableHead>
+                      <TableHead>{t('Total Credits')}</TableHead>
+                      <TableHead className='text-right'>
+                        {t('Actions')}
+                      </TableHead>
                     </TableRow>
-                  ) : subs.length === 0 ? (
-                    <TableRow>
-                      <TableCell
-                        colSpan={6}
-                        className='text-muted-foreground py-8 text-center'
-                      >
-                        {t('No subscription records')}
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    subs.map((record) => {
-                      const sub = record.subscription
-                      const now = Date.now() / 1000
-                      const isExpired =
-                        (sub.end_time || 0) > 0 && sub.end_time < now
-                      const isActive = sub.status === 'active' && !isExpired
-                      const total = Number(sub.amount_total || 0)
-                      const used = Number(sub.amount_used || 0)
-                      const isConverted = sub.status === 'converted'
+                  </TableHeader>
+                  <TableBody>
+                    {loading ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className='py-8 text-center'>
+                          {t('Loading...')}
+                        </TableCell>
+                      </TableRow>
+                    ) : subs.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={6}
+                          className='text-muted-foreground py-8 text-center'
+                        >
+                          {t('No subscription records')}
+                        </TableCell>
+                      </TableRow>
+                    ) : (
+                      subs.map((record) => {
+                        const sub = record.subscription
+                        const now = Date.now() / 1000
+                        const isExpired =
+                          (sub.end_time || 0) > 0 && sub.end_time < now
+                        const isActive = sub.status === 'active' && !isExpired
+                        const total = Number(sub.amount_total || 0)
+                        const used = Number(sub.amount_used || 0)
+                        const isConverted = sub.status === 'converted'
 
-                      return (
-                        <TableRow key={sub.id}>
-                          <TableCell>#{sub.id}</TableCell>
-                          <TableCell>
-                            <div>
-                              <div className='font-medium'>
-                                {planTitleMap.get(sub.plan_id) ||
-                                  `#${sub.plan_id}`}
-                              </div>
-                              <div className='text-muted-foreground text-xs'>
-                                {t('Source')}: {sub.source || '-'}
-                              </div>
-                              {record.conversion_audit && (
-                                <div className='text-muted-foreground mt-1 flex flex-col gap-0.5 text-xs'>
-                                  <div>
-                                    {t('Conversion ID')}: #
-                                    {record.conversion_audit.conversion_id}
-                                  </div>
-                                  <div>
-                                    {t('Source subscription')}: #
-                                    {
-                                      record.conversion_audit
-                                        .source_subscription_id
-                                    }{' '}
-                                    → {t('Target Credit balance')}: #
-                                    {
-                                      record.conversion_audit
-                                        .target_subscription_id
-                                    }
-                                  </div>
-                                  <div>
-                                    {t('Status')}:{' '}
-                                    {
-                                      record.conversion_audit
-                                        .source_status_before
-                                    }{' '}
-                                    →{' '}
-                                    {
-                                      record.conversion_audit
-                                        .source_status_after
-                                    }
-                                  </div>
-                                  <div>
-                                    {t('Target Credit balance')}:{' '}
-                                    {record.conversion_audit.target_status ||
-                                      '-'}
-                                  </div>
-                                  <div>
-                                    {t('Converted at')}:{' '}
-                                    {formatTimestamp(
-                                      Number(
-                                        record.conversion_audit.converted_at
-                                      )
-                                    )}
-                                  </div>
+                        return (
+                          <TableRow key={sub.id}>
+                            <TableCell>#{sub.id}</TableCell>
+                            <TableCell>
+                              <div>
+                                <div className='font-medium'>
+                                  {planTitleMap.get(sub.plan_id) ||
+                                    `#${sub.plan_id}`}
                                 </div>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <SubscriptionStatusBadge sub={sub} t={t} />
-                          </TableCell>
-                          <TableCell>
-                            <div className='text-xs'>
-                              <div>
-                                {t('Start')}: {formatTimestamp(sub.start_time)}
+                                <div className='text-muted-foreground text-xs'>
+                                  {t('Source')}: {sub.source || '-'}
+                                </div>
+                                {record.conversion_audit && (
+                                  <div className='text-muted-foreground mt-1 flex flex-col gap-0.5 text-xs'>
+                                    <div>
+                                      {t('Conversion ID')}: #
+                                      {record.conversion_audit.conversion_id}
+                                    </div>
+                                    <div>
+                                      {t('Source subscription')}: #
+                                      {
+                                        record.conversion_audit
+                                          .source_subscription_id
+                                      }{' '}
+                                      → {t('Target Credit balance')}: #
+                                      {
+                                        record.conversion_audit
+                                          .target_subscription_id
+                                      }
+                                    </div>
+                                    <div>
+                                      {t('Status')}:{' '}
+                                      {
+                                        record.conversion_audit
+                                          .source_status_before
+                                      }{' '}
+                                      →{' '}
+                                      {
+                                        record.conversion_audit
+                                          .source_status_after
+                                      }
+                                    </div>
+                                    <div>
+                                      {t('Target Credit balance')}:{' '}
+                                      {record.conversion_audit.target_status ||
+                                        '-'}
+                                    </div>
+                                    <div>
+                                      {t('Converted at')}:{' '}
+                                      {formatTimestamp(
+                                        Number(
+                                          record.conversion_audit.converted_at
+                                        )
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
                               </div>
-                              <div>
-                                {t('End')}: {formatTimestamp(sub.end_time)}
+                            </TableCell>
+                            <TableCell>
+                              <SubscriptionStatusBadge sub={sub} t={t} />
+                            </TableCell>
+                            <TableCell>
+                              <div className='text-xs'>
+                                <div>
+                                  {t('Start')}:{' '}
+                                  {formatTimestamp(sub.start_time)}
+                                </div>
+                                <div>
+                                  {t('End')}: {formatTimestamp(sub.end_time)}
+                                </div>
                               </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {total > 0 ? `${used}/${total}` : t('Unlimited')}
-                          </TableCell>
-                          <TableCell className='text-right'>
-                            <div className='flex justify-end gap-1'>
-                              <Button
-                                size='sm'
-                                variant='outline'
-                                disabled={!isActive}
-                                onClick={() =>
-                                  setConfirmAction({
-                                    type: 'invalidate',
-                                    subId: sub.id,
-                                  })
-                                }
-                              >
-                                {t('Invalidate')}
-                              </Button>
-                              <Button
-                                size='sm'
-                                variant='destructive'
-                                disabled={isConverted}
-                                onClick={() =>
-                                  setConfirmAction({
-                                    type: 'delete',
-                                    subId: sub.id,
-                                  })
-                                }
-                              >
-                                {t('Delete')}
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </div>
+                            </TableCell>
+                            <TableCell>
+                              {total > 0 ? `${used}/${total}` : t('Unlimited')}
+                            </TableCell>
+                            <TableCell className='text-right'>
+                              <div className='flex justify-end gap-1'>
+                                <Button
+                                  size='sm'
+                                  variant='outline'
+                                  disabled={!isActive}
+                                  onClick={() =>
+                                    setConfirmAction({
+                                      type: 'invalidate',
+                                      subId: sub.id,
+                                    })
+                                  }
+                                >
+                                  {t('Invalidate')}
+                                </Button>
+                                <Button
+                                  size='sm'
+                                  variant='destructive'
+                                  disabled={isConverted}
+                                  onClick={() =>
+                                    setConfirmAction({
+                                      type: 'delete',
+                                      subId: sub.id,
+                                    })
+                                  }
+                                >
+                                  {t('Delete')}
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })
+                    )}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+            <TabsContent value='credit-finance'>
+              {props.user?.id ? (
+                <AdminCreditBalancePanel
+                  userId={props.user.id}
+                  onSuccess={props.onSuccess}
+                />
+              ) : null}
+            </TabsContent>
+          </Tabs>
         </SheetContent>
       </Sheet>
 

@@ -28,8 +28,9 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Form,
   FormControl,
@@ -58,6 +59,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { Switch } from '@/components/ui/switch'
+import { Textarea } from '@/components/ui/textarea'
 import {
   createPlan,
   getSubscriptionKyrenProduct,
@@ -94,6 +96,8 @@ export function SubscriptionsMutateDrawer({
     useState<SubscriptionKyrenProductStatus | null>(null)
   const [isKyrenLoading, setIsKyrenLoading] = useState(false)
   const [isKyrenSyncing, setIsKyrenSyncing] = useState(false)
+  const [riskConfirmed, setRiskConfirmed] = useState(false)
+  const [riskReason, setRiskReason] = useState('')
 
   const schema = getPlanFormSchema(t)
   const form = useForm<PlanFormValues>({
@@ -130,17 +134,37 @@ export function SubscriptionsMutateDrawer({
         form.reset(PLAN_FORM_DEFAULTS)
         setKyrenStatus(null)
       }
+      setRiskConfirmed(false)
+      setRiskReason('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, currentRow, form])
 
   const durationUnit = form.watch('duration_unit')
   const resetPeriod = form.watch('quota_reset_period')
+  const monthlyCredit = form.watch('monthly_token_limit')
+  const existingTimedEntitlementCount = Number(
+    currentRow?.existing_timed_entitlement_count || 0
+  )
+  const monthlyCreditChanged =
+    isEdit &&
+    Number(currentRow?.plan.monthly_token_limit || 0) !==
+      Number(monthlyCredit || 0)
+  const requiresRiskConfirmation =
+    monthlyCreditChanged && existingTimedEntitlementCount > 0
 
   const onSubmit = async (values: PlanFormValues) => {
     setIsSubmitting(true)
     try {
       const payload = formValuesToPlanPayload(values)
+      if (requiresRiskConfirmation) {
+        if (!riskConfirmed || !riskReason.trim()) {
+          toast.error(t('Confirm the renewal-merging risk and enter a reason.'))
+          return
+        }
+        payload.risk_confirmed = true
+        payload.risk_reason = riskReason.trim()
+      }
       if (isEdit && currentRow?.plan?.id) {
         const res = await updatePlan(currentRow.plan.id, payload)
         if (res.success) {
@@ -318,6 +342,57 @@ export function SubscriptionsMutateDrawer({
                     </FormItem>
                   )}
                 />
+
+                {requiresRiskConfirmation ? (
+                  <Alert variant='destructive'>
+                    <AlertTriangle />
+                    <AlertTitle>{t('Monthly Credit change risk')}</AlertTitle>
+                    <AlertDescription className='flex flex-col gap-3'>
+                      <p>
+                        {t(
+                          'This plan has {{count}} active or conversion-grace timed entitlements. Renewal merging may make the converted Credit basis differ from each order refund basis.',
+                          { count: existingTimedEntitlementCount }
+                        )}
+                      </p>
+                      <label
+                        className='flex items-start gap-2'
+                        htmlFor='plan-credit-risk-confirmed'
+                      >
+                        <Checkbox
+                          id='plan-credit-risk-confirmed'
+                          checked={riskConfirmed}
+                          onCheckedChange={(value) =>
+                            setRiskConfirmed(value === true)
+                          }
+                          aria-labelledby='plan-credit-risk-confirmed-label'
+                        />
+                        <span id='plan-credit-risk-confirmed-label'>
+                          {t('I accept the renewal-merging risk')}
+                        </span>
+                      </label>
+                      <div className='flex flex-col gap-1'>
+                        <label
+                          htmlFor='plan-credit-risk-reason'
+                          className='font-medium'
+                        >
+                          {t('Risk confirmation reason')}
+                        </label>
+                        <Textarea
+                          id='plan-credit-risk-reason'
+                          value={riskReason}
+                          onChange={(event) =>
+                            setRiskReason(event.target.value)
+                          }
+                          placeholder={t(
+                            'Explain why this monthly Credit change is accepted'
+                          )}
+                          required
+                          aria-required='true'
+                        />
+                      </div>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
               </div>
 
               <div className='grid grid-cols-1 gap-3 sm:grid-cols-2'>

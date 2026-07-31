@@ -1,0 +1,272 @@
+package router
+
+import (
+	"bytes"
+	"fmt"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
+	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func setupCreditAdjustmentRoute(t *testing.T) (*gin.Engine, string, int) {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionPublicPlansRouteTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.CreditBalanceLedger{}, &model.CreditBalanceAdjustment{}, &model.InvitationRewardEvent{}, &model.Log{}))
+	accessToken := "credit-adjustment-admin-token"
+	const adminID = 9961
+	const userID = 9962
+	require.NoError(t, db.Create(&model.User{Id: adminID, Username: "credit-adjustment-admin", Status: common.UserStatusEnabled, Role: common.RoleAdminUser, AccessToken: &accessToken, AffCode: "credit-adjustment-admin"}).Error)
+	require.NoError(t, db.Create(&model.User{Id: userID, Username: "credit-adjustment-user", Status: common.UserStatusEnabled, AffCode: "credit-adjustment-user"}).Error)
+	code := "credit-adjustment-balance"
+	require.NoError(t, db.Create(&model.SubscriptionPlan{Id: 9963, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, BusinessCode: &code}).Error)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("credit-adjustment-route-secret"))))
+	SetApiRouter(engine)
+	return engine, accessToken, userID
+}
+
+func performCreditAdjustmentRouteRequest(engine *gin.Engine, token string, userID int, body string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/adjustments", userID), bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func performSubscriptionOrderRecoveryRouteRequest(engine *gin.Engine, token string, userID int, tradeNo, body string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/subscription/admin/users/%d/orders/%s/recovery", userID, tradeNo), bytes.NewBufferString(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func performSubscriptionOrderRecoveryPreviewRouteRequest(engine *gin.Engine, token string, userID int, tradeNo string) *httptest.ResponseRecorder {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/subscription/admin/users/%d/orders/%s/recovery-preview", userID, tradeNo), nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
+func TestAdminCreditAdjustmentRouteCreatesDebtThenIncreaseOffsetsIt(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	decrease := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":300,"idempotency_key":"admin-decrease-empty","reason":"manual correction"}`)
+	require.Equal(t, http.StatusOK, decrease.Code, decrease.Body.String())
+	assert.Contains(t, decrease.Body.String(), `"settlement_debt":300`)
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	assert.Equal(t, int64(0), balance.TokenLimit)
+	assert.Equal(t, int64(300), balance.TokenUsed)
+
+	increase := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":500,"idempotency_key":"admin-increase-offset","reason":"approved correction"}`)
+	require.Equal(t, http.StatusOK, increase.Code, increase.Body.String())
+	assert.Contains(t, increase.Body.String(), `"debt_offset":300`)
+	assert.Contains(t, increase.Body.String(), `"available_credit":200`)
+	require.NoError(t, model.DB.First(&balance, balance.Id).Error)
+	assert.Equal(t, int64(500), balance.TokenLimit)
+	assert.Equal(t, int64(300), balance.TokenUsed)
+}
+
+func TestAdminCreditAdjustmentRouteValidatesReasonBoundsAndIdempotency(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	missingReason := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":1,"idempotency_key":"missing-reason","reason":""}`)
+	assert.Contains(t, missingReason.Body.String(), `"success":false`)
+	zero := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":0,"idempotency_key":"zero","reason":"reason"}`)
+	assert.Contains(t, zero.Body.String(), `"success":false`)
+	negative := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":-1,"idempotency_key":"negative","reason":"reason"}`)
+	assert.Contains(t, negative.Body.String(), `"success":false`)
+	maxAllowed := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"max-allowed","reason":"boundary"}`, model.MaxCreditBalanceAdjustmentAmount))
+	assert.Contains(t, maxAllowed.Body.String(), `"success":true`)
+	overflow := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"too-large","reason":"overflow"}`, model.MaxCreditBalanceAdjustmentAmount+1))
+	assert.Contains(t, overflow.Body.String(), `"success":false`)
+	maxInt := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"max-int","reason":"overflow"}`, int64(math.MaxInt64)))
+	assert.Contains(t, maxInt.Body.String(), `"success":false`)
+
+	first := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":25,"idempotency_key":"replay-key","reason":"same"}`)
+	require.Contains(t, first.Body.String(), `"success":true`)
+	replay := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":25,"idempotency_key":"replay-key","reason":"same"}`)
+	require.Contains(t, replay.Body.String(), `"replayed":true`)
+	conflict := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":26,"idempotency_key":"replay-key","reason":"same"}`)
+	assert.Contains(t, conflict.Body.String(), `"success":false`)
+	var adjustmentCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Where("idempotency_key = ?", "replay-key").Count(&adjustmentCount).Error)
+	assert.Equal(t, int64(1), adjustmentCount)
+}
+
+func TestCreditBalanceAdjustmentIdempotencyKeyRejectsDifferentOperator(t *testing.T) {
+	_, _, userID := setupCreditAdjustmentRoute(t)
+	request := model.CreditBalanceAdjustmentRequest{
+		UserId: userID, Operation: model.CreditBalanceAdjustmentIncrease, Amount: 25,
+		IdempotencyKey: "operator-bound-adjustment", OperatorUserId: 9961, Reason: "verified correction",
+	}
+	first, err := model.AdjustCreditBalance(request)
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+
+	request.OperatorUserId = 9971
+	second, err := model.AdjustCreditBalance(request)
+	require.Nil(t, second)
+	require.ErrorContains(t, err, "idempotency key parameter mismatch")
+
+	var adjustmentCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).
+		Where("idempotency_key = ?", request.IdempotencyKey).
+		Count(&adjustmentCount).Error)
+	assert.Equal(t, int64(1), adjustmentCount)
+	var ledgerCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).
+		Where("source_type = ?", model.CreditBalanceLedgerSourceAdminAdjustment).
+		Count(&ledgerCount).Error)
+	assert.Equal(t, int64(1), ledgerCount)
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	assert.Equal(t, int64(25), balance.TokenLimit)
+	assert.Zero(t, balance.TokenUsed)
+}
+
+func TestCreditAdjustmentRouteRequiresAdminAuthentication(t *testing.T) {
+	engine, _, userID := setupCreditAdjustmentRoute(t)
+	unauthorized := performCreditAdjustmentRouteRequest(engine, "invalid", userID, `{"operation":"increase","amount":1,"idempotency_key":"unauthorized","reason":"reason"}`)
+	assert.Contains(t, unauthorized.Body.String(), `"success":false`)
+	var adjustments int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Count(&adjustments).Error)
+	assert.Zero(t, adjustments)
+}
+
+func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	optionCode := "epay-admin-recovery-option"
+	optionPlan := model.SubscriptionPlan{
+		Id: 9964, Title: "Epay recovery option", EntitlementType: model.SubscriptionEntitlementTimed,
+		MonthlyTokenLimit: 1000, Enabled: true, BusinessCode: &optionCode,
+	}
+	require.NoError(t, model.DB.Create(&optionPlan).Error)
+	var creditPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&creditPlan, 9963).Error)
+	snapshot := model.NewSubscriptionEntitlementSnapshot(&optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlan.Id)
+	snapshot.SetTargetCreditBalancePlanSnapshot(&creditPlan)
+	snapshot.SetPaymentSnapshot(model.PaymentProviderEpay, "", "alipay", 4000, "CNY")
+	snapshotJSON, err := model.MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := model.SubscriptionOrder{
+		UserId: userID, PlanId: optionPlan.Id, AmountCents: 4000, Currency: "CNY",
+		CreditGrantAmount: 1000, CreditTargetPlanID: creditPlan.Id, TradeNo: "epay-admin-recovery-order",
+		PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusSuccess,
+		CompleteTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, model.DB.Create(&order).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		UserId: userID, PlanId: creditPlan.Id, EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Status: model.SubscriptionStatusActive, TokenLimit: 1000, TokenUsed: 250,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+	}).Error)
+
+	preview := performSubscriptionOrderRecoveryPreviewRouteRequest(engine, token, userID, order.TradeNo)
+	require.Equal(t, http.StatusOK, preview.Code, preview.Body.String())
+	assert.Contains(t, preview.Body.String(), `"user_id":9962`)
+	assert.Contains(t, preview.Body.String(), `"amount_cents":4000`)
+	assert.Contains(t, preview.Body.String(), `"gross_credit":1000`)
+	wrongUser := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID+1, order.TradeNo, `{"recovery_type":"refund","reason":"wrong owner"}`)
+	assert.Contains(t, wrongUser.Body.String(), `"success":false`)
+	first := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"verified Epay refund"}`)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	assert.Contains(t, first.Body.String(), `"replayed":false`)
+	assert.Contains(t, first.Body.String(), `"gross_credit":1000`)
+	replay := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"verified Epay refund"}`)
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
+	assert.Contains(t, replay.Body.String(), `"replayed":true`)
+
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	assert.Equal(t, int64(1250), balance.TokenUsed)
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
+	assert.Equal(t, "verified Epay refund", order.RecoveryReason)
+	var recoveryLedgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryLedgers).Error)
+	assert.Equal(t, int64(1), recoveryLedgers)
+}
+
+func TestAdminSubscriptionOrderRecoveryRouteValidatesAndRequiresAdmin(t *testing.T) {
+	engine, token, _ := setupCreditAdjustmentRoute(t)
+	unauthorized := performSubscriptionOrderRecoveryRouteRequest(engine, "invalid", 9962, "missing", `{"recovery_type":"refund","reason":"verified"}`)
+	assert.Contains(t, unauthorized.Body.String(), `"success":false`)
+	missingReason := performSubscriptionOrderRecoveryRouteRequest(engine, token, 9962, "missing", `{"recovery_type":"refund","reason":""}`)
+	assert.Contains(t, missingReason.Body.String(), `"success":false`)
+	invalidType := performSubscriptionOrderRecoveryRouteRequest(engine, token, 9962, "missing", `{"recovery_type":"cancel","reason":"verified"}`)
+	assert.Contains(t, invalidType.Body.String(), `"success":false`)
+	var recoveryLedgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_type = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery).Count(&recoveryLedgers).Error)
+	assert.Zero(t, recoveryLedgers)
+}
+
+type creditBalanceLedgerRouteResponse struct {
+	Success bool                                   `json:"success"`
+	Message string                                 `json:"message"`
+	Data    []model.CreditBalanceLedgerHistoryItem `json:"data"`
+}
+
+func performCreditBalanceLedgerRouteRequest(engine *gin.Engine, token string, userID int, path string) creditBalanceLedgerRouteResponse {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", fmt.Sprintf("%d", userID))
+	engine.ServeHTTP(recorder, request)
+	var response creditBalanceLedgerRouteResponse
+	if err := common.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		panic(fmt.Sprintf("decode ledger response %q: %v", recorder.Body.String(), err))
+	}
+	return response
+}
+
+func TestCreditBalanceLedgerRoutesApplyAuthenticatedSourceTypeAndTimeFilters(t *testing.T) {
+	engine, adminToken, userID := setupCreditAdjustmentRoute(t)
+	userToken := "credit-ledger-user-token"
+	require.NoError(t, model.DB.Model(&model.User{}).Where("id = ?", userID).Update("access_token", userToken).Error)
+	balance := model.UserSubscription{
+		UserId: userID, PlanId: 9963, EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Status: model.SubscriptionStatusActive,
+	}
+	require.NoError(t, model.DB.Create(&balance).Error)
+	entries := []model.CreditBalanceLedger{
+		{UserId: userID, UserSubscriptionId: balance.Id, Type: model.CreditBalanceLedgerTypeAdminIncrease, IdempotencyKey: "ledger-route-match", SourceType: model.CreditBalanceLedgerSourceAdminAdjustment, SourceId: 9971, GrossCredit: 100, BalanceAfter: 100, AvailableCreditAfter: 100, CreatedAt: 200},
+		{UserId: userID, UserSubscriptionId: balance.Id, Type: model.CreditBalanceLedgerTypeRedemption, IdempotencyKey: "ledger-route-wrong-type", SourceType: model.CreditBalanceLedgerSourceRedemption, SourceId: 9972, GrossCredit: 50, BalanceBefore: 100, BalanceAfter: 150, AvailableCreditAfter: 150, CreatedAt: 200},
+		{UserId: userID, UserSubscriptionId: balance.Id, Type: model.CreditBalanceLedgerTypeAdminIncrease, IdempotencyKey: "ledger-route-outside-time", SourceType: model.CreditBalanceLedgerSourceAdminAdjustment, SourceId: 9973, GrossCredit: 25, BalanceBefore: 150, BalanceAfter: 175, AvailableCreditAfter: 175, CreatedAt: 100},
+	}
+	require.NoError(t, model.DB.Create(&entries).Error)
+	query := "?source_type=admin_adjustment&type=admin_increase&start_time=150&end_time=250"
+
+	adminResponse := performCreditBalanceLedgerRouteRequest(
+		engine, adminToken, 9961,
+		fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/ledger%s", userID, query),
+	)
+	require.True(t, adminResponse.Success, adminResponse.Message)
+	require.Len(t, adminResponse.Data, 1)
+	assert.Equal(t, "ledger-route-match", adminResponse.Data[0].IdempotencyKey)
+
+	userResponse := performCreditBalanceLedgerRouteRequest(
+		engine, userToken, userID,
+		"/api/subscription/self/credit-balance/ledger"+query,
+	)
+	require.True(t, userResponse.Success, userResponse.Message)
+	require.Len(t, userResponse.Data, 1)
+	assert.Equal(t, "ledger-route-match", userResponse.Data[0].IdempotencyKey)
+}

@@ -113,11 +113,16 @@ export interface InvitationCommissionRecord {
   source_currency: string
   commission_rate_bps: number
   commission_cents: number
-  status: 'available' | 'skipped' | 'cancelled'
+  status: 'available' | 'skipped' | 'cancelled' | 'unrecoverable'
   reason: string
   created_at: number
   available_at: number
   cancelled_at: number
+  reversal_status?: 'recovered' | 'unrecoverable'
+  recovered_cents?: number
+  unrecovered_cents?: number
+  reversal_reason?: string
+  reversed_at?: number
 }
 
 export interface InvitationCommissionTransferResult {

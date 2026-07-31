@@ -23,9 +23,15 @@ const (
 	InvitationCommissionSourceSubscriptionRedemption = InvitationRewardEventSourceSubscriptionRedemption
 	InvitationCommissionSourceLegacySubscription     = InvitationRewardEventSourceLegacySubscription
 
-	InvitationCommissionStatusAvailable = "available"
-	InvitationCommissionStatusSkipped   = "skipped"
-	InvitationCommissionStatusCancelled = "cancelled"
+	InvitationCommissionStatusAvailable     = "available"
+	InvitationCommissionStatusSkipped       = "skipped"
+	InvitationCommissionStatusCancelled     = "cancelled"
+	InvitationCommissionStatusUnrecoverable = "unrecoverable"
+)
+
+const (
+	InvitationCommissionReversalStatusRecovered     = "recovered"
+	InvitationCommissionReversalStatusUnrecoverable = "unrecoverable"
 )
 
 const (
@@ -40,6 +46,8 @@ const (
 	InvitationCommissionLedgerWithdrawalCreated   = "withdrawal_created"
 	InvitationCommissionLedgerWithdrawalRejected  = "withdrawal_rejected"
 	InvitationCommissionLedgerWithdrawalCompleted = "withdrawal_completed"
+	InvitationCommissionLedgerRefundReversal      = "refund_reversal"
+	InvitationCommissionLedgerRefundUnrecoverable = "refund_unrecoverable"
 )
 
 const (
@@ -97,6 +105,11 @@ type InvitationCommissionRecord struct {
 	CreatedAt         int64  `json:"created_at" gorm:"type:bigint;not null;default:0"`
 	AvailableAt       int64  `json:"available_at" gorm:"type:bigint;not null;default:0"`
 	CancelledAt       int64  `json:"cancelled_at" gorm:"type:bigint;not null;default:0"`
+	ReversalStatus    string `json:"reversal_status,omitempty" gorm:"type:varchar(32);not null;default:'';index"`
+	RecoveredCents    int64  `json:"recovered_cents,omitempty" gorm:"type:bigint;not null;default:0"`
+	UnrecoveredCents  int64  `json:"unrecovered_cents,omitempty" gorm:"type:bigint;not null;default:0"`
+	ReversalReason    string `json:"reversal_reason,omitempty" gorm:"type:varchar(255);not null;default:''"`
+	ReversedAt        int64  `json:"reversed_at,omitempty" gorm:"type:bigint;not null;default:0"`
 }
 
 type InvitationCommissionLedger struct {

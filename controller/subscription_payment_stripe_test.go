@@ -774,3 +774,71 @@ func TestStripeCreditWebhookSuccessThenFailedPreservesSingleFulfillment(t *testi
 	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", 8801, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
 	assert.Equal(t, int64(1000), balance.TokenLimit)
 }
+
+func TestStripeCreditRefundBeforeCompletionRetriesThenRecoversOnce(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedExternalCreditPurchasePlans(t, 9648, 9649)
+	setting.StripeApiSecret = "sk_test_123"
+	setting.StripeWebhookSecret = "whsec_test"
+	SetStripeSubscriptionPriceSnapshotForTest(t, func(string) (int64, string, error) { return 4000, "CNY", nil })
+	SetStripeSubscriptionCheckoutForTest(t, func(string, string, string, string) (StripeSubscriptionCheckoutResult, error) {
+		return StripeSubscriptionCheckoutResult{URL: "https://stripe.test/refund-ordering"}, nil
+	})
+	create := performSubscriptionJSON(SubscriptionRequestStripePay, `{"plan_id":9648,"purchase_mode":"credit_balance"}`)
+	require.Contains(t, create.Body.String(), `"message":"success"`)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("plan_id = ?", 9648).First(&order).Error)
+	SetStripeFinancialChargeIdentityForTest(t, func(chargeID string) (stripeFinancialChargeIdentity, error) {
+		require.Equal(t, "ch_refund_early", chargeID)
+		return stripeFinancialChargeIdentity{
+			TradeNo: order.TradeNo,
+			Identity: model.SubscriptionOrderProviderIdentity{
+				TransactionID:  "pi_refund_early",
+				InvoiceID:      "in_refund_early",
+				SubscriptionID: "sub_refund_early",
+			},
+		}, nil
+	})
+	refundPayload := stripeWebhookPayloadForSubscriptionTest(t, "evt_refund_early", stripe.EventTypeRefundCreated, map[string]any{
+		"id": "re_refund_early", "charge": "ch_refund_early", "payment_intent": "pi_refund_early", "status": "succeeded", "amount": 4000, "currency": "cny",
+	})
+	for _, status := range []string{"pending", "failed", "canceled"} {
+		nonTerminalPayload := stripeWebhookPayloadForSubscriptionTest(t, "evt_refund_early_"+status, stripe.EventTypeRefundCreated, map[string]any{
+			"id": "re_refund_early_" + status, "charge": "ch_refund_early", "payment_intent": "pi_refund_early", "status": status,
+		})
+		nonTerminal := signedStripeWebhookRecorderForSubscriptionTest(t, nonTerminalPayload)
+		require.Equal(t, http.StatusOK, nonTerminal.Code)
+		require.NoError(t, model.DB.First(&order, order.Id).Error)
+		assert.Equal(t, common.TopUpStatusPending, order.Status)
+	}
+
+	early := signedStripeWebhookRecorderForSubscriptionTest(t, refundPayload)
+	require.Equal(t, http.StatusInternalServerError, early.Code)
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusPending, order.Status)
+
+	completionPayload := stripeWebhookPayloadForSubscriptionTest(t, "evt_complete_after_refund", stripe.EventTypeCheckoutSessionCompleted, map[string]any{
+		"customer": "cus_refund_early", "client_reference_id": order.TradeNo,
+		"status": "complete", "payment_status": "paid", "amount_total": 4000, "currency": "cny",
+		"payment_intent": "pi_refund_early", "invoice": "in_refund_early", "subscription": "sub_refund_early",
+		"metadata": map[string]any{stripeSubscriptionProductMetadataKey: "price_test"},
+	})
+	require.Equal(t, http.StatusOK, signedStripeWebhookRecorderForSubscriptionTest(t, completionPayload).Code)
+
+	retry := signedStripeWebhookRecorderForSubscriptionTest(t, refundPayload)
+	require.Equal(t, http.StatusOK, retry.Code)
+	replay := signedStripeWebhookRecorderForSubscriptionTest(t, refundPayload)
+	require.Equal(t, http.StatusOK, replay.Code)
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
+	assert.Equal(t, "pi_refund_early", order.ProviderTransactionID)
+	assert.Equal(t, "in_refund_early", order.ProviderInvoiceID)
+	assert.Equal(t, "sub_refund_early", order.ProviderSubscriptionID)
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", order.UserId, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	assert.Equal(t, int64(1000), balance.TokenLimit)
+	assert.Equal(t, int64(1000), balance.TokenUsed)
+	var recoveryCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Count(&recoveryCount).Error)
+	assert.Equal(t, int64(1), recoveryCount)
+}

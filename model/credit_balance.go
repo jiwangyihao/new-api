@@ -12,12 +12,18 @@ import (
 )
 
 const (
-	CreditBalanceLedgerSourceSubscriptionOrder      = "subscription_order"
-	CreditBalanceLedgerSourceRedemption             = "redemption"
-	CreditBalanceLedgerSourceSubscriptionConversion = "subscription_conversion"
-	CreditBalanceLedgerTypePurchase                 = "purchase"
-	CreditBalanceLedgerTypeRedemption               = "redemption"
-	CreditBalanceLedgerTypeSubscriptionConversion   = "subscription_conversion"
+	CreditBalanceLedgerSourceSubscriptionOrder         = "subscription_order"
+	CreditBalanceLedgerSourceRedemption                = "redemption"
+	CreditBalanceLedgerSourceSubscriptionConversion    = "subscription_conversion"
+	CreditBalanceLedgerTypePurchase                    = "purchase"
+	CreditBalanceLedgerTypeRedemption                  = "redemption"
+	CreditBalanceLedgerTypeSubscriptionConversion      = "subscription_conversion"
+	CreditBalanceLedgerSourceSubscriptionOrderRecovery = "subscription_order_recovery"
+	CreditBalanceLedgerSourceAdminAdjustment           = "admin_adjustment"
+	CreditBalanceLedgerTypeRefund                      = "refund"
+	CreditBalanceLedgerTypeChargeback                  = "chargeback"
+	CreditBalanceLedgerTypeAdminIncrease               = "admin_increase"
+	CreditBalanceLedgerTypeAdminDecrease               = "admin_decrease"
 )
 
 const (
@@ -27,30 +33,34 @@ const (
 )
 
 type CreditBalanceLedger struct {
-	Id                   int    `json:"id"`
-	UserId               int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
-	UserSubscriptionId   int    `json:"user_subscription_id" gorm:"not null;index"`
-	Type                 string `json:"type" gorm:"type:varchar(32);not null;index"`
-	IdempotencyKey       string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
-	SourceType           string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
-	SourceId             int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
-	SourceSnapshot       string `json:"source_snapshot,omitempty" gorm:"type:text"`
-	GrossCredit          int64  `json:"gross_credit" gorm:"type:bigint;not null"`
-	DebtOffset           int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
-	BalanceBefore        int64  `json:"balance_before" gorm:"type:bigint;not null"`
-	BalanceAfter         int64  `json:"balance_after" gorm:"type:bigint;not null"`
-	AvailableCreditAfter int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
-	SettlementDebtAfter  int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
-	OperatorUserId       int    `json:"operator_user_id" gorm:"not null;default:0"`
-	Reason               string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
-	CreatedAt            int64  `json:"created_at" gorm:"type:bigint;not null;index"`
+	Id                    int    `json:"id"`
+	UserId                int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
+	UserSubscriptionId    int    `json:"user_subscription_id" gorm:"not null;index"`
+	Type                  string `json:"type" gorm:"type:varchar(32);not null;index"`
+	IdempotencyKey        string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
+	SourceType            string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
+	SourceId              int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
+	SourceSnapshot        string `json:"source_snapshot,omitempty" gorm:"type:text"`
+	GrossCredit           int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	DebtOffset            int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
+	DebtFormed            int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
+	AvailableCreditBefore int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtBefore  int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
+	BalanceBefore         int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	BalanceAfter          int64  `json:"balance_after" gorm:"type:bigint;not null"`
+	AvailableCreditAfter  int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtAfter   int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
+	OperatorUserId        int    `json:"operator_user_id" gorm:"not null;default:0"`
+	PaymentProvider       string `json:"payment_provider,omitempty" gorm:"type:varchar(50);not null;default:''"`
+	ParameterFingerprint  string `json:"-" gorm:"type:varchar(64);not null;default:''"`
+	Reason                string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
+	CreatedAt             int64  `json:"created_at" gorm:"type:bigint;not null;index"`
 }
 
 type CreditBalanceLedgerHistoryItem struct {
 	CreditBalanceLedger
-	PaymentProvider string `json:"payment_provider,omitempty"`
-	PaymentMethod   string `json:"payment_method,omitempty"`
-	PurchaseMode    string `json:"purchase_mode,omitempty"`
+	PaymentMethod string `json:"payment_method,omitempty"`
+	PurchaseMode  string `json:"purchase_mode,omitempty"`
 }
 
 func (l *CreditBalanceLedger) BeforeUpdate(_ *gorm.DB) error {
@@ -72,6 +82,7 @@ type CreditBalanceGrantRequest struct {
 	TargetPlanId            int
 	OperatorUserId          int
 	Reason                  string
+	PaymentProvider         string
 	TargetPlanSnapshot      *SubscriptionPlan
 	PreserveActiveSelection bool
 }
@@ -198,6 +209,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	request.SourceType = strings.TrimSpace(request.SourceType)
 	request.Type = strings.TrimSpace(request.Type)
 	request.SourceSnapshot = strings.TrimSpace(request.SourceSnapshot)
+	request.PaymentProvider = strings.TrimSpace(request.PaymentProvider)
 	request.Reason = strings.TrimSpace(request.Reason)
 	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.Type == "" || request.TargetPlanId <= 0 {
 		return nil, errors.New("invalid credit balance grant")
@@ -270,22 +282,25 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	}
 
 	ledger := CreditBalanceLedger{
-		UserId:               request.UserId,
-		UserSubscriptionId:   balance.Id,
-		Type:                 request.Type,
-		IdempotencyKey:       request.IdempotencyKey,
-		SourceType:           request.SourceType,
-		SourceId:             request.SourceId,
-		SourceSnapshot:       request.SourceSnapshot,
-		GrossCredit:          request.GrossCredit,
-		DebtOffset:           debtOffset,
-		BalanceBefore:        balanceBefore,
-		BalanceAfter:         balanceAfter,
-		AvailableCreditAfter: availableAfter,
-		SettlementDebtAfter:  debtAfter,
-		OperatorUserId:       request.OperatorUserId,
-		Reason:               request.Reason,
-		CreatedAt:            getDBTimestampTx(tx),
+		UserId:                request.UserId,
+		UserSubscriptionId:    balance.Id,
+		Type:                  request.Type,
+		IdempotencyKey:        request.IdempotencyKey,
+		SourceType:            request.SourceType,
+		SourceId:              request.SourceId,
+		SourceSnapshot:        request.SourceSnapshot,
+		GrossCredit:           request.GrossCredit,
+		AvailableCreditBefore: maxInt64(balanceBefore, 0),
+		SettlementDebtBefore:  settlementDebtBefore,
+		DebtOffset:            debtOffset,
+		BalanceBefore:         balanceBefore,
+		BalanceAfter:          balanceAfter,
+		AvailableCreditAfter:  availableAfter,
+		SettlementDebtAfter:   debtAfter,
+		OperatorUserId:        request.OperatorUserId,
+		PaymentProvider:       request.PaymentProvider,
+		Reason:                request.Reason,
+		CreatedAt:             getDBTimestampTx(tx),
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err
@@ -302,7 +317,7 @@ func findCreditBalanceGrantResultTx(tx *gorm.DB, request CreditBalanceGrantReque
 	if query.RowsAffected == 0 {
 		return nil, false, nil
 	}
-	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot {
+	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot || ledger.PaymentProvider != strings.TrimSpace(request.PaymentProvider) {
 		return nil, false, errors.New("credit balance idempotency key mismatch")
 	}
 	var balance UserSubscription
@@ -338,22 +353,52 @@ func FindCreditBalanceGrantBySourceTx(tx *gorm.DB, sourceType string, sourceId i
 	return creditBalanceGrantResult(&ledger, balance.PlanId, user.GetSetting().ActiveSubscriptionId == balance.Id), nil
 }
 
+type CreditBalanceLedgerFilter struct {
+	UserId     int
+	SourceType string
+	Type       string
+	StartTime  int64
+	EndTime    int64
+	Limit      int
+}
+
 func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedgerHistoryItem, error) {
-	if userId <= 0 {
+	return ListCreditBalanceLedgerFiltered(CreditBalanceLedgerFilter{UserId: userId, Limit: limit})
+}
+
+func ListCreditBalanceLedgerFiltered(filter CreditBalanceLedgerFilter) ([]CreditBalanceLedgerHistoryItem, error) {
+	if filter.UserId <= 0 {
 		return nil, errors.New("invalid userId")
 	}
-	if limit <= 0 || limit > 100 {
-		limit = 100
+	if filter.Limit <= 0 || filter.Limit > 100 {
+		filter.Limit = 100
+	}
+	query := DB.Where("user_id = ?", filter.UserId)
+	if sourceType := strings.TrimSpace(filter.SourceType); sourceType != "" {
+		query = query.Where("source_type = ?", sourceType)
+	}
+	if entryType := strings.TrimSpace(filter.Type); entryType != "" {
+		query = query.Where("type = ?", entryType)
+	}
+	if filter.StartTime > 0 {
+		query = query.Where("created_at >= ?", filter.StartTime)
+	}
+	if filter.EndTime > 0 {
+		query = query.Where("created_at <= ?", filter.EndTime)
 	}
 	var entries []CreditBalanceLedger
-	if err := DB.Where("user_id = ?", userId).Order("id desc").Limit(limit).Find(&entries).Error; err != nil {
+	if err := query.Order("id desc").Limit(filter.Limit).Find(&entries).Error; err != nil {
 		return nil, err
 	}
+	return hydrateCreditBalanceLedgerHistory(filter.UserId, entries)
+}
+
+func hydrateCreditBalanceLedgerHistory(userId int, entries []CreditBalanceLedger) ([]CreditBalanceLedgerHistoryItem, error) {
 	result := make([]CreditBalanceLedgerHistoryItem, len(entries))
 	orderIds := make([]int, 0, len(entries))
 	for index := range entries {
 		result[index].CreditBalanceLedger = entries[index]
-		if entries[index].SourceType == CreditBalanceLedgerSourceSubscriptionOrder && entries[index].SourceId > 0 {
+		if (entries[index].SourceType == CreditBalanceLedgerSourceSubscriptionOrder || entries[index].SourceType == CreditBalanceLedgerSourceSubscriptionOrderRecovery) && entries[index].SourceId > 0 {
 			orderIds = append(orderIds, entries[index].SourceId)
 		}
 	}
@@ -361,9 +406,7 @@ func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedgerHistor
 		return result, nil
 	}
 	var orders []SubscriptionOrder
-	if err := DB.Select("id", "payment_provider", "payment_method", "entitlement_snapshot").
-		Where("user_id = ? AND id IN ?", userId, orderIds).
-		Find(&orders).Error; err != nil {
+	if err := DB.Select("id", "payment_provider", "payment_method", "entitlement_snapshot").Where("user_id = ? AND id IN ?", userId, orderIds).Find(&orders).Error; err != nil {
 		return nil, err
 	}
 	ordersById := make(map[int]SubscriptionOrder, len(orders))
@@ -375,18 +418,13 @@ func ListCreditBalanceLedger(userId int, limit int) ([]CreditBalanceLedgerHistor
 		if !ok {
 			continue
 		}
-		result[index].PaymentProvider = order.PaymentProvider
+		result[index].CreditBalanceLedger.PaymentProvider = order.PaymentProvider
 		result[index].PaymentMethod = order.PaymentMethod
 		result[index].PurchaseMode = SubscriptionPurchaseModeCreditBalance
-		if strings.TrimSpace(order.EntitlementSnapshot) == "" {
-			continue
-		}
-		snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
-		if err != nil {
-			continue
-		}
-		if mode, err := NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode); err == nil {
-			result[index].PurchaseMode = mode
+		if snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot); err == nil {
+			if mode, err := NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode); err == nil {
+				result[index].PurchaseMode = mode
+			}
 		}
 	}
 	return result, nil

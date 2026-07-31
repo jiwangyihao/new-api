@@ -457,3 +457,127 @@ func TestCreemSubscriptionCompletionRejectsAmountCurrencyMismatch(t *testing.T) 
 		})
 	}
 }
+
+func TestCreemCreditRefundAndChargebackRecoverOnce(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedExternalCreditPurchasePlans(t, 9650, 9651)
+	setting.CreemWebhookSecret = "creem_secret"
+	setting.CreemApiKey = "creem_api_key"
+	SetCreemSubscriptionProductSnapshotForTest(t, func(context.Context, string) (int64, string, error) { return 4000, "CNY", nil })
+	SetCreemSubscriptionCheckoutForTest(t, func(string, *CreemProduct, string, string) (CreemSubscriptionCheckoutResult, error) {
+		return CreemSubscriptionCheckoutResult{URL: "https://creem.test/recovery"}, nil
+	})
+	create := performSubscriptionJSON(SubscriptionRequestCreemPay, `{"plan_id":9650,"purchase_mode":"credit_balance"}`)
+	require.Contains(t, create.Body.String(), `"message":"success"`)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("plan_id = ?", 9650).First(&order).Error)
+	completion, err := common.Marshal(map[string]any{
+		"id": "evt_creem_recovery_paid", "eventType": "checkout.completed",
+		"object": map[string]any{"request_id": order.TradeNo, "order": map[string]any{"id": "ord_creem_recovery", "transaction": "tran_creem_recovery", "status": "paid", "amount_paid": 4000, "currency": "CNY"}, "product": map[string]any{"id": "prod_test"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, performSignedCreemSubscriptionWebhook(t, completion).Code)
+	refund, err := common.Marshal(map[string]any{
+		"id": "evt_creem_recovery_refund", "eventType": "refund.created",
+		"object": map[string]any{"request_id": order.TradeNo, "status": "succeeded", "refund_amount": 100, "refund_currency": "CNY", "transaction": map[string]any{"id": "tran_creem_recovery", "status": "refunded"}, "subscription": map[string]any{"id": "sub_creem_recovery", "status": "canceled"}},
+	})
+	require.NoError(t, err)
+	for _, status := range []string{"pending", "failed", "canceled"} {
+		nonTerminal, marshalErr := common.Marshal(map[string]any{
+			"id": "evt_creem_recovery_" + status, "eventType": "refund.created",
+			"object": map[string]any{"request_id": order.TradeNo, "status": status, "transaction": map[string]any{"id": "tran_creem_recovery", "status": status}},
+		})
+		require.NoError(t, marshalErr)
+		require.Equal(t, http.StatusOK, performSignedCreemSubscriptionWebhook(t, nonTerminal).Code)
+		require.NoError(t, model.DB.First(&order, order.Id).Error)
+		assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	}
+
+	require.Equal(t, http.StatusOK, performSignedCreemSubscriptionWebhook(t, refund).Code)
+	dispute, err := common.Marshal(map[string]any{
+		"id": "evt_creem_recovery_dispute", "eventType": "dispute.created",
+		"object": map[string]any{"request_id": order.TradeNo, "amount": 50, "currency": "CNY", "transaction": map[string]any{"id": "tran_creem_recovery", "status": "chargeback"}, "subscription": map[string]any{"id": "sub_creem_recovery", "status": "active"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, performSignedCreemSubscriptionWebhook(t, dispute).Code)
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusChargeback, order.Status)
+	var count int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestCreemTopUpRefundAcknowledgesWithoutSubscriptionRecoveryRetry(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	setting.CreemWebhookSecret = "creem_secret"
+	setting.CreemApiKey = "creem_api_key"
+	tradeNo := "creem-topup-refund-ack"
+	require.NoError(t, model.DB.Create(&model.TopUp{
+		UserId: 9652, TradeNo: tradeNo, PaymentProvider: model.PaymentProviderCreem,
+		PaymentMethod: model.PaymentMethodCreem, Status: common.TopUpStatusSuccess,
+	}).Error)
+	payload, err := common.Marshal(map[string]any{
+		"id": "evt_creem_topup_refund", "eventType": "refund.created",
+		"object": map[string]any{"request_id": tradeNo, "status": "succeeded", "transaction": map[string]any{"status": "refunded"}},
+	})
+	require.NoError(t, err)
+
+	recorder := performSignedCreemSubscriptionWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var orderCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("trade_no = ?", tradeNo).Count(&orderCount).Error)
+	assert.Zero(t, orderCount)
+}
+
+func TestCreemSubscriptionRefundWinsWhenTopUpSharesTradeNumber(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	seedExternalCreditPurchasePlans(t, 9653, 9654)
+	setting.CreemWebhookSecret = "creem_secret"
+	setting.CreemApiKey = "creem_api_key"
+	SetCreemSubscriptionProductSnapshotForTest(t, func(context.Context, string) (int64, string, error) { return 4000, "CNY", nil })
+	SetCreemSubscriptionCheckoutForTest(t, func(string, *CreemProduct, string, string) (CreemSubscriptionCheckoutResult, error) {
+		return CreemSubscriptionCheckoutResult{URL: "https://creem.test/shared-trade"}, nil
+	})
+	create := performSubscriptionJSON(SubscriptionRequestCreemPay, `{"plan_id":9653,"purchase_mode":"credit_balance"}`)
+	require.Contains(t, create.Body.String(), `"message":"success"`)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("plan_id = ?", 9653).First(&order).Error)
+	completion, err := common.Marshal(map[string]any{
+		"id": "evt_creem_shared_paid", "eventType": "checkout.completed",
+		"object": map[string]any{"request_id": order.TradeNo, "order": map[string]any{"id": "ord_creem_shared", "transaction": "tran_creem_shared", "status": "paid", "amount_paid": 4000, "currency": "CNY"}, "product": map[string]any{"id": "prod_test"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, performSignedCreemSubscriptionWebhook(t, completion).Code)
+	topUp := model.GetTopUpByTradeNo(order.TradeNo)
+	require.NotNil(t, topUp)
+	assert.Equal(t, model.PaymentProviderCreem, topUp.PaymentProvider)
+	refund, err := common.Marshal(map[string]any{
+		"id": "evt_creem_shared_refund", "eventType": "refund.created",
+		"object": map[string]any{"request_id": order.TradeNo, "status": "succeeded", "transaction": map[string]any{"id": "tran_creem_shared", "status": "refunded"}},
+	})
+	require.NoError(t, err)
+
+	recorder := performSignedCreemSubscriptionWebhook(t, refund)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.NoError(t, model.DB.First(&order, order.Id).Error)
+	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
+	var recoveryLedgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryLedgers).Error)
+	assert.Equal(t, int64(1), recoveryLedgers)
+}
+
+func TestCreemRefundWithoutReliableOrderReturnsRetryableError(t *testing.T) {
+	setupSubscriptionTrialPurchaseTest(t)
+	setting.CreemWebhookSecret = "creem_secret"
+	setting.CreemApiKey = "creem_api_key"
+	payload, err := common.Marshal(map[string]any{
+		"id": "evt_creem_unmapped_refund", "eventType": "refund.created",
+		"object": map[string]any{"status": "succeeded", "transaction": map[string]any{"id": "tran_unmapped", "status": "refunded"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusInternalServerError, performSignedCreemSubscriptionWebhook(t, payload).Code)
+}

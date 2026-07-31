@@ -313,14 +313,23 @@ func (p *SubscriptionPlan) normalizeEntitlementIdentity() error {
 
 // Subscription order (payment -> webhook -> create UserSubscription)
 type SubscriptionOrder struct {
-	Id                 int     `json:"id"`
-	UserId             int     `json:"user_id" gorm:"index"`
-	PlanId             int     `json:"plan_id" gorm:"index"`
-	Money              float64 `json:"money"`
-	AmountCents        int64   `json:"amount_cents" gorm:"type:bigint;not null;default:0"`
-	Currency           string  `json:"currency" gorm:"type:varchar(8);not null;default:''"`
-	CreditGrantAmount  int64   `json:"-" gorm:"type:bigint;not null;default:0"`
-	CreditTargetPlanID int     `json:"-" gorm:"type:int;not null;default:0"`
+	Id                      int     `json:"id"`
+	UserId                  int     `json:"user_id" gorm:"index"`
+	PlanId                  int     `json:"plan_id" gorm:"index"`
+	Money                   float64 `json:"money"`
+	AmountCents             int64   `json:"amount_cents" gorm:"type:bigint;not null;default:0"`
+	Currency                string  `json:"currency" gorm:"type:varchar(8);not null;default:''"`
+	CreditGrantAmount       int64   `json:"-" gorm:"type:bigint;not null;default:0"`
+	CreditTargetPlanID      int     `json:"-" gorm:"type:int;not null;default:0"`
+	FulfilledSubscriptionID int     `json:"-" gorm:"type:int;not null;default:0;index"`
+	RecoveryType            string  `json:"recovery_type,omitempty" gorm:"type:varchar(32);not null;default:''"`
+	RecoveryTime            int64   `json:"recovery_time,omitempty" gorm:"type:bigint;not null;default:0;index"`
+	RecoveryLedgerID        int     `json:"recovery_ledger_id,omitempty" gorm:"type:int;not null;default:0;index"`
+	RecoveryReason          string  `json:"recovery_reason,omitempty" gorm:"type:varchar(255);not null;default:''"`
+	ProviderTransactionID   string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
+	ProviderOrderID         string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
+	ProviderInvoiceID       string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
+	ProviderSubscriptionID  string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
 
 	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`
@@ -898,6 +907,36 @@ func validateSubscriptionOrderEntitlementSnapshot(tx *gorm.DB, order *Subscripti
 	return nil
 }
 
+type subscriptionOrderProviderIdentityPayload struct {
+	ProviderTransactionID  string `json:"provider_transaction_id"`
+	ProviderOrderID        string `json:"provider_order_id"`
+	ProviderInvoiceID      string `json:"provider_invoice_id"`
+	ProviderSubscriptionID string `json:"provider_subscription_id"`
+}
+
+func subscriptionOrderProviderIdentityUpdates(providerPayload string) map[string]any {
+	providerPayload = strings.TrimSpace(providerPayload)
+	if providerPayload == "" {
+		return nil
+	}
+	var payload subscriptionOrderProviderIdentityPayload
+	if err := common.UnmarshalJsonStr(providerPayload, &payload); err != nil {
+		return nil
+	}
+	updates := make(map[string]any, 4)
+	for column, value := range map[string]string{
+		"provider_transaction_id":  payload.ProviderTransactionID,
+		"provider_order_id":        payload.ProviderOrderID,
+		"provider_invoice_id":      payload.ProviderInvoiceID,
+		"provider_subscription_id": payload.ProviderSubscriptionID,
+	} {
+		if value = strings.TrimSpace(value); value != "" {
+			updates[column] = value
+		}
+	}
+	return updates
+}
+
 func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, providerPayload string, actualPaymentMethod string) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {
 		return nil, errors.New("invalid subscription order")
@@ -948,6 +987,9 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	}
 	if providerPayload != "" {
 		updates["provider_payload"] = providerPayload
+		for column, value := range subscriptionOrderProviderIdentityUpdates(providerPayload) {
+			updates[column] = value
+		}
 	}
 	if actualPaymentMethod != "" {
 		updates["payment_method"] = actualPaymentMethod
@@ -993,9 +1035,14 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 			Type:               CreditBalanceLedgerTypePurchase,
 			TargetPlanId:       order.CreditTargetPlanID,
 			TargetPlanSnapshot: targetPlan,
+			PaymentProvider:    order.PaymentProvider,
 			Reason:             reason,
 		})
 		if err != nil {
+			return nil, err
+		}
+		order.FulfilledSubscriptionID = grant.UserSubscriptionId
+		if err := tx.Model(&SubscriptionOrder{}).Where("id = ?", order.Id).Update("fulfilled_subscription_id", grant.UserSubscriptionId).Error; err != nil {
 			return nil, err
 		}
 		if order.PaymentProvider != PaymentProviderBalance {
@@ -1016,6 +1063,12 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
 	if err != nil {
 		return nil, err
+	}
+	if creation != nil && creation.Subscription != nil {
+		order.FulfilledSubscriptionID = creation.Subscription.Id
+		if err := tx.Model(&SubscriptionOrder{}).Where("id = ?", order.Id).Update("fulfilled_subscription_id", creation.Subscription.Id).Error; err != nil {
+			return nil, err
+		}
 	}
 	if order.PaymentProvider != PaymentProviderBalance {
 		if err := upsertSubscriptionTopUpTx(tx, order); err != nil {
@@ -2699,6 +2752,9 @@ func ResetUserSubscriptionQuota(userId int, subscriptionId int) (*SubscriptionRe
 		if err != nil {
 			return err
 		}
+		if target.EntitlementType == SubscriptionEntitlementCreditBalance {
+			return errors.New("Credit balance quota cannot be reset")
+		}
 		payer := target
 		if !isPaidEquivalentSubscription(target, targetPlan) {
 			if !isInvitationRewardSubscription(target) {
@@ -2746,7 +2802,7 @@ func lockActiveUserSubscriptionWithPlanTx(tx *gorm.DB, userId int, subscriptionI
 		return nil, nil, errors.New("tx is nil")
 	}
 	var sub UserSubscription
-	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ? AND user_id = ? AND status = ? AND end_time > ?", subscriptionId, userId, "active", now).First(&sub).Error; err != nil {
+	if err := tx.Set("gorm:query_option", "FOR UPDATE").Where("id = ? AND user_id = ? AND status = ? AND (entitlement_type = ? OR end_time > ?)", subscriptionId, userId, "active", SubscriptionEntitlementCreditBalance, now).First(&sub).Error; err != nil {
 		return nil, nil, err
 	}
 	plan, err := getSubscriptionPlanByIdTx(tx, sub.PlanId)

@@ -260,6 +260,7 @@ export type SubscriptionPlan = Omit<
 
 export interface PlanRecord {
   plan: SubscriptionPlan
+  existing_timed_entitlement_count?: number
 }
 
 export interface PublicSubscriptionPlan {
@@ -373,6 +374,8 @@ export interface UpdateCodexProModeResponse {
 
 export interface PlanPayload {
   plan: Partial<SubscriptionPlan>
+  risk_confirmed?: boolean
+  risk_reason?: string
 }
 
 export interface CreditBalancePlanUpdateRequest {
@@ -470,6 +473,77 @@ export interface SubscriptionOrderStatus {
   credit_balance?: CreditBalanceGrantResult
 }
 
+export type CreditBalanceAdjustmentOperation = 'increase' | 'decrease'
+
+export interface CreditBalanceAdjustmentRequest {
+  operation: CreditBalanceAdjustmentOperation
+  amount: number
+  idempotency_key: string
+  reason: string
+}
+
+export interface CreditBalanceAdjustmentResult {
+  adjustment: {
+    id: number
+    idempotency_key: string
+    user_id: number
+    operation: CreditBalanceAdjustmentOperation
+    amount: number
+    operator_user_id: number
+    reason: string
+    ledger_id: number
+    created_at: number
+  }
+  credit_balance: CreditBalanceGrantResult
+  debt_formed: number
+  replayed: boolean
+}
+
+export interface SubscriptionOrderRecoveryPreview {
+  order_id: number
+  user_id: number
+  username: string
+  plan_id: number
+  plan_title: string
+  trade_no: string
+  money: number
+  amount_cents: number
+  currency: string
+  payment_provider: string
+  payment_method: string
+  purchase_mode: SubscriptionPurchaseMode
+  status: string
+  complete_time: number
+  gross_credit: number
+}
+
+export interface SubscriptionOrderRecoveryRequest {
+  recovery_type: 'refund' | 'chargeback'
+  reason: string
+}
+
+export interface SubscriptionOrderRecoveryResult {
+  order_id: number
+  trade_no: string
+  status: 'refunded' | 'chargeback'
+  recovery_type: 'refund' | 'chargeback'
+  gross_credit: number
+  debt_formed: number
+  available_credit: number
+  settlement_debt: number
+  balance_before: number
+  balance_after: number
+  ledger_id: number
+  replayed: boolean
+}
+
+export interface CreditBalanceLedgerFilters {
+  source_type?: string
+  type?: string
+  start_time?: number
+  end_time?: number
+}
+
 export interface CreditBalanceLedgerEntry {
   id: number
   user_id: number
@@ -480,10 +554,14 @@ export interface CreditBalanceLedgerEntry {
   source_id: number
   gross_credit: number
   debt_offset: number
+  debt_formed?: number
+  available_credit_before?: number
+  settlement_debt_before?: number
   balance_before: number
   balance_after: number
   available_credit_after: number
   settlement_debt_after: number
+  operator_user_id?: number
   reason: string
   source_snapshot?: string
   created_at: number

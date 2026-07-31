@@ -16,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -284,7 +285,21 @@ func KyrenWebhook(c *gin.Context) {
 			_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderKyren, common.TopUpStatusExpired)
 		}
 	case "order.refunded":
-		recordKyrenRefundManualAction(kind, tradeNo)
+		if kind == "subscription" {
+			if _, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
+				TradeNo: tradeNo, ExpectedPaymentProvider: model.PaymentProviderKyren,
+				RecoveryType: service.SubscriptionOrderRecoveryRefund, ProviderPayload: summary,
+				Reason: "Kyren provider refund", CreditRecoveryOnly: true,
+			}); errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable) {
+				recordKyrenRefundManualAction(kind, tradeNo)
+			} else if err != nil {
+				logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 订阅退款回收失败 trade_no=%s error=%q", tradeNo, err.Error()))
+				c.AbortWithStatus(http.StatusInternalServerError)
+				return
+			}
+		} else {
+			recordKyrenRefundManualAction(kind, tradeNo)
+		}
 	default:
 		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Kyren webhook 忽略事件 event_type=%s trade_no=%s", event.Type, tradeNo))
 	}

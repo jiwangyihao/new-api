@@ -19,6 +19,7 @@ import (
 )
 
 const stripeSubscriptionProductMetadataKey = "provider_product_id"
+const stripeSubscriptionReferenceMetadataKey = "new_api_subscription_trade_no"
 
 type stripeTestHandle interface {
 	Helper()
@@ -198,6 +199,9 @@ func stripeSubscriptionCheckoutParams(referenceId string, customerId string, ema
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
 	}
 	params.AddMetadata(stripeSubscriptionProductMetadataKey, priceId)
+	params.SubscriptionData = &stripe.CheckoutSessionSubscriptionDataParams{Metadata: map[string]string{
+		stripeSubscriptionReferenceMetadataKey: referenceId,
+	}}
 	if customerId == "" {
 		if email != "" {
 			params.CustomerEmail = stripe.String(email)

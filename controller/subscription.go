@@ -9,14 +9,21 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ---- Shared types ----
 
 type SubscriptionPlanDTO struct {
 	Plan model.SubscriptionPlan `json:"plan"`
+}
+
+type AdminSubscriptionPlanDTO struct {
+	Plan                          model.SubscriptionPlan `json:"plan"`
+	ExistingTimedEntitlementCount int64                  `json:"existing_timed_entitlement_count"`
 }
 
 type PublicSubscriptionPlan struct {
@@ -150,7 +157,10 @@ func GetPublicSubscriptionPlans(c *gin.Context) {
 }
 
 func GetCreditBalanceLedger(c *gin.Context) {
-	entries, err := model.ListCreditBalanceLedger(c.GetInt("id"), 100)
+	entries, err := model.ListCreditBalanceLedgerFiltered(model.CreditBalanceLedgerFilter{
+		UserId: c.GetInt("id"), SourceType: c.Query("source_type"), Type: c.Query("type"),
+		StartTime: parseInt64Query(c.Query("start_time")), EndTime: parseInt64Query(c.Query("end_time")), Limit: 100,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -455,32 +465,62 @@ func ResetSubscriptionQuota(c *gin.Context) {
 
 // ---- Admin APIs ----
 
+func activeTimedEntitlementsQuery(db *gorm.DB, now int64) *gorm.DB {
+	graceStart := now - model.TimedSubscriptionConversionGraceSeconds
+	if graceStart < 0 {
+		graceStart = 0
+	}
+	return db.Model(&model.UserSubscription{}).Where(
+		"entitlement_type = ? AND ((status = ? AND end_time >= ?) OR (status = ? AND end_time >= ? AND end_time <= ?))",
+		model.SubscriptionEntitlementTimed,
+		model.SubscriptionStatusActive, graceStart,
+		model.SubscriptionStatusExpired, graceStart, now,
+	)
+}
+
 func AdminListSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
 	if err := model.DB.Where("entitlement_type = ?", model.SubscriptionEntitlementTimed).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
+	type entitlementCount struct {
+		PlanId int   `gorm:"column:plan_id"`
+		Count  int64 `gorm:"column:entitlement_count"`
+	}
+	var countRows []entitlementCount
+	if err := activeTimedEntitlementsQuery(model.DB, model.GetDBTimestamp()).
+		Select("plan_id, COUNT(*) AS entitlement_count").
+		Group("plan_id").Scan(&countRows).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	counts := make(map[int]int64, len(countRows))
+	for _, row := range countRows {
+		counts[row.PlanId] = row.Count
+	}
 	groups, err := model.ListEnabledChannelCreditBillingGroups()
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	result := make([]SubscriptionPlanDTO, 0, len(plans))
+	result := make([]AdminSubscriptionPlanDTO, 0, len(plans))
 	for _, p := range plans {
 		if err := model.PopulateSubscriptionPlanChannelCreditEquivalents(&p, groups); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		result = append(result, SubscriptionPlanDTO{
-			Plan: p,
+		result = append(result, AdminSubscriptionPlanDTO{
+			Plan: p, ExistingTimedEntitlementCount: counts[p.Id],
 		})
 	}
 	common.ApiSuccess(c, result)
 }
 
 type AdminUpsertSubscriptionPlanRequest struct {
-	Plan model.SubscriptionPlan `json:"plan"`
+	Plan          model.SubscriptionPlan `json:"plan"`
+	RiskConfirmed bool                   `json:"risk_confirmed"`
+	RiskReason    string                 `json:"risk_reason"`
 }
 
 type AdminUpdateCreditBalancePlanRequest struct {
@@ -689,6 +729,8 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	common.ApiSuccess(c, req.Plan)
 }
 
+var errSubscriptionPlanCreditRiskConfirmationRequired = errors.New("修改存在存量权益的套餐月 Credit 需要确认续期归并风险并填写原因")
+
 func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	if id <= 0 {
@@ -751,7 +793,28 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 
+	var previousMonthlyCredit int64
+	var existingTimedEntitlementCount int64
+	riskSnapshotTime := model.GetDBTimestamp()
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var current model.SubscriptionPlan
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "title", "entitlement_type", "monthly_token_limit").First(&current, id).Error; err != nil {
+			return err
+		}
+		if current.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+			return errors.New("Credit 余额套餐只能通过专用接口配置")
+		}
+		previousMonthlyCredit = current.MonthlyTokenLimit
+		if previousMonthlyCredit != req.Plan.MonthlyTokenLimit {
+			if err := activeTimedEntitlementsQuery(tx, riskSnapshotTime).
+				Where("plan_id = ?", id).
+				Count(&existingTimedEntitlementCount).Error; err != nil {
+				return err
+			}
+			if existingTimedEntitlementCount > 0 && (!req.RiskConfirmed || strings.TrimSpace(req.RiskReason) == "") {
+				return errSubscriptionPlanCreditRiskConfirmationRequired
+			}
+		}
 		// update plan (allow zero values updates with map)
 		updateMap := map[string]interface{}{
 			"title":                      req.Plan.Title,
@@ -788,13 +851,36 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err
 		}
+		if existingTimedEntitlementCount > 0 && previousMonthlyCredit != req.Plan.MonthlyTokenLimit {
+			return model.CreateSubscriptionPlanCreditChangeAuditTx(tx, &model.SubscriptionPlanCreditChangeAudit{
+				PlanId: id, PlanTitle: req.Plan.Title,
+				AdminUserId: c.GetInt("id"), AdminUsername: c.GetString("username"),
+				OldMonthlyCredit: previousMonthlyCredit, NewMonthlyCredit: req.Plan.MonthlyTokenLimit,
+				ExistingTimedEntitlementCount: existingTimedEntitlementCount,
+				RiskConfirmed:                 true, RiskReason: strings.TrimSpace(req.RiskReason),
+			})
+		}
 		return nil
 	})
 	if err != nil {
+		if errors.Is(err, errSubscriptionPlanCreditRiskConfirmationRequired) {
+			common.ApiErrorMsg(c, err.Error())
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
 	model.InvalidateSubscriptionPlanCache(id)
+	if existingTimedEntitlementCount > 0 && previousMonthlyCredit != req.Plan.MonthlyTokenLimit {
+		model.RecordLogWithAdminInfo(c.GetInt("id"), model.LogTypeManage,
+			"subscription plan monthly Credit risk confirmed plan_id="+strconv.Itoa(id), map[string]any{
+				"admin_id": c.GetInt("id"), "admin_username": c.GetString("username"),
+				"plan_id": id, "plan_title": req.Plan.Title,
+				"old_monthly_credit": previousMonthlyCredit, "new_monthly_credit": req.Plan.MonthlyTokenLimit,
+				"existing_timed_entitlement_count": existingTimedEntitlementCount,
+				"risk_confirmed":                   true, "risk_reason": strings.TrimSpace(req.RiskReason),
+			})
+	}
 	common.ApiSuccess(c, nil)
 }
 
@@ -901,6 +987,97 @@ func AdminListUserSubscriptions(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, toAdminUserSubscriptionResponses(subs))
+}
+
+type AdminCreditBalanceAdjustmentRequest struct {
+	Operation      string `json:"operation"`
+	Amount         int64  `json:"amount"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Reason         string `json:"reason"`
+}
+
+func AdminAdjustUserCreditBalance(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	var req AdminCreditBalanceAdjustmentRequest
+	if userId <= 0 || c.ShouldBindJSON(&req) != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := service.AdjustCreditBalance(service.CreditBalanceAdjustmentRequest{
+		UserId: userId, Operation: req.Operation, Amount: req.Amount,
+		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+
+func AdminGetUserCreditBalanceLedger(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	if userId <= 0 {
+		common.ApiErrorMsg(c, "无效的用户ID")
+		return
+	}
+	entries, err := model.ListCreditBalanceLedgerFiltered(model.CreditBalanceLedgerFilter{
+		UserId: userId, SourceType: c.Query("source_type"), Type: c.Query("type"),
+		StartTime: parseInt64Query(c.Query("start_time")), EndTime: parseInt64Query(c.Query("end_time")), Limit: 100,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, entries)
+}
+
+func parseInt64Query(value string) int64 {
+	parsed, _ := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	return parsed
+}
+
+type AdminSubscriptionOrderRecoveryRequest struct {
+	RecoveryType string `json:"recovery_type"`
+	Reason       string `json:"reason"`
+}
+
+func AdminGetSubscriptionOrderRecoveryPreview(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	tradeNo := strings.TrimSpace(c.Param("trade_no"))
+	if userId <= 0 || tradeNo == "" {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	preview, err := model.GetSubscriptionOrderRecoveryPreview(tradeNo, userId)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, preview)
+}
+
+func AdminRecoverSubscriptionOrder(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	tradeNo := strings.TrimSpace(c.Param("trade_no"))
+	var req AdminSubscriptionOrderRecoveryRequest
+	if userId <= 0 || tradeNo == "" || c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Reason) == "" {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
+		TradeNo: tradeNo, ExpectedUserId: userId, RecoveryType: req.RecoveryType,
+		OperatorUserId: c.GetInt("id"), Reason: req.Reason,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	model.RecordLogWithAdminInfo(userId, model.LogTypeManage,
+		"subscription order financial recovery trade_no="+tradeNo, map[string]any{
+			"admin_id": c.GetInt("id"), "trade_no": tradeNo, "expected_user_id": userId,
+			"recovery_type": result.RecoveryType, "reason": strings.TrimSpace(req.Reason),
+		})
+	common.ApiSuccess(c, result)
 }
 
 type AdminCreateUserSubscriptionRequest struct {

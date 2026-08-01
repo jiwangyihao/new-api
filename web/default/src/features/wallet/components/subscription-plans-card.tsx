@@ -24,6 +24,7 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { FieldDescription, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -290,27 +291,12 @@ export const billingStrategyOptions: Array<{
 export function SubscriptionBillingStrategyControl({
   data,
 }: {
-  data?: SelfSubscriptionData
+  data: SelfSubscriptionData
 }) {
-  return data ? (
-    <SubscriptionBillingStrategyCard data={data} />
-  ) : (
-    <SubscriptionBillingStrategyLoader />
-  )
+  return <SubscriptionBillingStrategySection data={data} />
 }
 
-function SubscriptionBillingStrategyLoader() {
-  const selfSubscriptionQuery = useQuery({
-    queryKey: subscriptionQueryKeys.selfSummary,
-    queryFn: getSelfSubscriptionFull,
-  })
-  const data = selfSubscriptionQuery.data?.success
-    ? selfSubscriptionQuery.data.data
-    : null
-  return data ? <SubscriptionBillingStrategyCard data={data} /> : null
-}
-
-function SubscriptionBillingStrategyCard({
+function SubscriptionBillingStrategySection({
   data,
 }: {
   data: SelfSubscriptionData
@@ -354,20 +340,21 @@ function SubscriptionBillingStrategyCard({
   }
 
   return (
-    <TitledCard
-      title={t('Subscription billing strategy')}
-      description={t(
-        'This account-level strategy applies to every API key and only affects requests that start after it changes.'
-      )}
-      icon={<RefreshCw />}
-      contentClassName='flex flex-col gap-4'
-    >
+    <FieldSet className='rounded-xl border p-3 sm:p-4'>
+      <FieldLegend variant='label'>
+        {t('Subscription billing strategy')}
+      </FieldLegend>
+      <FieldDescription>
+        {t(
+          'This account-level strategy applies to every API key and only affects requests that start after it changes.'
+        )}
+      </FieldDescription>
       <ToggleGroup
         value={[strategy]}
         onValueChange={handleChange}
         disabled={updateMutation.isPending}
         spacing={2}
-        className='grid w-full grid-cols-1 gap-2'
+        className='grid w-full grid-cols-1 gap-2 lg:grid-cols-3'
         aria-label={t('Subscription billing strategy')}
       >
         {billingStrategyOptions.map((option) => (
@@ -419,7 +406,7 @@ function SubscriptionBillingStrategyCard({
           )}
         </div>
       </div>
-    </TitledCard>
+    </FieldSet>
   )
 }
 
@@ -924,6 +911,10 @@ export function SubscriptionPlansCard({
             </p>
           )}
         </div>
+
+        {selfSubscriptionData && (
+          <SubscriptionBillingStrategyControl data={selfSubscriptionData} />
+        )}
 
         {plans.length > 0 ? (
           <div className='grid grid-cols-1 gap-3 2xl:grid-cols-2 2xl:gap-4'>

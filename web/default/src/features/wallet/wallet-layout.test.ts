@@ -145,7 +145,7 @@ describe('wallet Kyren payment flow', () => {
   })
 })
 describe('wallet page layout', () => {
-  test('keeps account-balance top-up hidden until opened from subscription actions', () => {
+  test('keeps account-balance top-up hidden without widening the subscription card', () => {
     const source = readWalletSource()
     const subscriptionIndex = source.indexOf('<SubscriptionPlansCard')
     const addFundsStateIndex = source.indexOf(
@@ -158,27 +158,32 @@ describe('wallet page layout', () => {
     assert.notEqual(addFundsIndex, -1)
     assert.match(source, /onOpenAddFunds=\{handleOpenAddFunds\}/)
     assert.match(source, /\{addFundsOpen && \(/)
+    assert.match(
+      source,
+      /xl:grid-cols-\[minmax\(0,1\.05fr\)_minmax\(360px,0\.95fr\)\]/
+    )
     assert.ok(subscriptionIndex < addFundsIndex)
   })
 
-  test('moves order history to subscription actions and separates strategy from subscriptions', () => {
+  test('keeps billing strategy in Subscription Plans but outside My Subscriptions', () => {
     const walletSource = readWalletSource()
     const subscriptionSource = readSubscriptionPlansSource()
     const rechargeSource = readRechargeFormCardSource()
+    const mySubscriptionsIndex = subscriptionSource.indexOf(
+      "{t('My Subscriptions')}"
+    )
+    const strategyIndex = subscriptionSource.indexOf(
+      '<SubscriptionBillingStrategyControl data={selfSubscriptionData} />'
+    )
+    const plansIndex = subscriptionSource.indexOf('{plans.length > 0 ?')
 
     assert.match(subscriptionSource, /onOpenBilling/)
     assert.match(subscriptionSource, /Order History/)
     assert.doesNotMatch(rechargeSource, /Order History/)
-    assert.doesNotMatch(
-      subscriptionSource.slice(
-        subscriptionSource.indexOf("title={t('Subscription Plans')}")
-      ),
-      /SubscriptionBillingStrategyControl data/
-    )
-    assert.match(
-      walletSource,
-      /grid items-start gap-4 lg:grid-cols-2[\s\S]*SubscriptionBillingStrategyControl[\s\S]*TimedSubscriptionConversionQuotesCard/
-    )
+    assert.doesNotMatch(walletSource, /SubscriptionBillingStrategyControl/)
+    assert.ok(mySubscriptionsIndex >= 0)
+    assert.ok(strategyIndex > mySubscriptionsIndex)
+    assert.ok(plansIndex > strategyIndex)
   })
 
   test('wallet subscriptions expose active selection and quota reset actions', () => {

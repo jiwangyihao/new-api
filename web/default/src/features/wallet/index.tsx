@@ -57,6 +57,8 @@ import type {
   RedemptionResult,
 } from './types'
 
+const ACCOUNT_BALANCE_TOPUP_VISIBLE = false
+
 interface WalletProps {
   initialShowHistory?: boolean
 }
@@ -80,7 +82,6 @@ export function Wallet(props: WalletProps) {
   const [selectedKyrenTopUpProduct, setSelectedKyrenTopUpProduct] =
     useState<KyrenTopUpProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
-  const [addFundsOpen, setAddFundsOpen] = useState(false)
   const addFundsRef = useRef<HTMLDivElement>(null)
 
   const { status } = useStatus()
@@ -280,16 +281,6 @@ export function Wallet(props: WalletProps) {
     []
   )
 
-  const handleOpenAddFunds = useCallback(() => {
-    setAddFundsOpen(true)
-    requestAnimationFrame(() => {
-      addFundsRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      })
-    })
-  }, [])
-
   return (
     <>
       <SectionPageLayout>
@@ -314,12 +305,11 @@ export function Wallet(props: WalletProps) {
                 onPurchaseSuccess={fetchUser}
                 onAvailabilityChange={handleSubscriptionAvailabilityChange}
                 onOpenBilling={() => setBillingDialogOpen(true)}
-                onOpenAddFunds={handleOpenAddFunds}
               />
 
               {showSubscriptionPanel && (
                 <div className='flex min-w-0 flex-col gap-4'>
-                  {addFundsOpen && (
+                  {ACCOUNT_BALANCE_TOPUP_VISIBLE && (
                     <div
                       ref={addFundsRef}
                       id='wallet-add-funds'

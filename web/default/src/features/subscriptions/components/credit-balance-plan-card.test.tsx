@@ -314,7 +314,7 @@ describe('Credit balance plan admin component', () => {
       sort_order: 1,
       max_purchase_per_user: 0,
       total_amount: 0,
-      monthly_token_limit: 1000,
+      monthly_token_limit: 1_500_000,
       concurrency_limit: 1,
       public_visible: true,
       unlimited_purchase_enabled: true,
@@ -348,6 +348,12 @@ describe('Credit balance plan admin component', () => {
     assert.ok(view.getByRole('button', { name: 'Stripe' }))
     const timed = view.getByRole('radio', { name: /Timed subscription/ })
     const credit = view.getByRole('radio', { name: /Credit balance/ })
+    const dialogText = view.getByRole('dialog').textContent || ''
+    assert.match(
+      dialogText,
+      /Adds 1\.5M permanent Credits using the global Credit balance service limits\./
+    )
+    assert.doesNotMatch(dialogText, /1500000/)
 
     fireEvent.click(timed)
     await waitFor(() =>
@@ -362,6 +368,8 @@ describe('Credit balance plan admin component', () => {
     await waitFor(() =>
       assert.equal(credit.getAttribute('aria-checked'), 'true')
     )
+    const creditSummary = view.getByText('Credits added').parentElement
+    assert.match(creditSummary?.textContent || '', /1\.5M credits/)
     assert.ok(view.getByRole('button', { name: 'Stripe' }))
     assert.ok(view.getByRole('button', { name: 'Creem' }))
     assert.ok(view.getByRole('button', { name: 'Pay with Kyren' }))

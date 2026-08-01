@@ -145,24 +145,22 @@ describe('wallet Kyren payment flow', () => {
   })
 })
 describe('wallet page layout', () => {
-  test('keeps account-balance top-up hidden without widening the subscription card', () => {
-    const source = readWalletSource()
-    const subscriptionIndex = source.indexOf('<SubscriptionPlansCard')
-    const addFundsStateIndex = source.indexOf(
-      'const [addFundsOpen, setAddFundsOpen] = useState(false)'
-    )
-    const addFundsIndex = source.indexOf("id='wallet-add-funds'")
+  test('hides account-balance top-up without widening the subscription card', () => {
+    const walletSource = readWalletSource()
+    const subscriptionSource = readSubscriptionPlansSource()
 
-    assert.notEqual(subscriptionIndex, -1)
-    assert.notEqual(addFundsStateIndex, -1)
-    assert.notEqual(addFundsIndex, -1)
-    assert.match(source, /onOpenAddFunds=\{handleOpenAddFunds\}/)
-    assert.match(source, /\{addFundsOpen && \(/)
+    assert.match(walletSource, /<SubscriptionPlansCard/)
+    assert.match(walletSource, /<TimedSubscriptionConversionQuotesCard/)
+    assert.match(walletSource, /ACCOUNT_BALANCE_TOPUP_VISIBLE = false/)
+    assert.doesNotMatch(walletSource, /onOpenAddFunds|handleOpenAddFunds/)
+    assert.doesNotMatch(
+      subscriptionSource,
+      /Add Account Balance|onOpenAddFunds/
+    )
     assert.match(
-      source,
+      walletSource,
       /xl:grid-cols-\[minmax\(0,1\.05fr\)_minmax\(360px,0\.95fr\)\]/
     )
-    assert.ok(subscriptionIndex < addFundsIndex)
   })
 
   test('keeps billing strategy in Subscription Plans but outside My Subscriptions', () => {
@@ -245,16 +243,8 @@ describe('wallet page layout', () => {
     }
   })
 
-  test('Kyren top-up products keep direct checkout without wallet confirmation dialog', () => {
-    const walletSource = readWalletSource()
+  test('Kyren top-up helper keeps direct checkout without confirmation dialogs', () => {
     const rechargeSource = readRechargeFormCardSource()
-    const kyrenHandlerStart = walletSource.indexOf(
-      'const handleKyrenTopUpProductSelect'
-    )
-    const kyrenHandlerEnd = walletSource.indexOf(
-      'const handleWaffoMethodSelect',
-      kyrenHandlerStart
-    )
     const usePaymentSource = readUsePaymentSource()
     const paymentHandlerStart = usePaymentSource.indexOf(
       'const processKyrenPayment'
@@ -263,7 +253,6 @@ describe('wallet page layout', () => {
       'const processWaffoPayment',
       paymentHandlerStart
     )
-    const kyrenHandler = walletSource.slice(kyrenHandlerStart, kyrenHandlerEnd)
     const paymentHandler = usePaymentSource.slice(
       paymentHandlerStart,
       paymentHandlerEnd
@@ -274,7 +263,10 @@ describe('wallet page layout', () => {
       /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
     )
     assert.match(paymentHandler, /processKyrenTopUpProductPayment/)
-    assert.doesNotMatch(kyrenHandler, /setConfirmDialogOpen|setCreemDialogOpen/)
+    assert.doesNotMatch(
+      paymentHandler,
+      /setConfirmDialogOpen|setCreemDialogOpen/
+    )
   })
 
   test('affiliate reward transfer accepts CNY amount and submits account balance cents', () => {

@@ -9,6 +9,7 @@ import {
   fireEvent,
   render,
   waitFor,
+  within,
 } from '@testing-library/react/pure'
 import i18next from 'i18next'
 import assert from 'node:assert/strict'
@@ -89,7 +90,8 @@ function createWalletQueryClient(
 ): QueryClient {
   const queryClient = new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retry: false, staleTime: Infinity },
+      mutations: { retry: false },
     },
   })
   queryClient.setQueryData(subscriptionQueryKeys.walletPlans, {
@@ -436,6 +438,123 @@ describe('wallet subscription React Query rendering', () => {
       queryClient.clear()
     }
   })
+  test('activates an unselected Credit balance from its visible summary in single-active mode', async () => {
+    const timedRecord = makeRecord(
+      {
+        id: 42,
+        plan_id: 41,
+        end_time: 4_102_444_800,
+        is_active_selected: true,
+      },
+      { id: 41, title: 'Active timed plan' }
+    )
+    const creditRecord = makeRecord(
+      {
+        id: 51,
+        plan_id: 52,
+        entitlement_type: 'credit_balance',
+        end_time: 0,
+        is_active_selected: false,
+      },
+      {
+        id: 52,
+        title: 'Credit balance plan',
+        entitlement_type: 'credit_balance',
+      }
+    )
+    const base = makeSelfSubscriptionData()
+    const selfSummary = makeSelfSubscriptionData({
+      billing_strategy: 'single_active',
+      active_subscription_id: 42,
+      billing_candidate_subscription_ids: [42],
+      subscriptions: [timedRecord],
+      all_subscriptions: [timedRecord, creditRecord],
+      credit_balance: {
+        user_subscription_id: 51,
+        plan_id: 52,
+        gross_credit: 1_500_000,
+        debt_offset: 0,
+        available_credit: 1_500_000,
+        settlement_debt: 0,
+        balance_before: 1_500_000,
+        balance_after: 1_500_000,
+        active: false,
+        ledger_id: 61,
+        status: 'available',
+      },
+      summary: {
+        ...base.summary,
+        active_subscription_id: 42,
+        subscription_id: 42,
+      },
+    })
+    const queryClient = createWalletQueryClient([], selfSummary)
+    let submitted: Record<string, unknown> | undefined
+    api.defaults.adapter = async (config) => {
+      if (
+        String(config.url).includes(
+          '/api/subscription/self/credit-balance/ledger'
+        )
+      ) {
+        return {
+          data: { success: true, data: [] },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        }
+      }
+      if (config.method === 'put') {
+        assert.equal(config.url, '/api/subscription/self/active')
+        submitted = JSON.parse(String(config.data))
+        return {
+          data: {
+            success: true,
+            data: { active_subscription_id: 51 },
+          },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        }
+      }
+      return {
+        data: {
+          success: true,
+          data: {
+            ...selfSummary,
+            active_subscription_id: 51,
+            credit_balance: { ...selfSummary.credit_balance!, active: true },
+          },
+        },
+        status: 200,
+        statusText: 'OK',
+        headers: {},
+        config,
+      }
+    }
+
+    const view = render(
+      createElement(
+        I18nextProvider,
+        { i18n: testI18n },
+        createElement(
+          QueryClientProvider,
+          { client: queryClient },
+          createElement(SubscriptionPlansCard, { topupInfo: null })
+        )
+      )
+    )
+
+    const creditSummary = view.getByRole('group', { name: 'Credit balance' })
+    fireEvent.click(
+      within(creditSummary).getByRole('button', { name: 'Set as active' })
+    )
+
+    await waitFor(() => assert.deepEqual(submitted, { subscription_id: 51 }))
+    queryClient.clear()
+  })
+
   test('renders exhausted Credit balance and ledger without unlimited copy', () => {
     const creditRecord = makeRecord(
       {

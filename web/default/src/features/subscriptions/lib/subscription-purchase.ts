@@ -23,6 +23,7 @@ import type {
   PlanRecord,
   SubscriptionPurchaseMode,
 } from '../types'
+import { formatCompactCredit } from './format'
 
 export const purchaseModeSchema = z.object({
   purchase_mode: z.enum(['timed', 'credit_balance']),
@@ -65,9 +66,9 @@ export function creditPurchaseSuccessMessage(
   return t(
     'Added {{gross}} Credits; offset {{debt}} debt; {{available}} Credits available.',
     {
-      gross: grant.gross_credit,
-      debt: grant.debt_offset,
-      available: grant.available_credit,
+      gross: formatCompactCredit(grant.gross_credit),
+      debt: formatCompactCredit(grant.debt_offset),
+      available: formatCompactCredit(grant.available_credit),
     }
   )
 }

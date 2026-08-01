@@ -80,17 +80,17 @@ describe('subscription purchase mode helpers', () => {
     )
   })
 
-  test('formats gross credit, debt offset, and net availability', () => {
+  test('formats large Credit purchase results without raw long integers', () => {
     const message = creditPurchaseSuccessMessage(
       {
         user_subscription_id: 1,
         plan_id: 2,
-        gross_credit: 1000,
-        debt_offset: 250,
-        available_credit: 750,
+        gross_credit: 1_500_000,
+        debt_offset: 250_000,
+        available_credit: 1_250_000,
         settlement_debt: 0,
-        balance_before: -250,
-        balance_after: 750,
+        balance_before: -250_000,
+        balance_after: 1_250_000,
         active: true,
         ledger_id: 3,
         status: 'available',
@@ -103,8 +103,9 @@ describe('subscription purchase mode helpers', () => {
 
     assert.equal(
       message,
-      'Added 1000 Credits; offset 250 debt; 750 Credits available.'
+      'Added 1.5M Credits; offset 250K debt; 1.25M Credits available.'
     )
+    assert.doesNotMatch(message, /1500000|1250000|250000/)
   })
 })
 

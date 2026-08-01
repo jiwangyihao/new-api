@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Crown, RefreshCw, Check, Receipt, WalletCards } from 'lucide-react'
+import { Crown, RefreshCw, Check, Receipt } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -84,7 +84,6 @@ interface SubscriptionPlansCardProps {
   onPurchaseSuccess?: () => Promise<void> | void
   onAvailabilityChange?: (available: boolean) => void
   onOpenBilling?: () => void
-  onOpenAddFunds?: () => void
 }
 
 function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
@@ -416,7 +415,6 @@ export function SubscriptionPlansCard({
   accountBalance,
   onPurchaseSuccess,
   onOpenBilling,
-  onOpenAddFunds,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
 
@@ -585,12 +583,6 @@ export function SubscriptionPlansCard({
         icon={<Crown className='h-4 w-4' />}
         action={
           <div className='flex w-full flex-wrap gap-2 sm:w-auto'>
-            {onOpenAddFunds && (
-              <Button variant='outline' size='sm' onClick={onOpenAddFunds}>
-                <WalletCards data-icon='inline-start' />
-                {t('Add Account Balance')}
-              </Button>
-            )}
             {onOpenBilling && (
               <Button variant='outline' size='sm' onClick={onOpenBilling}>
                 <Receipt data-icon='inline-start' />
@@ -656,7 +648,11 @@ export function SubscriptionPlansCard({
           </div>
 
           {selfSubscriptionData?.credit_balance && (
-            <div className='mt-3 grid gap-2 rounded-md border p-3 text-xs sm:grid-cols-3'>
+            <div
+              role='group'
+              aria-label={t('Credit balance')}
+              className='mt-3 grid gap-2 rounded-md border p-3 text-xs sm:grid-cols-3'
+            >
               <div>
                 <div className='text-muted-foreground'>
                   {t('Available Credit balance')}
@@ -689,6 +685,27 @@ export function SubscriptionPlansCard({
                     ? ` · ${t('Current active')}`
                     : ''}
                 </div>
+                {!selfSubscriptionData.credit_balance.active &&
+                  selfSubscriptionData.credit_balance.user_subscription_id >
+                    0 && (
+                    <Button
+                      variant='outline'
+                      size='xs'
+                      className='mt-2'
+                      onClick={() =>
+                        handleSetActiveSubscription(
+                          selfSubscriptionData.credit_balance!
+                            .user_subscription_id
+                        )
+                      }
+                      disabled={
+                        pendingActiveSubscriptionId ===
+                        selfSubscriptionData.credit_balance.user_subscription_id
+                      }
+                    >
+                      {t('Set as active')}
+                    </Button>
+                  )}
               </div>
               <div className='sm:col-span-3'>
                 <CreditBalanceLedger
@@ -798,18 +815,20 @@ export function SubscriptionPlansCard({
                                 })}
                               </span>
                             )}
-                            {!isSelected && subscriptionId > 0 && (
-                              <Button
-                                variant='outline'
-                                size='xs'
-                                onClick={() =>
-                                  handleSetActiveSubscription(subscriptionId)
-                                }
-                                disabled={isSettingActive}
-                              >
-                                {t('Set as active')}
-                              </Button>
-                            )}
+                            {!isCreditBalance &&
+                              !isSelected &&
+                              subscriptionId > 0 && (
+                                <Button
+                                  variant='outline'
+                                  size='xs'
+                                  onClick={() =>
+                                    handleSetActiveSubscription(subscriptionId)
+                                  }
+                                  disabled={isSettingActive}
+                                >
+                                  {t('Set as active')}
+                                </Button>
+                              )}
                             {canResetQuota && (
                               <Button
                                 variant='secondary'

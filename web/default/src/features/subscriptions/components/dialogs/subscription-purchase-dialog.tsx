@@ -65,6 +65,7 @@ import {
   formatPlanPrice,
   formatDuration,
   formatCreditLimit,
+  formatCompactCredit,
   formatAccountBalanceForPlanPurchase,
   getAccountBalancePaymentState,
 } from '../../lib'
@@ -712,7 +713,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
                             <span className='text-muted-foreground text-xs'>
                               {t(
                                 'Adds {{credits}} permanent Credits using the global Credit balance service limits.',
-                                { credits: plan.monthly_token_limit || 0 }
+                                {
+                                  credits: formatCompactCredit(
+                                    plan.monthly_token_limit || 0
+                                  ),
+                                }
                               )}
                             </span>
                           </span>

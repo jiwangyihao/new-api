@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowRightLeft, ChevronDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -30,6 +31,11 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -39,6 +45,11 @@ import {
 } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
+import { TitledCard } from '@/components/ui/titled-card'
+import {
+  formatCompactCredit as formatCredit,
+  formatDurationSeconds,
+} from '@/features/subscriptions/lib'
 import {
   useConfirmSubscriptionConversion,
   useSubscriptionConversionQuotes,
@@ -83,10 +94,6 @@ const categorySections: Array<{
   },
 ]
 
-function formatCredit(value: bigint): string {
-  return new Intl.NumberFormat().format(value)
-}
-
 function formatTimestamp(seconds: bigint): string {
   if (seconds < -MAX_DATE_SECONDS || seconds > MAX_DATE_SECONDS) {
     return `${seconds} UTC seconds`
@@ -102,7 +109,15 @@ function reasonText(
   reason: SubscriptionConversionQuoteReason,
   t: (key: string, options?: Record<string, unknown>) => string
 ): string {
-  const seconds = reason.data?.remaining_seconds || '0'
+  const remainingSeconds = reason.data?.remaining_seconds
+  const duration = formatDurationSeconds(
+    typeof remainingSeconds === 'string' ||
+      typeof remainingSeconds === 'number' ||
+      typeof remainingSeconds === 'bigint'
+      ? remainingSeconds
+      : '0',
+    t
+  )
   const source = reason.data?.source || ''
   switch (reason.code) {
     case 'global_conversion_disabled':
@@ -137,12 +152,9 @@ function reasonText(
     case 'grant_time_missing':
       return t('The latest grant time is unavailable')
     case 'cooldown_active':
-      return t(
-        'Conversion cooldown is active ({{seconds}} seconds remaining)',
-        {
-          seconds,
-        }
-      )
+      return t('Conversion cooldown is active ({{duration}} remaining)', {
+        duration,
+      })
     case 'gross_credit_not_positive':
       return t('The calculated gross Credit is not positive')
     case 'calculation_failed':
@@ -152,6 +164,15 @@ function reasonText(
         reason: reason.code,
       })
   }
+}
+
+function formatConversionFormula(
+  blocks: bigint | string,
+  creditBasis: bigint | string,
+  currentRemainingCredit: bigint | string,
+  grossCredit: bigint | string
+): string {
+  return `${blocks} × ${formatCredit(creditBasis)} + ${formatCredit(currentRemainingCredit)} = ${formatCredit(grossCredit)}`
 }
 
 interface QuoteInstanceProps {
@@ -185,18 +206,18 @@ function QuoteInstance({
 
   const countdown =
     live.cooldownRemainingSeconds > 0n
-      ? t('{{seconds}} seconds of conversion cooldown remaining', {
-          seconds: live.cooldownRemainingSeconds.toString(),
+      ? t('Conversion cooldown: {{duration}} remaining', {
+          duration: formatDurationSeconds(live.cooldownRemainingSeconds, t),
         })
       : live.withinGrace
-        ? t('{{seconds}} seconds of conversion grace remaining', {
-            seconds: live.graceRemainingSeconds.toString(),
+        ? t('Conversion grace period: {{duration}} remaining', {
+            duration: formatDurationSeconds(live.graceRemainingSeconds, t),
           })
-        : t('{{seconds}} seconds remaining', {
-            seconds: live.remainingSeconds.toString(),
+        : t('Time remaining: {{duration}}', {
+            duration: formatDurationSeconds(live.remainingSeconds, t),
           })
-
   const reasons = liveQuoteReasons(quote, live)
+  const excluded = live.category === 'excluded'
 
   return (
     <article
@@ -217,7 +238,7 @@ function QuoteInstance({
             })}
           </p>
         </div>
-        <Badge variant={live.category === 'excluded' ? 'outline' : 'secondary'}>
+        <Badge variant={excluded ? 'outline' : 'secondary'}>
           {live.category === 'convertible'
             ? t('Convertible')
             : live.category === 'expired_grace'
@@ -226,26 +247,51 @@ function QuoteInstance({
         </Badge>
       </div>
 
-      <div className='mt-3 grid gap-2 text-xs sm:grid-cols-2'>
+      {excluded && reasons[0] && (
+        <Alert variant='destructive' className='mt-3'>
+          <AlertTitle>{t('Conversion is currently unavailable')}</AlertTitle>
+          <AlertDescription>{reasonText(reasons[0], t)}</AlertDescription>
+        </Alert>
+      )}
+
+      <dl className='mt-3 grid gap-2 text-xs sm:grid-cols-2'>
         <div>
-          <span className='text-muted-foreground'>{t('Ends')}</span>
-          <div>{formatTimestamp(live.endTime)}</div>
+          <dt className='text-muted-foreground'>{t('Ends')}</dt>
+          <dd>{formatTimestamp(live.endTime)}</dd>
         </div>
         <div>
-          <span className='text-muted-foreground'>{t('31-day blocks')}</span>
-          <div>{live.full31DayBlocks.toString()}</div>
+          <dt className='text-muted-foreground'>{t('Remaining time')}</dt>
+          <dd>{formatDurationSeconds(live.remainingSeconds, t)}</dd>
         </div>
         <div>
-          <span className='text-muted-foreground'>{t('Gross Credit')}</span>
-          <div>{formatCredit(live.grossCredit)}</div>
+          <dt className='text-muted-foreground'>
+            {t('Full future 31-day periods')}
+          </dt>
+          <dd>{live.full31DayBlocks.toString()}</dd>
         </div>
         <div>
-          <span className='text-muted-foreground'>
-            {t('Net available Credit')}
-          </span>
-          <div>{formatCredit(live.netAvailableCredit)}</div>
+          <dt className='text-muted-foreground'>
+            {t('Unused Credit in current period')}
+          </dt>
+          <dd>{formatCredit(live.currentRemainingCredit)}</dd>
         </div>
-      </div>
+        <div>
+          <dt className='text-muted-foreground'>
+            {excluded
+              ? t('Potential Credit before debt if eligible')
+              : t('Estimated Credit before debt')}
+          </dt>
+          <dd>{formatCredit(live.grossCredit)}</dd>
+        </div>
+        <div>
+          <dt className='text-muted-foreground'>
+            {excluded
+              ? t('Potential available Credit if eligible')
+              : t('Estimated available Credit')}
+          </dt>
+          <dd>{formatCredit(live.netAvailableCredit)}</dd>
+        </div>
+      </dl>
 
       <p
         className='text-muted-foreground mt-3 text-xs'
@@ -254,29 +300,34 @@ function QuoteInstance({
       >
         {countdown}
       </p>
-      <code className='bg-muted mt-2 block overflow-x-auto rounded px-2 py-1.5 text-xs'>
-        {live.formula}
-      </code>
-
-      {reasons.length > 0 && (
-        <ul className='text-muted-foreground mt-3 list-disc space-y-1 pl-4 text-xs'>
-          {reasons.map((reason) => (
-            <li key={reason.code}>{reasonText(reason, t)}</li>
-          ))}
-        </ul>
-      )}
-
-      <div className='mt-3 flex justify-end'>
-        <Button
-          type='button'
-          size='sm'
-          variant={live.canConfirm ? 'default' : 'outline'}
-          disabled={previewing}
-          onClick={() => onPreview(quote.source_subscription_id)}
-        >
-          {t('Preview conversion')}
-        </Button>
+      <div className='mt-2'>
+        <div className='text-muted-foreground mb-1 text-xs'>
+          {t(
+            'Full future periods × monthly Credit + unused current-period Credit'
+          )}
+        </div>
+        <code className='bg-muted block overflow-x-auto rounded px-2 py-1.5 text-xs'>
+          {formatConversionFormula(
+            live.full31DayBlocks,
+            live.creditBasis,
+            live.currentRemainingCredit,
+            live.grossCredit
+          )}
+        </code>
       </div>
+
+      {live.canConfirm && (
+        <div className='mt-3 flex justify-end'>
+          <Button
+            type='button'
+            size='sm'
+            disabled={previewing}
+            onClick={() => onPreview(quote.source_subscription_id)}
+          >
+            {t('Preview conversion')}
+          </Button>
+        </div>
+      )}
     </article>
   )
 }
@@ -311,7 +362,34 @@ function liveQuoteReasons(
   ) {
     reasons.push({ code: 'gross_credit_not_positive' })
   }
+  const priority = [
+    'global_conversion_disabled',
+    'entitlement_not_timed',
+    'plan_not_timed',
+    'plan_not_found',
+    'duration_not_one_month',
+    'reset_not_monthly',
+    'monthly_credit_not_positive',
+    'trial_plan',
+    'trial_source',
+    'monthly_invite_plan',
+    'monthly_invite_source',
+    'source_not_eligible',
+    'plan_conversion_disabled',
+    'status_not_eligible',
+    'subscription_not_started',
+    'outside_grace_period',
+    'grant_time_missing',
+    'cooldown_active',
+    'gross_credit_not_positive',
+    'calculation_failed',
+  ]
   return reasons
+    .sort(
+      (left, right) =>
+        priority.indexOf(left.code) - priority.indexOf(right.code)
+    )
+    .slice(0, 1)
 }
 
 function defaultConversionIdempotencyKey(): string {
@@ -327,7 +405,12 @@ function ConversionResultSummary({
   conversion: SubscriptionConversionHistory
 }) {
   const { t } = useTranslation()
-  const formula = `${conversion.full_31_day_blocks} × ${conversion.credit_basis} + ${conversion.current_remaining_credit} = ${conversion.gross_credit}`
+  const formula = formatConversionFormula(
+    conversion.full_31_day_blocks,
+    conversion.credit_basis,
+    conversion.current_remaining_credit,
+    conversion.gross_credit
+  )
   return (
     <article
       className='bg-background rounded-lg border p-3'
@@ -458,10 +541,8 @@ function ConversionPreviewDialog({
                 <dd>{formatTimestamp(live.endTime)}</dd>
               </div>
               <div>
-                <dt className='text-muted-foreground'>
-                  {t('Remaining seconds')}
-                </dt>
-                <dd>{live.remainingSeconds.toString()}</dd>
+                <dt className='text-muted-foreground'>{t('Remaining time')}</dt>
+                <dd>{formatDurationSeconds(live.remainingSeconds, t)}</dd>
               </div>
               <div>
                 <dt className='text-muted-foreground'>
@@ -522,7 +603,12 @@ function ConversionPreviewDialog({
                 {t('Conversion formula')}
               </div>
               <code className='bg-muted block overflow-x-auto rounded px-3 py-2 text-sm'>
-                {live.formula}
+                {formatConversionFormula(
+                  live.full31DayBlocks,
+                  live.creditBasis,
+                  live.currentRemainingCredit,
+                  live.grossCredit
+                )}
               </code>
             </div>
 
@@ -778,7 +864,7 @@ export function TimedSubscriptionConversionQuotesCard({
     return null
 
   return (
-    <>
+    <div className='flex flex-col gap-4'>
       {latestConversion && (
         <ConversionResultCard
           title={t('Latest conversion result')}
@@ -786,54 +872,59 @@ export function TimedSubscriptionConversionQuotesCard({
           role='status'
         />
       )}
-      <Card>
-        <CardHeader className='border-b'>
-          <div className='flex flex-wrap items-start justify-between gap-3'>
-            <div>
-              <CardTitle>{t('Timed subscription conversion quotes')}</CardTitle>
-              <CardDescription>
-                {t(
-                  'Read-only estimates refresh from the server every five seconds.'
-                )}
-              </CardDescription>
-            </div>
-            <p
-              role='status'
-              aria-label={t('Conversion quote refresh status')}
-              aria-live='polite'
-              className={cn(
-                'text-muted-foreground text-xs',
-                quotesQuery.isFetching && 'text-foreground'
-              )}
+      <TitledCard
+        title={t('Timed subscription conversion quotes')}
+        description={t(
+          'Read-only estimates refresh from the server every five seconds.'
+        )}
+        icon={<ArrowRightLeft />}
+        action={
+          <p
+            role='status'
+            aria-label={t('Conversion quote refresh status')}
+            aria-live='polite'
+            className={cn(
+              'text-muted-foreground text-xs',
+              quotesQuery.isFetching && 'text-foreground'
+            )}
+          >
+            {quotesQuery.isFetching
+              ? t('Refreshing conversion quotes')
+              : t('Conversion quotes are up to date')}
+          </p>
+        }
+        contentClassName='flex flex-col gap-4'
+      >
+        {categorySections.map((section) => {
+          const sectionQuotes = liveQuoteEntries.filter(
+            (entry) => (entry.live?.category ?? 'excluded') === section.category
+          )
+          if (sectionQuotes.length === 0) return null
+          return (
+            <Collapsible
+              key={section.category}
+              defaultOpen={section.category !== 'excluded'}
+              className='rounded-lg border'
             >
-              {quotesQuery.isFetching
-                ? t('Refreshing conversion quotes')
-                : t('Conversion quotes are up to date')}
-            </p>
-          </div>
-        </CardHeader>
-        <CardContent className='flex flex-col gap-5'>
-          {categorySections.map((section) => {
-            const sectionQuotes = liveQuoteEntries.filter(
-              (entry) =>
-                (entry.live?.category ?? 'excluded') === section.category
-            )
-            if (sectionQuotes.length === 0) return null
-            return (
-              <section
-                key={section.category}
-                aria-labelledby={`conversion-${section.category}`}
-              >
-                <h3
-                  id={`conversion-${section.category}`}
-                  className='font-medium'
-                >
-                  {t(section.title)}
-                </h3>
-                <p className='text-muted-foreground mt-1 text-xs'>
-                  {t(section.description)}
-                </p>
-                <div className='mt-3 grid gap-3 lg:grid-cols-2'>
+              <CollapsibleTrigger className='group flex w-full items-center justify-between gap-3 p-3 text-left'>
+                <div>
+                  <div className='flex items-center gap-2'>
+                    <h3
+                      id={`conversion-${section.category}`}
+                      className='font-medium'
+                    >
+                      {t(section.title)}
+                    </h3>
+                    <Badge variant='outline'>{sectionQuotes.length}</Badge>
+                  </div>
+                  <p className='text-muted-foreground mt-1 text-xs'>
+                    {t(section.description)}
+                  </p>
+                </div>
+                <ChevronDown className='text-muted-foreground transition-transform group-data-[panel-open]:rotate-180' />
+              </CollapsibleTrigger>
+              <CollapsibleContent className='border-t p-3'>
+                <div className='grid gap-3'>
                   {sectionQuotes.map(({ quote, live }) => (
                     <QuoteInstance
                       key={quote.source_subscription_id}
@@ -844,26 +935,26 @@ export function TimedSubscriptionConversionQuotesCard({
                     />
                   ))}
                 </div>
-              </section>
-            )
-          })}
-          {conversions.length > 0 && (
-            <section aria-labelledby='subscription-conversion-history'>
-              <h3 id='subscription-conversion-history' className='font-medium'>
-                {t('Conversion history')}
-              </h3>
-              <div className='mt-3 grid gap-3 lg:grid-cols-2'>
-                {conversions.map((conversion) => (
-                  <ConversionResultSummary
-                    key={conversion.id}
-                    conversion={conversion}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-        </CardContent>
-      </Card>
+              </CollapsibleContent>
+            </Collapsible>
+          )
+        })}
+        {conversions.length > 0 && (
+          <section aria-labelledby='subscription-conversion-history'>
+            <h3 id='subscription-conversion-history' className='font-medium'>
+              {t('Conversion history')}
+            </h3>
+            <div className='mt-3 grid gap-3'>
+              {conversions.map((conversion) => (
+                <ConversionResultSummary
+                  key={conversion.id}
+                  conversion={conversion}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+      </TitledCard>
 
       <ConversionPreviewDialog
         quote={previewSelection?.quote ?? null}
@@ -879,6 +970,6 @@ export function TimedSubscriptionConversionQuotesCard({
           }
         }}
       />
-    </>
+    </div>
   )
 }

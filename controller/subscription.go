@@ -328,7 +328,6 @@ func GetSubscriptionSelf(c *gin.Context) {
 	if plan, planErr := model.GetCreditBalancePlanTx(model.DB); planErr == nil {
 		creditBalancePurchaseEnabled = plan.Enabled && plan.CreditBalanceConfigured && plan.CreditBalancePurchaseEnabled
 		creditBalancePlan = gin.H{
-			"model_limits":      plan.ModelLimits,
 			"concurrency_limit": plan.ConcurrencyLimit,
 			"queue_capacity":    plan.QueueCapacity,
 		}
@@ -524,7 +523,6 @@ type AdminUpsertSubscriptionPlanRequest struct {
 }
 
 type AdminUpdateCreditBalancePlanRequest struct {
-	ModelLimits       string `json:"model_limits"`
 	ConcurrencyLimit  int    `json:"concurrency_limit"`
 	QueueCapacity     int    `json:"queue_capacity"`
 	BusinessCode      string `json:"business_code"`
@@ -540,23 +538,6 @@ func getCreditBalancePlan() (*model.SubscriptionPlan, error) {
 		return nil, err
 	}
 	return &plan, nil
-}
-
-func normalizeCreditBalanceModelLimits(value string) string {
-	seen := make(map[string]struct{})
-	models := make([]string, 0)
-	for _, raw := range strings.Split(value, ",") {
-		name := strings.TrimSpace(raw)
-		if name == "" {
-			continue
-		}
-		if _, ok := seen[name]; ok {
-			continue
-		}
-		seen[name] = struct{}{}
-		models = append(models, name)
-	}
-	return strings.Join(models, ",")
 }
 
 func AdminGetCreditBalancePlan(c *gin.Context) {
@@ -582,12 +563,7 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "排队容量不能为负数")
 		return
 	}
-	modelLimits := normalizeCreditBalanceModelLimits(req.ModelLimits)
 	businessCode := strings.TrimSpace(req.BusinessCode)
-	if req.Configured && modelLimits == "" {
-		common.ApiErrorMsg(c, "配置完成前必须设置模型范围")
-		return
-	}
 	if req.Configured && businessCode == "" {
 		common.ApiErrorMsg(c, "配置完成前必须设置 BusinessCode")
 		return
@@ -606,7 +582,7 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		businessCodeValue = businessCode
 	}
 	updates := map[string]any{
-		"model_limits":                      modelLimits,
+		"model_limits":                      "",
 		"concurrency_limit":                 req.ConcurrencyLimit,
 		"queue_capacity":                    req.QueueCapacity,
 		"business_code":                     businessCodeValue,
@@ -674,6 +650,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 	req.Plan.EntitlementType = model.SubscriptionEntitlementTimed
+	req.Plan.ModelLimits = ""
 	req.Plan.Id = 0
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
@@ -779,6 +756,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	}
 
 	req.Plan.UpgradeGroup = ""
+	req.Plan.ModelLimits = ""
 	if req.Plan.QueueCapacity < 0 {
 		common.ApiErrorMsg(c, "排队容量不能为负数")
 		return
@@ -837,6 +815,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"gpt_abuse_warning_limit":    req.Plan.GPTAbuseWarningLimit,
 			"monthly_token_limit":        req.Plan.MonthlyTokenLimit,
 			"concurrency_limit":          req.Plan.ConcurrencyLimit,
+			"model_limits":               "",
 			"queue_capacity":             req.Plan.QueueCapacity,
 			"is_trial":                   req.Plan.IsTrial,
 			"invite_trial":               req.Plan.InviteTrial,

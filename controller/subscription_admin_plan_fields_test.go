@@ -130,6 +130,7 @@ func seedCreditBalancePlanForAdminTest(t *testing.T) model.SubscriptionPlan {
 	t.Helper()
 	plan := model.SubscriptionPlan{
 		Title:            "Credit 余额套餐",
+		ModelLimits:      "legacy-restricted-model",
 		EntitlementType:  model.SubscriptionEntitlementCreditBalance,
 		Enabled:          true,
 		PublicVisible:    false,
@@ -171,13 +172,13 @@ func TestAdminCreditBalancePlanLifecycleUsesDedicatedAuthenticatedAPI(t *testing
 	setupSubscriptionAdminPlanFieldsTest(t)
 	seedCreditBalancePlanForAdminTest(t)
 
-	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"model_limits":" gpt-4o, claude-3-7-sonnet,gpt-4o ","concurrency_limit":7,"queue_capacity":13,"business_code":" credit_balance_global ","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true}`)
+	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":" credit_balance_global ","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true}`)
 	require.Equal(t, http.StatusOK, update.Code, update.Body.String())
 	assert.Contains(t, update.Body.String(), `"success":true`)
 
 	var plan model.SubscriptionPlan
 	require.NoError(t, model.DB.Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error)
-	assert.Equal(t, "gpt-4o,claude-3-7-sonnet", plan.ModelLimits)
+	assert.Empty(t, plan.ModelLimits)
 	assert.Equal(t, 7, plan.ConcurrencyLimit)
 	assert.Equal(t, 13, plan.QueueCapacity)
 	require.NotNil(t, plan.BusinessCode)
@@ -189,7 +190,7 @@ func TestAdminCreditBalancePlanLifecycleUsesDedicatedAuthenticatedAPI(t *testing
 
 	get := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodGet, "")
 	require.Equal(t, http.StatusOK, get.Code, get.Body.String())
-	assert.Contains(t, get.Body.String(), `"model_limits":"gpt-4o,claude-3-7-sonnet"`)
+	assert.NotContains(t, get.Body.String(), `"model_limits"`)
 	assert.Contains(t, get.Body.String(), `"credit_balance_purchase_enabled":true`)
 }
 
@@ -197,7 +198,7 @@ func TestAdminCreditBalancePlanRejectsEnabledEntryBeforeConfiguration(t *testing
 	setupSubscriptionAdminPlanFieldsTest(t)
 	seedCreditBalancePlanForAdminTest(t)
 
-	recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"model_limits":"gpt-4o","concurrency_limit":1,"queue_capacity":0,"business_code":"credit_balance_global","configured":false,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":false}`)
+	recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":1,"queue_capacity":0,"business_code":"credit_balance_global","configured":false,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":false}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.Contains(t, recorder.Body.String(), "必须先确认 Credit 余额套餐配置")

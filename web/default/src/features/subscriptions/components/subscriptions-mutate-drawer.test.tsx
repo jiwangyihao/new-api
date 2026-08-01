@@ -76,7 +76,6 @@ const riskyPlan: PlanRecord = {
     reward_eligible: true,
     business_code: 'monthly-plan',
     entitlement_type: 'timed',
-    model_limits: '',
     unlimited_purchase_enabled: false,
     timed_conversion_enabled: true,
   },
@@ -125,8 +124,9 @@ async function renderRiskDrawer() {
   await user.type(monthlyCredit, '200')
   assert.ok(view.getByText('Monthly Credit change risk'))
   assert.match(
-    view.getByText(/This plan has 3 active or conversion-grace timed entitlements/).textContent ||
-      '',
+    view.getByText(
+      /This plan has 3 active or conversion-grace timed entitlements/
+    ).textContent || '',
     /refund basis/
   )
   return {

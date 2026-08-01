@@ -78,7 +78,6 @@ function makeCreditBalancePlan(
     max_purchase_per_user: 0,
     total_amount: 0,
     entitlement_type: 'credit_balance',
-    model_limits: 'gpt-4o,claude-3-7-sonnet',
     concurrency_limit: 7,
     queue_capacity: 13,
     business_code: 'credit_balance_global',
@@ -116,7 +115,6 @@ describe('Credit balance plan admin component', () => {
     const values = creditBalancePlanToFormValues(makeCreditBalancePlan())
 
     assert.deepEqual(values, {
-      model_limits: 'gpt-4o,claude-3-7-sonnet',
       concurrency_limit: 7,
       queue_capacity: 13,
       business_code: 'credit_balance_global',
@@ -127,9 +125,8 @@ describe('Credit balance plan admin component', () => {
     })
   })
 
-  test('normalizes submitted model scope and preserves independent entry switches', () => {
+  test('omits legacy model scope and preserves independent entry switches', () => {
     const payload = creditBalancePlanFormToRequest({
-      model_limits: ' gpt-4o, claude-3-7-sonnet, gpt-4o ',
       concurrency_limit: 9,
       queue_capacity: 21,
       business_code: ' credit_balance_global ',
@@ -140,7 +137,6 @@ describe('Credit balance plan admin component', () => {
     })
 
     assert.deepEqual(payload, {
-      model_limits: 'gpt-4o,claude-3-7-sonnet',
       concurrency_limit: 9,
       queue_capacity: 21,
       business_code: 'credit_balance_global',
@@ -153,7 +149,6 @@ describe('Credit balance plan admin component', () => {
 
   test('turning configuration off also disables every new entry point', () => {
     const payload = creditBalancePlanFormToRequest({
-      model_limits: 'gpt-4o',
       concurrency_limit: 1,
       queue_capacity: 2,
       business_code: 'credit_balance_global',
@@ -195,7 +190,6 @@ describe('Credit balance plan admin component', () => {
     })
 
     const persisted = makeCreditBalancePlan({
-      model_limits: 'server-model',
       concurrency_limit: 17,
       queue_capacity: 23,
       business_code: 'server_business_code',
@@ -236,9 +230,6 @@ describe('Credit balance plan admin component', () => {
       </I18nextProvider>
     )
 
-    fireEvent.input(view.getByLabelText('Model scope'), {
-      target: { value: ' client-model, client-model ' },
-    })
     fireEvent.input(view.getByLabelText('Concurrency Limit'), {
       target: { value: '9' },
     })
@@ -261,7 +252,6 @@ describe('Credit balance plan admin component', () => {
 
     await waitFor(() => {
       assert.deepEqual(submitted, {
-        model_limits: 'client-model',
         concurrency_limit: 9,
         queue_capacity: 21,
         business_code: 'client_business_code',
@@ -270,10 +260,7 @@ describe('Credit balance plan admin component', () => {
         redemption_enabled: true,
         conversion_enabled: false,
       })
-      assert.equal(
-        (view.getByLabelText('Model scope') as HTMLTextAreaElement).value,
-        'server-model'
-      )
+      assert.equal(view.queryByLabelText('Model scope'), null)
       assert.equal(
         (view.getByLabelText('Concurrency Limit') as HTMLInputElement).value,
         '17'
@@ -349,7 +336,6 @@ describe('Credit balance plan admin component', () => {
             enableKyrenSubscription
             creditBalancePurchaseEnabled
             creditBalancePlan={{
-              model_limits: 'gpt-4o',
               concurrency_limit: 2,
               queue_capacity: 4,
             }}
@@ -383,7 +369,8 @@ describe('Credit balance plan admin component', () => {
       view.getByText((_text, element) =>
         Boolean(
           element?.getAttribute('data-slot') === 'alert-description' &&
-          element.textContent?.includes('gpt-4o')
+          element.textContent?.includes('Concurrency Limit') &&
+          element.textContent?.includes('Queue Capacity')
         )
       )
     )
@@ -1084,7 +1071,6 @@ describe('Credit balance plan admin component', () => {
               refreshCount += 1
             }}
             creditBalancePlan={{
-              model_limits: 'gpt-4o',
               concurrency_limit: 2,
               queue_capacity: 4,
             }}
@@ -1136,8 +1122,8 @@ describe('Credit balance plan admin component', () => {
     assert.match(markup, /Renminbi account balance/)
     assert.match(markup, /Timed plans/)
     assert.match(markup, /<form/)
-    assert.match(markup, /credit-balance-model-limits/)
-    assert.match(markup, /gpt-4o,claude-3-7-sonnet/)
+    assert.doesNotMatch(markup, /credit-balance-model-limits/)
+    assert.doesNotMatch(markup, /Model scope/)
     assert.match(markup, /credit-balance-purchase-enabled/)
     assert.match(markup, /credit-balance-redemption-enabled/)
     assert.match(markup, /credit-balance-conversion-enabled/)

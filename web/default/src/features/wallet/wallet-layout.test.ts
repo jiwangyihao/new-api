@@ -145,33 +145,39 @@ describe('wallet Kyren payment flow', () => {
   })
 })
 describe('wallet page layout', () => {
-  test('places subscription plans before add-funds redemption card', () => {
+  test('keeps account-balance top-up hidden until opened from subscription actions', () => {
     const source = readWalletSource()
-    const gridIndex = source.indexOf('xl:grid-cols-')
-    const subscriptionIndex = source.indexOf(
-      '<SubscriptionPlansCard',
-      gridIndex
+    const subscriptionIndex = source.indexOf('<SubscriptionPlansCard')
+    const addFundsStateIndex = source.indexOf(
+      'const [addFundsOpen, setAddFundsOpen] = useState(false)'
     )
-    const addFundsIndex = source.indexOf("id='wallet-add-funds'", gridIndex)
+    const addFundsIndex = source.indexOf("id='wallet-add-funds'")
 
-    assert.notEqual(
-      gridIndex,
-      -1,
-      'wallet page should render a responsive grid'
+    assert.notEqual(subscriptionIndex, -1)
+    assert.notEqual(addFundsStateIndex, -1)
+    assert.notEqual(addFundsIndex, -1)
+    assert.match(source, /onOpenAddFunds=\{handleOpenAddFunds\}/)
+    assert.match(source, /\{addFundsOpen && \(/)
+    assert.ok(subscriptionIndex < addFundsIndex)
+  })
+
+  test('moves order history to subscription actions and separates strategy from subscriptions', () => {
+    const walletSource = readWalletSource()
+    const subscriptionSource = readSubscriptionPlansSource()
+    const rechargeSource = readRechargeFormCardSource()
+
+    assert.match(subscriptionSource, /onOpenBilling/)
+    assert.match(subscriptionSource, /Order History/)
+    assert.doesNotMatch(rechargeSource, /Order History/)
+    assert.doesNotMatch(
+      subscriptionSource.slice(
+        subscriptionSource.indexOf("title={t('Subscription Plans')}")
+      ),
+      /SubscriptionBillingStrategyControl data/
     )
-    assert.notEqual(
-      subscriptionIndex,
-      -1,
-      'wallet page should render subscription plans in the main grid'
-    )
-    assert.notEqual(
-      addFundsIndex,
-      -1,
-      'wallet page should render the add-funds/redemption card in the main grid'
-    )
-    assert.ok(
-      subscriptionIndex < addFundsIndex,
-      'desktop and mobile reading order should be subscription plans before redemption'
+    assert.match(
+      walletSource,
+      /grid items-start gap-4 lg:grid-cols-2[\s\S]*SubscriptionBillingStrategyControl[\s\S]*TimedSubscriptionConversionQuotesCard/
     )
   })
 
@@ -207,13 +213,12 @@ describe('wallet page layout', () => {
     assert.match(source, /CopyButton[\s\S]*value=\{referralShareText\}/)
   })
 
-  test('wallet balance displays use account balance CNY cents formatting', () => {
+  test('keeps RMB account balance out of the default wallet summary', () => {
     const source = readWalletStatsCardSource()
 
-    assert.match(
-      source,
-      /formatAccountBalanceForPlanPurchase\(props\.user\?\.quota \?\? 0\)/
-    )
+    assert.doesNotMatch(source, /Account Balance/)
+    assert.doesNotMatch(source, /formatAccountBalanceForPlanPurchase/)
+    assert.match(source, /grid-cols-2/)
   })
 
   test('Creem and Kyren products display credited CNY account balance', () => {

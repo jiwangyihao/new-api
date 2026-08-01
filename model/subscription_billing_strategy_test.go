@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func TestSingleActiveBillingStrategyDoesNotFallBackOnModelRestriction(t *testing.T) {
+func TestSingleActiveBillingStrategyIgnoresLegacyModelLimits(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
@@ -30,15 +30,18 @@ func TestSingleActiveBillingStrategyDoesNotFallBackOnModelRestriction(t *testing
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7894, UserId: user.Id, PlanId: 7892, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7895, UserId: user.Id, PlanId: 7893, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 
-	_, err := PreConsumeUserSubscription("single-active-model-restriction", user.Id, "gpt-4o", 0, 5)
+	pre, err := PreConsumeUserSubscription("single-active-model-restriction", user.Id, "gpt-4o", 0, 5)
 
-	require.ErrorContains(t, err, "subscription model not allowed")
-	var fallback UserSubscription
+	require.NoError(t, err)
+	assert.Equal(t, 7894, pre.UserSubscriptionId)
+	var active, fallback UserSubscription
+	require.NoError(t, DB.First(&active, 7894).Error)
 	require.NoError(t, DB.First(&fallback, 7895).Error)
+	assert.Equal(t, int64(5), active.TokenUsed)
 	assert.Zero(t, fallback.TokenUsed)
 	var records int64
 	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", "single-active-model-restriction").Count(&records).Error)
-	assert.Zero(t, records)
+	assert.Equal(t, int64(1), records)
 }
 
 func TestActiveFallbackBillingStrategyFallsBackOnInsufficientCredit(t *testing.T) {
@@ -131,7 +134,7 @@ func TestActiveFallbackBillingStrategyUsesTimedBeforeCreditBalance(t *testing.T)
 	assert.Zero(t, credit.TokenUsed)
 }
 
-func TestActiveFallbackBillingStrategyDoesNotFallBackOnModelRestriction(t *testing.T) {
+func TestActiveFallbackBillingStrategyIgnoresLegacyModelLimits(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
@@ -151,11 +154,14 @@ func TestActiveFallbackBillingStrategyDoesNotFallBackOnModelRestriction(t *testi
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7934, UserId: user.Id, PlanId: 7932, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7935, UserId: user.Id, PlanId: 7933, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 7200, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 
-	_, err := PreConsumeUserSubscription("active-fallback-model", user.Id, "gpt-4o", 0, 5)
+	pre, err := PreConsumeUserSubscription("active-fallback-model", user.Id, "gpt-4o", 0, 5)
 
-	require.ErrorContains(t, err, "subscription model not allowed")
-	var fallback UserSubscription
+	require.NoError(t, err)
+	assert.Equal(t, 7934, pre.UserSubscriptionId)
+	var active, fallback UserSubscription
+	require.NoError(t, DB.First(&active, 7934).Error)
 	require.NoError(t, DB.First(&fallback, 7935).Error)
+	assert.Equal(t, int64(5), active.TokenUsed)
 	assert.Zero(t, fallback.TokenUsed)
 }
 
@@ -271,7 +277,7 @@ func TestSingleActiveBillingStrategyRejectsConvertedCachedSubscription(t *testin
 	assert.Equal(t, int64(5), source.TokenUsed)
 }
 
-func TestExpiredActiveSubscriptionRepairCommitsWhenReplacementRejectsModel(t *testing.T) {
+func TestExpiredActiveSubscriptionRepairUsesReplacementRegardlessOfLegacyModelLimits(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
@@ -290,15 +296,16 @@ func TestExpiredActiveSubscriptionRepairCommitsWhenReplacementRejectsModel(t *te
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7964, UserId: user.Id, PlanId: 7962, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now - 1, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7965, UserId: user.Id, PlanId: 7963, EntitlementType: SubscriptionEntitlementTimed, Status: "active", TokenLimit: 100, EndTime: now + 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 
-	_, err := PreConsumeUserSubscription("repair-before-model-error", user.Id, "gpt-4o", 0, 5)
+	pre, err := PreConsumeUserSubscription("repair-before-model-error", user.Id, "gpt-4o", 0, 5)
 
-	require.ErrorContains(t, err, "subscription model not allowed")
+	require.NoError(t, err)
+	assert.Equal(t, 7965, pre.UserSubscriptionId)
 	var persisted User
 	require.NoError(t, DB.First(&persisted, user.Id).Error)
 	assert.Equal(t, 7965, persisted.GetSetting().ActiveSubscriptionId)
 	var records int64
 	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", "repair-before-model-error").Count(&records).Error)
-	assert.Zero(t, records)
+	assert.Equal(t, int64(1), records)
 }
 
 func TestActiveDistributorUsageUsesTimedFirstStrategySelection(t *testing.T) {
@@ -675,7 +682,7 @@ func TestRolledBackQuotaResetCacheCannotBypassDueReset(t *testing.T) {
 	require.NoError(t, DB.Create(&UserSubscription{Id: subscriptionID, UserId: userID, PlanId: planID, EntitlementType: SubscriptionEntitlementTimed, Status: "active", StartTime: now - 2*86400, EndTime: now + 3*86400, TokenLimit: 100, TokenUsed: 90, LastResetTime: now - 2*86400, NextResetTime: now - 3600, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		outcome, selectErr := selectPrimaryBillableSubscriptionTx(tx, userID, now, 5, true, true, "gpt-4o")
+		outcome, selectErr := selectPrimaryBillableSubscriptionTx(tx, userID, now, 5, true, true)
 		if selectErr != nil {
 			return selectErr
 		}
@@ -804,7 +811,7 @@ func TestSubscriptionBillingStrategySelectionMatrix(t *testing.T) {
 			wantOrder:          []int{0, 1, 2},
 		},
 		{
-			name:        "model restriction on first candidate stops fallback",
+			name:        "legacy model restrictions do not block the active candidate",
 			strategy:    SubscriptionBillingStrategyActiveFallback,
 			activeIndex: 0,
 			candidates: []candidateSpec{
@@ -813,7 +820,7 @@ func TestSubscriptionBillingStrategySelectionMatrix(t *testing.T) {
 			},
 			modelName:          "gpt-4o",
 			requiredTokens:     5,
-			wantSelectionIndex: -1,
+			wantSelectionIndex: 0,
 			wantActiveIndex:    0,
 			wantOrder:          []int{0, 1},
 		},
@@ -887,7 +894,7 @@ func TestSubscriptionBillingStrategySelectionMatrix(t *testing.T) {
 
 			var outcome primaryBillableSelectionOutcome
 			require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
-				selected, err := selectPrimaryBillableSubscriptionTx(tx, user.Id, now, test.requiredTokens, true, false, test.modelName)
+				selected, err := selectPrimaryBillableSubscriptionTx(tx, user.Id, now, test.requiredTokens, true, false)
 				outcome = selected
 				return err
 			}))

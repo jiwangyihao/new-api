@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getSelf } from '@/lib/api'
@@ -29,7 +29,10 @@ import { CreemConfirmDialog } from './components/dialogs/creem-confirm-dialog'
 import { PaymentConfirmDialog } from './components/dialogs/payment-confirm-dialog'
 import { RechargeFormCard } from './components/recharge-form-card'
 import { RedemptionDialog } from './components/redemption-dialog'
-import { SubscriptionPlansCard } from './components/subscription-plans-card'
+import {
+  SubscriptionBillingStrategyControl,
+  SubscriptionPlansCard,
+} from './components/subscription-plans-card'
 import { WalletStatsCard } from './components/wallet-stats-card'
 import { DEFAULT_DISCOUNT_RATE } from './constants'
 import {
@@ -80,6 +83,8 @@ export function Wallet(props: WalletProps) {
   const [selectedKyrenTopUpProduct, setSelectedKyrenTopUpProduct] =
     useState<KyrenTopUpProduct | null>(null)
   const [showSubscriptionPanel, setShowSubscriptionPanel] = useState(true)
+  const [addFundsOpen, setAddFundsOpen] = useState(false)
+  const addFundsRef = useRef<HTMLDivElement>(null)
 
   const { status } = useStatus()
   const { topupInfo, presetAmounts, loading: topupLoading } = useTopupInfo()
@@ -278,6 +283,16 @@ export function Wallet(props: WalletProps) {
     []
   )
 
+  const handleOpenAddFunds = useCallback(() => {
+    setAddFundsOpen(true)
+    requestAnimationFrame(() => {
+      addFundsRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      })
+    })
+  }, [])
+
   return (
     <>
       <SectionPageLayout>
@@ -286,24 +301,24 @@ export function Wallet(props: WalletProps) {
           {t('Manage your balance and payment methods')}
         </SectionPageLayout.Description>
         <SectionPageLayout.Content>
-          <div className='mx-auto flex w-full max-w-7xl flex-col gap-4 sm:gap-5'>
+          <div className='mx-auto flex w-full max-w-6xl flex-col gap-4 sm:gap-5'>
             <WalletStatsCard user={user} loading={userLoading} />
 
-            <div
-              className={
-                showSubscriptionPanel
-                  ? 'grid gap-4 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)] xl:items-start'
-                  : 'grid gap-4'
-              }
-            >
-              <SubscriptionPlansCard
-                topupInfo={topupInfo}
-                accountBalance={user?.quota}
-                onPurchaseSuccess={fetchUser}
-                onAvailabilityChange={handleSubscriptionAvailabilityChange}
-              />
+            <SubscriptionPlansCard
+              topupInfo={topupInfo}
+              accountBalance={user?.quota}
+              onPurchaseSuccess={fetchUser}
+              onAvailabilityChange={handleSubscriptionAvailabilityChange}
+              onOpenBilling={() => setBillingDialogOpen(true)}
+              onOpenAddFunds={handleOpenAddFunds}
+            />
 
-              <div id='wallet-add-funds' className='scroll-mt-4'>
+            {addFundsOpen && (
+              <div
+                ref={addFundsRef}
+                id='wallet-add-funds'
+                className='scroll-mt-4'
+              >
                 <RechargeFormCard
                   topupInfo={topupInfo}
                   presetAmounts={presetAmounts}
@@ -322,7 +337,6 @@ export function Wallet(props: WalletProps) {
                   topupLink={topupInfo?.topup_link}
                   loading={topupLoading}
                   priceRatio={(status?.price as number) || 1}
-                  onOpenBilling={() => setBillingDialogOpen(true)}
                   creemProducts={topupInfo?.creem_products}
                   enableCreemTopup={topupInfo?.enable_creem_topup}
                   onCreemProductSelect={handleCreemProductSelect}
@@ -339,9 +353,14 @@ export function Wallet(props: WalletProps) {
                   }
                 />
               </div>
-            </div>
+            )}
 
-            <TimedSubscriptionConversionQuotesCard />
+            {showSubscriptionPanel && (
+              <div className='grid items-start gap-4 lg:grid-cols-2'>
+                <SubscriptionBillingStrategyControl />
+                <TimedSubscriptionConversionQuotesCard />
+              </div>
+            )}
 
             <AffiliateRewardsCard
               affiliateLink={affiliateLink}

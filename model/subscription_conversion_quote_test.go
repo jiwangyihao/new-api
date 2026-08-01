@@ -25,11 +25,11 @@ func TestRecalculateTimedSubscriptionConversionQuoteFormulaBoundaries(t *testing
 		wantBlocks       int64
 		wantGross        int64
 	}{
-		{name: "zero", remainingSeconds: 0, wantBlocks: 0, wantGross: 25},
-		{name: "one_second_before_block", remainingSeconds: blockSeconds - 1, wantBlocks: 0, wantGross: 25},
-		{name: "one_block", remainingSeconds: blockSeconds, wantBlocks: 1, wantGross: 125},
-		{name: "thirty_two_days", remainingSeconds: 32 * 24 * 60 * 60, wantBlocks: 1, wantGross: 125},
-		{name: "multiple_blocks", remainingSeconds: 3*blockSeconds + 17, wantBlocks: 3, wantGross: 325},
+		{name: "no_remaining_time_keeps_current_period_unused_credit", remainingSeconds: 0, wantBlocks: 0, wantGross: 25},
+		{name: "less_than_31_days_keeps_only_current_period_unused_credit", remainingSeconds: blockSeconds - 1, wantBlocks: 0, wantGross: 25},
+		{name: "exact_31_days_adds_one_full_future_period", remainingSeconds: blockSeconds, wantBlocks: 1, wantGross: 125},
+		{name: "31_days_plus_partial_does_not_prorate_another_period", remainingSeconds: blockSeconds + 24*60*60, wantBlocks: 1, wantGross: 125},
+		{name: "multiple_full_periods_ignore_partial_remainder", remainingSeconds: 3*blockSeconds + 17, wantBlocks: 3, wantGross: 325},
 	}
 
 	for index, test := range tests {
@@ -68,6 +68,48 @@ func TestRecalculateTimedSubscriptionConversionQuoteFormulaBoundaries(t *testing
 			assert.True(t, quote.Eligible)
 			assert.True(t, quote.CanConfirm)
 			assert.Empty(t, quote.ReasonCodes)
+		})
+	}
+}
+
+func TestRecalculateTimedSubscriptionConversionQuoteLargeCreditExamplesDoNotDoubleCountPartialTime(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	const blockSeconds int64 = TimedSubscriptionConversionBlockSeconds
+	tests := []struct {
+		name             string
+		remainingSeconds int64
+		creditBasis      int64
+		currentRemaining int64
+		wantBlocks       int64
+		wantGross        int64
+	}{
+		{name: "under_one_block", remainingSeconds: blockSeconds - 1, creditBasis: 5_000_000_000, currentRemaining: 4_915_690_135, wantBlocks: 0, wantGross: 4_915_690_135},
+		{name: "exactly_one_block", remainingSeconds: blockSeconds, creditBasis: 36_000_000_000, currentRemaining: 35_553_920_000, wantBlocks: 1, wantGross: 71_553_920_000},
+		{name: "one_block_plus_partial_time", remainingSeconds: blockSeconds + 15*24*60*60, creditBasis: 36_000_000_000, currentRemaining: 35_553_920_000, wantBlocks: 1, wantGross: 71_553_920_000},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			userID := 11_000 + index
+			planID := 21_000 + index
+			subscriptionID := 31_000 + index
+			seedConversionQuoteTimedPlan(t, planID, test.creditBasis)
+			snapshot := test.creditBasis
+			subscription := UserSubscription{
+				Id: subscriptionID, UserId: userID, PlanId: planID,
+				EntitlementType: SubscriptionEntitlementTimed,
+				TokenLimit:      test.creditBasis, TokenUsed: test.creditBasis - test.currentRemaining,
+				GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+				StartTime: conversionQuoteTestNow - 40*24*60*60,
+				EndTime:   conversionQuoteTestNow + test.remainingSeconds,
+				Status:    "active", LastGrantedAt: conversionQuoteTestNow - TimedSubscriptionConversionCooldownSeconds,
+				LastGrantCreditSnapshot: &snapshot,
+			}
+			require.NoError(t, DB.Create(&subscription).Error)
+			quote, err := RecalculateTimedSubscriptionConversionQuoteTx(DB, userID, subscriptionID, conversionQuoteTestNow)
+			require.NoError(t, err)
+			assert.Equal(t, test.wantBlocks, quote.Full31DayBlocks)
+			assert.Equal(t, test.currentRemaining, quote.CurrentRemainingCredit)
+			assert.Equal(t, test.wantGross, quote.GrossCredit)
 		})
 	}
 }

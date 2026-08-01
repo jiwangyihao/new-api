@@ -348,7 +348,7 @@ describe('timed subscription conversion quotes', () => {
     assert.equal(view.queryByRole('button', { name: /restore/i }), null)
   })
 
-  test('shows the explicit reason for a subscription that has not started', async () => {
+  test('collapses excluded subscriptions and exposes only their primary reason', async () => {
     const view = await renderQuotesCard(
       makeQuoteList([
         makeQuote({
@@ -363,7 +363,21 @@ describe('timed subscription conversion quotes', () => {
     )
 
     assert.ok(view.getByRole('heading', { name: 'Excluded subscriptions' }))
+    assert.equal(
+      view.queryByText('The source subscription has not started yet'),
+      null
+    )
+    assert.equal(
+      view.queryByRole('button', { name: 'Preview conversion' }),
+      null
+    )
+    const trigger = view.getByRole('button', {
+      name: /Excluded subscriptions/,
+    })
+    assert.equal(trigger.getAttribute('aria-expanded'), 'false')
+    fireEvent.click(trigger)
     assert.ok(view.getByText('The source subscription has not started yet'))
+    assert.ok(view.getByText('Potential available Credit if eligible'))
   })
   test('submits subscription identifiers above Number.MAX_SAFE_INTEGER without precision loss', async () => {
     const unsafeId = '9007199254740993'
@@ -402,13 +416,15 @@ describe('timed subscription conversion quotes', () => {
   test('updates remaining time, block boundary, and formula after one local second', async () => {
     const view = await renderQuotesCard()
     assert.ok(view.getByText('1 × 100 + 25 = 125'))
-    assert.ok(view.getByText('2678400 seconds remaining'))
+    assert.ok(view.getByText('Time remaining: 1 months'))
 
     currentTimeMs += 1000
     await act(async () => runCapturedInterval(1000))
 
     assert.ok(view.getByText('0 × 100 + 25 = 25'))
-    assert.ok(view.getByText('2678399 seconds remaining'))
+    assert.ok(
+      view.getByText('Time remaining: 30 days 23 hours 59 minutes 59 seconds')
+    )
   })
 
   test('refreshes with React Query every five seconds, on focus, and before preview opens', async () => {
@@ -491,6 +507,11 @@ describe('timed subscription conversion quotes', () => {
     currentTimeMs += (336 * 60 * 60 + 1) * 1000
     await act(async () => runCapturedInterval(1000))
     assert.ok(view.getByRole('heading', { name: 'Excluded subscriptions' }))
+    const excludedTrigger = view.getByRole('button', {
+      name: /Excluded subscriptions/,
+    })
+    assert.equal(excludedTrigger.getAttribute('aria-expanded'), 'false')
+    fireEvent.click(excludedTrigger)
     assert.ok(view.getByText('Excluded'))
     assert.ok(view.getByText('The 336-hour conversion grace period has ended'))
   })
@@ -512,8 +533,12 @@ describe('timed subscription conversion quotes', () => {
         }),
       ])
     )
+    const cooldownTrigger = view.getByRole('button', {
+      name: /Excluded subscriptions/,
+    })
+    fireEvent.click(cooldownTrigger)
     assert.ok(
-      view.getByText('Conversion cooldown is active (60 seconds remaining)')
+      view.getByText('Conversion cooldown is active (1 minutes remaining)')
     )
 
     currentTimeMs += 1000
@@ -545,6 +570,9 @@ describe('timed subscription conversion quotes', () => {
     await act(async () => runCapturedInterval(1000))
 
     assert.ok(view.getByRole('heading', { name: 'Excluded subscriptions' }))
+    fireEvent.click(
+      view.getByRole('button', { name: /Excluded subscriptions/ })
+    )
     assert.ok(view.getByText('The calculated gross Credit is not positive'))
   })
 
@@ -587,12 +615,17 @@ describe('timed subscription conversion quotes', () => {
     assert.ok(view.getByRole('heading', { name: 'Excluded subscriptions' }))
     assert.ok(view.getByText('Subscription #7001'))
     assert.ok(view.getByText('Subscription #7002'))
-    assert.ok(view.getByText('Subscription #7003'))
-    assert.ok(
-      view.getByText('Conversion cooldown is active (60 seconds remaining)')
-    )
+    assert.equal(view.queryByText('Subscription #7003'), null)
     assert.ok(
       view.getByRole('status', { name: 'Conversion quote refresh status' })
+    )
+    assert.equal(view.getAllByRole('timer').length, 2)
+    fireEvent.click(
+      view.getByRole('button', { name: /Excluded subscriptions/ })
+    )
+    assert.ok(view.getByText('Subscription #7003'))
+    assert.ok(
+      view.getByText('Conversion cooldown is active (1 minutes remaining)')
     )
     assert.equal(view.getAllByRole('timer').length, 3)
 

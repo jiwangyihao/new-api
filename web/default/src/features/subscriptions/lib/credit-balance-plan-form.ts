@@ -29,7 +29,6 @@ export function creditBalancePlanToFormValues(
   plan: SubscriptionPlan
 ): CreditBalancePlanFormValues {
   return {
-    model_limits: plan.model_limits || '',
     concurrency_limit: Number(plan.concurrency_limit || 0),
     queue_capacity: Number(plan.queue_capacity || 0),
     business_code: plan.business_code || '',
@@ -43,17 +42,7 @@ export function creditBalancePlanToFormValues(
 export function creditBalancePlanFormToRequest(
   values: CreditBalancePlanFormValues
 ): CreditBalancePlanUpdateRequest {
-  const modelLimits = [
-    ...new Set(
-      values.model_limits
-        .split(',')
-        .map((model) => model.trim())
-        .filter(Boolean)
-    ),
-  ].join(',')
-
   return {
-    model_limits: modelLimits,
     concurrency_limit: Number(values.concurrency_limit || 0),
     queue_capacity: Number(values.queue_capacity || 0),
     business_code: values.business_code.trim(),

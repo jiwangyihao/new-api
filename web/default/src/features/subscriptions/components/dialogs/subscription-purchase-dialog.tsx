@@ -113,7 +113,6 @@ interface KyrenPaymentDependencies {
 }
 
 interface CreditBalancePlanDisplay {
-  model_limits?: string
   concurrency_limit?: number
   queue_capacity?: number
 }
@@ -698,7 +697,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                           </span>
                           <span className='text-muted-foreground text-xs'>
                             {t(
-                              'Extends this plan and keeps its validity period, model scope, concurrency, and reset rules.'
+                              'Extends this plan and keeps its validity period, concurrency, and reset rules.'
                             )}
                           </span>
                         </span>
@@ -729,10 +728,8 @@ export function SubscriptionPurchaseDialog(props: Props) {
             {purchaseMode === 'credit_balance' && props.creditBalancePlan && (
               <Alert>
                 <AlertDescription>
-                  {t('Credit balance service limits')}:{' '}
-                  {props.creditBalancePlan.model_limits || t('All models')} ·{' '}
-                  {t('Concurrency Limit')}:{' '}
-                  {props.creditBalancePlan.concurrency_limit || 0} ·{' '}
+                  {t('Credit balance service limits')}: {t('Concurrency Limit')}
+                  : {props.creditBalancePlan.concurrency_limit || 0} ·{' '}
                   {t('Queue Capacity')}:{' '}
                   {props.creditBalancePlan.queue_capacity || 0}
                 </AlertDescription>

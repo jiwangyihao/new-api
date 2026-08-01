@@ -1,13 +1,15 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import { subscriptionPlanSchema } from '../types'
 import {
   formatConcurrencyLimit,
+  formatCompactCredit,
+  formatDurationSeconds,
   formatFiniteTokenCount,
   formatPlanPrice,
   formatQueueCapacity,
   formatTokenLimit,
 } from './format'
-import { subscriptionPlanSchema } from '../types'
 
 const t = (key: string, values?: Record<string, unknown>) =>
   key.replace(/{{(\w+)}}/g, (_match, name: string) =>
@@ -55,6 +57,28 @@ describe('subscription distributor format helpers', () => {
   test('formats billion-scale monthly token limits compactly', () => {
     assert.equal(formatTokenLimit(1_000_000_000, t), '1B tokens')
     assert.equal(formatTokenLimit(2_500_000_000, t), '2.5B tokens')
+  })
+
+  test('formats Credit with exact K, M, and B suffixes', () => {
+    assert.equal(formatCompactCredit(999), '999')
+    assert.equal(formatCompactCredit(1_250), '1.25K')
+    assert.equal(formatCompactCredit(4_915_690_135n), '4.92B')
+    assert.equal(formatCompactCredit(-1_500_000), '-1.5M')
+  })
+
+  test('formats seconds as years, months, days, hours, minutes, and seconds', () => {
+    const duration =
+      365n * 24n * 60n * 60n +
+      2n * 31n * 24n * 60n * 60n +
+      3n * 24n * 60n * 60n +
+      4n * 60n * 60n +
+      5n * 60n +
+      6n
+    assert.equal(
+      formatDurationSeconds(duration, t),
+      '1 years 2 months 3 days 4 hours 5 minutes 6 seconds'
+    )
+    assert.equal(formatDurationSeconds(0, t), '0 seconds')
   })
 
   test('formats concurrency limit with unlimited fallback', () => {

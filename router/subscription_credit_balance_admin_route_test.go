@@ -64,7 +64,7 @@ func TestCreditBalanceAdminRoutePersistsDedicatedConfiguration(t *testing.T) {
 	engine.ServeHTTP(getRecorder, getRequest)
 
 	require.Equal(t, http.StatusOK, getRecorder.Code, getRecorder.Body.String())
-	assert.Contains(t, getRecorder.Body.String(), `"model_limits":"gpt-4o,claude-3-7-sonnet"`)
+	assert.NotContains(t, getRecorder.Body.String(), `"model_limits"`)
 	assert.Contains(t, getRecorder.Body.String(), `"credit_balance_configured":true`)
 	assert.Contains(t, getRecorder.Body.String(), `"credit_balance_purchase_enabled":true`)
 	assert.Contains(t, getRecorder.Body.String(), `"credit_balance_redemption_enabled":false`)
@@ -72,7 +72,7 @@ func TestCreditBalanceAdminRoutePersistsDedicatedConfiguration(t *testing.T) {
 
 	var plan model.SubscriptionPlan
 	require.NoError(t, db.Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error)
-	assert.Equal(t, "gpt-4o,claude-3-7-sonnet", plan.ModelLimits)
+	assert.Empty(t, plan.ModelLimits)
 	assert.Equal(t, 7, plan.ConcurrencyLimit)
 	assert.Equal(t, 13, plan.QueueCapacity)
 	require.NotNil(t, plan.BusinessCode)

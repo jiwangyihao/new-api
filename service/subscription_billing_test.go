@@ -992,17 +992,9 @@ func TestPreConsumeBillingFreeNonTextModelOnlyRequiresActiveSubscription(t *test
 	assert.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 }
 
-func TestPreConsumeBillingFreeModelUsesResolvedBillingModelScope(t *testing.T) {
-	tests := []struct {
-		name        string
-		modelLimits string
-		wantSuccess bool
-	}{
-		{name: "allowed resolved model", modelLimits: "mapped-gpt-4o", wantSuccess: true},
-		{name: "denied origin model", modelLimits: "gpt-4o", wantSuccess: false},
-	}
-	for index, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
+func TestPreConsumeBillingFreeModelIgnoresLegacyModelLimits(t *testing.T) {
+	for index, modelLimits := range []string{"mapped-gpt-4o", "gpt-4o"} {
+		t.Run(modelLimits, func(t *testing.T) {
 			truncate(t)
 			userID := 8100 + index*10
 			tokenID := userID + 1
@@ -1011,7 +1003,7 @@ func TestPreConsumeBillingFreeModelUsesResolvedBillingModelScope(t *testing.T) {
 			seedUser(t, userID, 10_000)
 			seedToken(t, tokenID, userID, fmt.Sprintf("sk-free-scope-%d", index), 10_000)
 			seedDistributorPlan(t, planID, fmt.Sprintf("plan-free-scope-%d", index), 1_000)
-			require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Update("model_limits", tc.modelLimits).Error)
+			require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Update("model_limits", modelLimits).Error)
 			model.InvalidateSubscriptionPlanCache(planID)
 			seedDistributorSubscription(t, subID, userID, planID, 1_000, 0)
 
@@ -1022,15 +1014,10 @@ func TestPreConsumeBillingFreeModelUsesResolvedBillingModelScope(t *testing.T) {
 			relayInfo.OriginModelName = "gpt-4o"
 
 			session, apiErr := NewBillingSession(ctx, relayInfo, 0)
-			if tc.wantSuccess {
-				require.Nil(t, apiErr)
-				assert.Nil(t, session)
-				assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
-				return
-			}
-			require.Nil(t, session)
-			require.NotNil(t, apiErr)
-			assert.Equal(t, types.ErrorCodeSubscriptionRequired, apiErr.GetErrorCode())
+
+			require.Nil(t, apiErr)
+			assert.Nil(t, session)
+			assert.Equal(t, BillingSourceSubscription, relayInfo.BillingSource)
 		})
 	}
 }

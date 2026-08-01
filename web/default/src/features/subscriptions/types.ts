@@ -232,7 +232,6 @@ export const subscriptionPlanSchema = z.object({
   reward_eligible: z.boolean().optional(),
   business_code: z.string().optional(),
   entitlement_type: z.enum(['timed', 'credit_balance']).default('timed'),
-  model_limits: z.string().optional(),
   credit_balance_configured: z.boolean().optional(),
   credit_balance_purchase_enabled: z.boolean().optional(),
   credit_balance_redemption_enabled: z.boolean().optional(),
@@ -379,7 +378,6 @@ export interface PlanPayload {
 }
 
 export interface CreditBalancePlanUpdateRequest {
-  model_limits: string
   concurrency_limit: number
   queue_capacity: number
   business_code: string
@@ -636,7 +634,6 @@ export interface SelfSubscriptionData {
   credit_balance_ledger?: CreditBalanceLedgerEntry[]
   credit_balance_purchase_enabled?: boolean
   credit_balance_plan?: {
-    model_limits?: string
     concurrency_limit?: number
     queue_capacity?: number
   } | null

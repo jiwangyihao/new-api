@@ -260,7 +260,7 @@ type SubscriptionPlan struct {
 
 	EntitlementType                string  `json:"entitlement_type" gorm:"type:varchar(32);not null;default:'timed';index"`
 	SingletonKey                   *string `json:"-" gorm:"type:varchar(32);uniqueIndex:idx_subscription_plans_singleton_key"`
-	ModelLimits                    string  `json:"model_limits" gorm:"type:text"`
+	ModelLimits                    string  `json:"-" gorm:"type:text"` // Legacy storage only; subscription billing ignores model scope.
 	CreditBalanceConfigured        bool    `json:"credit_balance_configured" gorm:"not null;default:false"`
 	CreditBalancePurchaseEnabled   bool    `json:"credit_balance_purchase_enabled" gorm:"not null;default:false"`
 	CreditBalanceRedemptionEnabled bool    `json:"credit_balance_redemption_enabled" gorm:"not null;default:false"`
@@ -1464,18 +1464,8 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 }
 
 // HasActiveUserSubscription returns whether the user has any billable active subscription.
-// This is a lightweight existence check to avoid heavy pre-consume transactions.
+// Subscription plans do not restrict models; API-key model restrictions remain independent.
 func HasActiveUserSubscription(userId int) (bool, error) {
-	return hasActiveUserSubscriptionForModel(userId, "")
-}
-
-// HasActiveUserSubscriptionForModel returns whether the user has a billable active
-// subscription whose model scope includes modelName.
-func HasActiveUserSubscriptionForModel(userId int, modelName string) (bool, error) {
-	return hasActiveUserSubscriptionForModel(userId, modelName)
-}
-
-func hasActiveUserSubscriptionForModel(userId int, modelName string) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
@@ -1483,7 +1473,7 @@ func hasActiveUserSubscriptionForModel(userId int, modelName string) (bool, erro
 	var repairedSettingJSON string
 	hasSubscription := false
 	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
-		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true, modelName)
+		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
 		if err != nil {
 			return err
 		}
@@ -2055,20 +2045,6 @@ func isBillableSubscriptionCandidate(sub *UserSubscription, plan *SubscriptionPl
 	return false, false
 }
 
-func subscriptionPlanAllowsModel(plan *SubscriptionPlan, modelName string) bool {
-	modelName = strings.TrimSpace(modelName)
-	if modelName == "" || plan == nil || strings.TrimSpace(plan.ModelLimits) == "" {
-		return true
-	}
-
-	for _, allowed := range strings.Split(plan.ModelLimits, ",") {
-		if strings.TrimSpace(allowed) == modelName {
-			return true
-		}
-	}
-	return false
-}
-
 func sortAutomaticBillingCandidates(candidates []billableSubscriptionCandidate) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		left := candidates[i].sub
@@ -2235,7 +2211,6 @@ func resolveSubscriptionBillingStrategyStateTx(tx *gorm.DB, userId int, userSett
 type primaryBillableSelectionOutcome struct {
 	Selection                       *primaryBillableSubscription
 	SawDistributorSubscription      bool
-	SawModelAllowedSubscription     bool
 	ActiveSubscriptionId            int
 	RepairedSettingJSON             string
 	BillingStrategy                 string
@@ -2279,7 +2254,7 @@ func primaryBillableSubscriptionCacheKey(userId int) string {
 	return strconv.Itoa(userId)
 }
 
-func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting string, requiredTokens int64, now int64, modelName string) (*primaryBillableSubscription, bool) {
+func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting string, requiredTokens int64, now int64) (*primaryBillableSubscription, bool) {
 	if tx == nil {
 		return nil, false
 	}
@@ -2310,9 +2285,6 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 		return nil, false
 	}
 	selection.Plan = plan
-	if !subscriptionPlanAllowsModel(plan, modelName) {
-		return nil, false
-	}
 	if ok, unlimited := isBillableSubscriptionCandidate(&sub, plan, requiredTokens); !ok {
 		return nil, false
 	} else {
@@ -2354,7 +2326,7 @@ func cachePrimaryBillableSelectionTx(tx *gorm.DB, userId int, sub *UserSubscript
 	})
 }
 
-func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool, modelName string) (primaryBillableSelectionOutcome, error) {
+func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool) (primaryBillableSelectionOutcome, error) {
 	if tx == nil {
 		tx = DB
 	}
@@ -2369,11 +2341,10 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	userSetting := user.GetSetting()
 	billingStrategy := NormalizeSubscriptionBillingStrategy(userSetting.SubscriptionBillingStrategy)
 	if forUpdate && billingStrategy == SubscriptionBillingStrategySingleActive && userSetting.ActiveSubscriptionId > 0 {
-		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, user.Setting, requiredTokens, now, modelName); ok && cached.Subscription.Id == userSetting.ActiveSubscriptionId {
+		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, user.Setting, requiredTokens, now); ok && cached.Subscription.Id == userSetting.ActiveSubscriptionId {
 			return primaryBillableSelectionOutcome{
 				Selection:                       cached,
 				SawDistributorSubscription:      true,
-				SawModelAllowedSubscription:     true,
 				ActiveSubscriptionId:            userSetting.ActiveSubscriptionId,
 				BillingStrategy:                 billingStrategy,
 				BillingCandidateSubscriptionIds: []int{userSetting.ActiveSubscriptionId},
@@ -2396,11 +2367,6 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		outcome.BillingCandidateSubscriptionIds = append(outcome.BillingCandidateSubscriptionIds, candidate.sub.Id)
 	}
 	for _, candidate := range state.OrderedCandidates {
-		if !subscriptionPlanAllowsModel(candidate.plan, modelName) {
-			outcome.SawModelAllowedSubscription = false
-			return outcome, nil
-		}
-		outcome.SawModelAllowedSubscription = true
 		ok, unlimited := isBillableSubscriptionCandidate(&candidate.sub, candidate.plan, requiredTokens)
 		if !ok {
 			if state.Strategy == SubscriptionBillingStrategySingleActive {
@@ -2525,7 +2491,7 @@ func GetCodexProEligibility(userId int, _ dto.UserSetting) (bool, string, error)
 	var selection *primaryBillableSubscription
 	var repairedSettingJSON string
 	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
-		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true, "")
+		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
 		if err != nil {
 			return err
 		}
@@ -2892,7 +2858,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return nil
 		}
 
-		outcome, selectionErr := selectPrimaryBillableSubscriptionTx(tx, userId, now, distributorAmount, true, true, modelName)
+		outcome, selectionErr := selectPrimaryBillableSubscriptionTx(tx, userId, now, distributorAmount, true, true)
 		if selectionErr != nil {
 			return selectionErr
 		}
@@ -2902,8 +2868,6 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			switch {
 			case !outcome.SawDistributorSubscription:
 				selectionBusinessErr = ErrNoActiveSubscription
-			case !outcome.SawModelAllowedSubscription:
-				selectionBusinessErr = fmt.Errorf("subscription model not allowed: %s", modelName)
 			default:
 				selectionBusinessErr = fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
 			}

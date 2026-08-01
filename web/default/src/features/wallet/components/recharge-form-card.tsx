@@ -17,12 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect } from 'react'
-import { Gift, ExternalLink, Loader2, Receipt, WalletCards } from 'lucide-react'
+import { Gift, ExternalLink, Loader2, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import {
-  accountBalanceCnyToCents,
-  formatAccountBalanceForPlanPurchase,
-} from '@/features/subscriptions/lib'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -37,6 +33,10 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import {
+  accountBalanceCnyToCents,
+  formatAccountBalanceForPlanPurchase,
+} from '@/features/subscriptions/lib'
 import {
   formatCurrency,
   getDiscountLabel,
@@ -72,7 +72,6 @@ interface RechargeFormCardProps {
   topupLink?: string
   loading?: boolean
   priceRatio?: number
-  onOpenBilling?: () => void
   creemProducts?: CreemProduct[]
   enableCreemTopup?: boolean
   onCreemProductSelect?: (product: CreemProduct) => void
@@ -105,7 +104,6 @@ export function RechargeFormCard({
   topupLink,
   loading,
   priceRatio = 1,
-  onOpenBilling,
   creemProducts,
   enableCreemTopup,
   onCreemProductSelect,
@@ -204,21 +202,10 @@ export function RechargeFormCard({
   return (
     <TitledCard
       title={t('Add Account Balance')}
-      description={t('Account balance can be used to purchase subscription plans.')}
+      description={t(
+        'Account balance can be used to purchase subscription plans.'
+      )}
       icon={<WalletCards className='h-4 w-4' />}
-      action={
-        onOpenBilling ? (
-          <Button
-            variant='outline'
-            size='sm'
-            onClick={onOpenBilling}
-            className='w-full gap-2 sm:w-auto'
-          >
-            <Receipt className='h-4 w-4' />
-            {t('Order History')}
-          </Button>
-        ) : null
-      }
       contentClassName='space-y-4 sm:space-y-6'
     >
       {/* Online Topup Section */}

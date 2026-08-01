@@ -18,13 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Crown, RefreshCw, Check } from 'lucide-react'
+import { Crown, RefreshCw, Check, Receipt, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import { FieldDescription, FieldLegend, FieldSet } from '@/components/ui/field'
 import { Progress } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -83,6 +82,8 @@ interface SubscriptionPlansCardProps {
   accountBalance?: number
   onPurchaseSuccess?: () => Promise<void> | void
   onAvailabilityChange?: (available: boolean) => void
+  onOpenBilling?: () => void
+  onOpenAddFunds?: () => void
 }
 
 function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
@@ -270,7 +271,7 @@ export const billingStrategyOptions: Array<{
     value: 'single_active',
     label: 'Single active subscription',
     description:
-      'Uses only the active subscription. Credit shortage, model restrictions, concurrency limits, and request failures never switch benefits.',
+      'Uses only the active subscription. Credit shortage, concurrency limits, and request failures never switch benefits.',
   },
   {
     value: 'active_fallback',
@@ -287,6 +288,29 @@ export const billingStrategyOptions: Array<{
 ]
 
 export function SubscriptionBillingStrategyControl({
+  data,
+}: {
+  data?: SelfSubscriptionData
+}) {
+  return data ? (
+    <SubscriptionBillingStrategyCard data={data} />
+  ) : (
+    <SubscriptionBillingStrategyLoader />
+  )
+}
+
+function SubscriptionBillingStrategyLoader() {
+  const selfSubscriptionQuery = useQuery({
+    queryKey: subscriptionQueryKeys.selfSummary,
+    queryFn: getSelfSubscriptionFull,
+  })
+  const data = selfSubscriptionQuery.data?.success
+    ? selfSubscriptionQuery.data.data
+    : null
+  return data ? <SubscriptionBillingStrategyCard data={data} /> : null
+}
+
+function SubscriptionBillingStrategyCard({
   data,
 }: {
   data: SelfSubscriptionData
@@ -330,21 +354,20 @@ export function SubscriptionBillingStrategyControl({
   }
 
   return (
-    <FieldSet className='rounded-xl border p-3 sm:p-4'>
-      <FieldLegend variant='label'>
-        {t('Subscription billing strategy')}
-      </FieldLegend>
-      <FieldDescription>
-        {t(
-          'This account-level strategy applies to every API key and only affects requests that start after it changes.'
-        )}
-      </FieldDescription>
+    <TitledCard
+      title={t('Subscription billing strategy')}
+      description={t(
+        'This account-level strategy applies to every API key and only affects requests that start after it changes.'
+      )}
+      icon={<RefreshCw />}
+      contentClassName='flex flex-col gap-4'
+    >
       <ToggleGroup
         value={[strategy]}
         onValueChange={handleChange}
         disabled={updateMutation.isPending}
         spacing={2}
-        className='grid w-full grid-cols-1 gap-2 lg:grid-cols-3'
+        className='grid w-full grid-cols-1 gap-2'
         aria-label={t('Subscription billing strategy')}
       >
         {billingStrategyOptions.map((option) => (
@@ -380,7 +403,7 @@ export function SubscriptionBillingStrategyControl({
             {t('Current candidate order')}
           </div>
           {(data.billing_candidate_subscription_ids?.length || 0) > 0 ? (
-            <ol className='mt-1 list-inside list-decimal space-y-1 font-medium'>
+            <ol className='mt-1 list-inside list-decimal font-medium'>
               {data.billing_candidate_subscription_ids?.map(
                 (subscriptionId) => (
                   <li key={subscriptionId}>
@@ -396,7 +419,7 @@ export function SubscriptionBillingStrategyControl({
           )}
         </div>
       </div>
-    </FieldSet>
+    </TitledCard>
   )
 }
 
@@ -405,6 +428,8 @@ export function SubscriptionPlansCard({
   onAvailabilityChange,
   accountBalance,
   onPurchaseSuccess,
+  onOpenBilling,
+  onOpenAddFunds,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
 
@@ -571,6 +596,22 @@ export function SubscriptionPlansCard({
         title={t('Subscription Plans')}
         description={t('Subscribe to a plan for model access')}
         icon={<Crown className='h-4 w-4' />}
+        action={
+          <div className='flex w-full flex-wrap gap-2 sm:w-auto'>
+            {onOpenAddFunds && (
+              <Button variant='outline' size='sm' onClick={onOpenAddFunds}>
+                <WalletCards data-icon='inline-start' />
+                {t('Add Account Balance')}
+              </Button>
+            )}
+            {onOpenBilling && (
+              <Button variant='outline' size='sm' onClick={onOpenBilling}>
+                <Receipt data-icon='inline-start' />
+                {t('Order History')}
+              </Button>
+            )}
+          </div>
+        }
         contentClassName='space-y-4 sm:space-y-5'
       >
         <div className='rounded-xl border p-3 sm:p-4'>
@@ -875,10 +916,6 @@ export function SubscriptionPlansCard({
                 })}
               </div>
             </>
-          )}
-
-          {selfSubscriptionData && (
-            <SubscriptionBillingStrategyControl data={selfSubscriptionData} />
           )}
 
           {!hasAny && (

@@ -100,18 +100,14 @@ func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *test
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7206, Title: "Credit 余额套餐", EntitlementType: SubscriptionEntitlementCreditBalance, Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 0, ConcurrencyLimit: 2, BusinessCode: &creditCode}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7207, UserId: 7104, PlanId: 7206, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 100, TokenUsed: 90, EndTime: 0, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
 
-	hasAllowed, err := HasActiveUserSubscriptionForModel(7104, "gpt-4o")
+	hasSubscription, err := HasActiveUserSubscription(7104)
 	require.NoError(t, err)
-	assert.True(t, hasAllowed)
-	hasDenied, err := HasActiveUserSubscriptionForModel(7104, "claude-3-7-sonnet")
-	require.NoError(t, err)
-	assert.False(t, hasDenied)
+	assert.True(t, hasSubscription)
 
-	_, err = PreConsumeUserSubscription("credit-balance-model-denied", 7104, "claude-3-7-sonnet", 0, 1)
-	require.ErrorContains(t, err, "subscription model not allowed")
-	var deniedRecordCount int64
-	require.NoError(t, DB.Model(&SubscriptionPreConsumeRecord{}).Where("request_id = ?", "credit-balance-model-denied").Count(&deniedRecordCount).Error)
-	assert.Zero(t, deniedRecordCount)
+	otherModelPreConsume, err := PreConsumeUserSubscription("credit-balance-other-model", 7104, "claude-3-7-sonnet", 0, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 7207, otherModelPreConsume.UserSubscriptionId)
+	require.NoError(t, RefundSubscriptionPreConsume("credit-balance-other-model"))
 
 	pre, err := PreConsumeUserSubscription("credit-balance-preconsume", 7104, "gpt-4o", 0, 10)
 	require.NoError(t, err)
@@ -177,7 +173,7 @@ func TestActiveCreditBalanceInsufficientDoesNotFallBackToTimedSubscription(t *te
 	}
 }
 
-func TestPreConsumeDoesNotFallBackWhenActiveSubscriptionDisallowsModel(t *testing.T) {
+func TestPreConsumeIgnoresLegacyModelLimitsForCachedActiveSubscription(t *testing.T) {
 	truncateTables(t)
 	ensureSubscriptionPreConsumeRecordTableForTest(t)
 	ClearPrimaryBillableSubscriptionCacheForTest()
@@ -207,13 +203,17 @@ func TestPreConsumeDoesNotFallBackWhenActiveSubscriptionDisallowsModel(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, 7210, persistedSetting.ActiveSubscriptionId)
 
-	_, err = PreConsumeUserSubscription("model-fallback-first", 7106, "gpt-4o", 0, 5)
-	require.ErrorContains(t, err, "subscription model not allowed")
+	firstDifferentModel, err := PreConsumeUserSubscription("model-fallback-first", 7106, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7210, firstDifferentModel.UserSubscriptionId)
 
-	_, err = PreConsumeUserSubscription("model-fallback-cached", 7106, "gpt-4o", 0, 5)
-	require.ErrorContains(t, err, "subscription model not allowed")
-	var fallback UserSubscription
+	cachedDifferentModel, err := PreConsumeUserSubscription("model-fallback-cached", 7106, "gpt-4o", 0, 5)
+	require.NoError(t, err)
+	assert.Equal(t, 7210, cachedDifferentModel.UserSubscriptionId)
+	var active, fallback UserSubscription
+	require.NoError(t, DB.First(&active, 7210).Error)
 	require.NoError(t, DB.First(&fallback, 7213).Error)
+	assert.Equal(t, int64(15), active.TokenUsed)
 	assert.Zero(t, fallback.TokenUsed)
 }
 

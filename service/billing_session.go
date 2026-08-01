@@ -657,7 +657,7 @@ func NewBillingSession(c *gin.Context, relayInfo *relaycommon.RelayInfo, preCons
 		return nil, types.NewOpenAIError(distributorSubscriptionRelayError(relayInfo), types.ErrorCodeSubscriptionRequired, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
 	}
 	if relayInfo.FreeModel || relayInfo.PriceData.FreeModel {
-		hasSubscription, err := model.HasActiveUserSubscriptionForModel(relayInfo.UserId, relaycommon.ResolveBillingModelName(relayInfo))
+		hasSubscription, err := model.HasActiveUserSubscription(relayInfo.UserId)
 		if err != nil {
 			return nil, types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
 		}

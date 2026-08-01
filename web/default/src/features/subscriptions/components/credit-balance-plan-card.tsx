@@ -37,7 +37,6 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
 import { getCreditBalancePlan } from '../api'
 import {
   creditBalancePlanToFormValues,
@@ -105,7 +104,6 @@ export function CreditBalancePlanCard() {
 
   const editorRevision = JSON.stringify([
     plan.id,
-    plan.model_limits,
     plan.concurrency_limit,
     plan.queue_capacity,
     plan.business_code,
@@ -205,7 +203,7 @@ function CreditBalancePlanEditor({
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className='space-y-4'>
+      <CardContent className='flex flex-col gap-4'>
         <Alert>
           <AlertTitle>{t('Keep balances distinct')}</AlertTitle>
           <AlertDescription>
@@ -214,27 +212,8 @@ function CreditBalancePlanEditor({
           </AlertDescription>
         </Alert>
 
-        <form className='space-y-4' onSubmit={handleSubmit}>
+        <form className='flex flex-col gap-4' onSubmit={handleSubmit}>
           <div className='grid gap-4 md:grid-cols-2'>
-            <div className='space-y-2 md:col-span-2'>
-              <Label htmlFor='credit-balance-model-limits'>
-                {t('Model scope')}
-              </Label>
-              <Textarea
-                id='credit-balance-model-limits'
-                value={values.model_limits}
-                placeholder={t('Comma-separated model names')}
-                onChange={(event) =>
-                  setField('model_limits', event.target.value)
-                }
-              />
-              <p className='text-muted-foreground text-xs'>
-                {t(
-                  'These live limits apply to newly started Credit balance requests.'
-                )}
-              </p>
-            </div>
-
             <div className='space-y-2'>
               <Label htmlFor='credit-balance-concurrency'>
                 {t('Concurrency Limit')}
@@ -284,7 +263,7 @@ function CreditBalancePlanEditor({
             id='credit-balance-configured'
             label={t('Configuration confirmed')}
             description={t(
-              'Confirm only after model scope, concurrency, queue capacity, and BusinessCode are reviewed.'
+              'Confirm only after concurrency, queue capacity, and BusinessCode are reviewed.'
             )}
             checked={values.configured}
             onCheckedChange={(checked) =>

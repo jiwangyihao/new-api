@@ -123,6 +123,61 @@ export function formatFiniteCreditCount(
   return formatCreditLimit(credits, t)
 }
 
+export function formatCompactCredit(value: bigint | number | string): string {
+  let credits: bigint
+  try {
+    credits = typeof value === 'bigint' ? value : BigInt(value)
+  } catch {
+    return '0'
+  }
+  const negative = credits < 0n
+  const absolute = negative ? -credits : credits
+  const units = [
+    { value: 1_000_000_000n, suffix: 'B' },
+    { value: 1_000_000n, suffix: 'M' },
+    { value: 1_000n, suffix: 'K' },
+  ]
+  const unit = units.find((candidate) => absolute >= candidate.value)
+  if (!unit) return new Intl.NumberFormat().format(credits)
+  const scaledHundredths = (absolute * 100n + unit.value / 2n) / unit.value
+  const whole = scaledHundredths / 100n
+  const fraction = (scaledHundredths % 100n)
+    .toString()
+    .padStart(2, '0')
+    .replace(/0+$/, '')
+  return `${negative ? '-' : ''}${whole}${fraction ? `.${fraction}` : ''}${unit.suffix}`
+}
+
+export function formatDurationSeconds(
+  value: bigint | number | string,
+  t: TranslationFn
+): string {
+  let remaining: bigint
+  try {
+    remaining = typeof value === 'bigint' ? value : BigInt(value)
+  } catch {
+    return `0 ${t('seconds')}`
+  }
+  if (remaining < 0n) remaining = 0n
+  const units = [
+    { seconds: 365n * 24n * 60n * 60n, label: 'years' },
+    { seconds: 31n * 24n * 60n * 60n, label: 'months' },
+    { seconds: 24n * 60n * 60n, label: 'days' },
+    { seconds: 60n * 60n, label: 'hours' },
+    { seconds: 60n, label: 'minutes' },
+    { seconds: 1n, label: 'seconds' },
+  ] as const
+  const parts: string[] = []
+  for (const unit of units) {
+    const count = remaining / unit.seconds
+    if (count > 0n) {
+      parts.push(`${count} ${t(unit.label)}`)
+      remaining %= unit.seconds
+    }
+  }
+  return parts.length > 0 ? parts.join(' ') : `0 ${t('seconds')}`
+}
+
 export function formatConcurrencyLimit(
   value: number | null | undefined,
   t: TranslationFn

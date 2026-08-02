@@ -1,5 +1,7 @@
 # 付费套餐剩余价值与邀请付费统计面板实现计划
 
+> **后续计划覆盖说明（2026-08-02）：** 本计划已经交付的面板结构继续保留，但其中以 `SubscriptionPlan.price_amount > 0`、`UserSubscription + SubscriptionPlan` 和 `(user_id, plan_id)` 订单关联作为 Credit 主金额来源的实现步骤，已由 `2026-08-02-credit-operational-remaining-value-plan.md` 替代。后续修复必须按新计划迁移，不能只移除 `end_time` 或正价格过滤条件。
+
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法跟踪进度。实现直接在主工作区开发，不创建、不切换 worktree。
 
 **目标：** 在现有 `/admin-analytics` 中新增「付费套餐剩余价值」和「邀请付费」两个后台统计面板，并新增可配置的统计排除用户列表。

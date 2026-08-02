@@ -2,7 +2,6 @@ package model
 
 import (
 	"errors"
-	"math"
 	"sort"
 	"strconv"
 	"time"
@@ -11,11 +10,8 @@ import (
 	"gorm.io/gorm"
 )
 
-const usageAnalyticsCandidateLimit = 50000
-
 var (
 	ErrUsageAnalyticsInvalidToken = errors.New("invalid usage analytics token")
-	ErrUsageAnalyticsTooManyLogs  = errors.New("usage analytics candidate logs exceed limit")
 	ErrUsageAnalyticsInvalidGroup = errors.New("invalid usage analytics group_by")
 )
 
@@ -52,84 +48,122 @@ const (
 
 type usageAnalyticsAccumulator struct {
 	UsageAnalyticsGroup
-	latencySamples []int
-	tokenName      string
-	tokenNameAt    int64
+	latencyTotalSeconds int64
+	latencyCounts       map[int]int
+	tokenName           string
+	tokenNameAt         int64
 }
 
 func GetUsageAnalyticsSummary(query UsageAnalyticsQuery) (UsageAnalyticsSummaryResponse, error) {
 	query = usageAnalyticsNormalizeQuery(query)
-	logs, err := usageAnalyticsLoadCandidateLogs(query, true)
-	if err != nil {
+	if err := usageAnalyticsValidateQuery(query); err != nil {
 		return UsageAnalyticsSummaryResponse{}, err
 	}
-	total, groups := usageAnalyticsAggregate(logs, query.GroupBy)
+
+	total := usageAnalyticsNewAccumulator(query.GroupBy, "total", "total", "Total", nil)
+	groups := make(map[string]*usageAnalyticsAccumulator)
+	activeTokenIDs := make(map[int]struct{})
+	if err := usageAnalyticsForEachLog(query, true, func(log Log) {
+		usageAnalyticsAddLog(total, log)
+		usageAnalyticsAddGroupedLog(groups, query.GroupBy, log)
+		if log.TokenId > 0 {
+			activeTokenIDs[log.TokenId] = struct{}{}
+		}
+	}); err != nil {
+		return UsageAnalyticsSummaryResponse{}, err
+	}
+
 	usageAnalyticsFinalizeAccumulator(total)
 	usageAnalyticsFinalizeAccumulators(groups)
 	usageAnalyticsAttachTokenInfo(query.UserID, groups)
 	usageAnalyticsApplyShares(groups, query.SortBy)
 	limitedGroups := usageAnalyticsLimitGroups(groups, query.Limit, query.SortBy, query.SortOrder)
-	recentLogs, err := usageAnalyticsLoadCandidateLogs(query, false)
-	if err != nil {
+
+	rpm := 0
+	tpm := 0
+	if err := usageAnalyticsForEachLog(query, false, func(log Log) {
+		rpm++
+		tpm += usageAnalyticsLogTokens(log)
+	}); err != nil {
 		return UsageAnalyticsSummaryResponse{}, err
 	}
-	rpm, tpm := usageAnalyticsRPMAndTPM(recentLogs)
+
 	totalMetrics := usageAnalyticsGroupMetrics(total.UsageAnalyticsGroup)
 	totalMetrics.Rpm = rpm
 	totalMetrics.Tpm = tpm
-	totalMetrics.ActiveKeyCount = usageAnalyticsActiveKeyCount(logs)
+	totalMetrics.ActiveKeyCount = len(activeTokenIDs)
 	return UsageAnalyticsSummaryResponse{Total: totalMetrics, Groups: usageAnalyticsAccumulatorSliceToGroups(limitedGroups), GroupBy: query.GroupBy}, nil
 }
 
 func GetUsageAnalyticsTimeseries(query UsageAnalyticsQuery) (UsageAnalyticsTimeseriesResponse, error) {
 	query = usageAnalyticsNormalizeQuery(query)
-	logs, err := usageAnalyticsLoadCandidateLogs(query, true)
-	if err != nil {
+	if err := usageAnalyticsValidateQuery(query); err != nil {
 		return UsageAnalyticsTimeseriesResponse{}, err
 	}
+
 	step := usageAnalyticsStepSeconds(query.Granularity)
-	_, globalGroups := usageAnalyticsAggregate(logs, query.GroupBy)
-	usageAnalyticsFinalizeAccumulators(globalGroups)
-	usageAnalyticsAttachTokenInfo(query.UserID, globalGroups)
-	topKeys := usageAnalyticsTopKeySet(globalGroups, query.Limit, query.SortBy, query.SortOrder)
+	globalGroups := make(map[string]*usageAnalyticsAccumulator)
 	bucketGroups := make(map[int64]map[string]*usageAnalyticsAccumulator)
-	for i := range logs {
-		log := logs[i]
-		if log.CreatedAt < query.StartTimestamp || log.CreatedAt > query.EndTimestamp {
-			continue
-		}
-		bucket := query.StartTimestamp + ((log.CreatedAt - query.StartTimestamp) / step * step)
+	if err := usageAnalyticsForEachLog(query, true, func(log Log) {
 		key, value, label, drilldown := usageAnalyticsDimension(query.GroupBy, log)
-		if !topKeys[key] {
-			key = "other"
-			value = "other"
-			label = "Other"
-			drilldown = nil
+		global := globalGroups[key]
+		if global == nil {
+			global = usageAnalyticsNewAccumulator(query.GroupBy, key, value, label, drilldown)
+			globalGroups[key] = global
 		}
+		usageAnalyticsAddLog(global, log)
+
+		bucket := query.StartTimestamp + ((log.CreatedAt - query.StartTimestamp) / step * step)
 		groupsByKey := bucketGroups[bucket]
 		if groupsByKey == nil {
 			groupsByKey = make(map[string]*usageAnalyticsAccumulator)
 			bucketGroups[bucket] = groupsByKey
 		}
-		acc := groupsByKey[key]
-		if acc == nil {
-			acc = usageAnalyticsNewAccumulator(query.GroupBy, key, value, label, drilldown)
-			groupsByKey[key] = acc
+		bucketAccumulator := groupsByKey[key]
+		if bucketAccumulator == nil {
+			bucketAccumulator = usageAnalyticsNewAccumulator(query.GroupBy, key, value, label, drilldown)
+			groupsByKey[key] = bucketAccumulator
 		}
-		usageAnalyticsAddLog(acc, log)
+		usageAnalyticsAddLog(bucketAccumulator, log)
+	}); err != nil {
+		return UsageAnalyticsTimeseriesResponse{}, err
 	}
+
+	usageAnalyticsFinalizeAccumulators(globalGroups)
+	usageAnalyticsAttachTokenInfo(query.UserID, globalGroups)
+	topKeys := usageAnalyticsTopKeySet(globalGroups, query.Limit, query.SortBy, query.SortOrder)
 	points := make([]UsageAnalyticsTimeseriesPoint, 0)
 	for bucket, groupsByKey := range bucketGroups {
+		var other *usageAnalyticsAccumulator
 		for key, acc := range groupsByKey {
+			if !topKeys[key] {
+				if other == nil {
+					other = usageAnalyticsNewAccumulator(query.GroupBy, "other", "other", "Other", nil)
+				}
+				usageAnalyticsMergeAccumulator(other, acc)
+				continue
+			}
+
 			usageAnalyticsFinalizeAccumulator(acc)
-			if key != "other" && query.GroupBy == UsageAnalyticsGroupByToken {
+			if query.GroupBy == UsageAnalyticsGroupByToken {
 				if global := globalGroups[key]; global != nil {
 					acc.GroupLabel = global.GroupLabel
 					acc.Token = global.Token
 				}
 			}
-			point := UsageAnalyticsTimeseriesPoint{Timestamp: bucket, TimeLabel: usageAnalyticsTimeLabel(bucket, query.Granularity), UsageAnalyticsGroup: acc.UsageAnalyticsGroup}
-			points = append(points, point)
+			points = append(points, UsageAnalyticsTimeseriesPoint{
+				Timestamp:           bucket,
+				TimeLabel:           usageAnalyticsTimeLabel(bucket, query.Granularity),
+				UsageAnalyticsGroup: acc.UsageAnalyticsGroup,
+			})
+		}
+		if other != nil {
+			usageAnalyticsFinalizeAccumulator(other)
+			points = append(points, UsageAnalyticsTimeseriesPoint{
+				Timestamp:           bucket,
+				TimeLabel:           usageAnalyticsTimeLabel(bucket, query.Granularity),
+				UsageAnalyticsGroup: other.UsageAnalyticsGroup,
+			})
 		}
 	}
 	sort.Slice(points, func(i, j int) bool {
@@ -143,11 +177,17 @@ func GetUsageAnalyticsTimeseries(query UsageAnalyticsQuery) (UsageAnalyticsTimes
 
 func GetUsageAnalyticsBreakdown(query UsageAnalyticsQuery) (UsageAnalyticsBreakdownResponse, error) {
 	query = usageAnalyticsNormalizeQuery(query)
-	logs, err := usageAnalyticsLoadCandidateLogs(query, true)
-	if err != nil {
+	if err := usageAnalyticsValidateQuery(query); err != nil {
 		return UsageAnalyticsBreakdownResponse{}, err
 	}
-	_, groups := usageAnalyticsAggregate(logs, query.GroupBy)
+
+	groups := make(map[string]*usageAnalyticsAccumulator)
+	if err := usageAnalyticsForEachLog(query, true, func(log Log) {
+		usageAnalyticsAddGroupedLog(groups, query.GroupBy, log)
+	}); err != nil {
+		return UsageAnalyticsBreakdownResponse{}, err
+	}
+
 	usageAnalyticsFinalizeAccumulators(groups)
 	usageAnalyticsAttachTokenInfo(query.UserID, groups)
 	usageAnalyticsApplyShares(groups, query.SortBy)
@@ -193,22 +233,31 @@ func usageAnalyticsNormalizeQuery(query UsageAnalyticsQuery) UsageAnalyticsQuery
 	return query
 }
 
-func usageAnalyticsLoadCandidateLogs(query UsageAnalyticsQuery, useQueryTime bool) ([]Log, error) {
+func usageAnalyticsValidateQuery(query UsageAnalyticsQuery) error {
 	if _, ok := usageAnalyticsGroupExpr(query.GroupBy); !ok {
-		return nil, ErrUsageAnalyticsInvalidGroup
+		return ErrUsageAnalyticsInvalidGroup
 	}
-	if err := usageAnalyticsValidateTokenIDs(query); err != nil {
-		return nil, err
+	return usageAnalyticsValidateTokenIDs(query)
+}
+
+func usageAnalyticsForEachLog(query UsageAnalyticsQuery, useQueryTime bool, visit func(Log)) error {
+	db := usageAnalyticsBaseLogQuery(LOG_DB, query, useQueryTime).Select(
+		"created_at, type, token_name, model_name, quota, prompt_tokens, completion_tokens, metered_tokens, use_time, is_stream, token_id",
+	)
+	rows, err := db.Rows()
+	if err != nil {
+		return err
 	}
-	logs := make([]Log, 0)
-	db := usageAnalyticsBaseLogQuery(LOG_DB, query, useQueryTime).Order("created_at asc").Limit(usageAnalyticsCandidateLimit + 1)
-	if err := db.Find(&logs).Error; err != nil {
-		return nil, err
+	defer rows.Close()
+
+	for rows.Next() {
+		var log Log
+		if err := db.ScanRows(rows, &log); err != nil {
+			return err
+		}
+		visit(log)
 	}
-	if len(logs) > usageAnalyticsCandidateLimit {
-		return nil, ErrUsageAnalyticsTooManyLogs
-	}
-	return logs, nil
+	return rows.Err()
 }
 
 func usageAnalyticsBaseLogQuery(db *gorm.DB, query UsageAnalyticsQuery, useQueryTime bool) *gorm.DB {
@@ -286,21 +335,14 @@ func usageAnalyticsStatusTypes(statuses []string) []int {
 	return nil
 }
 
-func usageAnalyticsAggregate(logs []Log, groupBy UsageAnalyticsGroupBy) (*usageAnalyticsAccumulator, map[string]*usageAnalyticsAccumulator) {
-	total := usageAnalyticsNewAccumulator(groupBy, "total", "total", "Total", nil)
-	groups := make(map[string]*usageAnalyticsAccumulator)
-	for i := range logs {
-		log := logs[i]
-		usageAnalyticsAddLog(total, log)
-		key, value, label, drilldown := usageAnalyticsDimension(groupBy, log)
-		acc := groups[key]
-		if acc == nil {
-			acc = usageAnalyticsNewAccumulator(groupBy, key, value, label, drilldown)
-			groups[key] = acc
-		}
-		usageAnalyticsAddLog(acc, log)
+func usageAnalyticsAddGroupedLog(groups map[string]*usageAnalyticsAccumulator, groupBy UsageAnalyticsGroupBy, log Log) {
+	key, value, label, drilldown := usageAnalyticsDimension(groupBy, log)
+	acc := groups[key]
+	if acc == nil {
+		acc = usageAnalyticsNewAccumulator(groupBy, key, value, label, drilldown)
+		groups[key] = acc
 	}
-	return total, groups
+	usageAnalyticsAddLog(acc, log)
 }
 
 func usageAnalyticsNewAccumulator(groupBy UsageAnalyticsGroupBy, key string, value string, label string, drilldown *UsageAnalyticsDrilldown) *usageAnalyticsAccumulator {
@@ -320,7 +362,12 @@ func usageAnalyticsAddLog(acc *usageAnalyticsAccumulator, log Log) {
 	tokens := usageAnalyticsLogTokens(log)
 	acc.MeteredTokens += tokens
 	acc.TotalTokens += tokens
-	acc.latencySamples = append(acc.latencySamples, usageAnalyticsLogUseTime(log))
+	useTime := usageAnalyticsLogUseTime(log)
+	acc.latencyTotalSeconds += int64(useTime)
+	if acc.latencyCounts == nil {
+		acc.latencyCounts = make(map[int]int)
+	}
+	acc.latencyCounts[useTime]++
 	if acc.FirstUsedAt == 0 || log.CreatedAt < acc.FirstUsedAt {
 		acc.FirstUsedAt = log.CreatedAt
 	}
@@ -348,7 +395,19 @@ func usageAnalyticsMergeAccumulator(dst *usageAnalyticsAccumulator, src *usageAn
 	if src.LastUsedAt > dst.LastUsedAt {
 		dst.LastUsedAt = src.LastUsedAt
 	}
-	dst.latencySamples = append(dst.latencySamples, src.latencySamples...)
+	dst.latencyTotalSeconds += src.latencyTotalSeconds
+	if len(src.latencyCounts) > 0 {
+		if dst.latencyCounts == nil {
+			dst.latencyCounts = make(map[int]int, len(src.latencyCounts))
+		}
+		for value, count := range src.latencyCounts {
+			dst.latencyCounts[value] += count
+		}
+	}
+	if src.tokenName != "" && src.tokenNameAt >= dst.tokenNameAt {
+		dst.tokenName = src.tokenName
+		dst.tokenNameAt = src.tokenNameAt
+	}
 }
 
 func usageAnalyticsFinalizeAccumulators(groups map[string]*usageAnalyticsAccumulator) {
@@ -364,14 +423,8 @@ func usageAnalyticsFinalizeAccumulator(acc *usageAnalyticsAccumulator) {
 	if acc.RequestCount > 0 {
 		acc.SuccessRate = float64(acc.SuccessCount) / float64(acc.RequestCount)
 		acc.ErrorRate = float64(acc.ErrorCount) / float64(acc.RequestCount)
-	}
-	if len(acc.latencySamples) > 0 {
-		sum := 0
-		for _, sample := range acc.latencySamples {
-			sum += sample
-		}
-		acc.AvgLatencyMs = sum * 1000 / len(acc.latencySamples)
-		acc.P95LatencyMs = usageAnalyticsP95LatencyMs(acc.latencySamples)
+		acc.AvgLatencyMs = int(acc.latencyTotalSeconds * 1000 / int64(acc.RequestCount))
+		acc.P95LatencyMs = usageAnalyticsP95LatencyMs(acc.latencyCounts, acc.RequestCount)
 	}
 }
 
@@ -394,20 +447,24 @@ func usageAnalyticsGroupMetrics(group UsageAnalyticsGroup) UsageAnalyticsMetrics
 	}
 }
 
-func usageAnalyticsP95LatencyMs(samples []int) int {
-	if len(samples) == 0 {
+func usageAnalyticsP95LatencyMs(counts map[int]int, total int) int {
+	if total <= 0 || len(counts) == 0 {
 		return 0
 	}
-	copySamples := append([]int(nil), samples...)
-	sort.Ints(copySamples)
-	index := int(math.Ceil(0.95*float64(len(copySamples)))) - 1
-	if index < 0 {
-		index = 0
+	values := make([]int, 0, len(counts))
+	for value := range counts {
+		values = append(values, value)
 	}
-	if index >= len(copySamples) {
-		index = len(copySamples) - 1
+	sort.Ints(values)
+	target := (95*int64(total) + 99) / 100
+	seen := int64(0)
+	for _, value := range values {
+		seen += int64(counts[value])
+		if seen >= target {
+			return value * 1000
+		}
 	}
-	return copySamples[index] * 1000
+	return values[len(values)-1] * 1000
 }
 
 func usageAnalyticsLogTokens(log Log) int {
@@ -681,25 +738,6 @@ func usageAnalyticsTopKeySet(groups map[string]*usageAnalyticsAccumulator, limit
 		keys[acc.GroupKey] = true
 	}
 	return keys
-}
-
-func usageAnalyticsRPMAndTPM(logs []Log) (int, int) {
-	rpm := len(logs)
-	tpm := 0
-	for i := range logs {
-		tpm += usageAnalyticsLogTokens(logs[i])
-	}
-	return rpm, tpm
-}
-
-func usageAnalyticsActiveKeyCount(logs []Log) int {
-	ids := make(map[int]bool)
-	for _, log := range logs {
-		if log.TokenId > 0 {
-			ids[log.TokenId] = true
-		}
-	}
-	return len(ids)
 }
 
 func usageAnalyticsStepSeconds(granularity string) int64 {

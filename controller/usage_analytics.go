@@ -82,7 +82,7 @@ func writeUsageAnalyticsResponse(c *gin.Context, data any, err error) {
 		common.ApiSuccess(c, data)
 		return
 	}
-	if errors.Is(err, model.ErrUsageAnalyticsInvalidToken) || errors.Is(err, model.ErrUsageAnalyticsTooManyLogs) || errors.Is(err, model.ErrUsageAnalyticsInvalidGroup) {
+	if errors.Is(err, model.ErrUsageAnalyticsInvalidToken) || errors.Is(err, model.ErrUsageAnalyticsInvalidGroup) {
 		writeUsageAnalyticsBadRequest(c, err.Error())
 		return
 	}

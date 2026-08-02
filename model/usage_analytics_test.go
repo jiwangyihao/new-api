@@ -306,15 +306,50 @@ func TestUsageAnalyticsTimeseriesP95UsesBucketSamples(t *testing.T) {
 	require.Equal(t, 8000, res.Points[1].P95LatencyMs)
 }
 
-func TestUsageAnalyticsCandidateLimit(t *testing.T) {
+func TestUsageAnalyticsStreamsMoreThanFiftyThousandLogs(t *testing.T) {
 	setupUsageAnalyticsModelTestDBs(t)
 	now := usageAnalyticsNow()
-	for i := 0; i < 50001; i++ {
-		seedUsageAnalyticsLog(t, &Log{UserId: 101, CreatedAt: now - int64(i%60), Type: LogTypeConsume, TokenId: 1, MeteredTokens: intPtrForUsageAnalyticsTest(1)})
+	const logCount = 50001
+	const batchSize = 40
+	meteredTokens := 1
+	for start := 0; start < logCount; start += batchSize {
+		end := min(start+batchSize, logCount)
+		logs := make([]Log, end-start)
+		for i := range logs {
+			logs[i] = Log{
+				UserId:        101,
+				CreatedAt:     now - int64((start+i)%60),
+				Type:          LogTypeConsume,
+				TokenId:       1,
+				MeteredTokens: &meteredTokens,
+			}
+		}
+		require.NoError(t, LOG_DB.Create(&logs).Error)
 	}
 
-	_, err := GetUsageAnalyticsTimeseries(UsageAnalyticsQuery{UserID: 101, StartTimestamp: now - 60, EndTimestamp: now, Granularity: UsageAnalyticsGranularityHour, GroupBy: UsageAnalyticsGroupByToken, Limit: 10})
-	require.ErrorIs(t, err, ErrUsageAnalyticsTooManyLogs)
+	query := UsageAnalyticsQuery{
+		UserID:         101,
+		StartTimestamp: now - 60,
+		EndTimestamp:   now,
+		Granularity:    UsageAnalyticsGranularityHour,
+		GroupBy:        UsageAnalyticsGroupByToken,
+		Metric:         UsageAnalyticsMetricTotalTokens,
+		Limit:          10,
+	}
+	summary, err := GetUsageAnalyticsSummary(query)
+	require.NoError(t, err)
+	require.Equal(t, logCount, summary.Total.RequestCount)
+	require.Equal(t, logCount, summary.Total.TotalTokens)
+
+	timeseries, err := GetUsageAnalyticsTimeseries(query)
+	require.NoError(t, err)
+	require.Len(t, timeseries.Points, 1)
+	require.Equal(t, logCount, timeseries.Points[0].RequestCount)
+
+	breakdown, err := GetUsageAnalyticsBreakdown(query)
+	require.NoError(t, err)
+	require.Len(t, breakdown.Groups, 1)
+	require.Equal(t, logCount, breakdown.Groups[0].RequestCount)
 }
 
 func TestUsageAnalyticsSQLAvoidsDatabaseSpecificFunctions(t *testing.T) {

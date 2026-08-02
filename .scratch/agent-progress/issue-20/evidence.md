@@ -1,0 +1,30 @@
+# Issue #20 验证证据
+
+## 约束基线
+
+- 父 PRD：`issue://jiwangyihao/new-api/19`
+- 当前切片：`issue://jiwangyihao/new-api/20`
+- 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
+- 共享执行协议：`docs/agents/credit-operational-value-execution.md`
+
+## 已执行
+
+- 阅读并确认 Issue #20 验收标准。
+- 阅读 `CONTEXT.md`、ADR 0001、ADR 0002。
+- 阅读规格 4.1–5.7 与实施计划任务 1–2。
+- 加载 `skill://tdd`：后续严格采用单个可观察行为的 RED → GREEN 循环。
+
+## RED/GREEN 记录
+
+尚未开始。
+
+## 最终验证待办
+
+- 精确金额解析、序列化和稳定错误码。
+- 套餐创建、编辑、读取往返。
+- Credit 估值币种首次配置与冻结。
+- 附加 migration/schema 可重复与唯一约束。
+- 只读非法价格诊断不写数据库。
+- 防溢出整数比例边界。
+- 管理 UI 真实浏览器请求 payload 与刷新结果。
+- 修改文件格式化、`git diff --check`、工作树清洁度。

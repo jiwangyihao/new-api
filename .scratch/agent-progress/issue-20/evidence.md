@@ -16,8 +16,16 @@
 
 ## RED/GREEN 记录
 
-尚未开始。
+- RED：`go test ./model -run TestCreditValuationMathMulDivFloorOrdinaryValue -count=1`，编译失败 `undefined: mulDivFloor`。
+- GREEN：最小整数实现后普通值 `40,000,000 × 800 / 1,000 = 32,000,000` 通过。
+- RED：零分母缺少稳定 sentinel；补充 `ErrCreditValuationDivisionByZero` 后通过。
+- RED：`MaxInt64 × MaxInt64 / MaxInt64` 旧 `int64` 中间乘法得到 0；改用 `math/bits.Mul64/Div64` 后通过。
+- RED：`MaxInt64 × 2 / 1` 缺少结果溢出检测；补充 `credit_valuation_overflow` 后通过。
+- RED：`ParseDecimalAmountMicros` 不存在；实现严格十进制文本解析后六位小数通过。
+- RED：负数、七位小数、`MaxInt64` 边界与越界输入缺少稳定错误；补充非负、精度和防溢出检查后通过。
+- GREEN：`go test ./model -run 'Test(ParseDecimalAmountMicros|CreditValuationMathMulDivFloor)' -count=1`，目标包通过。
 
+当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
 ## 最终验证待办
 
 - 精确金额解析、序列化和稳定错误码。

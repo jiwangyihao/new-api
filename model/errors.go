@@ -7,6 +7,16 @@ var (
 	ErrDatabase = errors.New("database error")
 )
 
+// Credit valuation errors
+var (
+	ErrCreditValuationDivisionByZero  = errors.New("credit_valuation_division_by_zero")
+	ErrCreditValuationOverflow        = errors.New("credit_valuation_overflow")
+	ErrCreditValuationNegativeInput   = errors.New("credit_valuation_negative_input")
+	ErrSubscriptionPlanPriceInvalid   = errors.New("subscription_plan_price_invalid")
+	ErrSubscriptionPlanPriceNegative  = errors.New("subscription_plan_price_negative")
+	ErrSubscriptionPlanPricePrecision = errors.New("subscription_plan_price_precision")
+)
+
 // User auth errors
 var (
 	ErrInvalidCredentials   = errors.New("invalid credentials")

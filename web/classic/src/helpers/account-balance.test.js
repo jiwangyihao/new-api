@@ -40,30 +40,21 @@ describe('classic account balance helper', () => {
     assert.match(formatAccountBalance(-250), /-2\.50/);
   });
 
-  test('top-up balance UI uses credited CNY balance instead of legacy quota conversion', () => {
+  test('classic user-facing subscription surfaces hide account balance', () => {
     const index = readFileSync('src/components/topup/index.jsx', 'utf8');
     const recharge = readFileSync('src/components/topup/RechargeCard.jsx', 'utf8');
-    const invitation = readFileSync('src/components/topup/InvitationCard.jsx', 'utf8');
-    const transfer = readFileSync('src/components/topup/modals/TransferModal.jsx', 'utf8');
-    const confirm = readFileSync('src/components/topup/modals/PaymentConfirmModal.jsx', 'utf8');
-    const creemAndTransferSource = index + recharge + invitation + transfer + confirm;
-
-    assert.match(creemAndTransferSource, /formatAccountBalance/);
-    assert.match(transfer, /accountBalanceCnyToCents/);
-    assert.match(confirm, /到账余额|Top-up credit|Credited balance|Account Balance/);
-    assert.doesNotMatch(creemAndTransferSource, /renderQuotaWithAmount\(topUpCount\)/);
-    assert.doesNotMatch(transfer, /getQuotaPerUnit\(\)/);
-  });
-
-  test('classic subscription balance purchase calls balance API with cents comparison', () => {
     const card = readFileSync('src/components/topup/SubscriptionPlansCard.jsx', 'utf8');
     const modal = readFileSync('src/components/topup/modals/SubscriptionPurchaseModal.jsx', 'utf8');
+    const profile = readFileSync(
+      'src/components/settings/personal/components/UserInfoHeader.jsx',
+      'utf8',
+    );
 
-    assert.match(card, /\/api\/subscription\/balance\/pay/);
-    assert.match(card, /idempotency_key/);
-    assert.match(modal, /Pay with Account Balance|账户余额支付|余额支付/);
-    assert.match(modal, /Math\.round\([^)]*price_amount[^)]*\*\s*100\)|balanceCents\s*>=/);
-    assert.doesNotMatch(modal, /renderQuota\([^)]*price_amount/);
+    assert.doesNotMatch(recharge, /账户余额|当前余额|formatAccountBalance/);
+    assert.doesNotMatch(card, /subscription\/balance\/pay|onPayBalance|accountBalanceCents/);
+    assert.doesNotMatch(modal, /账户余额|余额支付|accountBalance|balanceCents/);
+    assert.doesNotMatch(profile, /当前余额|formatAccountBalance/);
+    assert.doesNotMatch(index, /TransferModal|onOpenHistory|TopupHistoryModal/);
   });
 
   test('classic payment gateway labels use credited CNY balance and channel unit price', () => {

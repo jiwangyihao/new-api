@@ -330,7 +330,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             enableCreem
             enableKyrenSubscription
@@ -406,7 +405,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             enableCreem
             enableOnlineTopUp
@@ -438,10 +436,8 @@ describe('Credit balance plan admin component', () => {
       true
     )
     assert.equal(
-      view
-        .getByRole('button', { name: /Pay with Account Balance/ })
-        .hasAttribute('disabled'),
-      true
+      view.queryByRole('button', { name: /Pay with Account Balance/ }),
+      null
     )
     assert.equal(view.queryByRole('button', { name: 'Pay' }), null)
   })
@@ -523,7 +519,6 @@ describe('Credit balance plan admin component', () => {
               closed = !open
             }}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
             lastPurchaseMode='credit_balance'
@@ -663,7 +658,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
           />
@@ -739,7 +733,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
           />
@@ -790,7 +783,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
           />
@@ -863,7 +855,6 @@ describe('Credit balance plan admin component', () => {
               open
               onOpenChange={() => {}}
               plan={{ plan: purchasePlan }}
-              accountBalance={10000}
               enableStripe
               creditBalancePurchaseEnabled
             />
@@ -920,7 +911,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
           />
@@ -978,7 +968,6 @@ describe('Credit balance plan admin component', () => {
             open
             onOpenChange={() => {}}
             plan={{ plan: makeExternalPurchasePlan(9017) }}
-            accountBalance={10000}
             enableStripe
             creditBalancePurchaseEnabled
           />
@@ -990,7 +979,7 @@ describe('Credit balance plan admin component', () => {
     queryClient.clear()
   })
 
-  test('restores Credit preference and submits an explicit balance purchase', async () => {
+  test('restores Credit preference without exposing account balance payment', async () => {
     const i18n = createInstance()
     await i18n.init({
       lng: 'en',
@@ -1015,69 +1004,16 @@ describe('Credit balance plan admin component', () => {
       public_visible: true,
       unlimited_purchase_enabled: true,
     }
-    let submitted: Record<string, unknown> | undefined
-    let refreshCount = 0
-    let closed = false
-    api.defaults.adapter = async (config) => {
-      assert.equal(config.method, 'post')
-      assert.equal(config.url, '/api/subscription/balance/pay')
-      submitted = JSON.parse(String(config.data))
-      return {
-        data: {
-          success: true,
-          message: 'success',
-          data: {
-            order: {
-              id: 1,
-              user_id: 2,
-              plan_id: purchasePlan.id,
-              money: purchasePlan.price_amount,
-              trade_no: 'balance-order',
-              payment_method: 'account_balance',
-              payment_provider: 'balance',
-              status: 'success',
-              create_time: 1,
-              complete_time: 2,
-              provider_payload: '',
-            },
-            purchase_mode: 'credit_balance',
-            credit_balance: {
-              user_subscription_id: 3,
-              plan_id: 4,
-              gross_credit: 1000,
-              debt_offset: 250,
-              available_credit: 750,
-              settlement_debt: 0,
-              balance_before: -250,
-              balance_after: 750,
-              active: true,
-              ledger_id: 5,
-              status: 'available',
-            },
-          },
-        },
-        status: 200,
-        statusText: 'OK',
-        headers: {},
-        config,
-      }
-    }
     const queryClient = new QueryClient()
     const view = render(
       <QueryClientProvider client={queryClient}>
         <I18nextProvider i18n={i18n}>
           <SubscriptionPurchaseDialog
             open
-            onOpenChange={(open) => {
-              closed = !open
-            }}
+            onOpenChange={() => {}}
             plan={{ plan: purchasePlan }}
-            accountBalance={10000}
             creditBalancePurchaseEnabled
             lastPurchaseMode='credit_balance'
-            onPurchaseSuccess={() => {
-              refreshCount += 1
-            }}
             creditBalancePlan={{
               concurrency_limit: 2,
               queue_capacity: 4,
@@ -1091,17 +1027,11 @@ describe('Credit balance plan admin component', () => {
     await waitFor(() =>
       assert.equal(credit.getAttribute('aria-checked'), 'true')
     )
-    fireEvent.click(
-      view.getByRole('button', { name: /Pay with Account Balance/ })
+    assert.equal(
+      view.queryByRole('button', { name: /Pay with Account Balance/ }),
+      null
     )
-
-    await waitFor(() => assert.ok(submitted))
-    assert.equal(submitted?.plan_id, purchasePlan.id)
-    assert.equal(submitted?.purchase_mode, 'credit_balance')
-    assert.equal(typeof submitted?.idempotency_key, 'string')
-    assert.ok(String(submitted?.idempotency_key).length > 0)
-    assert.equal(refreshCount, 1)
-    assert.equal(closed, true)
+    assert.doesNotMatch(view.getByRole('dialog').textContent || '', /Account Balance/)
   })
 
   test('renders the persisted configuration as an accessible admin form', async () => {

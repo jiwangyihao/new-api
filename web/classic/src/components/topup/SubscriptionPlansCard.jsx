@@ -17,13 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Badge,
   Button,
   Card,
   Divider,
-  Select,
   Skeleton,
   Space,
   Tag,
@@ -38,6 +37,13 @@ import {
   formatSubscriptionDuration,
   formatSubscriptionResetPeriod,
 } from '../../helpers/subscriptionFormat';
+import {
+  buildSubscriptionPaymentRequest,
+  initialSubscriptionPurchaseMode,
+  isCreditBalancePurchaseAvailable,
+  isKyrenSubscriptionAvailable,
+  processKyrenSubscriptionPayment,
+} from './subscription-purchase.js';
 
 const { Text } = Typography;
 
@@ -97,17 +103,6 @@ function submitEpayForm({ url, params }) {
   document.body.removeChild(form);
 }
 
-function createBalanceIdempotencyKey() {
-  try {
-    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-      return crypto.randomUUID();
-    }
-  } catch (e) {
-    // ignore
-  }
-  return `balance-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-}
-
 const SubscriptionPlansCard = ({
   t,
   loading = false,
@@ -116,35 +111,43 @@ const SubscriptionPlansCard = ({
   enableOnlineTopUp = false,
   enableStripeTopUp = false,
   enableCreemTopUp = false,
-  billingPreference,
-  onChangeBillingPreference,
+  enableKyrenSubscription = false,
   activeSubscriptions = [],
   allSubscriptions = [],
+  lastSubscriptionPurchaseMode,
+  creditBalancePurchaseEnabled = false,
   reloadSubscriptionSelf,
-  accountBalanceCents = 0,
-  reloadUserBalance,
   withCard = true,
 }) => {
   const [open, setOpen] = useState(false);
   const [selectedPlan, setSelectedPlan] = useState(null);
   const [paying, setPaying] = useState(false);
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('');
+  const [purchaseMode, setPurchaseMode] = useState(undefined);
   const [refreshing, setRefreshing] = useState(false);
-  const balanceIdempotencyKeyRef = useRef('');
 
   const epayMethods = useMemo(() => getEpayMethods(payMethods), [payMethods]);
 
   const openBuy = (p) => {
+    const creditAvailable = isCreditBalancePurchaseAvailable(
+      p?.plan,
+      creditBalancePurchaseEnabled,
+    );
     setSelectedPlan(p);
     setSelectedEpayMethod(epayMethods?.[0]?.type || '');
-    balanceIdempotencyKeyRef.current = createBalanceIdempotencyKey();
+    setPurchaseMode(
+      initialSubscriptionPurchaseMode(
+        lastSubscriptionPurchaseMode,
+        creditAvailable,
+      ),
+    );
     setOpen(true);
   };
 
   const closeBuy = () => {
     setOpen(false);
     setSelectedPlan(null);
-    balanceIdempotencyKeyRef.current = '';
+    setPurchaseMode(undefined);
     setPaying(false);
   };
 
@@ -162,12 +165,17 @@ const SubscriptionPlansCard = ({
       showError(t('该套餐未配置 Stripe'));
       return;
     }
+    if (!purchaseMode) {
+      showError(t('请选择使用模式'));
+      return;
+    }
     setPaying(true);
     try {
-      const res = await API.post('/api/subscription/stripe/pay', {
-        plan_id: selectedPlan.plan.id,
-      });
-      if (res.data?.message === 'success') {
+      const res = await API.post(
+        '/api/subscription/stripe/pay',
+        buildSubscriptionPaymentRequest(selectedPlan.plan.id, purchaseMode),
+      );
+      if (res.data?.success || res.data?.message === 'success') {
         window.open(res.data.data?.pay_link, '_blank');
         showSuccess(t('已打开支付页面'));
         closeBuy();
@@ -190,12 +198,17 @@ const SubscriptionPlansCard = ({
       showError(t('该套餐未配置 Creem'));
       return;
     }
+    if (!purchaseMode) {
+      showError(t('请选择使用模式'));
+      return;
+    }
     setPaying(true);
     try {
-      const res = await API.post('/api/subscription/creem/pay', {
-        plan_id: selectedPlan.plan.id,
-      });
-      if (res.data?.message === 'success') {
+      const res = await API.post(
+        '/api/subscription/creem/pay',
+        buildSubscriptionPaymentRequest(selectedPlan.plan.id, purchaseMode),
+      );
+      if (res.data?.success || res.data?.message === 'success') {
         window.open(res.data.data?.checkout_url, '_blank');
         showSuccess(t('已打开支付页面'));
         closeBuy();
@@ -213,53 +226,50 @@ const SubscriptionPlansCard = ({
     }
   };
 
-  const payEpay = async () => {
-    if (!selectedEpayMethod) {
-      showError(t('请选择支付方式'));
+  const payKyren = async () => {
+    if (!purchaseMode) {
+      showError(t('请选择使用模式'));
       return;
     }
     setPaying(true);
     try {
-      const res = await API.post('/api/subscription/epay/pay', {
-        plan_id: selectedPlan.plan.id,
-        payment_method: selectedEpayMethod,
+      await processKyrenSubscriptionPayment({
+        planId: selectedPlan?.plan?.id,
+        purchaseMode,
+        requestPayment: (url, request) => API.post(url, request),
+        openCheckout: (url) => window.open(url, '_blank'),
       });
-      if (res.data?.message === 'success') {
-        submitEpayForm({ url: res.data.url, params: res.data.data });
-        showSuccess(t('已发起支付'));
-        closeBuy();
-      } else {
-        const errorMsg =
-          typeof res.data?.data === 'string'
-            ? res.data.data
-            : res.data?.message || t('支付失败');
-        showError(errorMsg);
-      }
+      showSuccess(t('已打开支付页面'));
+      closeBuy();
     } catch (e) {
-      showError(t('支付请求失败'));
+      showError(e instanceof Error ? e.message : t('支付请求失败'));
     } finally {
       setPaying(false);
     }
   };
 
-  const payBalance = async () => {
-    const plan = selectedPlan?.plan;
-    if (!plan?.id) {
-      showError(t('请选择订阅套餐'));
+  const payEpay = async () => {
+    if (!selectedEpayMethod) {
+      showError(t('请选择支付方式'));
       return;
     }
-    if (!balanceIdempotencyKeyRef.current) {
-      balanceIdempotencyKeyRef.current = createBalanceIdempotencyKey();
+    if (!purchaseMode) {
+      showError(t('请选择使用模式'));
+      return;
     }
     setPaying(true);
     try {
-      const res = await API.post('/api/subscription/balance/pay', {
-        plan_id: plan.id,
-        idempotency_key: balanceIdempotencyKeyRef.current,
-      });
+      const res = await API.post(
+        '/api/subscription/epay/pay',
+        buildSubscriptionPaymentRequest(
+          selectedPlan.plan.id,
+          purchaseMode,
+          selectedEpayMethod,
+        ),
+      );
       if (res.data?.success || res.data?.message === 'success') {
-        showSuccess(t('订阅购买成功'));
-        await Promise.all([reloadSubscriptionSelf?.(), reloadUserBalance?.()]);
+        submitEpayForm({ url: res.data.url, params: res.data.data });
+        showSuccess(t('已发起支付'));
         closeBuy();
       } else {
         const errorMsg =
@@ -278,16 +288,6 @@ const SubscriptionPlansCard = ({
   // 当前订阅信息 - 支持多个订阅
   const hasActiveSubscription = activeSubscriptions.length > 0;
   const hasAnySubscription = allSubscriptions.length > 0;
-  const disableSubscriptionPreference = !hasActiveSubscription;
-  const isSubscriptionPreference =
-    billingPreference === 'subscription_first' ||
-    billingPreference === 'subscription_only';
-  const displayBillingPreference =
-    disableSubscriptionPreference && isSubscriptionPreference
-      ? 'wallet_first'
-      : billingPreference;
-  const subscriptionPreferenceLabel =
-    billingPreference === 'subscription_only' ? t('仅用订阅') : t('优先订阅');
 
   const planPurchaseCountMap = useMemo(() => {
     const map = new Map();
@@ -405,29 +405,6 @@ const SubscriptionPlansCard = ({
                 )}
               </div>
               <div className='flex items-center gap-2'>
-                <Select
-                  value={displayBillingPreference}
-                  onChange={onChangeBillingPreference}
-                  size='small'
-                  optionList={[
-                    {
-                      value: 'subscription_first',
-                      label: disableSubscriptionPreference
-                        ? `${t('优先订阅')} (${t('无生效')})`
-                        : t('优先订阅'),
-                      disabled: disableSubscriptionPreference,
-                    },
-                    { value: 'wallet_first', label: t('优先钱包') },
-                    {
-                      value: 'subscription_only',
-                      label: disableSubscriptionPreference
-                        ? `${t('仅用订阅')} (${t('无生效')})`
-                        : t('仅用订阅'),
-                      disabled: disableSubscriptionPreference,
-                    },
-                    { value: 'wallet_only', label: t('仅用钱包') },
-                  ]}
-                />
                 <Button
                   size='small'
                   theme='light'
@@ -443,13 +420,6 @@ const SubscriptionPlansCard = ({
                 />
               </div>
             </div>
-            {disableSubscriptionPreference && isSubscriptionPreference && (
-              <Text type='tertiary' size='small'>
-                {t('已保存偏好为')}
-                {subscriptionPreferenceLabel}
-                {t('，当前无生效订阅，将自动使用钱包')}
-              </Text>
-            )}
 
             {hasAnySubscription ? (
               <>
@@ -747,6 +717,16 @@ const SubscriptionPlansCard = ({
         enableOnlineTopUp={enableOnlineTopUp}
         enableStripeTopUp={enableStripeTopUp}
         enableCreemTopUp={enableCreemTopUp}
+        creditBalanceAvailable={isCreditBalancePurchaseAvailable(
+          selectedPlan?.plan,
+          creditBalancePurchaseEnabled,
+        )}
+        kyrenAvailable={isKyrenSubscriptionAvailable(
+          selectedPlan?.plan,
+          enableKyrenSubscription,
+        )}
+        purchaseMode={purchaseMode}
+        setPurchaseMode={setPurchaseMode}
         purchaseLimitInfo={
           selectedPlan?.plan?.id
             ? {
@@ -757,9 +737,8 @@ const SubscriptionPlansCard = ({
         }
         onPayStripe={payStripe}
         onPayCreem={payCreem}
+        onPayKyren={payKyren}
         onPayEpay={payEpay}
-        onPayBalance={payBalance}
-        accountBalanceCents={accountBalanceCents}
       />
     </>
   );

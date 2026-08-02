@@ -16,11 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Crown, CalendarClock, Package, WalletCards } from 'lucide-react'
+import { Crown, CalendarClock, Package } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
@@ -57,7 +57,6 @@ import {
   paySubscriptionCreem,
   paySubscriptionKyren,
   paySubscriptionEpay,
-  paySubscriptionBalance,
   getSubscriptionOrderStatus,
 } from '../../api'
 import {
@@ -66,8 +65,6 @@ import {
   formatDuration,
   formatCreditLimit,
   formatCompactCredit,
-  formatAccountBalanceForPlanPurchase,
-  getAccountBalancePaymentState,
 } from '../../lib'
 import {
   creditPurchaseSuccessMessage,
@@ -127,7 +124,6 @@ interface Props {
   enableOnlineTopUp?: boolean
   epayMethods?: PaymentMethod[]
   enableKyrenSubscription?: boolean
-  accountBalance?: number
   lastPurchaseMode?: SubscriptionPurchaseMode
   creditBalancePurchaseEnabled?: boolean
   creditBalancePlan?: CreditBalancePlanDisplay | null
@@ -332,7 +328,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
   const { onOpenChange, onPurchaseSuccess } = props
   const [paying, setPaying] = useState(false)
   const [selectedEpayMethod, setSelectedEpayMethod] = useState('')
-  const balanceIdempotencyKeyRef = useRef('')
   const plan = props.plan?.plan
   const creditAvailable = isCreditBalancePurchaseAvailable(
     plan,
@@ -534,14 +529,12 @@ export function SubscriptionPurchaseDialog(props: Props) {
 
   useEffect(() => {
     if (props.open) {
-      balanceIdempotencyKeyRef.current = crypto.randomUUID()
       const initialMode = initialSubscriptionPurchaseMode(
         props.lastPurchaseMode,
         creditAvailable
       )
       form.reset(initialMode ? { purchase_mode: initialMode } : {})
     } else {
-      balanceIdempotencyKeyRef.current = ''
       form.reset({})
     }
   }, [creditAvailable, form, props.lastPurchaseMode, props.open])
@@ -569,15 +562,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
     selectedEpayMethod ||
     t('Select payment method')
   const price = formatPlanPrice(plan.price_amount, plan.currency)
-  const accountBalanceLoaded = props.accountBalance !== undefined
-  const balancePaymentState = getAccountBalancePaymentState({
-    accountBalanceQuota: props.accountBalance ?? 0,
-    priceAmount: plan.price_amount,
-    currency: plan.currency,
-  })
-  const accountBalanceDisplay = formatAccountBalanceForPlanPurchase(
-    props.accountBalance ?? 0
-  )
   const kyrenAvailability = getKyrenSubscriptionAvailability(plan, {
     enable_kyren_subscription: hasKyren,
   })
@@ -611,55 +595,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
     })
   }
 
-  const handlePayBalance = form.handleSubmit(async ({ purchase_mode }) => {
-    if (paying || !accountBalanceLoaded) {
-      return
-    }
-    if (!balancePaymentState.supported) {
-      toast.error(t('Account balance supports CNY plans only.'))
-      return
-    }
-    if (!balancePaymentState.sufficient) {
-      toast.error(t('Account balance is insufficient. Please top up first.'))
-      return
-    }
-    if (purchase_mode === 'credit_balance' && !creditAvailable) {
-      toast.error(t('Credit balance purchase is unavailable for this plan.'))
-      return
-    }
-    if (!balanceIdempotencyKeyRef.current) {
-      balanceIdempotencyKeyRef.current = crypto.randomUUID()
-    }
-
-    setPaying(true)
-    try {
-      const res = await paySubscriptionBalance({
-        plan_id: plan.id,
-        purchase_mode,
-        idempotency_key: balanceIdempotencyKeyRef.current,
-      })
-      if (res.success || res.message === 'success') {
-        const grant = res.data?.credit_balance
-        toast.success(
-          purchase_mode === 'credit_balance' && grant
-            ? creditPurchaseSuccessMessage(grant, t)
-            : t('Subscription purchased successfully')
-        )
-        await onPurchaseSuccess?.()
-        onOpenChange(false)
-      } else {
-        toast.error(
-          res.message && res.message !== 'success'
-            ? res.message
-            : t('Payment request failed')
-        )
-      }
-    } catch {
-      toast.error(t('Payment request failed'))
-    } finally {
-      setPaying(false)
-    }
-  })
 
   return (
     <Dialog open={props.open} onOpenChange={onOpenChange}>
@@ -672,7 +607,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         </DialogHeader>
 
         <Form {...form}>
-          <form className='space-y-3 sm:space-y-4' onSubmit={handlePayBalance}>
+          <div className='space-y-3 sm:space-y-4'>
             <FormField
               control={form.control}
               name='purchase_mode'
@@ -787,15 +722,6 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 <span className='text-sm font-medium'>{t('Amount Due')}</span>
                 <span className='text-primary text-lg font-bold'>{price}</span>
               </div>
-              <div className='flex items-center justify-between'>
-                <span className='text-muted-foreground flex items-center gap-1 text-sm'>
-                  <WalletCards className='h-3.5 w-3.5' />
-                  {t('Account Balance')}
-                </span>
-                <span className='text-sm font-medium'>
-                  {accountBalanceDisplay}
-                </span>
-              </div>
             </div>
 
             {hasKyren && !kyrenAvailability.available && (
@@ -845,42 +771,11 @@ export function SubscriptionPurchaseDialog(props: Props) {
               </Alert>
             )}
 
-            {accountBalanceLoaded && balancePaymentState.disabled && (
-              <Alert>
-                <AlertDescription>
-                  {balancePaymentState.disabledReason === 'unsupported_currency'
-                    ? t('Account balance supports CNY plans only.')
-                    : t(
-                        'Account balance is insufficient. Please top up first.'
-                      )}
-                </AlertDescription>
-              </Alert>
-            )}
 
             <div className='space-y-3'>
               <p className='text-muted-foreground text-xs'>
                 {t('Select payment method')}
               </p>
-              <Button
-                type='submit'
-                variant='outline'
-                className='w-full justify-between gap-2'
-                disabled={
-                  paying ||
-                  !purchaseMode ||
-                  !accountBalanceLoaded ||
-                  balancePaymentState.disabled
-                }
-              >
-                <span>
-                  {purchaseMode
-                    ? t('Pay with Account Balance')
-                    : t('Choose purchase mode')}
-                </span>
-                <span className='text-muted-foreground text-xs'>
-                  {accountBalanceDisplay}
-                </span>
-              </Button>
 
               {(hasStripe || hasCreem || hasKyren) && (
                 <div className='grid grid-cols-2 gap-2 sm:flex'>
@@ -966,7 +861,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                 </div>
               )}
             </div>
-          </form>
+          </div>
         </Form>
       </DialogContent>
     </Dialog>

@@ -18,9 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import { useMemo } from 'react';
-import { Wallet, Activity, Zap, Gauge } from 'lucide-react';
+import { History, Activity, Zap, Gauge } from 'lucide-react';
 import {
-  IconMoneyExchangeStroked,
   IconHistogram,
   IconCoinMoneyStroked,
   IconTextStroked,
@@ -30,7 +29,6 @@ import {
   IconSend,
 } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../helpers';
-import { formatAccountBalance } from '../../helpers/account-balance.js';
 import { createSectionTitle } from '../../helpers/dashboard';
 
 export const useDashboardStats = (
@@ -46,17 +44,9 @@ export const useDashboardStats = (
   const groupedStatsData = useMemo(
     () => [
       {
-        title: createSectionTitle(Wallet, t('账户数据')),
+        title: createSectionTitle(History, t('账户数据')),
         color: 'bg-blue-50',
         items: [
-          {
-            title: t('当前余额'),
-            value: formatAccountBalance(userState?.user?.quota),
-            icon: <IconMoneyExchangeStroked />,
-            avatarColor: 'blue',
-            trendData: [],
-            trendColor: '#3b82f6',
-          },
           {
             title: t('历史消耗'),
             value: renderQuota(userState?.user?.used_quota),
@@ -135,7 +125,6 @@ export const useDashboardStats = (
       },
     ],
     [
-      userState?.user?.quota,
       userState?.user?.used_quota,
       userState?.user?.request_count,
       times,

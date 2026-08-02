@@ -21,108 +21,12 @@ import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 import { processKyrenTopUpProductPayment } from './lib/payment'
 
-function readWalletSource(): string {
-  return readFileSync('src/features/wallet/index.tsx', 'utf8')
-}
-
-function readSubscriptionPlansSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/subscription-plans-card.tsx',
-    'utf8'
-  )
-}
-
-function readAffiliateRewardsSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/affiliate-rewards-card.tsx',
-    'utf8'
-  )
-}
-
-function readBillingHistoryDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/billing-history-dialog.tsx',
-    'utf8'
-  )
-}
-
-function readWalletStatsCardSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/wallet-stats-card.tsx',
-    'utf8'
-  )
-}
-
-function readCreemProductsSectionSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/creem-products-section.tsx',
-    'utf8'
-  )
-}
-
-function readCreemConfirmDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/creem-confirm-dialog.tsx',
-    'utf8'
-  )
-}
-
-function readRechargeFormCardSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/recharge-form-card.tsx',
-    'utf8'
-  )
-}
-
-function readTransferDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/transfer-dialog.tsx',
-    'utf8'
-  )
-}
-
-function readUseAffiliateSource(): string {
-  return readFileSync('src/features/wallet/hooks/use-affiliate.ts', 'utf8')
-}
-
-function readPaymentConfirmDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/payment-confirm-dialog.tsx',
-    'utf8'
-  )
-}
-
-function readWalletFormatSource(): string {
-  return readFileSync('src/features/wallet/lib/format.ts', 'utf8')
-}
-
-function readUsePaymentSource(): string {
-  return readFileSync('src/features/wallet/hooks/use-payment.ts', 'utf8')
-}
-
-function readInvitationCommissionHookSource(): string {
-  return readFileSync(
-    'src/features/wallet/hooks/use-invitation-commission.ts',
-    'utf8'
-  )
-}
-
-function readCommissionTransferDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/commission-transfer-dialog.tsx',
-    'utf8'
-  )
-}
-
-function readCommissionWithdrawalDialogSource(): string {
-  return readFileSync(
-    'src/features/wallet/components/dialogs/commission-withdrawal-dialog.tsx',
-    'utf8'
-  )
+function readSource(path: string): string {
+  return readFileSync(path, 'utf8')
 }
 
 describe('wallet Kyren payment flow', () => {
-  test('submits Kyren payment with local top-up product id', async () => {
+  test('submits Kyren top-up products independently by local product id', async () => {
     const calls: Array<{ product_id: string }> = []
     const opened: string[] = []
 
@@ -135,301 +39,82 @@ describe('wallet Kyren payment flow', () => {
           data: { checkout_url: 'https://checkout.example/kyren' },
         }
       },
-      openCheckout: (url) => {
-        opened.push(url)
-      },
+      openCheckout: (url) => opened.push(url),
     })
 
     assert.deepEqual(calls, [{ product_id: 'topup_cny_10' }])
     assert.deepEqual(opened, ['https://checkout.example/kyren'])
   })
 })
-describe('wallet page layout', () => {
-  test('hides account-balance top-up without widening the subscription card', () => {
-    const walletSource = readWalletSource()
-    const subscriptionSource = readSubscriptionPlansSource()
 
-    assert.match(walletSource, /<SubscriptionPlansCard/)
-    assert.match(walletSource, /<TimedSubscriptionConversionQuotesCard/)
-    assert.match(walletSource, /ACCOUNT_BALANCE_TOPUP_VISIBLE = false/)
-    assert.doesNotMatch(walletSource, /onOpenAddFunds|handleOpenAddFunds/)
-    assert.doesNotMatch(
-      subscriptionSource,
-      /Add Account Balance|onOpenAddFunds/
+describe('subscriptions page layout', () => {
+  test('mounts subscription and referral features without account-balance surfaces', () => {
+    const page = readSource('src/features/wallet/index.tsx')
+    const plans = readSource(
+      'src/features/wallet/components/subscription-plans-card.tsx'
     )
-    assert.match(
-      walletSource,
-      /xl:grid-cols-\[minmax\(0,1\.05fr\)_minmax\(360px,0\.95fr\)\]/
+    const affiliate = readSource(
+      'src/features/wallet/components/affiliate-rewards-card.tsx'
+    )
+
+    assert.match(page, /<SubscriptionPlansCard/)
+    assert.match(page, /<TimedSubscriptionConversionQuotesCard/)
+    assert.match(page, /<AffiliateRewardsCard/)
+    assert.doesNotMatch(
+      page,
+      /RechargeFormCard|WalletStatsCard|BillingHistoryDialog/
+    )
+    assert.doesNotMatch(
+      plans,
+      /accountBalance|Pay with Account Balance|onOpenBilling|Order History/
+    )
+    assert.match(affiliate, /Copy referral link/)
+    assert.match(affiliate, /value=\{referralShareText\}/)
+    assert.doesNotMatch(
+      affiliate,
+      /account|commission|transfer|withdrawal|cashback|formatAccountBalance/i
     )
   })
 
-  test('keeps billing strategy in Subscription Plans but outside My Subscriptions', () => {
-    const walletSource = readWalletSource()
-    const subscriptionSource = readSubscriptionPlansSource()
-    const rechargeSource = readRechargeFormCardSource()
-    const mySubscriptionsIndex = subscriptionSource.indexOf(
-      "{t('My Subscriptions')}"
+  test('keeps billing strategy outside My Subscriptions', () => {
+    const page = readSource('src/features/wallet/index.tsx')
+    const plans = readSource(
+      'src/features/wallet/components/subscription-plans-card.tsx'
     )
-    const strategyIndex = subscriptionSource.indexOf(
+    const mySubscriptionsIndex = plans.indexOf("{t('My Subscriptions')}")
+    const strategyIndex = plans.indexOf(
       '<SubscriptionBillingStrategyControl data={selfSubscriptionData} />'
     )
-    const plansIndex = subscriptionSource.indexOf('{plans.length > 0 ?')
+    const plansIndex = plans.indexOf('{plans.length > 0 ?')
 
-    assert.match(subscriptionSource, /onOpenBilling/)
-    assert.match(subscriptionSource, /Order History/)
-    assert.doesNotMatch(rechargeSource, /Order History/)
-    assert.doesNotMatch(walletSource, /SubscriptionBillingStrategyControl/)
+    assert.doesNotMatch(page, /SubscriptionBillingStrategyControl/)
     assert.ok(mySubscriptionsIndex >= 0)
     assert.ok(strategyIndex > mySubscriptionsIndex)
     assert.ok(plansIndex > strategyIndex)
   })
 
-  test('wallet subscriptions expose active selection and quota reset actions', () => {
-    const source = readSubscriptionPlansSource()
-    assert.match(source, /setActiveSubscription/)
-    assert.match(source, /resetSubscriptionQuota/)
-    assert.match(source, /Set as active/)
-    assert.match(source, /Reset credits/)
-  })
-
-  test('subscription usage display formats used zero as numeric credits', () => {
-    const source = readSubscriptionPlansSource()
-    assert.match(source, /formatUsedCreditCount\(tokenUsed, t\)/)
-    assert.doesNotMatch(source, /formatCreditLimit\(tokenUsed, t\)/)
-  })
-
-  test('affiliate card documents invitation reward rules near referral link', () => {
-    const source = readAffiliateRewardsSource()
-    assert.match(source, /Invitation reward rules/)
-    assert.match(source, /two longest valid paid referrals/)
-    assert.match(source, /same tier/)
-  })
-
-  test('affiliate card focuses referral copy on the link', () => {
-    const source = readAffiliateRewardsSource()
-    assert.match(source, /赔钱GPT超低价稳定GPT服务/)
-    assert.doesNotMatch(source, /t\('Pending'\), formatQuota/)
-    assert.doesNotMatch(source, /t\('Total Earned'\), formatQuota/)
-    assert.doesNotMatch(source, /t\('Invites'\), String/)
-    assert.doesNotMatch(source, /Transfer to Balance/)
-    assert.match(source, /value=\{referralShareText\}/)
-    assert.match(source, /CopyButton[\s\S]*value=\{referralShareText\}/)
-  })
-
-  test('keeps RMB account balance out of the default wallet summary', () => {
-    const source = readWalletStatsCardSource()
-
-    assert.doesNotMatch(source, /Account Balance/)
-    assert.doesNotMatch(source, /formatAccountBalanceForPlanPurchase/)
-    assert.match(source, /grid-cols-2/)
-  })
-
-  test('Creem and Kyren products display credited CNY account balance', () => {
-    const creemProductsSource = readCreemProductsSectionSource()
-    const creemDialogSource = readCreemConfirmDialogSource()
-    const rechargeSource = readRechargeFormCardSource()
-
-    for (const source of [
-      creemProductsSource,
-      creemDialogSource,
-      rechargeSource,
-    ]) {
-      assert.match(
-        source,
-        /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
-      )
-      assert.doesNotMatch(source, /formatNumber\(product\.quota\)/)
-      assert.doesNotMatch(source, /\{\{quota\}\} quota/)
-    }
-  })
-
-  test('Kyren top-up helper keeps direct checkout without confirmation dialogs', () => {
-    const rechargeSource = readRechargeFormCardSource()
-    const usePaymentSource = readUsePaymentSource()
-    const paymentHandlerStart = usePaymentSource.indexOf(
-      'const processKyrenPayment'
-    )
-    const paymentHandlerEnd = usePaymentSource.indexOf(
-      'const processWaffoPayment',
-      paymentHandlerStart
-    )
-    const paymentHandler = usePaymentSource.slice(
-      paymentHandlerStart,
-      paymentHandlerEnd
+  test('keeps active selection and quota reset actions', () => {
+    const plans = readSource(
+      'src/features/wallet/components/subscription-plans-card.tsx'
     )
 
-    assert.match(
-      rechargeSource,
-      /formatAccountBalanceForPlanPurchase\(\s*product\.quota\s*\)/
+    assert.match(plans, /setActiveSubscription/)
+    assert.match(plans, /resetSubscriptionQuota/)
+    assert.match(plans, /Set as active/)
+    assert.match(plans, /Reset credits/)
+    assert.match(plans, /formatUsedCreditCount\(tokenUsed, t\)/)
+    assert.doesNotMatch(plans, /formatCreditLimit\(tokenUsed, t\)/)
+  })
+
+  test('does not mount commission balance controls', () => {
+    const page = readSource('src/features/wallet/index.tsx')
+    const affiliate = readSource(
+      'src/features/wallet/components/affiliate-rewards-card.tsx'
     )
-    assert.match(paymentHandler, /processKyrenTopUpProductPayment/)
+
     assert.doesNotMatch(
-      paymentHandler,
-      /setConfirmDialogOpen|setCreemDialogOpen/
+      page + affiliate,
+      /onCommissionTransferSuccess|CommissionTransferDialog|CommissionWithdrawalDialog/
     )
-  })
-
-  test('affiliate reward transfer accepts CNY amount and submits account balance cents', () => {
-    const transferSource = readTransferDialogSource()
-    const affiliateSource = readUseAffiliateSource()
-
-    assert.doesNotMatch(transferSource, /QUOTA_PER_DOLLAR/)
-    assert.match(transferSource, /MIN_TRANSFER_AMOUNT_CNY = 0\.01/)
-    assert.match(transferSource, /min=\{MIN_TRANSFER_AMOUNT_CNY\}/)
-    assert.match(transferSource, /step=\{MIN_TRANSFER_AMOUNT_CNY\}/)
-    assert.match(transferSource, /onConfirm\(amount\)/)
-    assert.match(
-      transferSource,
-      /formatAccountBalanceForPlanPurchase\(availableQuota\)/
-    )
-    assert.match(affiliateSource, /accountBalanceCnyToCents/)
-    assert.match(
-      affiliateSource,
-      /const amountCents = accountBalanceCnyToCents\(amountCny\)/
-    )
-    assert.match(
-      affiliateSource,
-      /transferAffiliateQuota\(\{ quota: amountCents \}\)/
-    )
-  })
-
-  test('payment confirmation separates credited balance from amount paid', () => {
-    const source = readPaymentConfirmDialogSource()
-
-    assert.match(source, /t\('Topup Amount'\)/)
-    assert.match(source, /t\('You Pay'\)/)
-    assert.match(source, /formatAccountBalanceForPlanPurchase/)
-    assert.match(source, /accountBalanceCnyToCents\(topupAmount\)/)
-    assert.doesNotMatch(source, /topupAmount \* usdExchangeRate/)
-  })
-
-  test('regular top-up presets display credited CNY amount without exchange-rate conversion', () => {
-    const rechargeSource = readRechargeFormCardSource()
-    const formatSource = readWalletFormatSource()
-
-    assert.match(formatSource, /const displayValue = presetValue/)
-    assert.doesNotMatch(formatSource, /presetValue \* usdExchangeRate/)
-    assert.match(
-      rechargeSource,
-      /formatAccountBalanceForPlanPurchase\(\s*accountBalanceCnyToCents\(displayValue\)\s*\)/
-    )
-  })
-
-  test('billing history uses credited balance DTO fields instead of amount units', () => {
-    const source = readBillingHistoryDialogSource()
-
-    assert.match(source, /credited_balance_display/)
-    assert.match(source, /credited_balance_cents/)
-    assert.match(source, /getCreditedBalanceDisplay\(record\)/)
-    assert.match(source, /record\.credited_balance_display\?\.trim\(\)/)
-    assert.match(source, /record\.credited_balance_cents/)
-    assert.doesNotMatch(source, /formatCurrencyFromUSD\(record\.amount/)
-    assert.match(source, /Number\.isFinite\(cents\)/)
-    assert.doesNotMatch(source, /cents > 0/)
-    assert.match(source, /corresponding account balance/)
-    assert.doesNotMatch(source, /corresponding quota/)
-  })
-
-  test('commission transfer copy is immediate and withdrawal copy is manual', () => {
-    const card = readAffiliateRewardsSource()
-    const transferDialog = readCommissionTransferDialogSource()
-    const withdrawalDialog = readCommissionWithdrawalDialogSource()
-
-    assert.match(card, /Transfer to balance/)
-    assert.match(card, /Request manual cashback/)
-    assert.match(card, /This is not an automatic payout\./)
-    assert.doesNotMatch(transferDialog, /review/i)
-    assert.doesNotMatch(transferDialog, /approval/i)
-    assert.match(withdrawalDialog, /manual/i)
-  })
-
-  test('commission wallet keeps referral link and uses side-effect-free summary stats', () => {
-    const card = readAffiliateRewardsSource()
-    const hook = readInvitationCommissionHookSource()
-
-    assert.match(card, /Copy referral link/)
-    assert.match(card, /direct_invite_count/)
-    assert.match(card, /qualified_paid_invite_count/)
-    assert.match(
-      hook,
-      /\['wallet', 'invitation-commission', 'summary', userId\]/
-    )
-    assert.match(
-      hook,
-      /\['wallet', 'invitation-commission', 'records', userId, params\]/
-    )
-    assert.match(
-      hook,
-      /queryKey:\s*\[[\s\S]*'wallet',[\s\S]*'invitation-commission',[\s\S]*'withdrawals',[\s\S]*userId,[\s\S]*params[\s\S]*\]/
-    )
-    assert.match(hook, /enabled:\s*Boolean\(userId\)/)
-    assert.match(hook, /useInvitationCommissionSummary/)
-    assert.match(hook, /useTransferInvitationCommission/)
-    assert.match(hook, /useRequestInvitationCommissionWithdrawal/)
-  })
-
-  test('commission wallet renders recent records and manual cashback requests', () => {
-    const card = readAffiliateRewardsSource()
-
-    assert.match(
-      card,
-      /useInvitationCommissionRecords\(\{\s*page: 1,\s*page_size: 3/s
-    )
-    assert.match(
-      card,
-      /useInvitationCommissionWithdrawals\(\{\s*page: 1,\s*page_size: 3/s
-    )
-    assert.match(card, /Recent commission records/)
-    assert.match(card, /recentCommissionRecords\.map/)
-    assert.match(card, /Recent manual cashback requests/)
-    assert.match(card, /recentCommissionWithdrawals\.map/)
-    assert.match(card, /withdrawal\.contact\.value/)
-    assert.match(card, /No commission records yet/)
-    assert.match(card, /No manual cashback requests yet/)
-  })
-
-  test('commission mutations refresh private wallet data and auth balance', () => {
-    const hook = readInvitationCommissionHookSource()
-    const api = readFileSync('src/features/wallet/api.ts', 'utf8')
-
-    assert.match(api, /return unwrapWalletPayload\(res\.data\)/)
-    assert.match(
-      hook,
-      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'summary', userId\]/
-    )
-    assert.match(
-      hook,
-      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'records', userId\]/
-    )
-    assert.match(
-      hook,
-      /invalidateQueries\(\{\s*queryKey:\s*\['wallet', 'invitation-commission', 'withdrawals', userId\]/
-    )
-    assert.match(hook, /auth\.setUser|setUser\(/)
-    assert.match(api, /unwrapWalletPayload/)
-    assert.match(api, /if \(!payload\.success\)/)
-    assert.match(
-      api,
-      /throw new Error\(payload\.message \|\| 'Request failed'\)/
-    )
-    assert.match(hook, /user_quota/)
-  })
-
-  test('commission transfer success refreshes wallet user balance', () => {
-    const wallet = readWalletSource()
-    const card = readAffiliateRewardsSource()
-
-    assert.match(wallet, /onCommissionTransferSuccess=\{fetchUser\}/)
-    assert.match(
-      card,
-      /onCommissionTransferSuccess\?: \(\) => Promise<void> \| void/
-    )
-    assert.match(card, /await props\.onCommissionTransferSuccess\?\.\(\)/)
-  })
-
-  test('subscription mode with historical commission account keeps commission actions visible', () => {
-    const card = readAffiliateRewardsSource()
-    assert.match(card, /has_commission_account/)
-    assert.match(card, /Historical commission balance can still be handled/)
   })
 })

@@ -22,7 +22,6 @@ import {
   BarChart3,
   Key,
   FileText,
-  Wallet,
   Box,
   Users,
   Ticket,
@@ -115,9 +114,9 @@ export function useSidebarData(): SidebarData {
         title: t('Personal'),
         items: [
           {
-            title: t('Wallet'),
+            title: t('Subscriptions'),
             url: '/wallet',
-            icon: Wallet,
+            icon: CreditCard,
           },
           {
             title: t('Profile'),

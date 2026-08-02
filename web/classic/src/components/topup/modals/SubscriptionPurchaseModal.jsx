@@ -27,8 +27,10 @@ import {
   Select,
   Divider,
   Tooltip,
+  Radio,
+  RadioGroup,
 } from '@douyinfe/semi-ui';
-import { Crown, CalendarClock, Package, WalletCards } from 'lucide-react';
+import { Crown, CalendarClock, Package } from 'lucide-react';
 import { SiStripe } from 'react-icons/si';
 import { IconCreditCard } from '@douyinfe/semi-icons';
 import { renderQuota } from '../../../helpers';
@@ -37,7 +39,6 @@ import {
   formatSubscriptionDuration,
   formatSubscriptionResetPeriod,
 } from '../../../helpers/subscriptionFormat';
-import { formatAccountBalance } from '../../../helpers/account-balance.js';
 
 const { Text } = Typography;
 
@@ -53,12 +54,15 @@ const SubscriptionPurchaseModal = ({
   enableOnlineTopUp = false,
   enableStripeTopUp = false,
   enableCreemTopUp = false,
+  creditBalanceAvailable = false,
+  kyrenAvailable = false,
+  purchaseMode,
+  setPurchaseMode,
   purchaseLimitInfo = null,
   onPayStripe,
   onPayCreem,
+  onPayKyren,
   onPayEpay,
-  onPayBalance,
-  accountBalanceCents = 0,
 }) => {
   const plan = selectedPlan?.plan;
   const totalAmount = Number(plan?.total_amount || 0);
@@ -71,21 +75,13 @@ const SubscriptionPurchaseModal = ({
   // 只有当管理员开启支付网关 AND 套餐配置了对应的支付ID时才显示
   const hasStripe = enableStripeTopUp && !!plan?.stripe_price_id;
   const hasCreem = enableCreemTopUp && !!plan?.creem_product_id;
+  const hasKyren = kyrenAvailable;
   const hasEpay = enableOnlineTopUp && epayMethods.length > 0;
-  const hasBalancePayment = true;
-  const hasAnyPayment = hasBalancePayment || hasStripe || hasCreem || hasEpay;
+  const hasAnyPayment = hasStripe || hasCreem || hasKyren || hasEpay;
   const purchaseLimit = Number(purchaseLimitInfo?.limit || 0);
   const purchaseCount = Number(purchaseLimitInfo?.count || 0);
   const purchaseLimitReached =
     purchaseLimit > 0 && purchaseCount >= purchaseLimit;
-  const balanceCents = Number(accountBalanceCents || 0);
-  const balanceSupportsPlan =
-    String(plan?.currency || 'CNY').toUpperCase() === 'CNY';
-  const balanceSufficient =
-    balanceSupportsPlan &&
-    balanceCents >= Math.round(Number(plan?.price_amount || 0) * 100);
-  const balancePaymentDisabled =
-    paying || purchaseLimitReached || !balanceSupportsPlan || !balanceSufficient;
 
   return (
     <Modal
@@ -103,6 +99,32 @@ const SubscriptionPurchaseModal = ({
     >
       {plan ? (
         <div className='space-y-4 pb-10'>
+          <div className='space-y-2'>
+            <Text strong>{t('请选择使用模式')}</Text>
+            <RadioGroup
+              type='card'
+              value={purchaseMode}
+              onChange={(event) =>
+                setPurchaseMode?.(event?.target?.value ?? event)
+              }
+              className='w-full'
+              style={{ width: '100%' }}
+            >
+              <Radio value='timed' style={{ width: '100%' }}>
+                {t('套餐')} · {t('有效期')}
+              </Radio>
+              {creditBalanceAvailable && (
+                <Radio value='credit_balance' style={{ width: '100%' }}>
+                  Credit
+                </Radio>
+              )}
+            </RadioGroup>
+            {!purchaseMode && (
+              <Text type='warning' size='small'>
+                {t('请选择使用模式')}
+              </Text>
+            )}
+          </div>
           {/* 套餐信息 */}
           <Card className='!rounded-xl !border-0 bg-slate-50 dark:bg-slate-800'>
             <div className='space-y-3'>
@@ -118,34 +140,49 @@ const SubscriptionPurchaseModal = ({
                   {plan.title}
                 </Typography.Text>
               </div>
-              <div className='flex justify-between items-center'>
-                <Text strong className='text-slate-700 dark:text-slate-200'>
-                  {t('有效期')}：
-                </Text>
-                <div className='flex items-center'>
-                  <CalendarClock size={14} className='mr-1 text-slate-500' />
-                  <Text className='text-slate-900 dark:text-slate-100'>
-                    {formatSubscriptionDuration(plan, t)}
-                  </Text>
-                </div>
-              </div>
-              {formatSubscriptionResetPeriod(plan, t) !== t('不重置') && (
-                <div className='flex justify-between items-center'>
-                  <Text strong className='text-slate-700 dark:text-slate-200'>
-                    {t('重置周期')}：
-                  </Text>
-                  <Text className='text-slate-900 dark:text-slate-100'>
-                    {formatSubscriptionResetPeriod(plan, t)}
-                  </Text>
-                </div>
+              {purchaseMode !== 'credit_balance' && (
+                <>
+                  <div className='flex justify-between items-center'>
+                    <Text strong className='text-slate-700 dark:text-slate-200'>
+                      {t('有效期')}：
+                    </Text>
+                    <div className='flex items-center'>
+                      <CalendarClock
+                        size={14}
+                        className='mr-1 text-slate-500'
+                      />
+                      <Text className='text-slate-900 dark:text-slate-100'>
+                        {formatSubscriptionDuration(plan, t)}
+                      </Text>
+                    </div>
+                  </div>
+                  {formatSubscriptionResetPeriod(plan, t) !== t('不重置') && (
+                    <div className='flex justify-between items-center'>
+                      <Text
+                        strong
+                        className='text-slate-700 dark:text-slate-200'
+                      >
+                        {t('重置周期')}：
+                      </Text>
+                      <Text className='text-slate-900 dark:text-slate-100'>
+                        {formatSubscriptionResetPeriod(plan, t)}
+                      </Text>
+                    </div>
+                  )}
+                </>
               )}
               <div className='flex justify-between items-center'>
                 <Text strong className='text-slate-700 dark:text-slate-200'>
-                  {t('总额度')}：
+                  {purchaseMode === 'credit_balance' ? 'Credits' : t('总额度')}
+                  ：
                 </Text>
                 <div className='flex items-center'>
                   <Package size={14} className='mr-1 text-slate-500' />
-                  {totalAmount > 0 ? (
+                  {purchaseMode === 'credit_balance' ? (
+                    <Text className='text-slate-900 dark:text-slate-100'>
+                      {Number(plan.monthly_token_limit || 0).toLocaleString()}
+                    </Text>
+                  ) : totalAmount > 0 ? (
                     <Tooltip content={`${t('原生额度')}：${totalAmount}`}>
                       <Text className='text-slate-900 dark:text-slate-100'>
                         {renderQuota(totalAmount)}
@@ -168,14 +205,6 @@ const SubscriptionPurchaseModal = ({
                   {displayPrice}
                 </Text>
               </div>
-              <div className='flex justify-between items-center'>
-                <Text strong className='text-slate-700 dark:text-slate-200'>
-                  {t('账户余额')}：
-                </Text>
-                <Text className='text-slate-900 dark:text-slate-100'>
-                  {formatAccountBalance(balanceCents)}
-                </Text>
-              </div>
             </div>
           </Card>
 
@@ -188,42 +217,15 @@ const SubscriptionPurchaseModal = ({
               closeIcon={null}
             />
           )}
-          {hasBalancePayment && (!balanceSupportsPlan || !balanceSufficient) && (
-            <Banner
-              type='warning'
-              description={
-                balanceSupportsPlan
-                  ? t('账户余额不足，请先充值。')
-                  : t('账户余额支付仅支持 CNY 套餐。')
-              }
-              className='!rounded-xl'
-              closeIcon={null}
-            />
-          )}
 
           {hasAnyPayment ? (
             <div className='space-y-3'>
               <Text size='small' type='tertiary'>
                 {t('选择支付方式')}：
               </Text>
-              {hasBalancePayment && (
-                <Button
-                  theme='light'
-                  className='w-full justify-between'
-                  icon={<WalletCards size={14} />}
-                  onClick={onPayBalance}
-                  loading={paying}
-                  disabled={balancePaymentDisabled}
-                >
-                  <span>{t('余额支付')}</span>
-                  <Text size='small' type='tertiary'>
-                    {formatAccountBalance(balanceCents)}
-                  </Text>
-                </Button>
-              )}
 
-              {/* Stripe / Creem */}
-              {(hasStripe || hasCreem) && (
+              {/* Stripe / Creem / Kyren */}
+              {(hasStripe || hasCreem || hasKyren) && (
                 <div className='flex gap-2'>
                   {hasStripe && (
                     <Button
@@ -232,7 +234,7 @@ const SubscriptionPurchaseModal = ({
                       icon={<SiStripe size={14} color='#635BFF' />}
                       onClick={onPayStripe}
                       loading={paying}
-                      disabled={purchaseLimitReached}
+                      disabled={!purchaseMode || purchaseLimitReached}
                     >
                       Stripe
                     </Button>
@@ -244,9 +246,21 @@ const SubscriptionPurchaseModal = ({
                       icon={<IconCreditCard />}
                       onClick={onPayCreem}
                       loading={paying}
-                      disabled={purchaseLimitReached}
+                      disabled={!purchaseMode || purchaseLimitReached}
                     >
                       Creem
+                    </Button>
+                  )}
+                  {hasKyren && (
+                    <Button
+                      theme='light'
+                      className='flex-1'
+                      icon={<IconCreditCard />}
+                      onClick={onPayKyren}
+                      loading={paying}
+                      disabled={!purchaseMode || purchaseLimitReached}
+                    >
+                      Kyren
                     </Button>
                   )}
                 </div>
@@ -272,7 +286,11 @@ const SubscriptionPurchaseModal = ({
                     type='primary'
                     onClick={onPayEpay}
                     loading={paying}
-                    disabled={!selectedEpayMethod || purchaseLimitReached}
+                    disabled={
+                      !purchaseMode ||
+                      !selectedEpayMethod ||
+                      purchaseLimitReached
+                    }
                   >
                     {t('支付')}
                   </Button>

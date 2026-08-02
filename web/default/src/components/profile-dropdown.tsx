@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { User, Wallet, LogOut, Settings } from 'lucide-react'
+import { User, CreditCard, LogOut, Settings } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
@@ -97,8 +97,8 @@ export function ProfileDropdown() {
           </DropdownMenuItem>
 
           <DropdownMenuItem onClick={() => navigate({ to: '/wallet' })}>
-            <Wallet className='size-4' />
-            {t('Wallet')}
+            <CreditCard className='size-4' />
+            {t('Subscriptions')}
           </DropdownMenuItem>
 
           {isSuperAdmin && (

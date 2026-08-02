@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Crown, RefreshCw, Check, Receipt } from 'lucide-react'
+import { Crown, RefreshCw, Check } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -80,10 +80,8 @@ type TranslationFn = (key: string, options?: Record<string, unknown>) => string
 
 interface SubscriptionPlansCardProps {
   topupInfo: TopupInfo | null
-  accountBalance?: number
   onPurchaseSuccess?: () => Promise<void> | void
   onAvailabilityChange?: (available: boolean) => void
-  onOpenBilling?: () => void
 }
 
 function getEpayMethods(payMethods: PaymentMethod[] = []): PaymentMethod[] {
@@ -412,9 +410,7 @@ function SubscriptionBillingStrategySection({
 export function SubscriptionPlansCard({
   topupInfo,
   onAvailabilityChange,
-  accountBalance,
   onPurchaseSuccess,
-  onOpenBilling,
 }: SubscriptionPlansCardProps) {
   const { t } = useTranslation()
 
@@ -581,16 +577,7 @@ export function SubscriptionPlansCard({
         title={t('Subscription Plans')}
         description={t('Subscribe to a plan for model access')}
         icon={<Crown className='h-4 w-4' />}
-        action={
-          <div className='flex w-full flex-wrap gap-2 sm:w-auto'>
-            {onOpenBilling && (
-              <Button variant='outline' size='sm' onClick={onOpenBilling}>
-                <Receipt data-icon='inline-start' />
-                {t('Order History')}
-              </Button>
-            )}
-          </div>
-        }
+        action={null}
         contentClassName='space-y-4 sm:space-y-5'
       >
         <div className='rounded-xl border p-3 sm:p-4'>
@@ -1060,7 +1047,6 @@ export function SubscriptionPlansCard({
         enableOnlineTopUp={enableOnlineTopUp}
         enableKyrenSubscription={!!topupInfo?.enable_kyren_subscription}
         epayMethods={epayMethods}
-        accountBalance={accountBalance}
         lastPurchaseMode={selfSubscriptionData?.last_subscription_purchase_mode}
         creditBalancePurchaseEnabled={
           selfSubscriptionData?.credit_balance_purchase_enabled

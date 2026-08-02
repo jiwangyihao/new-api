@@ -348,9 +348,6 @@ const ExtendDurationModal = ({
           title={t('重要提醒')}
           description={
             <div className='space-y-2'>
-              <p>
-                {t('延长容器时长将会产生额外费用，请确认您有足够的账户余额。')}
-              </p>
               <p>{t('延长操作一旦确认无法撤销，费用将立即扣除。')}</p>
             </div>
           }

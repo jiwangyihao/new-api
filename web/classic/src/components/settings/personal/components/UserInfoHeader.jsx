@@ -18,21 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import {
-  Avatar,
-  Card,
-  Tag,
-  Divider,
-  Typography,
-  Badge,
-} from '@douyinfe/semi-ui';
+import { Avatar, Card, Tag, Divider, Typography } from '@douyinfe/semi-ui';
 import {
   isRoot,
   isAdmin,
   renderQuota,
   stringToColor,
 } from '../../../../helpers';
-import { formatAccountBalance } from '../../../../helpers/account-balance.js';
 import { Coins, BarChart2 } from 'lucide-react';
 
 const UserInfoHeader = ({ t, userState }) => {
@@ -117,15 +109,7 @@ const UserInfoHeader = ({ t, userState }) => {
         </div>
       }
     >
-      {/* 当前余额和桌面版统计信息 */}
-      <div className='flex items-start justify-between gap-6'>
-        {/* 当前余额显示 */}
-        <Badge count={t('当前余额')} position='rightTop' type='danger'>
-          <div className='text-2xl sm:text-3xl md:text-4xl font-bold tracking-wide'>
-            {formatAccountBalance(userState?.user?.quota)}
-          </div>
-        </Badge>
-
+      <div className='flex items-start justify-end gap-6'>
         {/* 桌面版统计信息（Semi UI 卡片） */}
         <div className='hidden lg:block flex-shrink-0'>
           <Card

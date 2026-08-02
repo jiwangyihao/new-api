@@ -184,8 +184,8 @@ export function SidebarModulesCard() {
       modules: [
         {
           key: 'topup',
-          title: t('Wallet Management'),
-          description: t('Balance and top-up management'),
+          title: t('Subscriptions'),
+          description: t('Subscription Plans'),
         },
         {
           key: 'personal',

@@ -195,3 +195,40 @@ func TestCreditValuationOrderIngressPreservesLegacyPathWhenMarkerNotReady(t *tes
 	require.Zero(t, ledger.ValuationStateVersionAfter)
 	require.Empty(t, ledger.ValuationConfidence)
 }
+
+func TestCreditValuationRequestPreConsumeRemovesMovingAverageCost(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	result := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-valuation-request-200"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, result.CreditBalance.UserSubscriptionId, preConsumed.UserSubscriptionId)
+	require.Equal(t, int64(200), preConsumed.PreConsumed)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, result.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(1_000), subscription.TokenLimit)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(800), state.AvailableCredit)
+	require.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+	require.Equal(t, int64(2), state.StateVersion)
+	require.Equal(t, CreditValuationMutationConsume, state.LastMutationType)
+
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(200), record.DeductedAvailableCredit)
+	require.Zero(t, record.DebtFormedCredit)
+	require.Equal(t, subscription.Id, record.ValuationSubscriptionId)
+	require.Equal(t, int64(8_000_000), record.DeductedExactCostMicros)
+	require.Zero(t, record.DeductedEstimatedCostMicros)
+	require.Zero(t, record.DeductedUnknownCredit)
+	require.Equal(t, CreditValuationRuleVersion, record.ValuationRuleVersion)
+	require.Equal(t, int64(1), record.SettlementVersion)
+}

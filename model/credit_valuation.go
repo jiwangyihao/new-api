@@ -231,6 +231,88 @@ func validateCreditValuationState(sub *UserSubscription, state *CreditValuationS
 	return nil
 }
 
+func ApplyCreditValuationOutflowTx(tx *gorm.DB, lockedSub *UserSubscription, credit int64, mutationType string) (CreditValuationMutationResult, error) {
+	mutationType = strings.TrimSpace(mutationType)
+	if tx == nil || lockedSub == nil || lockedSub.Id <= 0 || lockedSub.EntitlementType != SubscriptionEntitlementCreditBalance || credit <= 0 || mutationType == "" {
+		return CreditValuationMutationResult{}, ErrCreditValuationStateMismatch
+	}
+	var state CreditValuationState
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_subscription_id = ?", lockedSub.Id).First(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return CreditValuationMutationResult{}, ErrCreditValuationStateMissing
+	}
+	if err != nil {
+		return CreditValuationMutationResult{}, err
+	}
+	if err := validateCreditValuationState(lockedSub, &state); err != nil {
+		return CreditValuationMutationResult{}, err
+	}
+	consumedAvailable := minInt64(credit, state.AvailableCredit)
+	removedExact := int64(0)
+	removedEstimated := int64(0)
+	removedUnknown := int64(0)
+	if consumedAvailable > 0 {
+		var prorateErr error
+		removedExact, prorateErr = prorateFloor(state.ExactCostMicros, consumedAvailable, state.AvailableCredit)
+		if prorateErr != nil {
+			return CreditValuationMutationResult{}, prorateErr
+		}
+		removedEstimated, prorateErr = prorateFloor(state.EstimatedCostMicros, consumedAvailable, state.AvailableCredit)
+		if prorateErr != nil {
+			return CreditValuationMutationResult{}, prorateErr
+		}
+		removedUnknown, prorateErr = prorateFloor(state.UnknownCredit, consumedAvailable, state.AvailableCredit)
+		if prorateErr != nil {
+			return CreditValuationMutationResult{}, prorateErr
+		}
+	}
+	newTokenUsed, ok := checkedAddInt64(lockedSub.TokenUsed, credit)
+	if !ok {
+		return CreditValuationMutationResult{}, ErrCreditValuationOverflow
+	}
+	newStateVersion, ok := checkedAddInt64(state.StateVersion, 1)
+	if !ok {
+		return CreditValuationMutationResult{}, ErrCreditValuationOverflow
+	}
+	now := getDBTimestampTx(tx)
+	if err := tx.Model(&UserSubscription{}).Where("id = ?", lockedSub.Id).Updates(map[string]any{
+		"token_used": newTokenUsed,
+		"updated_at": now,
+	}).Error; err != nil {
+		return CreditValuationMutationResult{}, err
+	}
+	lockedSub.TokenUsed = newTokenUsed
+	lockedSub.UpdatedAt = now
+	state.AvailableCredit = maxInt64(lockedSub.TokenLimit-newTokenUsed, 0)
+	state.ExactCostMicros -= removedExact
+	state.EstimatedCostMicros -= removedEstimated
+	state.UnknownCredit -= removedUnknown
+	state.StateVersion = newStateVersion
+	state.LastMutationType = mutationType
+	state.UpdatedAt = now
+	if err := validateCreditValuationState(lockedSub, &state); err != nil {
+		return CreditValuationMutationResult{}, err
+	}
+	if err := tx.Model(&CreditValuationState{}).Where("user_subscription_id = ?", state.UserSubscriptionId).Updates(map[string]any{
+		"available_credit":      state.AvailableCredit,
+		"exact_cost_micros":     state.ExactCostMicros,
+		"estimated_cost_micros": state.EstimatedCostMicros,
+		"unknown_credit":        state.UnknownCredit,
+		"state_version":         state.StateVersion,
+		"last_mutation_type":    state.LastMutationType,
+		"updated_at":            state.UpdatedAt,
+	}).Error; err != nil {
+		return CreditValuationMutationResult{}, err
+	}
+	return CreditValuationMutationResult{
+		StateVersionAfter:          state.StateVersion,
+		NetAvailableCredit:         state.AvailableCredit,
+		RemovedExactCostMicros:     removedExact,
+		RemovedEstimatedCostMicros: removedEstimated,
+		RemovedUnknownCredit:       removedUnknown,
+	}, nil
+}
+
 func migrateCreditValuationSchema(db *gorm.DB) error {
 	if db == nil {
 		return ErrDatabase

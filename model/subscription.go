@@ -2915,32 +2915,45 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			PreConsumed:        consumeAmount,
 			Status:             "consumed",
 		}
-		if err := tx.Create(record).Error; err != nil {
-			var dup SubscriptionPreConsumeRecord
-			if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
-				if dup.Status == "refunded" {
-					return errors.New("subscription pre-consume already refunded")
-				}
-				fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
-				cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
-				return nil
-			}
-			return err
-		}
-		rows, err := applySubscriptionPreConsumeUpdateTx(tx, sub.Id, distributor, consumeAmount)
+		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
 		if err != nil {
 			return err
 		}
-		if rows == 0 {
-			if distributor {
-				return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+		if valuationReady && sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+			if !distributor {
+				return ErrCreditValuationStateMismatch
 			}
-			return fmt.Errorf("subscription quota insufficient, need=%d", consumeAmount)
-		}
-		if distributor {
-			sub.TokenUsed += consumeAmount
+			mutation, err := ApplyCreditValuationOutflowTx(tx, &sub, consumeAmount, CreditValuationMutationConsume)
+			if err != nil {
+				return err
+			}
+			record.AppliedCredit = consumeAmount
+			record.DeductedAvailableCredit = consumeAmount
+			record.ValuationSubscriptionId = sub.Id
+			record.DeductedExactCostMicros = mutation.RemovedExactCostMicros
+			record.DeductedEstimatedCostMicros = mutation.RemovedEstimatedCostMicros
+			record.DeductedUnknownCredit = mutation.RemovedUnknownCredit
+			record.ValuationRuleVersion = CreditValuationRuleVersion
+			record.SettlementVersion = 1
 		} else {
-			sub.AmountUsed += consumeAmount
+			rows, err := applySubscriptionPreConsumeUpdateTx(tx, sub.Id, distributor, consumeAmount)
+			if err != nil {
+				return err
+			}
+			if rows == 0 {
+				if distributor {
+					return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+				}
+				return fmt.Errorf("subscription quota insufficient, need=%d", consumeAmount)
+			}
+			if distributor {
+				sub.TokenUsed += consumeAmount
+			} else {
+				sub.AmountUsed += consumeAmount
+			}
+		}
+		if err := tx.Create(record).Error; err != nil {
+			return err
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)

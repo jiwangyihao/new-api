@@ -11,6 +11,8 @@
 - GREEN：实现只读 marker predicate、订单冻结来源构造、每份权益初始状态和 `GrantCreditBalanceTx` 同事务双写后，ready 用例通过；状态 `available=1000/exact=40000000 CNY/version=1`，ledger 同步记录 exact。
 - GREEN：marker 非 ready 且快照缺失 micros/估值币种时，订单仍走原数量路径成功入账 1,000 Credit，不创建状态且 ledger 估值字段保持 0；证明加表阶段兼容旧路径。
 - 范围校正：协调器明确 #22 只覆盖 CNY→CNY 同币种；未新增/写入 FX 来源合同。marker 仅允许只读 predicate，测试直接预置状态；生命周期写入仍归 #27。
+- RED：`TestCreditValuationRequestPreConsumeRemovesMovingAverageCost` 经真实 `request_id` 预扣后 subscription 已消费 200，但状态仍保持 `available=1000`，证明预扣旁路未双写。
+- GREEN：`ApplyCreditValuationOutflowTx` 按操作前 1,000 Credit 池移除 8,000,000 exact micros，并在同事务写预扣快照；状态变为 `available=800/exact=32000000/version=2`。
 
 ## 约束证据
 - 金额权威字段为十进制 micros；后端内部使用整数，前端使用 BigInt/字符串优先。
@@ -21,3 +23,4 @@
 - 2026-08-03：首次真实订单 tracer RED，预期状态 `available=1000/exact=40000000 CNY/version=1`，实际 `record not found`。
 - 2026-08-03：收到协调器范围指令；下一 GREEN 只消费订单冻结的 CNY micros/Credit 快照，测试预置已有 `ready` marker，生产代码不创建或修改 marker。
 - 2026-08-03：`go test ./model -run 'TestCreditValuationOrderIngress(CreatesExactState|PreservesLegacyPathWhenMarkerNotReady)' -count=1` 返回 `go test: 1 packages ok`。
+- 2026-08-03：`go test ./model -run 'Test(CreditValuationRequestPreConsumeRemovesMovingAverageCost|CreditBalanceLifecycleAcrossBillingStrategiesAndCache|PreConsumeUserSubscriptionByUnitsReturnsPlanMetadata)' -count=1` 返回 `go test: 1 packages ok`。

@@ -39,3 +39,17 @@ func TestParseDecimalAmountMicrosAcceptsMaxInt64(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(math.MaxInt64), got)
 }
+
+func TestNormalizeSubscriptionPlanPricePreservesExplicitZero(t *testing.T) {
+	price, err := NormalizeSubscriptionPlanPrice(SubscriptionPlanPriceInput{
+		DisplayAmount:         "0",
+		DisplayAmountProvided: true,
+		AmountMicros:          "0",
+		AmountMicrosProvided:  true,
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, price.DisplayAmount)
+	require.NotNil(t, price.AmountMicros)
+	require.Equal(t, int64(0), *price.AmountMicros)
+}

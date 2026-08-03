@@ -107,9 +107,6 @@ func NormalizeSubscriptionPlanPrice(input SubscriptionPlanPriceInput) (Subscript
 	if input.DisplayAmountProvided && displayMicros != exactMicros {
 		return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceMismatch
 	}
-	if exactMicros == 0 {
-		return SubscriptionPlanPrice{}, nil
-	}
 	displayText := strconv.FormatInt(exactMicros/amountMicrosPerUnit, 10) + "." +
 		fmt.Sprintf("%06d", exactMicros%amountMicrosPerUnit)
 	displayAmount, err := strconv.ParseFloat(displayText, 64)

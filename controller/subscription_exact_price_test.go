@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +29,25 @@ func TestAdminCreateSubscriptionPlanRoundTripsExactPriceMicros(t *testing.T) {
 	var stored int64
 	require.NoError(t, model.DB.Raw("SELECT price_amount_micros FROM subscription_plans WHERE title = ?", "Exact price").Scan(&stored).Error)
 	assert.Equal(t, int64(40_123_456), stored)
+}
+
+func TestAdminCreateSubscriptionPlanPreservesExplicitZeroPriceMicros(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+
+	recorder := performAdminSubscriptionPlanCreate(`{"plan":{"title":"Exact zero price","price_amount":0,"price_amount_micros":"0","currency":"CNY","duration_unit":"month","duration_value":1,"enabled":true,"monthly_token_limit":1000}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var stored sql.NullInt64
+	require.NoError(t, model.DB.Raw("SELECT price_amount_micros FROM subscription_plans WHERE title = ?", "Exact zero price").Scan(&stored).Error)
+	require.True(t, stored.Valid, "explicit zero must remain distinct from legacy NULL")
+	require.Zero(t, stored.Int64)
+
+	listRecorder := httptest.NewRecorder()
+	listContext, _ := gin.CreateTestContext(listRecorder)
+	AdminListSubscriptionPlans(listContext)
+	require.Equal(t, http.StatusOK, listRecorder.Code)
+	assert.Contains(t, listRecorder.Body.String(), `"price_amount_micros":"0"`)
 }
 
 func performAdminSubscriptionPlanCreate(body string) *httptest.ResponseRecorder {
@@ -86,6 +106,28 @@ func TestAdminUpdateSubscriptionPlanRoundTripsExactPriceMicros(t *testing.T) {
 	listContext, _ := gin.CreateTestContext(listRecorder)
 	AdminListSubscriptionPlans(listContext)
 	assert.Contains(t, listRecorder.Body.String(), `"price_amount_micros":"40654321"`)
+}
+
+func TestAdminUpdateSubscriptionPlanPreservesExplicitZeroPriceMicros(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	initialMicros := int64(40_000_000)
+	plan := model.SubscriptionPlan{Title: "Exact update to zero", PriceAmount: 40, PriceAmountMicros: &initialMicros, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, Enabled: true}
+	require.NoError(t, model.DB.Create(&plan).Error)
+
+	recorder := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Exact update to zero","price_amount":0,"price_amount_micros":"0","currency":"CNY","duration_unit":"month","duration_value":1,"enabled":true}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var stored sql.NullInt64
+	require.NoError(t, model.DB.Raw("SELECT price_amount_micros FROM subscription_plans WHERE id = ?", plan.Id).Scan(&stored).Error)
+	require.True(t, stored.Valid, "explicit zero update must remain distinct from legacy NULL")
+	require.Zero(t, stored.Int64)
+
+	listRecorder := httptest.NewRecorder()
+	listContext, _ := gin.CreateTestContext(listRecorder)
+	AdminListSubscriptionPlans(listContext)
+	require.Equal(t, http.StatusOK, listRecorder.Code)
+	assert.Contains(t, listRecorder.Body.String(), `"price_amount_micros":"0"`)
 }
 
 func TestAdminUpdateSubscriptionPlanPreservesLegacyPriceWhenPriceFieldsAreAbsent(t *testing.T) {

@@ -11,15 +11,14 @@
 
 ## M1：真实 SQLite 只读诊断
 
-H1 提交前不推进 M1。之后范围严格收敛为：
+M1 范围严格收敛为 SQLite 专属诊断：
 
-1. 使用真实 SQLite NUMERIC/REAL 数据构造表面十进制文本可解析、但原始数值与规范 micros 重建值严格不等的 `roundtrip_mismatch`。
-2. Go 应用层不得扫描或格式化 `float32/float64`，不得使用容差比较。
-3. reason 使用稳定常量 `roundtrip_mismatch`，既有 `invalid_decimal`、`negative`、`precision_exceeds_six`、`overflow` 保持不变。
-4. 结果按 plan ID 稳定排序，重复执行确定。
-5. 诊断前后数据库相关内容快照完全相同，证明零写入。
-
-不再扩大 SQLite/跨方言探索；真实 MySQL/PostgreSQL 矩阵不属于本次收敛执行。
+1. 真实 SQLite NUMERIC/REAL 行的表面文本先由现有严格解析器转成 `int64` micros。
+2. 仅 SQLite 将 micros 用整数运算重建为规范六位十进制字符串，并在数据库内用 `CAST(? AS NUMERIC)` 与原始 `price_amount` 严格比较。
+3. Go 应用层不得扫描、格式化或比较 `float32/float64`，不得使用容差。
+4. 表面文本可解析但严格往返不等时返回稳定常量 `roundtrip_mismatch`；既有 `invalid_decimal`、`negative`、`precision_exceeds_six`、`overflow` 保持不变。
+5. 结果按 plan ID 稳定排序，重复执行确定；诊断前后完整夹具快照相同，证明零写入。
+6. 非 SQLite 查询、错误和诊断语义保持原样；不新增 MySQL/PostgreSQL 合同或测试，真实跨库历史迁移属于 #27。
 
 ## 明确非所有权
 
@@ -31,5 +30,5 @@ H1 提交前不推进 M1。之后范围严格收敛为：
 
 ## 恢复锚点
 
-- 最近安全 HEAD：`79982d773d127779c9c3835c2e1c771b7a829268`。
-- 当前未提交文件：三份 `spec-fix-*.md`；H1 测试/实现加入后由状态文件持续列出。
+- H1 安全提交：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`。
+- 当前未提交文件：三份 `spec-fix-*.md`、`model/subscription_price_diagnostic.go`、`model/subscription_price_diagnostic_test.go`。

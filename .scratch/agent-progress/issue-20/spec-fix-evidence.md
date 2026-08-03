@@ -24,11 +24,49 @@
 - 完全缺失价格字段的无关编辑必须继续保留历史 NULL。
 - 既有拒绝路径与非零路径保持不变。
 
-## M1 已知事实（冻结至 H1 提交后）
+## M1 真实 SQLite RED / GREEN
 
-- 冻结诊断仅将 `price_amount` 转为文本并调用 `ParseDecimalAmountMicros`，没有数值域往返不一致 reason。
-- 真实 SQLite NUMERIC/REAL 值可出现表面文本能解析、但原始数值不等于规范六位十进制重建值的情况。
-- 后续仅以真实 SQLite 夹具验证 `roundtrip_mismatch`，并比较诊断前后数据库快照证明零写入；不继续扩大跨方言调查。
+### 真实夹具
+
+测试表使用 `price_amount NUMERIC`，plan 6 通过 SQLite 自身执行 `CAST('40.12345600000001' AS REAL)` 写入真实数值。夹具断言：
+
+- `CAST(price_amount AS TEXT)` 为可被严格 micros 解析的 `40.123456`；
+- 原始 `price_amount` 与 `CAST('40.123456' AS NUMERIC)` 严格数值比较不相等。
+
+因此这是 SQLite 原始数值到规范六位 micros 十进制的真实往返不一致，不是注入伪字符串。
+
+### RED
+
+命令：`go test ./model -run TestDiagnosePendingSubscriptionPlanPricesIsReadOnlyAndDeterministic -count=1`
+
+关键输出：
+
+```text
+expected: plan 2 negative, plan 6 roundtrip_mismatch, plan 7 invalid_decimal, plan 9 precision_exceeds_six
+actual:   plan 2 negative, plan 7 invalid_decimal, plan 9 precision_exceeds_six
+FAIL github.com/QuantumNous/new-api/model
+```
+
+冻结实现稳定漏报 plan 6，准确复现 M1。测试已同时要求稳定 plan ID 排序、重复调用结果一致，以及包含 `total_changes()`、SQLite 存储类型/字面值、micros 的诊断前后完整快照相同。
+
+### GREEN
+
+- `go test ./model -run TestDiagnosePendingSubscriptionPlanPricesIsReadOnlyAndDeterministic -count=1`：PASS。
+- `go test ./model -run TestDiagnosePendingSubscriptionPlanPricesIsReadOnlyAndDeterministic -count=10`：PASS，证明稳定排序与重复执行确定。
+- SQLite 专属比较将严格解析所得 `int64` micros 用整数运算重建为规范六位十进制字符串，再由 SQLite `CAST(? AS NUMERIC)` 与原始 `price_amount` 严格比较；Go 未扫描、格式化或比较任何 `float32/float64`。
+- 表面文本解析成功但严格比较不等时返回稳定常量 `SubscriptionPlanPriceDiagnosticRoundtripMismatch = "roundtrip_mismatch"`。
+- 每次测试内部连续调用诊断两次，结果均严格等于 plan ID `2, 6, 7, 9` 的有序列表。
+- 诊断前后快照严格相等；快照包含 SQLite `total_changes()` 以及全部套餐行的 ID、`typeof(price_amount)`、`quote(price_amount)`、`price_amount_micros`，证明零写入。
+- 非 SQLite 查询、错误和诊断行为保持原样；本轮未新增跨库语义或测试，真实跨库历史迁移仍属于 #27。
+
+### 最终窄回归
+
+- `go test ./model -run 'Test(ParseDecimalAmountMicros|NormalizeSubscriptionPlanPrice|DiagnosePendingSubscriptionPlanPricesIsReadOnlyAndDeterministic)$' -count=1`：PASS。
+- `go test ./controller -run 'TestAdmin(CreateSubscriptionPlanPreservesExplicitZeroPriceMicros|UpdateSubscriptionPlanPreservesExplicitZeroPriceMicros|UpdateSubscriptionPlanPreservesLegacyPriceWhenPriceFieldsAreAbsent|CreateSubscriptionPlanRejectsInvalidExactPricesAtomically|CreateSubscriptionPlanRoundTripsExactPriceMicros|UpdateSubscriptionPlanRoundTripsExactPriceMicros)$' -count=1`：PASS。
+- `go test ./model -run TestSubscriptionPlanPriceDiagnosticQuerySupportsAllDialects -count=1`：PASS，确认非 SQLite 查询与 unsupported 行为未改变。
+- `bun test src/features/subscriptions/lib/plan-form.test.ts`：`13 pass / 0 fail`。
+- `bun run typecheck`：`tsc -b` PASS。
+- `git diff --check`：PASS。
 
 ## H1 RED / GREEN 命令记录
 
@@ -69,5 +107,5 @@ FAIL github.com/QuantumNous/new-api/controller
 
 ## 最近安全 HEAD 与未提交文件
 
-- 最近安全 HEAD：`79982d773d127779c9c3835c2e1c771b7a829268`。
-- 当前未提交：三份 `spec-fix-*.md`、`model/credit_valuation_money.go`、`model/credit_valuation_money_test.go`、`controller/subscription_exact_price_test.go`。
+- 最近安全 HEAD：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`（H1）。
+- 当前未提交：三份 `spec-fix-*.md`、`model/subscription_price_diagnostic.go`、`model/subscription_price_diagnostic_test.go`。

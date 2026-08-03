@@ -5,19 +5,19 @@
 - 冻结候选 HEAD：`79982d773d127779c9c3835c2e1c771b7a829268`。
 - 分支：`issue-20-valuation-foundation`。
 - 开始状态：工作树 clean。
-- 最近安全 HEAD：`79982d773d127779c9c3835c2e1c771b7a829268`。
+- 最近安全 HEAD：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`（H1 显式零值修复）。
 
 ## 当前阶段
 
-- H1：model、controller/API 创建与更新显式零值均已 GREEN；历史 NULL、非零与拒绝路径回归通过，准备小步提交。
-- M1：冻结等待 H1 提交；之后仅做真实 SQLite `roundtrip_mismatch` 与诊断前后数据库快照相同，不再扩展跨方言探索。
+- H1：已完成 RED→GREEN 并提交 `cf2b743b8`；显式零值创建、更新、数据库非 NULL 0 与 GET `"0"` 均受保护。
+- M1：真实 SQLite NUMERIC/REAL `roundtrip_mismatch` 已 GREEN；稳定排序、重复调用与诊断前后完整夹具快照相同均通过，进入既定窄回归与提交。
 
 ## RED / GREEN
 
 | 项目 | RED | GREEN | 状态 |
 | --- | --- | --- | --- |
-| H1 显式精确零值保真 | model 指针为 nil；API 数据库 `sql.NullInt64.Valid=false` | model/create/update/GET 与历史 NULL 回归通过 | GREEN，待提交 |
-| M1 SQLite 数值往返诊断 | H1 提交后执行 | 待实现 | 暂停 |
+| H1 显式精确零值保真 | model 指针为 nil；API 数据库 `sql.NullInt64.Valid=false` | model/create/update/GET 与历史 NULL 回归通过 | GREEN，`cf2b743b8` |
+| M1 SQLite 数值往返诊断 | 表面 `40.123456` 可解析但原始 REAL 严格不等，plan 6 被漏报 | plan 6 稳定返回 `roundtrip_mismatch`；排序、重复调用、零写入通过 | GREEN，待提交 |
 
 ## 已确认根因
 
@@ -29,16 +29,12 @@
 - `.scratch/agent-progress/issue-20/spec-fix-status.md`
 - `.scratch/agent-progress/issue-20/spec-fix-evidence.md`
 - `.scratch/agent-progress/issue-20/spec-fix-contract.md`
-
-- `model/credit_valuation_money_test.go`
-- `controller/subscription_exact_price_test.go`
-- `model/credit_valuation_money.go`
-
-H1 实现落盘后继续在此列出。
+- `model/subscription_price_diagnostic.go`
+- `model/subscription_price_diagnostic_test.go`
 
 ## 下一条命令
 
-格式化 H1 Go 文件，重跑窄范围测试与 `git diff --check`，提交 H1 可恢复小提交。
+运行既定 H1/M1 窄 Go 回归、plan-form 13 tests、tsc 与 `git diff --check`，然后提交 M1。
 
 ## 阻塞
 

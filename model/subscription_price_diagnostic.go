@@ -8,10 +8,11 @@ import (
 )
 
 const (
-	SubscriptionPlanPriceDiagnosticInvalid   = "invalid_decimal"
-	SubscriptionPlanPriceDiagnosticNegative  = "negative"
-	SubscriptionPlanPriceDiagnosticPrecision = "precision_exceeds_six"
-	SubscriptionPlanPriceDiagnosticOverflow  = "overflow"
+	SubscriptionPlanPriceDiagnosticInvalid           = "invalid_decimal"
+	SubscriptionPlanPriceDiagnosticNegative          = "negative"
+	SubscriptionPlanPriceDiagnosticPrecision         = "precision_exceeds_six"
+	SubscriptionPlanPriceDiagnosticOverflow          = "overflow"
+	SubscriptionPlanPriceDiagnosticRoundtripMismatch = "roundtrip_mismatch"
 )
 
 type SubscriptionPlanPriceDiagnostic struct {
@@ -27,6 +28,17 @@ func subscriptionPlanPriceDiagnosticQuery(dialect string) (string, error) {
 		return "", fmt.Errorf("unsupported database dialect: %s", dialect)
 	}
 	return "SELECT id AS plan_id, " + cast + " AS price_text FROM subscription_plans WHERE price_amount_micros IS NULL ORDER BY id", nil
+}
+
+func sqliteSubscriptionPlanPriceRoundtripMatches(db *gorm.DB, planId int, amountMicros int64) (bool, error) {
+	canonicalPrice := fmt.Sprintf("%d.%06d", amountMicros/amountMicrosPerUnit, amountMicros%amountMicrosPerUnit)
+	var matches int
+	err := db.Raw(
+		`SELECT CASE WHEN price_amount = CAST(? AS NUMERIC) THEN 1 ELSE 0 END FROM subscription_plans WHERE id = ? AND price_amount_micros IS NULL`,
+		canonicalPrice,
+		planId,
+	).Scan(&matches).Error
+	return matches == 1, err
 }
 func DiagnosePendingSubscriptionPlanPrices(db *gorm.DB) ([]SubscriptionPlanPriceDiagnostic, error) {
 	if db == nil {
@@ -45,8 +57,17 @@ func DiagnosePendingSubscriptionPlanPrices(db *gorm.DB) ([]SubscriptionPlanPrice
 	}
 	result := make([]SubscriptionPlanPriceDiagnostic, 0)
 	for _, row := range rows {
-		_, err := ParseDecimalAmountMicros(row.PriceText)
+		amountMicros, err := ParseDecimalAmountMicros(row.PriceText)
 		if err == nil {
+			if db.Dialector.Name() == "sqlite" {
+				matches, compareErr := sqliteSubscriptionPlanPriceRoundtripMatches(db, row.PlanId, amountMicros)
+				if compareErr != nil {
+					return nil, compareErr
+				}
+				if !matches {
+					result = append(result, SubscriptionPlanPriceDiagnostic{PlanId: row.PlanId, Reason: SubscriptionPlanPriceDiagnosticRoundtripMismatch})
+				}
+			}
 			continue
 		}
 		reason := SubscriptionPlanPriceDiagnosticInvalid

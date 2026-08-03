@@ -6,7 +6,7 @@
 - 分析 tracer：summary/users/subscriptions/plans/sources 五个 paid-value 查询共享同一 `CreditValuationState`，均返回 `32,000,000` micros CNY；`active_paid_subscription_count=1`。
 - 分析 DTO：金额同时保留兼容 `amount` 与权威十进制字符串 `amount_micros`，所有分组继续使用 `*_by_currency` 数组承载多币种结果；#22 运行时仅实现 CNY→CNY，不引入 FX。
 - current-only 边界：Credit 状态晚于请求 `snapshot_at` 时，明细以 `snapshot_semantics=current_only` 标记最新状态；不伪造历史值，不扩展 paid-value 查询签名或 marker 生命周期。
-- 当前工作：从 `7f5455011` 恢复默认前端 UI RED；后端订单、购买、`request_id`、五接口、FX 与 marker/ready 边界均不再扩张。
+- 当前工作：UI 实现已达到 BigInt/micros 与字段级 GREEN，但新增 paid-value 页面行为测试仍 RED；立即保存诚实可恢复安全点，随后只补 purchase/BillingSession 未覆盖合同。
 - 基线：`53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
 - 工作树：`jiwangyihao/issue-22-credit-tracer`。
 
@@ -21,9 +21,9 @@
 默认前端优先解析 `amount_micros` 并以 BigInt/字符串格式化，展示 exact/estimated/unknown、Credit 时间值不适用和移动加权平均术语；补齐 en/zh/fr/ru/ja/vi。
 
 ## 下一步
-1. 先提交恢复现场：进度记录与两份 UI RED 行为测试。
-2. 更新默认前端 paid-value 类型、BigInt micros 格式化和 Credit 语义字段。
-3. 增加 current-only 非阻断提示与刷新，补齐六语言并运行定向测试和真实浏览器 smoke。
+1. 提交当前 UI WIP/RED：精确格式化与字段测试 GREEN，页面测试因缺少 RouterProvider 测试夹具而 RED。
+2. 仅审计并补齐 Issue #22 尚未覆盖的 purchase/BillingSession 合同测试与最小实现。
+3. 不重做订单、`request_id`、五接口，不实现 #23/#26/#27。
 
 ## 阻塞
 当前无外部阻塞。#21 timed grant 只保留窄扩展 seam，不实现其时间线。
@@ -42,3 +42,9 @@
 - 恢复时仅有 `format.test.ts` 与 `panel-fields.test.ts` 两份 UI RED 未提交；后端工作树无未提交改动。
 - RED：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts` 得到 `13 pass / 3 fail`，失败分别证明旧 float 覆盖 micros、大整数精度丢失、Credit exact/时间值/估值语义字段缺失。
 - 协调边界：本轮只完成默认前端、六语言、浏览器与最终门禁，不继续修改已验收的后端 tracer。
+
+## 2026-08-04 UI WIP/RED 安全点
+- `bun install --frozen-lockfile` 已按锁文件恢复 816 个依赖。
+- `format.test.ts` 与 `panel-fields.test.ts` 已 GREEN；与新增页面测试合跑为 `16 pass / 1 fail`。
+- 唯一 RED 是 `paid-value-panel.test.tsx` 缺少 TanStack `RouterProvider` 测试夹具，渲染 `Link` 时触发 `router.isServer` 空引用；尚未取得真实页面 GREEN 或浏览器证据。
+- 类型检查已启动但保存安全点时仍在运行，不声明通过。

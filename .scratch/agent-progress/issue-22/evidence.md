@@ -52,3 +52,11 @@
 - RED 命令：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts`。
 - RED 结果：`13 pass / 3 fail`。`amount=999, amount_micros=32000000` 实际显示 `¥999.00`；`amount_micros=9007199254740993000000` 实际显示 `$0.00`；Credit 明细缺少 exact 字段与本地化语义值。
 - 后续 GREEN 仅改 `web/default` 通用 micros/BigInt、Credit UI、current-only 与 i18n；不再扩张后端或 #23–#28 范围。
+
+## 2026-08-04 UI WIP/RED 实际状态
+- 依赖恢复：`bun install --frozen-lockfile` 成功，`816 packages installed`。
+- UI 合跑：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts src/features/admin-analytics/paid-value-panel.test.tsx` 返回 `16 pass / 1 fail`。
+- 已 GREEN：`amount_micros` 优先于兼容 float；超出 JS safe integer 的 micros 由 BigInt/字符串格式化；Credit exact、时间值不适用、moving-weighted、confidence、current-only 字段映射测试通过。
+- 仍 RED：新增页面行为测试未提供 TanStack `RouterProvider`，`useLinkProps` 读取空 `router.isServer`；这不是页面行为已通过的证据。
+- `bun run typecheck` 在本安全点落盘时尚未结束；不得将其记录为 PASS。
+- 本提交明确为 WIP/RED 恢复点；未运行真实浏览器 smoke，未补六语言，未声明 Issue #22 UI 完成。

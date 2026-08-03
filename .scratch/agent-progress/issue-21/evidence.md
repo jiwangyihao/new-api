@@ -230,3 +230,11 @@
 - 可见反馈：失败 Alert 明确提示重试将复用 key；成功 Alert 明确完成状态。
 - 格式化与测试：`bunx prettier --write src/features/subscriptions/types.ts src/features/subscriptions/components/dialogs/user-subscriptions-dialog.tsx src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx && bun test src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx`。
 - 结果：`2 pass, 0 fail`；既有转换审计行为保持 GREEN，新 timed UI 测试验证完整 payload、失败同 key 重试和 reason 变化换 key。
+
+## RED→GREEN 14：timed 跨币种运营剩余价值展示
+
+- RED：新增跨币种 timed 明细夹具，singular 三字段均为 null，CNY/USD 只在 `*_by_currency`；旧字段映射显示 `—`，而期望 `¥10.00, $5.00`。
+- RED 命令：`bun test src/features/admin-analytics/panel-fields.test.ts`；结果 `9 pass, 1 fail`，recognized 实际 `—`。
+- GREEN：前端类型接受 nullable singular、三组 by-currency、`valuation_confidence`、`valuation_warnings`、`amount_micros` 与 summary unknown timed count；卡片在 singular null 时展示 by-currency，且展示置信度/warning。面板 summary 新增 unknown timed 权益数量。
+- GREEN 命令：`bunx prettier --write src/features/admin-analytics/types.ts src/features/admin-analytics/lib/panel-fields.ts src/features/admin-analytics/panel-fields.test.ts && bun test src/features/admin-analytics/panel-fields.test.ts`。
+- 结果：`10 pass, 0 fail`；跨币种显示 CNY 10/USD 5，token CNY 12/USD 6，time CNY 20/USD 10；`bun run typecheck` PASS。

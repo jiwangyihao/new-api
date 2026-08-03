@@ -109,6 +109,8 @@ summary/users/subscriptions/plans/sources 使用同一 timed 行投影。来源�
 - UI 只允许启用、非 trial/invite-trial、`entitlement_type=timed` 且具有正精确 micros 与币种的计划。
 - attempt 指纹包含 user、plan、reason、冻结 micros 与币种；失败重试不改变指纹时复用 key，事实改变或成功后生成新 key。
 - 实际共享文件：`web/default/src/features/subscriptions/types.ts` 与 `web/default/src/features/subscriptions/components/dialogs/user-subscriptions-dialog.tsx`；未触碰 Credit UI 或通用金额格式化器。
+- timed 分析前端增量：`types.ts` 接受 nullable singular、三组 `*_by_currency`、`valuation_confidence`、`valuation_warnings` 与 `amount_micros`；`panel-fields.ts` 只在 singular 为 null 时回退到对应 by-currency 列表，不根据当前 Plan 币种合并。
+- summary 展示 `unknown_timed_subscription_count`；timed 明细展示原始 warning code，便于调查时间线异常。
 - 当前真实 RED fixture：Plan=`999 EUR`；grants=`40 CNY` + `10 USD`；50% 当前 Credit；预期 recognized=`10 CNY + 5 USD` 且无 EUR。
 
 ## 明确非所有权

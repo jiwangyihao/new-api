@@ -101,23 +101,74 @@ export function adminAnalyticsSubscriptionHistoryValues(
   item: AdminAnalyticsDrilldownSubscriptionItem
 ): AdminAnalyticsCardValue[] {
   return [
-    { labelKey: 'adminAnalytics.fields.subscriptionId', value: formatAdminAnalyticsOptionalValue(item.subscription_id) },
-    { labelKey: 'adminAnalytics.fields.userId', value: formatAdminAnalyticsOptionalValue(item.user_id) },
-    { labelKey: 'adminAnalytics.fields.planId', value: formatAdminAnalyticsOptionalValue(item.plan_id) },
-    { labelKey: 'adminAnalytics.fields.entitlementType', value: formatAdminAnalyticsOptionalValue(item.entitlement_type) },
-    { labelKey: 'adminAnalytics.fields.lifecycleState', value: formatAdminAnalyticsOptionalValue(item.lifecycle_state) },
-    { labelKey: 'adminAnalytics.fields.status', value: formatAdminAnalyticsOptionalValue(item.status) },
-    { labelKey: 'adminAnalytics.fields.sourceAttribution', value: formatAdminAnalyticsOptionalValue(item.source) },
-    { labelKey: 'adminAnalytics.fields.availableCredit', value: formatAdminTokens(item.available_credit) },
-    { labelKey: 'adminAnalytics.fields.settlementDebt', value: formatAdminTokens(item.settlement_debt) },
-    { labelKey: 'adminAnalytics.fields.graceRemainingSeconds', value: formatAdminTokens(item.grace_remaining_seconds) },
-    { labelKey: 'adminAnalytics.fields.conversionId', value: formatAdminAnalyticsOptionalValue(item.conversion_id) },
-    { labelKey: 'adminAnalytics.fields.targetSubscriptionId', value: formatAdminAnalyticsOptionalValue(item.target_subscription_id) },
-    { labelKey: 'adminAnalytics.fields.targetUserId', value: formatAdminAnalyticsOptionalValue(item.target_user_id) },
-    { labelKey: 'adminAnalytics.fields.targetPlanId', value: formatAdminAnalyticsOptionalValue(item.target_plan_id) },
-    { labelKey: 'adminAnalytics.fields.targetPlanTitle', value: formatAdminAnalyticsOptionalValue(item.target_plan_title) },
-    { labelKey: 'adminAnalytics.fields.startTime', value: formatAdminAnalyticsTimestamp(item.start_time) },
-    { labelKey: 'adminAnalytics.fields.endTime', value: formatAdminAnalyticsTimestamp(item.end_time) },
+    {
+      labelKey: 'adminAnalytics.fields.subscriptionId',
+      value: formatAdminAnalyticsOptionalValue(item.subscription_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.userId',
+      value: formatAdminAnalyticsOptionalValue(item.user_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.planId',
+      value: formatAdminAnalyticsOptionalValue(item.plan_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.entitlementType',
+      value: formatAdminAnalyticsOptionalValue(item.entitlement_type),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.lifecycleState',
+      value: formatAdminAnalyticsOptionalValue(item.lifecycle_state),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.status',
+      value: formatAdminAnalyticsOptionalValue(item.status),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.sourceAttribution',
+      value: formatAdminAnalyticsOptionalValue(item.source),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.availableCredit',
+      value: formatAdminTokens(item.available_credit),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.settlementDebt',
+      value: formatAdminTokens(item.settlement_debt),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.graceRemainingSeconds',
+      value: formatAdminTokens(item.grace_remaining_seconds),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.conversionId',
+      value: formatAdminAnalyticsOptionalValue(item.conversion_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.targetSubscriptionId',
+      value: formatAdminAnalyticsOptionalValue(item.target_subscription_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.targetUserId',
+      value: formatAdminAnalyticsOptionalValue(item.target_user_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.targetPlanId',
+      value: formatAdminAnalyticsOptionalValue(item.target_plan_id),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.targetPlanTitle',
+      value: formatAdminAnalyticsOptionalValue(item.target_plan_title),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.startTime',
+      value: formatAdminAnalyticsTimestamp(item.start_time),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.endTime',
+      value: formatAdminAnalyticsTimestamp(item.end_time),
+    },
   ]
 }
 
@@ -196,7 +247,9 @@ export function paidSubscriptionValuePlanCardValues(
     },
     {
       labelKey: 'adminAnalytics.metrics.excludedAuditValue',
-      value: formatAdminMoneyBreakdown(item.excluded_remaining_value_by_currency),
+      value: formatAdminMoneyBreakdown(
+        item.excluded_remaining_value_by_currency
+      ),
     },
     {
       labelKey: 'adminAnalytics.metrics.activePaidUsers',
@@ -229,7 +282,9 @@ export function paidSubscriptionValueSourceCardValues(
     },
     {
       labelKey: 'adminAnalytics.metrics.excludedAuditValue',
-      value: formatAdminMoneyBreakdown(item.excluded_remaining_value_by_currency),
+      value: formatAdminMoneyBreakdown(
+        item.excluded_remaining_value_by_currency
+      ),
     },
     {
       labelKey: 'adminAnalytics.metrics.activePaidUsers',
@@ -264,15 +319,26 @@ export function paidSubscriptionValueSubscriptionCardValues(
     },
     {
       labelKey: 'adminAnalytics.fields.recognizedRemainingValue',
-      value: formatAdminMoneyAmount(item.recognized_remaining_value),
+      value:
+        item.recognized_remaining_value === null
+          ? formatAdminMoneyBreakdown(
+              item.recognized_remaining_value_by_currency
+            )
+          : formatAdminMoneyAmount(item.recognized_remaining_value),
     },
     {
       labelKey: 'adminAnalytics.metrics.tokenBasedValue',
-      value: formatAdminMoneyAmount(item.token_based_value),
+      value:
+        item.token_based_value === null
+          ? formatAdminMoneyBreakdown(item.token_based_value_by_currency)
+          : formatAdminMoneyAmount(item.token_based_value),
     },
     {
       labelKey: 'adminAnalytics.metrics.timeBasedValue',
-      value: formatAdminMoneyAmount(item.time_based_value),
+      value:
+        item.time_based_value === null
+          ? formatAdminMoneyBreakdown(item.time_based_value_by_currency)
+          : formatAdminMoneyAmount(item.time_based_value),
     },
     {
       labelKey: 'adminAnalytics.fields.startTime',
@@ -301,6 +367,17 @@ export function paidSubscriptionValueSubscriptionCardValues(
     {
       labelKey: 'adminAnalytics.fields.valuationBasis',
       value: formatAdminAnalyticsOptionalValue(item.valuation_basis),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.valuationConfidence',
+      value: formatAdminAnalyticsOptionalValue(item.valuation_confidence),
+    },
+    {
+      labelKey: 'adminAnalytics.fields.valuationWarnings',
+      value:
+        item.valuation_warnings && item.valuation_warnings.length > 0
+          ? item.valuation_warnings.join(', ')
+          : '—',
     },
     {
       labelKey: 'adminAnalytics.fields.sourceAttribution',

@@ -141,11 +141,13 @@ export interface AdminAnalyticsDrilldownTarget {
 export interface MoneyAmount {
   amount: number
   currency: string
+  amount_micros?: string
 }
 
 export interface MoneyBreakdown {
   amount: number
   currency: string
+  amount_micros?: string
 }
 
 export interface AdminAnalyticsOverviewUsers {
@@ -353,7 +355,6 @@ export interface AdminAnalyticsUserLifecycleTrendPoint {
   trial_users: number
 }
 
-
 export interface AdminAnalyticsUserLifecycleItem {
   user_id: number
   username: string
@@ -480,6 +481,7 @@ export interface PaidSubscriptionValueSummary {
   active_paid_subscription_count: number
   active_paid_user_count: number
   token_value_unavailable_count: number
+  unknown_timed_subscription_count: number
 }
 
 export interface PaidSubscriptionValuePlanGroup {
@@ -528,6 +530,7 @@ export interface PaidSubscriptionValueSubscription {
   username: string
   plan_id: number
   plan_name: string
+  entitlement_type?: 'timed' | 'credit_balance'
   source: AdminAnalyticsSource
   grant_reason: string
   plan_price: MoneyAmount
@@ -538,9 +541,14 @@ export interface PaidSubscriptionValueSubscription {
   token_used: number
   next_reset_time: number
   token_based_value: MoneyAmount | null
-  time_based_value: MoneyAmount
-  recognized_remaining_value: MoneyAmount
+  time_based_value: MoneyAmount | null
+  recognized_remaining_value: MoneyAmount | null
+  token_based_value_by_currency?: MoneyBreakdown[]
+  time_based_value_by_currency?: MoneyBreakdown[]
+  recognized_remaining_value_by_currency?: MoneyBreakdown[]
   valuation_basis: string
+  valuation_confidence?: string
+  valuation_warnings?: string[]
   source_attribution: string
   excluded: boolean
   excluded_reason: string
@@ -640,7 +648,6 @@ export interface InvitationPaidSubscriptionsResponse {
   invitees: AdminAnalyticsList<InvitationPaidInvitee>
   subscriptions: AdminAnalyticsList<InvitationPaidSubscriptionRecord>
 }
-
 
 export interface AdminAnalyticsInvitationTrendPoint {
   timestamp: number

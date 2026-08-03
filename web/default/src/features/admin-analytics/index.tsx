@@ -1342,6 +1342,10 @@ function PaidSubscriptionValuePanel(props: {
           labelKey='adminAnalytics.metrics.tokenValueUnavailable'
           value={summary.token_value_unavailable_count}
         />
+        <Metric
+          labelKey='adminAnalytics.metrics.unknownTimedSubscriptions'
+          value={summary.unknown_timed_subscription_count}
+        />
       </MetricGrid>
       <AnalyticsCardGrid
         titleKey='adminAnalytics.rankings.paidSubscriptionUsers'

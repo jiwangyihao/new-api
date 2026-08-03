@@ -104,3 +104,18 @@
 - `web/default/dist` 与 `web/classic/dist` 均已存在；启动前未发现残留 `browser-smoke.db`。
 - 下一动作：提交本恢复点，再按恢复合同通过 `cmd.exe` 显式注入环境并启动监督服务。
 - 当前阻塞：无。
+
+## 2026-08-04 Browser-only 最终验收 COMPLETE
+- 真实应用：`issue22-browser-final` 通过 `cmd.exe` 显式注入环境，日志显示 SQLite、`New API v0.0.0 ready` 与 `http://localhost:3112/`；`GET /api/status` 成功，隔离数据库实际生成。
+- 真实数据：隔离管理员 `issue22root`；专用 API 配置零价 CNY Credit 池；真实管理员 API 创建 `40 CNY / 1,000 Credit` 档位；真实 `/api/subscription/balance/pay` 冻结 `40000000` micros 并入账 1,000。
+- ready 仅作为本次隔离 SQLite 的临时测试夹具直接写入；没有新增或修改生产 marker/CAS/ready 代码、管理 API 或业务实现。
+- 真实 BillingSession/request_id：`issue22-browser-request-200` 同步预扣并最终结算 200，最终 available=800、exact=32000000、estimated=0、unknown=0、state_version=2、status=settled。
+- 五接口：summary/users/subscriptions/plans/sources 全部 HTTP 200；recognized/exact=`32000000` micros CNY，活动有价权益数 1，Credit 行 time=null、basis=`credit_moving_weighted_average`、confidence=`exact`、snapshot=`current_only`、source=`credit_balance_pool/moving_weighted_pool`。
+- 真实默认前端：登录后打开 `/admin-analytics?tab=paid-subscription-value&snapshot_at=1785786587`；页面显示 `¥32.00`、Available Credit 800、Exact、Estimated、Unknown-cost Credit、Not applicable、Moving weighted average、Current state only 与刷新动作。
+- full reload 后同一 URL、11 处 `¥32.00`、800 与全部关键语义保持一致；点击 `Refresh current snapshot` 后 snapshot 更新、warning 消失、32 CNY/800 保持一致。
+- 下一动作：运行恢复合同规定的窄复核，关闭浏览器和服务，删除临时 DB/夹具，提交证据并保持工作树 clean。
+- 数据库范围：真实 SQLite；无 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN`，MySQL 5.7/PostgreSQL 9.6 未运行，三数据库零 SKIP 仍归 Issue #27。
+- 最终窄复核：后端 model/service/controller 定向门禁 3 packages ok；前端 17/17；typecheck、production build、六语言 missing/extras=0；`git diff --check` 通过。
+- 清理：真实 Chromium tab 已关闭；`issue22-browser-final` 已停止且 3112 不可连接；临时 `browser/` 与 `browser-smoke.db*` 已删除；未保留 secret、请求文件或二进制证据。
+- 本续作修改仅为 `status.md` / `evidence.md`；未修改业务代码、测试合同、schema、支付或结算实现。
+- 状态：COMPLETE；下一动作仅提交证据、确认 clean tree 并发送唯一 `worker_done`。

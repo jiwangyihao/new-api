@@ -124,3 +124,27 @@
 - `.scratch/agent-progress/issue-22/browser-smoke.db*` 无匹配文件，证明启动前无本续作遗留隔离数据库。
 - 固定启动合同：服务名 `issue22-browser-final`；`PORT=3112`；`SQLITE_PATH=.scratch/agent-progress/issue-22/browser-smoke.db`；非默认临时 `SESSION_SECRET` 仅注入进程环境，不落盘。
 - 当前未声明真实 API 或浏览器通过；下一步在提交恢复点后启动真实应用并验证 readiness 四项证据。
+
+## 2026-08-04 真实 3112 / SQLite / API / 浏览器最终 smoke
+- 监督启动：`cmd.exe /d /s /c "set PORT=3112&& set SQLITE_PATH=.scratch/agent-progress/issue-22/browser-smoke.db&& set SESSION_SECRET=issue22-browser-only-session-secret&& go run ."`；服务名 `issue22-browser-final`。readiness 同时满足日志 `New API v0.0.0 ready`、TCP `127.0.0.1:3112`、真实 `GET /api/status` HTTP 成功、`browser-smoke.db` 存在。
+- 隔离前置：真实 `POST /api/setup` 创建 root；真实 `/api/user/login` 建立 session。仅在隔离 SQLite 直接插入一行 `credit_valuation_migrations(version=1,status=ready,valuation_currency=CNY)` 作为恢复合同允许的测试夹具；没有改生产 marker/CAS/ready 代码。
+- 数据入口：真实 `PUT /api/subscription/admin/credit-balance-plan` 配置 CNY Credit 池；真实 `POST /api/subscription/admin/plans` 创建 `price_amount_micros="40000000"`、`monthly_token_limit=1000` 档位；真实 `POST /api/subscription/balance/pay` 成功返回冻结 `list_price_micros="40000000"`、CNY、1,000 Credit、balance/account_balance 来源，状态 initially available=1000/exact=40000000。
+- request seam：临时夹具仅复用现有生产 `PreConsumeBilling` / `SettleBillingWithInput`，request_id=`issue22-browser-request-200`；持久化结果 available=800、exact=32000000、estimated=0、unknown=0、state_version=2，预扣记录 applied=200、deducted_exact=8000000、status=settled、finalized_at 非零。一次异步低余额通知因临时进程未初始化 Redis client 产生已隔离 gopool panic 日志，但主调用成功退出且数据库请求/状态均已提交；真实 3112 应用保持健康，最终窄回归用于排除业务失败。
+- 真实 API：以 `snapshot_at=1785786587` 调用 summary/users/subscriptions/plans/sources，五个 HTTP 状态均为 200。五视图 recognized/exact 均为权威字符串 `amount_micros="32000000"` CNY；summary `active_paid_subscription_count=1`；Credit 明细 `available_credit=800`、estimated micros=`0`、unknown=0、`time_based_value=null`、`valuation_basis=credit_moving_weighted_average`、`valuation_confidence=exact`、`snapshot_semantics=current_only`、source=`credit_balance_pool`、attribution=`moving_weighted_pool`、state_version=2。
+- 浏览器环境：Orca 内嵌 `tab create` 两次均在约 10 秒后返回 `Tab creation timed out` 且 `tab list` 为空；按诊断流程改用受控真实 Chromium，未设置 request interception、mock fetch 或 DOM 注入。真实页面为 `http://127.0.0.1:3112/admin-analytics?tab=paid-subscription-value&snapshot_at=1785786587...`。
+- 浏览器登录：真实 `/sign-in` 表单提交 `/api/user/login` 返回 HTTP 200/success=true 并导航 `/dashboard`；随后真实页面网络资源包含 summary/users/subscriptions/plans/sources 五个 API URL。
+- UI 与 API 联合观察：浏览器同源请求五接口均 200；summary `amount_micros=32000000`、active=1；明细 800/32000000/null/exact/moving-weighted/current-only。可见 UI 有 11 处 `¥32.00`，以及 `Available Credit`/`800`、`Exact remaining value`、`Estimated remaining value`、`Unknown-cost Credit`、`Time-based value`/`Not applicable`、`Moving weighted average`、`Exact`、`Current state only`、`Refresh current snapshot`。
+- full reload：刷新前后页面 URL 相同，`¥32.00` 均为 11 处，Available Credit 800、Exact、Not applicable、Moving weighted average、Current state only 均保持可见。
+- current-only 操作：点击可用的 `Refresh current snapshot` 按钮后 URL 的 snapshot_at 更新为 `1785787400`，warning 与刷新按钮消失；`¥32.00` 仍为 11 处，Available Credit 800 保持可见。
+- 数据库范围：本次真实 SQLite；环境无 MySQL/PostgreSQL DSN，未运行 MySQL 5.7/PostgreSQL 9.6，不冒充三数据库 PASS；三库零 SKIP 属于 Issue #27。
+
+## 2026-08-04 最终窄复核与清理
+- 后端：`go test ./model ./service ./controller -run "Test(CreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|PaidSubscriptionValue|SubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance|SubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure|SubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|CreditValuationRequestFinalizesSameTargetIdempotently)" -count=1` → `go test: 3 packages ok`。
+- 前端定向：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts src/features/admin-analytics/paid-value-panel.test.tsx` → `17 pass / 0 fail`。
+- 类型：`bun run typecheck` → `tsc -b` 退出成功。
+- production build：`bun run build` → Rsbuild v2.0.1 `ready built in 7.93 s`。
+- i18n：`bun run i18n:sync` 成功；en/zh/fr/ru/ja/vi 全部 `missingCount=0`、`extrasCount=0`。报告中的历史 untranslatedCount 如实保留，不属于本续作且未修改 locale。
+- `git diff --check` 成功；执行时工作树只包含 `.scratch/agent-progress/issue-22/status.md` 与 `evidence.md` 两份预期文本改动，无业务代码改动。
+- 清理：真实 Chromium tab `issue22-final` 已关闭；监督服务 `issue22-browser-final` 已停止，`GET http://127.0.0.1:3112/api/status` 已不可连接；临时 `.scratch/agent-progress/issue-22/browser/` 与 `browser-smoke.db*` 均无匹配文件。临时 SQLite 一度因本会话 Python kernel 持有句柄无法删除，reset kernel 释放句柄后删除成功；未杀害或干扰其他进程。
+- 服务清单中 `issue22-browser-final` 与前次 `issue22-browser-api` 均为 exited；OMP LSP/浏览器 daemon 是共享基础设施，未停止。
+- 实测数据库仅 SQLite；MySQL/PostgreSQL 无 DSN 未运行。未实现或修改 Issue #23–#28、FX、marker 生命周期、ready/CAS、生产发布。

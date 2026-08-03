@@ -102,6 +102,13 @@ summary/users/subscriptions/plans/sources 使用同一 timed 行投影。来源�
 - 来源：按 grant `source_type` 映射 order/redemption/admin/unknown；一条权益含多个来源时权益 `source_attribution=mixed_grants`，source endpoint 分别归集。
 - 缺 grant/非法 grant：返回 unknown/warning，不回退当前 Plan 价格。
 - 五接口最窄接线待完成：paid row 需携带逐币种值与来源投影，summary/users/subscriptions/plans/sources 必须复用同一 row；跨币种 subscription singular 为 null，单币种才保留兼容 singular。
+
+## 管理员 timed 授予前端实现合同
+
+- `CreateUserSubscriptionRequest` 现完整携带 `plan_id`、`reason`、`idempotency_key`、`source_price_micros`、`source_currency`。
+- UI 只允许启用、非 trial/invite-trial、`entitlement_type=timed` 且具有正精确 micros 与币种的计划。
+- attempt 指纹包含 user、plan、reason、冻结 micros 与币种；失败重试不改变指纹时复用 key，事实改变或成功后生成新 key。
+- 实际共享文件：`web/default/src/features/subscriptions/types.ts` 与 `web/default/src/features/subscriptions/components/dialogs/user-subscriptions-dialog.tsx`；未触碰 Credit UI 或通用金额格式化器。
 - 当前真实 RED fixture：Plan=`999 EUR`；grants=`40 CNY` + `10 USD`；50% 当前 Credit；预期 recognized=`10 CNY + 5 USD` 且无 EUR。
 
 ## 明确非所有权

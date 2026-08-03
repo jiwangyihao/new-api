@@ -16,11 +16,18 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from '@/components/ui/field'
 import {
   Select,
   SelectContent,
@@ -45,6 +52,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Textarea } from '@/components/ui/textarea'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { StatusBadge } from '@/components/status-badge'
 import {
@@ -106,6 +114,31 @@ function SubscriptionStatusBadge(props: {
   )
 }
 
+function newTimedGrantIdempotencyKey(userId: number): string {
+  const random =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}`
+  return `admin-timed-${userId}-${random}`
+}
+
+function isEligibleTimedGrantPlan(record: PlanRecord): boolean {
+  const plan = record.plan
+  const priceMicros = plan.price_amount_micros?.trim()
+  if (
+    !plan.enabled ||
+    (plan.entitlement_type ?? 'timed') !== 'timed' ||
+    plan.is_trial ||
+    plan.invite_trial ||
+    !priceMicros ||
+    !/^\d+$/.test(priceMicros) ||
+    !plan.currency?.trim()
+  ) {
+    return false
+  }
+  return BigInt(priceMicros) > 0n
+}
+
 export function UserSubscriptionsDialog(props: Props) {
   const { t } = useTranslation()
   const [loading, setLoading] = useState(false)
@@ -113,6 +146,15 @@ export function UserSubscriptionsDialog(props: Props) {
   const [plans, setPlans] = useState<PlanRecord[]>([])
   const [subs, setSubs] = useState<UserSubscriptionRecord[]>([])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
+  const [timedGrantReason, setTimedGrantReason] = useState('')
+  const [timedGrantStatus, setTimedGrantStatus] = useState<{
+    kind: 'idle' | 'failed' | 'succeeded'
+    message: string
+  }>({ kind: 'idle', message: '' })
+  const timedGrantAttempt = useRef<{
+    fingerprint: string
+    idempotencyKey: string
+  } | null>(null)
   const [confirmAction, setConfirmAction] = useState<{
     type: 'invalidate' | 'delete'
     subId: number
@@ -125,6 +167,18 @@ export function UserSubscriptionsDialog(props: Props) {
     })
     return map
   }, [plans])
+
+  const timedGrantPlans = useMemo(
+    () => plans.filter(isEligibleTimedGrantPlan),
+    [plans]
+  )
+  const selectedTimedGrantPlan = useMemo(
+    () =>
+      timedGrantPlans.find(
+        (record) => String(record.plan.id) === selectedPlanId
+      )?.plan ?? null,
+    [selectedPlanId, timedGrantPlans]
+  )
 
   const loadData = useCallback(async () => {
     if (!props.user?.id) return
@@ -146,28 +200,64 @@ export function UserSubscriptionsDialog(props: Props) {
   useEffect(() => {
     if (props.open && props.user?.id) {
       setSelectedPlanId('')
+      setTimedGrantReason('')
+      setTimedGrantStatus({ kind: 'idle', message: '' })
+      timedGrantAttempt.current = null
       loadData()
     }
   }, [props.open, props.user?.id, loadData])
 
-  const handleCreate = async () => {
-    if (!props.user?.id || !selectedPlanId) {
-      toast.error(t('Please select a subscription plan'))
+  const handleCreate = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const reason = timedGrantReason.trim()
+    if (!props.user?.id || !selectedTimedGrantPlan || !reason) {
+      toast.error(t('Select an eligible timed plan and enter a grant reason.'))
       return
     }
+    const sourcePriceMicros = selectedTimedGrantPlan.price_amount_micros?.trim()
+    const sourceCurrency = selectedTimedGrantPlan.currency.trim().toUpperCase()
+    if (!sourcePriceMicros || !sourceCurrency) {
+      toast.error(t('The selected plan has no precise valuation snapshot.'))
+      return
+    }
+    const facts = {
+      plan_id: selectedTimedGrantPlan.id,
+      reason,
+      source_price_micros: sourcePriceMicros,
+      source_currency: sourceCurrency,
+    }
+    const fingerprint = JSON.stringify({ user_id: props.user.id, ...facts })
+    if (timedGrantAttempt.current?.fingerprint !== fingerprint) {
+      timedGrantAttempt.current = {
+        fingerprint,
+        idempotencyKey: newTimedGrantIdempotencyKey(props.user.id),
+      }
+    }
     setCreating(true)
+    setTimedGrantStatus({ kind: 'idle', message: '' })
     try {
       const res = await createUserSubscription(props.user.id, {
-        plan_id: Number(selectedPlanId),
+        ...facts,
+        idempotency_key: timedGrantAttempt.current.idempotencyKey,
       })
       if (res.success) {
-        toast.success(res.data?.message || t('Added successfully'))
+        const message = res.data?.message || t('Timed grant succeeded')
+        toast.success(message)
+        setTimedGrantStatus({ kind: 'succeeded', message })
         setSelectedPlanId('')
+        setTimedGrantReason('')
+        timedGrantAttempt.current = null
         await loadData()
         props.onSuccess?.()
+      } else {
+        const message = res.message || t('Request failed')
+        setTimedGrantStatus({ kind: 'failed', message })
+        toast.error(message)
       }
     } catch {
-      toast.error(t('Request failed'))
+      const message = t('Request failed')
+      setTimedGrantStatus({ kind: 'failed', message })
+      toast.error(message)
     } finally {
       setCreating(false)
     }
@@ -219,52 +309,108 @@ export function UserSubscriptionsDialog(props: Props) {
               </TabsTrigger>
             </TabsList>
             <TabsContent value='subscriptions' className='flex flex-col gap-4'>
-              <div className='flex gap-2'>
-                <Select
-                  items={[
-                    ...plans.map((p) => ({
-                      value: String(p.plan.id),
-                      label: (
-                        <>
-                          {p.plan.title}(
-                          {formatPlanPrice(
-                            p.plan.price_amount,
-                            p.plan.currency
-                          )}
-                          )
-                        </>
-                      ),
-                    })),
-                  ]}
-                  value={selectedPlanId}
-                  onValueChange={(v) => v !== null && setSelectedPlanId(v)}
-                >
-                  <SelectTrigger className='flex-1'>
-                    <SelectValue placeholder={t('Select subscription plan')} />
-                  </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
-                    <SelectGroup>
-                      {plans.map((p) => (
-                        <SelectItem key={p.plan.id} value={String(p.plan.id)}>
-                          {p.plan.title} (
-                          {formatPlanPrice(
-                            p.plan.price_amount,
-                            p.plan.currency
-                          )}
-                          )
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Button
-                  onClick={handleCreate}
-                  disabled={creating || !selectedPlanId}
-                >
-                  <Plus data-icon='inline-start' />
-                  {t('Add subscription')}
-                </Button>
-              </div>
+              <form onSubmit={handleCreate}>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor='timed-subscription-plan'>
+                      {t('Timed subscription plan')}
+                    </FieldLabel>
+                    <Select
+                      items={timedGrantPlans.map((record) => ({
+                        value: String(record.plan.id),
+                        label: `${record.plan.title} (${formatPlanPrice(
+                          record.plan.price_amount,
+                          record.plan.currency
+                        )})`,
+                      }))}
+                      value={selectedPlanId}
+                      onValueChange={(value) =>
+                        value !== null && setSelectedPlanId(value)
+                      }
+                    >
+                      <SelectTrigger
+                        id='timed-subscription-plan'
+                        aria-label={t('Timed subscription plan')}
+                      >
+                        <SelectValue placeholder={t('Select timed plan')} />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          {timedGrantPlans.map((record) => (
+                            <SelectItem
+                              key={record.plan.id}
+                              value={String(record.plan.id)}
+                            >
+                              {record.plan.title} (
+                              {formatPlanPrice(
+                                record.plan.price_amount,
+                                record.plan.currency
+                              )}
+                              )
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <FieldDescription>
+                      {t(
+                        'Only enabled paid timed plans with a precise price can be granted.'
+                      )}
+                    </FieldDescription>
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor='timed-grant-reason'>
+                      {t('Grant reason')}
+                    </FieldLabel>
+                    <Textarea
+                      id='timed-grant-reason'
+                      value={timedGrantReason}
+                      onChange={(event) =>
+                        setTimedGrantReason(event.target.value)
+                      }
+                      placeholder={t('Describe the after-sales correction')}
+                      disabled={creating}
+                    />
+                    <FieldDescription>
+                      {t(
+                        'Failed retries reuse the same idempotency key until grant details change.'
+                      )}
+                    </FieldDescription>
+                  </Field>
+                  <Field orientation='horizontal'>
+                    <Button
+                      type='submit'
+                      disabled={
+                        creating ||
+                        !selectedTimedGrantPlan ||
+                        !timedGrantReason.trim()
+                      }
+                    >
+                      <Plus data-icon='inline-start' />
+                      {t('Grant timed subscription')}
+                    </Button>
+                  </Field>
+                  {timedGrantStatus.kind === 'failed' && (
+                    <Alert variant='destructive'>
+                      <AlertTitle>{t('Timed grant failed')}</AlertTitle>
+                      <AlertDescription>
+                        {timedGrantStatus.message}{' '}
+                        {t(
+                          'Retrying without changes reuses the same idempotency key.'
+                        )}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                  {timedGrantStatus.kind === 'succeeded' && (
+                    <Alert>
+                      <AlertTitle>{t('Timed grant succeeded')}</AlertTitle>
+                      <AlertDescription>
+                        {timedGrantStatus.message}
+                      </AlertDescription>
+                    </Alert>
+                  )}
+                </FieldGroup>
+              </form>
 
               <div className='rounded-md border'>
                 <Table>

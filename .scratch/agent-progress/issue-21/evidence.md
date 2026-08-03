@@ -213,3 +213,20 @@
 - 已读取 `.scratch/agent-progress/issue-21/{status,evidence,contract}.md`，确认不重做 timed grant 与五接口已验收实现。
 - 已读取 `skill://shadcn-ui` 与 `skill://i18n-translate`；剩余范围严格收敛为管理员 timed grant UI、跨币种 timed 展示、六语言、真实浏览器和最终定向门禁。
 - 禁止范围保持不变：Credit 核心、转换 FX、migration marker/ready、历史回填和生产发布。
+
+## RED 13：管理员 timed 售后授予 UI
+
+- 测试：`timed subscription after-sales grant > submits frozen valuation facts and reuses the retry key until grant details change`。
+- 首次命令：`bun test src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx`；环境先因已声明但未安装的 `happy-dom` 失败，执行 `bun install --frozen-lockfile` 恢复锁文件依赖后重跑。
+- 真实行为 RED：既有转换审计测试通过，新测试失败于找不到 accessible combobox `Timed subscription plan`。
+- 根因：管理员对话框仍只有旧 `plan_id` Select + Add button，既不收集 reason，也不冻结 `price_amount_micros/currency`，没有客户端 idempotency key 或失败重试状态。
+- 防守合同：提交完整 `{plan_id, reason, idempotency_key, source_price_micros, source_currency}`；同一失败重试复用 key；reason 改变后使用新 key。
+
+## GREEN 13：管理员 timed 售后授予 UI
+
+- 实现：管理员用户套餐 Sheet 只列出启用、非试用、非邀请试用、timed 且具有正 `price_amount_micros` 的计划。
+- payload 冻结所选计划的 `price_amount_micros` 与原币种，并提交非空 reason 与客户端 `admin-timed-<user>-<uuid>` 幂等键。
+- 重试语义：相同 user/plan/reason/price/currency 的失败重试复用 key；任一事实变化时生成新 key；成功后清空 attempt，后续授予使用新 key。
+- 可见反馈：失败 Alert 明确提示重试将复用 key；成功 Alert 明确完成状态。
+- 格式化与测试：`bunx prettier --write src/features/subscriptions/types.ts src/features/subscriptions/components/dialogs/user-subscriptions-dialog.tsx src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx && bun test src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx`。
+- 结果：`2 pass, 0 fail`；既有转换审计行为保持 GREEN，新 timed UI 测试验证完整 payload、失败同 key 重试和 reason 变化换 key。

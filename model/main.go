@@ -248,8 +248,11 @@ func InitLogDB() (err error) {
 }
 
 func migrateDB() error {
-	// Migrate price_amount column from float/double to decimal for existing tables
-	migrateSubscriptionPlanPriceAmount()
+	// The compatibility column still stores the display value for existing callers,
+	// so widening it must complete before exact micros writes are accepted.
+	if err := migrateSubscriptionPlanPriceAmount(); err != nil {
+		return err
+	}
 	// Migrate model_limits column from varchar to text for existing tables
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
@@ -899,26 +902,21 @@ func migrateTokenModelLimitsToText() error {
 	return nil
 }
 
-// migrateSubscriptionPlanPriceAmount migrates price_amount to decimal(19,6).
-// This is safe to run multiple times because it verifies precision and scale.
-func migrateSubscriptionPlanPriceAmount() {
-	// SQLite doesn't support ALTER COLUMN, and its type affinity handles this automatically
-	// Skip early to avoid GORM parsing the existing table DDL which may cause issues
+// migrateSubscriptionPlanPriceAmount widens the compatibility display column.
+// Exact micros are authoritative, but both columns are written together for existing callers.
+func migrateSubscriptionPlanPriceAmount() error {
+	// SQLite doesn't support ALTER COLUMN, and its type affinity handles this automatically.
 	if common.UsingSQLite {
-		return
+		return nil
 	}
 
 	tableName := "subscription_plans"
 	columnName := "price_amount"
-
-	// Check if table exists first
 	if !DB.Migrator().HasTable(tableName) {
-		return
+		return nil
 	}
-
-	// Check if column exists
 	if !DB.Migrator().HasColumn(&SubscriptionPlan{}, columnName) {
-		return
+		return nil
 	}
 
 	var alterSQL string
@@ -927,9 +925,10 @@ func migrateSubscriptionPlanPriceAmount() {
 		if err := DB.Raw(`SELECT COALESCE(numeric_precision, 0), COALESCE(numeric_scale, 0) FROM information_schema.columns
 			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
 			tableName, columnName).Row().Scan(&precision, &scale); err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if precision >= 19 && scale == 6 {
-			return
+			return fmt.Errorf("failed to query metadata for %s.%s: %w", tableName, columnName, err)
+		}
+		if precision >= 19 && scale == 6 {
+			return nil
 		}
 		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(19,6) USING %s::decimal(19,6)`,
 			tableName, columnName, columnName)
@@ -938,22 +937,21 @@ func migrateSubscriptionPlanPriceAmount() {
 		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
 			tableName, columnName).Scan(&columnType).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if strings.HasPrefix(strings.ToLower(columnType), "decimal(19,6)") {
-			return
+			return fmt.Errorf("failed to query metadata for %s.%s: %w", tableName, columnName, err)
+		}
+		if strings.HasPrefix(strings.ToLower(columnType), "decimal(19,6)") {
+			return nil
 		}
 		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s decimal(19,6) NOT NULL DEFAULT 0", tableName, columnName)
 	} else {
-		return
+		return nil
 	}
 
-	if alterSQL != "" {
-		if err := DB.Exec(alterSQL).Error; err != nil {
-			common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to decimal: %v", tableName, columnName, err))
-		} else {
-			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(19,6)", tableName, columnName))
-		}
+	if err := DB.Exec(alterSQL).Error; err != nil {
+		return fmt.Errorf("failed to migrate %s.%s to decimal(19,6): %w", tableName, columnName, err)
 	}
+	common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(19,6)", tableName, columnName))
+	return nil
 }
 
 func closeDB(db *gorm.DB) error {

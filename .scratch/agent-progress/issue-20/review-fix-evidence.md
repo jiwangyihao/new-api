@@ -27,13 +27,13 @@
 
 ## Finding 2：schema fail-open
 
-### 待复现症状
+### 根因与方案
 
-确认旧兼容 `price_amount` 扩宽是否为 #20 前向合同必需；若不必需，删除高风险 ALTER 并证明权威 micros 与历史 NULL 合同不受影响；若必需，则用行为测试证明错误传播。
-
-### RED / GREEN
-
-待记录。
+- `price_amount_micros BIGINT` 是估值权威值，但管理员前向创建/更新仍按既定兼容合同在同一请求写 `price_amount`，并允许 `int64` 最大 micros（`9223372036854.775807`）；旧 `decimal(10,6)` 无法保存该兼容展示值。因此不能删除扩宽，选择让关键迁移 fail-closed。
+- RED：`go test ./model -run TestSubscriptionPlanPriceAmountMigrationFailsClosedOnMetadataError -count=1`；元数据查询和后续 MySQL ALTER 在 SQLite 夹具上均失败并仅 warning，`migrateDB` 继续执行，最终错误来自无关后续迁移，而不是 `subscription_plans.price_amount` 元数据失败。
+- 修复：`migrateSubscriptionPlanPriceAmount` 返回错误；PostgreSQL / MySQL 元数据查询和 ALTER 失败均带列上下文返回；`migrateDB` 在任何后续迁移前传播该错误。SQLite 保持合法的 type-affinity 分支。
+- GREEN：`go test ./model -run "TestSubscriptionPlanPrice(AmountMigrationFailsClosedOnMetadataError|MicrosMigrationLeavesLegacyRowPending)" -count=1`；通过。元数据错误稳定从 `migrateDB` 返回，历史 `price_amount_micros` 与 `valuation_currency` 仍为 NULL。
+- 回归：`go test ./model -run "TestSubscriptionPlanPrice" -count=1`；通过。未回填历史行，未修改 migration marker，未改变旧展示/支付读取路径。
 
 ## Finding 3：计划级线性化
 

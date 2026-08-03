@@ -43,3 +43,32 @@ func TestSubscriptionPlanPriceMicrosMigrationLeavesLegacyRowPending(t *testing.T
 	require.NoError(t, db.Raw(`SELECT valuation_currency FROM subscription_plans WHERE id = 1`).Scan(&valuationCurrency).Error)
 	require.False(t, valuationCurrency.Valid, "legacy plans must not receive an invented valuation currency")
 }
+
+func TestSubscriptionPlanPriceAmountMigrationFailsClosedOnMetadataError(t *testing.T) {
+	oldDB := DB
+	oldSQLite := common.UsingSQLite
+	oldMySQL := common.UsingMySQL
+	oldPostgreSQL := common.UsingPostgreSQL
+	db, err := gorm.Open(sqlite.Open("file:price-amount-metadata-failure?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	common.UsingSQLite = false
+	common.UsingMySQL = true
+	common.UsingPostgreSQL = false
+	t.Cleanup(func() {
+		DB = oldDB
+		common.UsingSQLite = oldSQLite
+		common.UsingMySQL = oldMySQL
+		common.UsingPostgreSQL = oldPostgreSQL
+		sqlDB, dbErr := db.DB()
+		if dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	require.NoError(t, db.Exec(`CREATE TABLE subscription_plans (id integer PRIMARY KEY, price_amount decimal(10,6) NOT NULL)`).Error)
+
+	err = migrateDB()
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "query metadata for subscription_plans.price_amount")
+}

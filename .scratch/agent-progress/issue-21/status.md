@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-领域 GREEN：真实订单履约已原子写 timed grant；付费缺快照稳定拒绝，显式试用仍创建权益且不估值。
+领域 GREEN：购买与兑换真实入口均原子写 timed grant；兑换码改价/改币种历史已冻结。
 
 ## 已完成
 
@@ -13,9 +13,9 @@
 
 ## 下一步
 
-1. 提交完整订单履约 timed grant 安全点。
-2. 通过 `Redeem(..., timed)` 写 RED 并迁移兑换调用点。
-3. 通过管理员 HTTP handler 写 RED，要求 reason/idempotency 并迁移售后授予。
+1. 提交兑换 timed grant 安全点。
+2. 通过管理员 HTTP handler 写 RED，要求 reason/idempotency 并迁移售后授予。
+3. 补 disabled plan、试用/邀请排除与不可变更新/删除行为。
 
 ## 阻塞
 
@@ -23,4 +23,4 @@
 
 ## 最近安全提交
 
-- `9e5a78bf1 test(subscription): 覆盖计时授予冲突与续期`。
+- `ff635938c feat(subscription): 为计时订单冻结估值授予`。

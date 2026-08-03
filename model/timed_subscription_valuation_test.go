@@ -262,6 +262,54 @@ func TestTimedSubscriptionValuationGrantExplicitTrialOrderCreatesNoGrant(t *test
 	require.Zero(t, grantCount)
 }
 
+func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	redemptionPriceMicros := int64(80_000_000)
+	currentPlanPriceMicros := int64(50_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_502, Title: "Timed Redemption", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     80, PriceAmountMicros: &redemptionPriceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 7200,
+		MonthlyTokenLimit: 2000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_501, Username: "timed-redemption", Status: common.UserStatusEnabled, AffCode: "timed-redemption-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	redemption := Redemption{
+		Id: 21_503, Key: "timed-redemption-21503", Name: "timed-redemption", Type: RedemptionTypeSubscription,
+		PlanId: plan.Id, Status: common.RedemptionCodeStatusEnabled, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, DB.Create(&redemption).Error)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"price_amount": 50, "price_amount_micros": currentPlanPriceMicros, "currency": "USD",
+	}).Error)
+	ClearSubscriptionPlanCacheForTest()
+
+	first, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.False(t, first.Replayed)
+	require.Greater(t, first.FulfillmentSubscriptionId, 0)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceRedemption, "redemption:21503").First(&grant).Error)
+	require.Equal(t, first.FulfillmentSubscriptionId, grant.UserSubscriptionId)
+	require.Equal(t, redemptionPriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+	firstEnd := grant.EventEndTime
+
+	replay, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)
+	require.NoError(t, err)
+	require.True(t, replay.Replayed)
+	require.Equal(t, first.FulfillmentSubscriptionId, replay.FulfillmentSubscriptionId)
+	var persisted UserSubscription
+	require.NoError(t, DB.First(&persisted, first.FulfillmentSubscriptionId).Error)
+	require.Equal(t, firstEnd, persisted.EndTime)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
 func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	t.Helper()
 	oldDB := DB
@@ -284,7 +332,7 @@ func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	DB = db
 	LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
+	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &Redemption{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
 
 	t.Cleanup(func() {
 		_ = sqlDB.Close()

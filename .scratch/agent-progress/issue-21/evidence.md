@@ -93,3 +93,18 @@
 - 排除：`TestTimedSubscriptionValuationGrantExplicitTrialOrderCreatesNoGrant` 证明快照明确 `IsTrial=true` 时权益仍创建而 grant 数量为 0。
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(ExplicitTrialOrderCreatesNoGrant|PaidOrderWithoutSnapshotRejectsAtomically|OrderCompletionCreatesGrant|CreatesTimelineAndReplaysSource|RejectsConflictAndAppendsRenewal)$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 12.16 秒。
+
+## RED 5：兑换真实入口
+
+- 测试：`TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant`，通过公开 `Redeem(key, user, timed)` 使用真实 SQLite 履约。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant$' -count=1`。
+- 结果：预期 RED；兑换与权益成功，但 `redemption:21503` grant 查询为 `record not found`。
+- 根因：timed 兑换分支仍直接调用低层 `CreateUserSubscriptionFromPlanWithResultTx`；附带的 `logs` 表缺失只导致现有 best-effort 日志告警，不是断言失败根因。
+
+## GREEN 5：兑换真实入口与冻结价格
+
+- `Redeem(..., timed)` 对有价、启用的非试用计划调用 `GrantTimedSubscriptionTx`；兑换码 `AmountCents/Currency` 是来源快照，使用整数 `mulDivFloor(cents, 1_000_000, 100)` 转为 micros。
+- 改价/改币种测试：兑换码创建时冻结 `80 CNY`，随后当前套餐改为 `50 USD`；grant 仍为 `80,000,000 CNY`。
+- 重放同一兑换码返回既有 fulfillment，权益 `end_time` 不变化且 grant 数量保持 1。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 15.00 秒。

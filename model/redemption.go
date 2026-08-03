@@ -351,7 +351,30 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			current.CreditBalance = grant
 			current.FulfillmentSubscriptionId = grant.UserSubscriptionId
 		} else {
-			creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, userId, plan, "redemption")
+			var creation *UserSubscriptionCreationResult
+			if plan.IsTrial || plan.InviteTrial {
+				creation, err = CreateUserSubscriptionFromPlanWithResultTx(tx, userId, plan, SubscriptionGrantRedemption)
+			} else {
+				if !plan.Enabled {
+					return ErrRedemptionPlanIneligible
+				}
+				if redemption.AmountCents <= 0 || strings.TrimSpace(redemption.Currency) == "" {
+					return ErrTimedSubscriptionGrantInvalid
+				}
+				sourcePriceMicros, err := mulDivFloor(redemption.AmountCents, amountMicrosPerUnit, 100)
+				if err != nil {
+					return err
+				}
+				creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+					UserId:            userId,
+					Plan:              plan,
+					IdempotencyKey:    TimedSubscriptionGrantSourceRedemption + ":" + strconv.Itoa(redemption.Id),
+					SourceType:        TimedSubscriptionGrantSourceRedemption,
+					SourceId:          redemption.Id,
+					SourcePriceMicros: sourcePriceMicros,
+					SourceCurrency:    redemption.Currency,
+				})
+			}
 			if err != nil {
 				return err
 			}

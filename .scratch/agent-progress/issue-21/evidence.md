@@ -153,3 +153,14 @@
 - 曾观察编译错误：新文件自定义 `minInt64/maxInt64` 与 `model/credit_balance.go` 重复；已删除重复 helper，改为复用现有包内函数。尚未接入五接口，因此当前保持 RED，不能记录为 GREEN。
 - `dto/admin_analytics.go` 当前只落盘 timed 最窄字段：`amount_micros`、nullable singular、三组 `*_by_currency`、timed confidence/warnings/unknown count；尚未验证编译兼容与五接口响应。
 - 最窄测试重跑首次停在编译层：nullable singular DTO 尚未同步现有 row builder/sorter，错误位于 `admin_analytics_paid_subscription.go:826,827,970`（值/指针类型不匹配）。该半接线不是可恢复安全状态；安全提交前撤回 DTO 代码增量，只在 contract 保留冻结 shape，确保测试回到业务 RED 而非编译 RED。
+
+
+## 恢复交接：最窄 tracer 编译 RED
+
+- 日期：2026-08-03。
+- 格式化：`gofmt -w dto/admin_analytics.go model/admin_analytics_paid_subscription.go`，仅触碰协调器指定的两个 Go 文件。
+- tracer：`go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 结果：`FAIL github.com/QuantumNous/new-api/model [build failed]`，耗时约 3.07 秒；真实 SQLite fixture 尚未启动，因此本次没有新的业务断言结果。
+- 编译错误：`admin_analytics_paid_subscription.go:855,856` 将 `dto.AdminAnalyticsMoneyAmount` 值赋给 `*dto.AdminAnalyticsMoneyAmount`；`:999` 左右两侧将 `*dto.AdminAnalyticsMoneyAmount` 传给接受值的 `adminMoneyAmountForCurrency`。
+- 上一个已观察到的业务 RED 保持为 `expected 10, actual 0`；不得把当前编译失败记作 GREEN，也不得声称五接口已完成。
+- 当前范围主动收敛：未尝试 UI、六语言或浏览器；未触碰 Credit 核心、FX、marker/ready。

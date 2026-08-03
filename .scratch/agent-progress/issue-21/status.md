@@ -2,25 +2,29 @@
 
 ## 当前阶段
 
-分析 RED：timed 时间线计算器已落盘但尚未接入五接口，当前只形成可恢复安全点，不宣称 GREEN。
+恢复交接 WIP：`timed_subscription_analytics.go` 已存在，但 paid row 与五接口仍未完成最窄接线。2026-08-03 指定 SQLite tracer 在编译阶段失败，未进入业务断言；当前不得视为 GREEN 或完成。
 
 ## 已完成
 
-- 确认隔离工作树 `jiwangyihao/issue-21-timed-grants` 与父集成工作树均位于 `53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
-- 确认工作树初始 clean，未从 `origin/main` 取代码，未重做 Issue #20。
-- 按指定顺序读取父 PRD #19、Issue #21、执行合同、Wave 1 共享合同、Issue #20 消费合同、领域上下文、ADR 0001/0002、新规格相关章节与实施计划任务 5/8/9。
-- 领域定向测试保持 GREEN；分析新增真实 SQLite RED `TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews`，证明旧五接口仍按当前 Plan 的 EUR 估值而非 grant 时间线。
+- 已保留 `ccd516aaa test(analytics): 保存计时 grant 时间线 RED` 作为此前可恢复 RED 安全点。
+- 已按协调器收敛要求仅对 `dto/admin_analytics.go` 与 `model/admin_analytics_paid_subscription.go` 执行 `gofmt -w`。
+- 已运行最窄命令 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 当前准确结果为编译 RED：subscription singular 字段已改为指针，但 row builder 仍写入值，sorter 仍把指针传给只接受值的 helper。
+- 未继续 UI、六语言、浏览器、Credit 核心、FX 或 marker/ready 工作。
 
 ## 下一步
 
-1. 保持 `model/timed_subscription_analytics.go` 为独立最窄计算器，修复/确认 duplicate helper 后运行编译与单个 RED。
-2. 下一步仅把 calculator 接入 paid row 与五接口；跨币种 singular null、source breakdown、warning 仍未完成。
-3. 分析 GREEN 后再进入管理员 UI 与六语言；当前不得视为完成。
+1. 只修复 `model/admin_analytics_paid_subscription.go:855-856,999` 的四处值/指针不兼容，不再扩展 DTO。
+2. 第一条验证命令仍为 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+3. 编译恢复后，继续完成 `ccd516aaa` RED 所需的最窄 paid-row/summary/users/subscriptions/plans/sources 接线；不得回退到当前 Plan 价格。
+4. UI、六语言与浏览器证据交给后续 Agent，当前提交明确为 WIP。
 
 ## 阻塞
 
-无外部阻塞；Issue #22 通用 DTO 尚未集成，当前 `dto/admin_analytics.go` 仅含 timed 最小增量，集成时需保留 #22 通用骨架优先权。
+- 当前阻塞是四处本地编译错误，不是外部依赖：两处 `dto.AdminAnalyticsMoneyAmount` 值不能赋给指针字段，两处 sorter 将指针传给值参数。
+- 最近一次运行未到达 SQLite fixture 或业务断言；此前已知业务 RED 仍是 CNY `expected 10, actual 0`。
 
 ## 最近安全提交
 
-- `14361af41 fix(subscription): 规范化计时授予来源身份`。
+- 此前安全点：`ccd516aaa test(analytics): 保存计时 grant 时间线 RED`。
+- 当前恢复状态由紧随其后的明确 WIP 提交承载；SHA 通过 escalation 交接。

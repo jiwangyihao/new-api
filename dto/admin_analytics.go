@@ -38,13 +38,15 @@ const (
 )
 
 type AdminAnalyticsMoneyAmount struct {
-	Amount   float64 `json:"amount"`
-	Currency string  `json:"currency"`
+	Amount       float64 `json:"amount"`
+	AmountMicros string  `json:"amount_micros,omitempty"`
+	Currency     string  `json:"currency"`
 }
 
 type AdminAnalyticsMoneyBreakdown struct {
-	Amount   float64 `json:"amount"`
-	Currency string  `json:"currency"`
+	Amount       float64 `json:"amount"`
+	AmountMicros string  `json:"amount_micros,omitempty"`
+	Currency     string  `json:"currency"`
 }
 
 type AdminUsageGroupBy string
@@ -443,6 +445,7 @@ type AdminPaidSubscriptionValueSummary struct {
 	ActivePaidSubscriptionCount        int                            `json:"active_paid_subscription_count"`
 	ActivePaidUserCount                int                            `json:"active_paid_user_count"`
 	TokenValueUnavailableCount         int                            `json:"token_value_unavailable_count"`
+	UnknownTimedSubscriptionCount      int                            `json:"unknown_timed_subscription_count"`
 }
 
 type AdminPaidSubscriptionValuePlanGroup struct {
@@ -486,32 +489,38 @@ type AdminPaidSubscriptionValueUser struct {
 }
 
 type AdminPaidSubscriptionValueSubscription struct {
-	SubscriptionID           int                            `json:"subscription_id"`
-	UserID                   int                            `json:"user_id"`
-	Username                 string                         `json:"username"`
-	PlanID                   int                            `json:"plan_id"`
-	PlanName                 string                         `json:"plan_name"`
-	Source                   AdminAnalyticsSource           `json:"source"`
-	GrantReason              string                         `json:"grant_reason"`
-	PlanPrice                AdminAnalyticsMoneyAmount      `json:"plan_price"`
-	StartTime                int64                          `json:"start_time"`
-	EndTime                  int64                          `json:"end_time"`
-	RemainingSeconds         int64                          `json:"remaining_seconds"`
-	TokenLimit               int64                          `json:"token_limit"`
-	TokenUsed                int64                          `json:"token_used"`
-	NextResetTime            int64                          `json:"next_reset_time"`
-	TokenBasedValue          *AdminAnalyticsMoneyAmount     `json:"token_based_value"`
-	TimeBasedValue           AdminAnalyticsMoneyAmount      `json:"time_based_value"`
-	RecognizedRemainingValue AdminAnalyticsMoneyAmount      `json:"recognized_remaining_value"`
-	ValuationBasis           string                         `json:"valuation_basis"`
-	SourceAttribution        string                         `json:"source_attribution"`
-	Excluded                 bool                           `json:"excluded"`
-	ExcludedReason           string                         `json:"excluded_reason"`
-	Drilldown                *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
-	PossibleOrderID          *int                           `json:"possible_order_id"`
-	PaymentProvider          string                         `json:"payment_provider"`
-	PaymentMethod            string                         `json:"payment_method"`
-	OrderRecordedAmount      *AdminAnalyticsMoneyAmount     `json:"order_recorded_amount"`
+	SubscriptionID                     int                            `json:"subscription_id"`
+	UserID                             int                            `json:"user_id"`
+	Username                           string                         `json:"username"`
+	PlanID                             int                            `json:"plan_id"`
+	PlanName                           string                         `json:"plan_name"`
+	EntitlementType                    string                         `json:"entitlement_type"`
+	Source                             AdminAnalyticsSource           `json:"source"`
+	GrantReason                        string                         `json:"grant_reason"`
+	PlanPrice                          AdminAnalyticsMoneyAmount      `json:"plan_price"`
+	StartTime                          int64                          `json:"start_time"`
+	EndTime                            int64                          `json:"end_time"`
+	RemainingSeconds                   int64                          `json:"remaining_seconds"`
+	TokenLimit                         int64                          `json:"token_limit"`
+	TokenUsed                          int64                          `json:"token_used"`
+	NextResetTime                      int64                          `json:"next_reset_time"`
+	TokenBasedValue                    *AdminAnalyticsMoneyAmount     `json:"token_based_value"`
+	TimeBasedValue                     *AdminAnalyticsMoneyAmount     `json:"time_based_value"`
+	RecognizedRemainingValue           *AdminAnalyticsMoneyAmount     `json:"recognized_remaining_value"`
+	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
+	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	ValuationBasis                     string                         `json:"valuation_basis"`
+	ValuationConfidence                string                         `json:"valuation_confidence"`
+	ValuationWarnings                  []string                       `json:"valuation_warnings,omitempty"`
+	SourceAttribution                  string                         `json:"source_attribution"`
+	Excluded                           bool                           `json:"excluded"`
+	ExcludedReason                     string                         `json:"excluded_reason"`
+	Drilldown                          *AdminAnalyticsDrilldownTarget `json:"drilldown,omitempty"`
+	PossibleOrderID                    *int                           `json:"possible_order_id"`
+	PaymentProvider                    string                         `json:"payment_provider"`
+	PaymentMethod                      string                         `json:"payment_method"`
+	OrderRecordedAmount                *AdminAnalyticsMoneyAmount     `json:"order_recorded_amount"`
 }
 
 type AdminInvitationPaidSubscriptionsResponse struct {

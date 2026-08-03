@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,17 +27,34 @@ const (
 	adminInvitationPaidUnitSnapshotMinimum = "snapshot_minimum"
 )
 
-type adminMoneyAccumulator map[string]float64
+type adminMoneyAccumulator struct {
+	amounts map[string]float64
+	micros  map[string]int64
+}
 
-func (a adminMoneyAccumulator) add(currency string, amount float64) {
+func (a *adminMoneyAccumulator) add(currency string, amount float64) {
 	if amount == 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 		return
 	}
-	a[strings.TrimSpace(currency)] += amount
+	if a.amounts == nil {
+		a.amounts = map[string]float64{}
+	}
+	a.amounts[strings.TrimSpace(currency)] += amount
+}
+
+func (a *adminMoneyAccumulator) addMicros(currency string, amountMicros int64) {
+	if amountMicros == 0 {
+		return
+	}
+	if a.micros == nil {
+		a.micros = map[string]int64{}
+	}
+	a.micros[strings.TrimSpace(currency)] += amountMicros
 }
 
 func (a adminMoneyAccumulator) amount(currency string) float64 {
-	return a[strings.TrimSpace(currency)]
+	currency = strings.TrimSpace(currency)
+	return a.amounts[currency] + float64(a.micros[currency])/float64(amountMicrosPerUnit)
 }
 
 func (a adminMoneyAccumulator) breakdown() []dto.AdminAnalyticsMoneyBreakdown {
@@ -44,15 +62,25 @@ func (a adminMoneyAccumulator) breakdown() []dto.AdminAnalyticsMoneyBreakdown {
 }
 
 func (a adminMoneyAccumulator) breakdownWithPreferredCurrency(currency string) []dto.AdminAnalyticsMoneyBreakdown {
-	if len(a) == 0 {
-		return []dto.AdminAnalyticsMoneyBreakdown{}
+	keys := make(map[string]struct{}, len(a.amounts)+len(a.micros))
+	for key := range a.amounts {
+		keys[key] = struct{}{}
 	}
-	items := make([]dto.AdminAnalyticsMoneyBreakdown, 0, len(a))
-	for key, amount := range a {
+	for key := range a.micros {
+		keys[key] = struct{}{}
+	}
+	items := make([]dto.AdminAnalyticsMoneyBreakdown, 0, len(keys))
+	for key := range keys {
+		amount := a.amount(key)
+		amountMicros := a.micros[key]
 		if amount == 0 || math.IsNaN(amount) || math.IsInf(amount, 0) {
 			continue
 		}
-		items = append(items, dto.AdminAnalyticsMoneyBreakdown{Currency: key, Amount: amount})
+		item := dto.AdminAnalyticsMoneyBreakdown{Currency: key, Amount: amount}
+		if amountMicros != 0 && a.amounts[key] == 0 {
+			item.AmountMicros = strconv.FormatInt(amountMicros, 10)
+		}
+		items = append(items, item)
 	}
 	preferred := strings.TrimSpace(currency)
 	sort.Slice(items, func(i, j int) bool {
@@ -330,6 +358,7 @@ type adminPaidSubscriptionRow struct {
 	Source            dto.AdminAnalyticsSource
 	SourceAttribution string
 	Value             adminSubscriptionValue
+	TimedValue        *adminTimedSubscriptionValue
 	Excluded          bool
 	ExcludedReason    string
 	ExcludedAt        int64

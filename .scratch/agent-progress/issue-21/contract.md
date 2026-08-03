@@ -107,3 +107,11 @@ summary/users/subscriptions/plans/sources 使用同一 timed 行投影。来源�
 ## 明确非所有权
 
 不实现 Credit 请求通用结算、Credit 正向入账、破坏性恢复、转换 FX/在途结算、历史回填、migration ready 切换、三数据库发布门禁或生产部署；不改变计时→Credit 转换数量公式；不新增退款自动撤销或 grant reversal schema。
+
+
+## 恢复交接约束
+
+- 当前 `dto/admin_analytics.go` 与 `model/admin_analytics_paid_subscription.go` 是明确 WIP，只允许为 `TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews` 修复最窄兼容与 paid-row 五接口接线，不再扩展 DTO/字段设计。
+- 下一 Agent 必须先修复 subscription singular 的四处值/指针编译不兼容，再原样运行单个 tracer；编译前不得把失败描述为 SQLite 业务断言。
+- 继续保持 grant-only 估值：不得恢复当前 Plan 价格回退；不得触碰 Credit 核心、FX、marker/ready。
+- UI、六语言与浏览器属于后续交接范围，本恢复提交不包含也不宣称这些交付。

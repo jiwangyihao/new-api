@@ -51,3 +51,12 @@
 - `format.test.ts` 与 `panel-fields.test.ts` 已 GREEN；与新增页面测试合跑为 `16 pass / 1 fail`。
 - 唯一 RED 是 `paid-value-panel.test.tsx` 缺少 TanStack `RouterProvider` 测试夹具，渲染 `Link` 时触发 `router.isServer` 空引用；尚未取得真实页面 GREEN 或浏览器证据。
 - 类型检查已启动但保存安全点时仍在运行，不声明通过。
+
+
+## 2026-08-04 Gate C 恢复执行
+- 恢复 HEAD：`6d8d001867a6922eb1a8da9df08befa69a037d1b`；恢复前 `git status --porcelain=v1` 为空。
+- 当前阶段：只补 Gate C 的人民币余额真实入口、Kyren 签名 webhook 冻结快照，以及 BillingSession 同步消费 200；完成安全点后再收敛既有 UI RED、六语言与真实浏览器。
+- 下一条 RED：增强 `controller/subscription_balance_purchase_test.go` 的真实 Gin + SQLite 购买夹具，预置测试所需 ready 前置，断言订单冻结 `40,000,000` micros CNY / `1,000` Credit 且唯一估值状态 exact 入账；禁止直接插入 `CreditValuationState`。
+- 随后 RED：Kyren 订单创建后改价再走真实签名 webhook，必须仍按冻结 `40,000,000` micros 入账并保持重复 webhook 幂等；再从真实购买结果经 `NewBillingSession` / `PreConsumeBilling` / `SettleBillingWithInput` 同步消费目标 200。
+- 禁止范围：不实现 #23 target 增减、少结算、退款、异步 identity 或 coalescer；不实现 FX；不创建/CAS/切换 migration marker 或 ready；不重做既有估值、请求 seam 与五接口。
+- 恢复指令：`credit-operational-value-issue-22-gate-c-recovery.md` 已完整读取并作为当前范围优先级。

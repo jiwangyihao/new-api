@@ -68,3 +68,9 @@
 - 最小 RED：分别增强现有余额与 Kyren 测试，或新增一个窄垂直测试；必须从 HTTP/payment 入口开始，禁止直接创建 `CreditValuationState`。BillingSession 只复用现有接口，不新增 API。
 - 禁止范围：不碰 #23 的 target 增减/退款/异步/coalescer，不碰 #26 FX，不碰 #27 marker 生命周期，不重做已有订单/request_id/五接口。
 - 本轮未运行 Gate C 新测试，故状态为诚实未完成；UI WIP 仍以 `91df0bd08` 的 RED/类型失败证据为准。
+
+## 2026-08-04 Gate C 恢复证据
+- `git rev-parse HEAD && git status --porcelain=v1`：HEAD 为 `6d8d001867a6922eb1a8da9df08befa69a037d1b`，状态输出为空。
+- 已完整读取协调器恢复指令、Issue #19/#22、执行合同、Wave 1 合同、Issue #22 实现说明及现有 `status/evidence/contract`。
+- 恢复决策：现有 `d6a493c75` / `e03e62905` / `06619f81b` / `452a75ccd` 为不可重做基线；仅从余额 HTTP、Kyren 签名 webhook、BillingSession 三个真实入口补验收。
+- 当前未宣称任何新增 GREEN；下一步先取得余额购买冻结估值 RED。

@@ -2,27 +2,27 @@
 
 ## 当前阶段
 
-恢复交接 WIP：`timed_subscription_analytics.go` 已存在，但 paid row 与五接口仍未完成最窄接线。2026-08-03 指定 SQLite tracer 在编译阶段失败，未进入业务断言；当前不得视为 GREEN 或完成。
+恢复交接 WIP：四处 nullable 金额接线已修复，指定 SQLite tracer 已从编译失败恢复到业务断言 RED；当前失败为 CNY `expected 10, actual 0`，说明 timed grant calculator 尚未接入 paid row 与五接口。
 
 ## 已完成
 
 - 已保留 `ccd516aaa test(analytics): 保存计时 grant 时间线 RED` 作为此前可恢复 RED 安全点。
-- 已按协调器收敛要求仅对 `dto/admin_analytics.go` 与 `model/admin_analytics_paid_subscription.go` 执行 `gofmt -w`。
+- 已修复 `model/admin_analytics_paid_subscription.go` 四处 nullable singular 值/指针兼容问题，并只格式化该文件。
 - 已运行最窄命令 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
-- 当前准确结果为编译 RED：subscription singular 字段已改为指针，但 row builder 仍写入值，sorter 仍把指针传给只接受值的 helper。
+- 编译已恢复；真实 SQLite fixture 进入业务断言，当前准确结果为 CNY `expected 10, actual 0`。
 - 未继续 UI、六语言、浏览器、Credit 核心、FX 或 marker/ready 工作。
 
 ## 下一步
 
-1. 只修复 `model/admin_analytics_paid_subscription.go:855-856,999` 的四处值/指针不兼容，不再扩展 DTO。
-2. 第一条验证命令仍为 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
-3. 编译恢复后，继续完成 `ccd516aaa` RED 所需的最窄 paid-row/summary/users/subscriptions/plans/sources 接线；不得回退到当前 Plan 价格。
-4. UI、六语言与浏览器证据交给后续 Agent，当前提交明确为 WIP。
+1. 将 `adminCalculateTimedSubscriptionValue` 的逐币种结果接入 paid row，不再读取当前 Plan 价格。
+2. 让 summary/users/subscriptions/plans/sources 复用同一 timed row，并保持跨币种 singular 为 null。
+3. 第一条验证命令仍为 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+4. GREEN 后再逐个补重叠、裁剪和来源行为 tracer。
 
 ## 阻塞
 
-- 当前阻塞是四处本地编译错误，不是外部依赖：两处 `dto.AdminAnalyticsMoneyAmount` 值不能赋给指针字段，两处 sorter 将指针传给值参数。
-- 最近一次运行未到达 SQLite fixture 或业务断言；此前已知业务 RED 仍是 CNY `expected 10, actual 0`。
+- 当前阻塞是 timed calculator 尚未接入 paid row，不是外部依赖。
+- 已知业务 RED 为 CNY `expected 10, actual 0`；Plan 的当前 `999 EUR` 仍错误主导旧行构建。
 
 ## 最近安全提交
 

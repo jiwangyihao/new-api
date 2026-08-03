@@ -164,3 +164,11 @@
 - 编译错误：`admin_analytics_paid_subscription.go:855,856` 将 `dto.AdminAnalyticsMoneyAmount` 值赋给 `*dto.AdminAnalyticsMoneyAmount`；`:999` 左右两侧将 `*dto.AdminAnalyticsMoneyAmount` 传给接受值的 `adminMoneyAmountForCurrency`。
 - 上一个已观察到的业务 RED 保持为 `expected 10, actual 0`；不得把当前编译失败记作 GREEN，也不得声称五接口已完成。
 - 当前范围主动收敛：未尝试 UI、六语言或浏览器；未触碰 Credit 核心、FX、marker/ready。
+
+## 恢复交接：编译恢复为业务 RED
+
+- 修复：`model/admin_analytics_paid_subscription.go` 的两处 nullable singular 构造和两处排序 helper 调用。
+- 格式化：`gofmt -w model/admin_analytics_paid_subscription.go`。
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 结果：编译成功，真实 SQLite fixture 运行；业务断言 RED 为 CNY `expected 10, actual 0`，耗时约 11.70 秒。
+- 结论：当前失败已准确收敛到 timed grant calculator 与 paid row/五接口未接线；没有把编译失败冒充业务证据。

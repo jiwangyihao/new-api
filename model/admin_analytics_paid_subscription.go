@@ -852,8 +852,8 @@ func adminPaidSubscriptionItem(row adminPaidSubscriptionRow) dto.AdminPaidSubscr
 		TokenLimit:               row.Subscription.TokenLimit,
 		TokenUsed:                row.Subscription.TokenUsed,
 		NextResetTime:            row.Subscription.NextResetTime,
-		TimeBasedValue:           dto.AdminAnalyticsMoneyAmount{Amount: row.Value.TimeBasedValue, Currency: row.Plan.Currency},
-		RecognizedRemainingValue: dto.AdminAnalyticsMoneyAmount{Amount: row.Value.RecognizedRemainingValue, Currency: row.Plan.Currency},
+		TimeBasedValue:           &dto.AdminAnalyticsMoneyAmount{Amount: row.Value.TimeBasedValue, Currency: row.Plan.Currency},
+		RecognizedRemainingValue: &dto.AdminAnalyticsMoneyAmount{Amount: row.Value.RecognizedRemainingValue, Currency: row.Plan.Currency},
 		ValuationBasis:           row.Value.ValuationBasis,
 		SourceAttribution:        row.SourceAttribution,
 		Excluded:                 row.Excluded,
@@ -996,7 +996,7 @@ func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscr
 func adminComparePaidSubscriptionItem(left dto.AdminPaidSubscriptionValueSubscription, right dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) int {
 	switch query.SortBy {
 	case "recognized_remaining_value":
-		return adminCompareFloat(adminMoneyAmountForCurrency(left.RecognizedRemainingValue, query.Currency), adminMoneyAmountForCurrency(right.RecognizedRemainingValue, query.Currency))
+		return adminCompareFloat(adminOptionalMoneyAmountForCurrency(left.RecognizedRemainingValue, query.Currency), adminOptionalMoneyAmountForCurrency(right.RecognizedRemainingValue, query.Currency))
 	case "end_time":
 		return adminCompareInt64(left.EndTime, right.EndTime)
 	case "start_time":

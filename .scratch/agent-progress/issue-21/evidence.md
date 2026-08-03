@@ -172,3 +172,12 @@
 - 命令：`go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
 - 结果：编译成功，真实 SQLite fixture 运行；业务断言 RED 为 CNY `expected 10, actual 0`，耗时约 11.70 秒。
 - 结论：当前失败已准确收敛到 timed grant calculator 与 paid row/五接口未接线；没有把编译失败冒充业务证据。
+
+## GREEN 9：timed grant 五接口时间线
+
+- 实现：`adminBuildPaidRowsFromSubscriptions` 对 timed 权益批量读取 grant，并调用 `adminCalculateTimedSubscriptionValue`；不再以当前 Plan 正价/币种过滤或估值。
+- 实现：summary、users、subscriptions、plans 统一按 `ByCurrency` 累加；sources 按 grant `source_type` 分拆；混合权益行标记 `mixed_grants`。
+- 实现：跨币种 subscription singular 为 null，`recognized/token/time_based_value_by_currency` 返回 grant 原币种 micros；单币种保留兼容 singular。
+- 命令：`gofmt -w model/admin_analytics_paid_subscription.go && go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 14.41 秒。
+- 真实 SQLite 观察：CNY recognized 10、USD recognized 5，summary/users/plans/sources 对账一致，当前 Plan 的 `999 EUR` 未出现。

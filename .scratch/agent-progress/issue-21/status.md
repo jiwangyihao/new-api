@@ -2,29 +2,28 @@
 
 ## 当前阶段
 
-恢复交接 WIP：四处 nullable 金额接线已修复，指定 SQLite tracer 已从编译失败恢复到业务断言 RED；当前失败为 CNY `expected 10, actual 0`，说明 timed grant calculator 尚未接入 paid row 与五接口。
+计时五接口最窄接线已 GREEN：paid row 只读不可变 grant 时间线，summary/users/subscriptions/plans/sources 统一返回 CNY/USD，当前 Plan 的 `999 EUR` 不再进入计时估值。
 
 ## 已完成
 
-- 已保留 `ccd516aaa test(analytics): 保存计时 grant 时间线 RED` 作为此前可恢复 RED 安全点。
-- 已修复 `model/admin_analytics_paid_subscription.go` 四处 nullable singular 值/指针兼容问题，并只格式化该文件。
-- 已运行最窄命令 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
-- 编译已恢复；真实 SQLite fixture 进入业务断言，当前准确结果为 CNY `expected 10, actual 0`。
-- 未继续 UI、六语言、浏览器、Credit 核心、FX 或 marker/ready 工作。
+- 已保留 `ccd516aaa test(analytics): 保存计时 grant 时间线 RED` 与 `226d3c76d fix(analytics): 恢复计时五接口业务 RED` 两个可恢复安全点。
+- 已将 `adminCalculateTimedSubscriptionValue` 接入 timed paid row，并按 grant 来源、币种和窗口投影。
+- summary/users/subscriptions/plans/sources 复用同一 row；跨币种 subscription singular 为 null，`*_by_currency` 返回精确 micros。
+- 当前 Plan 的 `999 EUR` 不参与计时金额；测试断言 CNY 10、USD 5 且无 EUR。
+- 指定真实 SQLite tracer 已 GREEN；未扩展 UI、Credit、FX 或 marker。
 
 ## 下一步
 
-1. 将 `adminCalculateTimedSubscriptionValue` 的逐币种结果接入 paid row，不再读取当前 Plan 价格。
-2. 让 summary/users/subscriptions/plans/sources 复用同一 timed row，并保持跨币种 singular 为 null。
-3. 第一条验证命令仍为 `go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
-4. GREEN 后再逐个补重叠、裁剪和来源行为 tracer。
+1. 在新 RED→GREEN 周期补重叠窗口去重、失效裁剪和 missing grant warning。
+2. 再完成管理员 reason/key UI、六语言与浏览器证据。
+3. 保持 Credit 核心、FX、marker/ready 为明确非所有权。
 
 ## 阻塞
 
-- 当前阻塞是 timed calculator 尚未接入 paid row，不是外部依赖。
-- 已知业务 RED 为 CNY `expected 10, actual 0`；Plan 的当前 `999 EUR` 仍错误主导旧行构建。
+- 当前没有外部阻塞。
+- 下一行为缺口是重叠/裁剪/warning 的公开 tracer；五接口主路径已 GREEN。
 
 ## 最近安全提交
 
-- 此前安全点：`ccd516aaa test(analytics): 保存计时 grant 时间线 RED`。
-- 当前恢复状态由紧随其后的明确 WIP 提交承载；SHA 通过 escalation 交接。
+- 上一安全点：`226d3c76d fix(analytics): 恢复计时五接口业务 RED`。
+- 当前 GREEN 由紧随其后的提交承载。

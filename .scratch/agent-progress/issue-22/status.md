@@ -65,6 +65,11 @@
 - 真实 `SubscriptionRequestBalance` Gin + SQLite 夹具已进入既有 ready 运行时路径：测试专用 `_test.go` helper 仅 AutoMigrate 估值表并预置 ready 行，不增加任何生产 marker seam 或生命周期逻辑。
 - `40 CNY / 1,000 Credit` 权威 micros、CNY、规则版本、目标全局池和 balance payment identity 均冻结到订单快照。
 - 首次购买与相同幂等键重放后仅有一张订单、一条 ledger、一行估值状态；人民币余额只扣一次。唯一状态为 available=1000、exact=40000000、estimated=0、unknown=0、version=1。
-- 下一步：把既有 ledger 注入失败用例也置于 ready 估值路径，证明订单、余额、权益、ledger 与估值状态整体回滚；随后进入 Kyren 改价签名 webhook RED。
 - ready 估值路径下的 ledger 注入失败回归也已 GREEN：人民币余额、订单、权益、ledger、估值状态与用户选择全部原子回滚。
-- 余额入口安全点待提交；随后进入 Kyren 改价签名 webhook RED。
+- 余额入口安全点：`3ed1ef70c test(subscription): 验证余额购买冻结估值`。
+
+## 2026-08-04 Gate C Kyren GREEN
+- 真实 Kyren fake checkout 创建订单时冻结 `40,000,000` micros CNY / `1,000` Credit、目标池币种与规则版本；当前档位随后改为 99 CNY 并 disabled。
+- 真实 HMAC 签名 `order.paid` webhook 仍按订单快照履约；state/ledger exact 均为 `40,000,000`，重复 webhook 后只有一条 ledger、一行 state 且 version=1。
+- 已授权订单按冻结快照履约；同一 disabled 档位的新 checkout 被拒绝且不创建第二张订单。
+- 下一步：从此真实 Kyren 购买结果经 BillingSession 的真实 request_id 同步预扣/结算目标 200。

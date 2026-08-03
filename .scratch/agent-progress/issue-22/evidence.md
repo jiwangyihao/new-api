@@ -83,3 +83,10 @@
 - 真实观察：订单快照 `list_price_micros=40000000`、`monthly_token_limit=1000`、`list_price_currency=CNY`、目标池估值币种 CNY、payment provider/method=`balance/account_balance`；状态 available=1000、exact=40000000、estimated=0、unknown=0、version=1。
 - 幂等观察：相同 HTTP payload 重放后订单/ledger/state 各 1，用户余额仍为 6000（仅扣 4000 cents）。
 - 原子回滚 GREEN：`go test ./controller -run 'TestSubscriptionBalancePayCreditMode(AtomicallyCreditsUniqueBalance|RollsBackEveryWriteOnLedgerFailure)' -count=1` 返回 `go test: 1 packages ok`；ready 估值路径下注入 ledger insert failure 后，用户余额保持 10000，订单/权益/ledger/估值状态均为 0。
+
+## 2026-08-04 Kyren 签名 webhook RED→GREEN
+- RED：`go test ./controller -run TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation -count=1` 稳定失败于 `snapshot.ListPriceMicros` 为 nil；证明旧共享外部 Credit 夹具只提供 float，checkout 订单没有权威估值 micros。
+- 最小 GREEN：仅为该真实 Kyren 用例的有价档位提供 `price_amount_micros=40000000`，全局 Credit 池提供 `valuation_currency=CNY`；未改支付 API 或生产 marker 逻辑。
+- GREEN：`go test ./controller -run TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation -count=1` 返回 `go test: 1 packages ok`。
+- 冻结改价证据：订单创建后数据库当前档位更新为 `price_amount=99`、`price_amount_micros=99000000` 且 `enabled=false`；签名 webhook 后 ledger/state 仍 exact=`40000000` CNY、available=1000、version=1。
+- 幂等/资格证据：同一签名 payload 重放仍只有 ledger/state 各 1；已授权订单履约成功，新 disabled 档位 checkout 返回“套餐未启用”，订单总数仍为 1。

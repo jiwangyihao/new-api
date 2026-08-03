@@ -291,6 +291,7 @@ func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testin
 
 func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
+	enableCreditValuationRuntimeForControllerTest(t)
 	setupSubscriptionControllerRedis(t)
 	userID := 6096
 	seedKyrenPaymentUser(t, userID)
@@ -298,6 +299,15 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	require.NoError(t, model.DB.First(&buyer, userID).Error)
 	seedUserCacheForSubscriptionControllerTest(t, buyer)
 	seedExternalCreditPurchasePlans(t, 6097, 6098)
+	priceMicros := int64(40_000_000)
+	valuationCurrency := "CNY"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Updates(map[string]any{
+		"price_amount_micros": priceMicros,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6098).Updates(map[string]any{
+		"currency":           "CNY",
+		"valuation_currency": valuationCurrency,
+	}).Error)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Update("kyren_product_id", "prod_credit_webhook").Error)
 	fake := &kyrenCheckoutFakeAPI{}
 	withKyrenCheckoutFakeControllerClient(t, fake)
@@ -305,16 +315,56 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	require.Contains(t, create.Body.String(), `"success":true`)
 	var order model.SubscriptionOrder
 	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 6097).First(&order).Error)
+	snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.ListPriceMicros)
+	assert.Equal(t, int64(40_000_000), *snapshot.ListPriceMicros)
+	assert.Equal(t, int64(1000), snapshot.MonthlyTokenLimit)
+	assert.Equal(t, "CNY", snapshot.ListPriceCurrency)
+	assert.Equal(t, "CNY", snapshot.TargetCreditBalanceValuationCurrency)
+	assert.Equal(t, model.CreditValuationRuleVersion, snapshot.ValuationRuleVersion)
+
+	changedMicros := int64(99_000_000)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Updates(map[string]any{
+		"price_amount":        99,
+		"price_amount_micros": changedMicros,
+		"enabled":             false,
+	}).Error)
+	model.InvalidateSubscriptionPlanCache(6097)
 	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", order.TradeNo, "prod_credit_webhook", "40.00", kyrenCurrencyCNY)
 
 	recorder := performSignedKyrenWebhook(t, payload)
+	replay := performSignedKyrenWebhook(t, payload)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
 	require.NoError(t, model.DB.First(&order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
 	var ledger model.CreditBalanceLedger
 	require.NoError(t, model.DB.Where("source_id = ?", order.Id).First(&ledger).Error)
 	assert.Equal(t, int64(1000), ledger.GrossCredit)
+	assert.Equal(t, int64(40_000_000), ledger.ValuationGrossCostMicros)
+	assert.Equal(t, int64(40_000_000), ledger.ValuationNetCostMicros)
+	assert.Equal(t, model.CreditValuationConfidenceExact, ledger.ValuationConfidence)
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(1000), state.AvailableCredit)
+	assert.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	assert.Zero(t, state.EstimatedCostMicros)
+	assert.Zero(t, state.UnknownCredit)
+	assert.Equal(t, int64(1), state.StateVersion)
+	var ledgerCount, stateCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_id = ?", order.Id).Count(&ledgerCount).Error)
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_id = ?", userID).Count(&stateCount).Error)
+	assert.Equal(t, int64(1), ledgerCount)
+	assert.Equal(t, int64(1), stateCount)
+
+	newPurchase := performKyrenSubscriptionPayRequest(t, userID, `{"plan_id":6097,"purchase_mode":"credit_balance"}`)
+	assert.Contains(t, newPurchase.Body.String(), "套餐未启用")
+	var orderCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 6097).Count(&orderCount).Error)
+	assert.Equal(t, int64(1), orderCount)
+
 	cachedBuyer, err := model.GetUserCache(userID)
 	require.NoError(t, err)
 	assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, cachedBuyer.GetSetting().LastSubscriptionPurchaseMode)

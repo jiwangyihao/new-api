@@ -32,6 +32,9 @@
 - GREEN：`TestAdminUpdateSubscriptionPlanRoundTripsExactPriceMicros` 证明编辑同时写兼容 DECIMAL 与权威 micros，随后管理列表刷新返回同一 micros 字符串。
 - RED：Credit 计划首次配置缺少/使用 EUR 时仍成功；已有 Credit 权益后从 CNY 改 USD 还连带修改其他配置。
 - GREEN：专用接口只接受 CNY/USD，首次配置必填；事务锁定计划并检查 Credit 权益、估值状态或账本，存量存在时返回 `credit_valuation_currency_locked` 并回滚全部字段。
+- RED：估值状态、迁移 marker、计时 grant 与请求/低频快照结构不存在，schema 测试编译失败。
+- GREEN：附加式模型注册到标准/快速迁移；真实 SQLite 两次迁移均成功，状态 user 唯一、grant 幂等键及来源组合唯一由数据库拒绝重复，marker 保持空表且 #20 未写状态。
+- GREEN：比例测试补齐普通值、向下取整、完全清空吸收余数、零分母、`MaxInt64` 宽中间乘积和结果溢出。
 
 当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
 ## 最终验证待办

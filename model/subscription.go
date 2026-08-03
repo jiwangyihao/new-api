@@ -1884,14 +1884,28 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 
 // SubscriptionPreConsumeRecord stores idempotent pre-consume operations per request.
 type SubscriptionPreConsumeRecord struct {
-	Id                 int    `json:"id"`
-	RequestId          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex"`
-	UserId             int    `json:"user_id" gorm:"index"`
-	UserSubscriptionId int    `json:"user_subscription_id" gorm:"index"`
-	PreConsumed        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
-	Status             string `json:"status" gorm:"type:varchar(32);index"` // consumed/refunded
-	CreatedAt          int64  `json:"created_at" gorm:"bigint"`
-	UpdatedAt          int64  `json:"updated_at" gorm:"bigint;index"`
+	Id                                 int    `json:"id"`
+	RequestId                          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex"`
+	UserId                             int    `json:"user_id" gorm:"index"`
+	UserSubscriptionId                 int    `json:"user_subscription_id" gorm:"index"`
+	PreConsumed                        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
+	AppliedCredit                      int64  `json:"applied_credit" gorm:"type:bigint;not null;default:0"`
+	DeductedAvailableCredit            int64  `json:"deducted_available_credit" gorm:"type:bigint;not null;default:0"`
+	DebtFormedCredit                   int64  `json:"debt_formed_credit" gorm:"type:bigint;not null;default:0"`
+	ValuationSubscriptionId            int    `json:"valuation_subscription_id" gorm:"not null;default:0;index"`
+	DeductedExactCostMicros            int64  `json:"deducted_exact_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	DeductedEstimatedCostMicros        int64  `json:"deducted_estimated_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	DeductedUnknownCredit              int64  `json:"deducted_unknown_credit" gorm:"type:bigint;not null;default:0"`
+	AbsorbedRestoreUnknownCredit       int64  `json:"absorbed_restore_unknown_credit" gorm:"type:bigint;not null;default:0"`
+	AbsorbedRestoreExactCostMicros     int64  `json:"absorbed_restore_exact_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	AbsorbedRestoreEstimatedCostMicros int64  `json:"absorbed_restore_estimated_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	RestoredUnknownCredit              int64  `json:"restored_unknown_credit" gorm:"type:bigint;not null;default:0"`
+	ValuationRuleVersion               int    `json:"valuation_rule_version" gorm:"not null;default:0"`
+	SettlementVersion                  int64  `json:"settlement_version" gorm:"type:bigint;not null;default:0"`
+	FinalizedAt                        int64  `json:"finalized_at" gorm:"type:bigint;not null;default:0"`
+	Status                             string `json:"status" gorm:"type:varchar(32);index"`
+	CreatedAt                          int64  `json:"created_at" gorm:"bigint"`
+	UpdatedAt                          int64  `json:"updated_at" gorm:"bigint;index"`
 }
 
 func (r *SubscriptionPreConsumeRecord) BeforeCreate(tx *gorm.DB) error {

@@ -38,3 +38,11 @@
 - 回归：`go test ./model -run 'Test(PaidSubscriptionValue|CreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)' -count=1` 返回 `go test: 1 packages ok`。
 - 编译诊断：`dto/admin_analytics.go` 与 `model/admin_analytics_paid_subscription.go` 的 LSP diagnostics 均为 `OK`。
 - 边界：本安全点未改 paid-value 查询签名、未扩展 warning 设计、未写 FX 字段、未创建或转换 migration marker。
+
+## 分析安全点复核
+- 提交：`452a75ccd feat(analytics): 接入 Credit 精确剩余价值`。
+- GREEN 命令：`go test ./model -run 'Test(PaidSubscriptionValue|CreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)' -count=1`；2026-08-03 复跑结果为 `go test: 1 packages ok`。
+- 五接口事实：summary/users/subscriptions/plans/sources 均由同一状态得到 recognized/exact=`32,000,000` micros CNY、estimated=`0`、unknown=`0`；summary `active_paid_subscription_count=1`。
+- micros 与多币种 DTO：后端聚合和排序使用 `int64` micros，JSON 权威金额为十进制字符串 `amount_micros`；兼容 `amount` 只由 micros 派生。summary/user/plan/source 的 `*_by_currency` 保持数组形状，可按原币种并列承载，不跨币种相加。
+- current-only 边界：当 `CreditValuationState.updated_at > snapshot_at` 时，返回最新状态、版本和 `snapshot_semantics=current_only`，不伪造历史回放。现有 paid-value 查询签名与顶层 warning shape 未扩展；UI 只把该稳定语义显示为非阻断提示。
+- 范围边界：#22 仅验证 CNY→CNY；不实现运行时 FX、汇率字段写入、marker 创建/CAS/状态转换或启动自动 ready。

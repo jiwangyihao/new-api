@@ -60,3 +60,11 @@
 - 随后 RED：Kyren 订单创建后改价再走真实签名 webhook，必须仍按冻结 `40,000,000` micros 入账并保持重复 webhook 幂等；再从真实购买结果经 `NewBillingSession` / `PreConsumeBilling` / `SettleBillingWithInput` 同步消费目标 200。
 - 禁止范围：不实现 #23 target 增减、少结算、退款、异步 identity 或 coalescer；不实现 FX；不创建/CAS/切换 migration marker 或 ready；不重做既有估值、请求 seam 与五接口。
 - 恢复指令：`credit-operational-value-issue-22-gate-c-recovery.md` 已完整读取并作为当前范围优先级。
+
+## 2026-08-04 Gate C 余额入口 GREEN
+- 真实 `SubscriptionRequestBalance` Gin + SQLite 夹具已进入既有 ready 运行时路径：测试专用 `_test.go` helper 仅 AutoMigrate 估值表并预置 ready 行，不增加任何生产 marker seam 或生命周期逻辑。
+- `40 CNY / 1,000 Credit` 权威 micros、CNY、规则版本、目标全局池和 balance payment identity 均冻结到订单快照。
+- 首次购买与相同幂等键重放后仅有一张订单、一条 ledger、一行估值状态；人民币余额只扣一次。唯一状态为 available=1000、exact=40000000、estimated=0、unknown=0、version=1。
+- 下一步：把既有 ledger 注入失败用例也置于 ready 估值路径，证明订单、余额、权益、ledger 与估值状态整体回滚；随后进入 Kyren 改价签名 webhook RED。
+- ready 估值路径下的 ledger 注入失败回归也已 GREEN：人民币余额、订单、权益、ledger、估值状态与用户选择全部原子回滚。
+- 余额入口安全点待提交；随后进入 Kyren 改价签名 webhook RED。

@@ -74,3 +74,12 @@
 - 已完整读取协调器恢复指令、Issue #19/#22、执行合同、Wave 1 合同、Issue #22 实现说明及现有 `status/evidence/contract`。
 - 恢复决策：现有 `d6a493c75` / `e03e62905` / `06619f81b` / `452a75ccd` 为不可重做基线；仅从余额 HTTP、Kyren 签名 webhook、BillingSession 三个真实入口补验收。
 - 当前未宣称任何新增 GREEN；下一步先取得余额购买冻结估值 RED。
+
+## 2026-08-04 人民币余额入口 RED→GREEN
+- RED：`go test ./controller -run TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance -count=1`。真实 HTTP 购买成功，但读取估值状态失败 `SQL logic error: no such table: credit_valuation_states`；证明旧控制器夹具只覆盖数量写，未启用既有估值运行时前置。
+- 协调器确认：允许测试复用 `model/credit_valuation_tracer_test.go` 的 ready 前置或等价 `_test.go` helper；生产代码仍禁止创建/CAS/切换 marker。
+- GREEN：控制器 `_test.go` helper 只 AutoMigrate `CreditValuationState` / `CreditValuationMigration` / `SubscriptionPreConsumeRecord` 并直接预置 ready 测试行；未修改生产代码或暴露新 seam。
+- GREEN 命令：`go test ./controller -run TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance -count=1` 返回 `go test: 1 packages ok`。
+- 真实观察：订单快照 `list_price_micros=40000000`、`monthly_token_limit=1000`、`list_price_currency=CNY`、目标池估值币种 CNY、payment provider/method=`balance/account_balance`；状态 available=1000、exact=40000000、estimated=0、unknown=0、version=1。
+- 幂等观察：相同 HTTP payload 重放后订单/ledger/state 各 1，用户余额仍为 6000（仅扣 4000 cents）。
+- 原子回滚 GREEN：`go test ./controller -run 'TestSubscriptionBalancePayCreditMode(AtomicallyCreditsUniqueBalance|RollsBackEveryWriteOnLedgerFailure)' -count=1` 返回 `go test: 1 packages ok`；ready 估值路径下注入 ledger insert failure 后，用户余额保持 10000，订单/权益/ledger/估值状态均为 0。

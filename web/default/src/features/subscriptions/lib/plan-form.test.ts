@@ -167,4 +167,109 @@ describe('subscription plan exact price round-trip', () => {
 
     assert.equal(values.price_amount, '40.123456')
   })
+  test('does not promote a legacy display price during unrelated edits', () => {
+    const plan = {
+      ...formValuesToPlanPayload({
+        ...PLAN_FORM_DEFAULTS,
+        title: 'Legacy price',
+        price_amount: '40.123456',
+      }).plan,
+      id: 2,
+      title: 'Legacy price',
+      price_amount: 40.123456,
+      price_amount_micros: null,
+    } as SubscriptionPlan
+
+    const values = planToFormValues(plan)
+    values.title = 'Renamed legacy price'
+    const payload = formValuesToPlanPayload(values)
+
+    assert.equal(values.price_amount, '40.123456')
+    assert.equal('price_amount' in payload.plan, false)
+    assert.equal('price_amount_micros' in payload.plan, false)
+  })
+
+  test('labels legacy display text as non-authoritative form state', () => {
+    const values = planToFormValues({
+      ...formValuesToPlanPayload({
+        ...PLAN_FORM_DEFAULTS,
+        title: 'Legacy display only',
+        price_amount: '0',
+      }).plan,
+      id: 3,
+      title: 'Legacy display only',
+      price_amount: 0.1 + 0.2,
+      price_amount_micros: null,
+    } as SubscriptionPlan)
+
+    assert.equal(values.price_amount, '0.30000000000000004')
+    assert.equal(values.price_amount_source, 'legacy')
+    assert.equal(values.price_amount_changed, false)
+  })
+
+  test('never promotes legacy Number edge cases without explicit input', () => {
+    const cases = [
+      { name: 'zero', price: 0 },
+      { name: 'large integer boundary', price: Number.MAX_SAFE_INTEGER },
+      { name: 'floating-sensitive decimal', price: 0.1 + 0.2 },
+    ]
+
+    for (const testCase of cases) {
+      const values = planToFormValues({
+        ...formValuesToPlanPayload({
+          ...PLAN_FORM_DEFAULTS,
+          title: testCase.name,
+          price_amount: '0',
+        }).plan,
+        id: 4,
+        title: testCase.name,
+        price_amount: testCase.price,
+        price_amount_micros: null,
+      } as SubscriptionPlan)
+      const payload = formValuesToPlanPayload(values)
+
+      assert.equal(values.price_amount_source, 'legacy')
+      assert.equal('price_amount' in payload.plan, false)
+      assert.equal('price_amount_micros' in payload.plan, false)
+    }
+  })
+
+  test('promotes only explicit decimal text edits to authoritative micros', () => {
+    const values = planToFormValues({
+      ...formValuesToPlanPayload({
+        ...PLAN_FORM_DEFAULTS,
+        title: 'Legacy edited explicitly',
+        price_amount: '0',
+      }).plan,
+      id: 5,
+      title: 'Legacy edited explicitly',
+      price_amount: 0.1 + 0.2,
+      price_amount_micros: null,
+    } as SubscriptionPlan)
+    values.price_amount = '0.300001'
+    values.price_amount_changed = true
+
+    const payload = formValuesToPlanPayload(values)
+
+    assert.equal(payload.plan.price_amount, '0.300001')
+    assert.equal(payload.plan.price_amount_micros, '300001')
+  })
+
+  test('converts zero and maximum supported decimal text without Number', () => {
+    const cases = [
+      { decimal: '0', micros: '0' },
+      { decimal: '9223372036854.775807', micros: '9223372036854775807' },
+    ]
+
+    for (const testCase of cases) {
+      const payload = formValuesToPlanPayload({
+        ...PLAN_FORM_DEFAULTS,
+        title: 'New exact boundary',
+        price_amount: testCase.decimal,
+      })
+
+      assert.equal(payload.plan.price_amount, testCase.decimal)
+      assert.equal(payload.plan.price_amount_micros, testCase.micros)
+    }
+  })
 })

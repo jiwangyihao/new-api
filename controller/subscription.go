@@ -523,6 +523,7 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	Plan          model.SubscriptionPlan `json:"plan"`
 	RiskConfirmed bool                   `json:"risk_confirmed"`
 	RiskReason    string                 `json:"risk_reason"`
+	PriceProvided bool                   `json:"-"`
 }
 
 type rawAdminUpsertSubscriptionPlanRequest struct {
@@ -560,7 +561,11 @@ func decodeAdminUpsertSubscriptionPlanRequest(c *gin.Context) (AdminUpsertSubscr
 	if err != nil {
 		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
 	}
-	request := AdminUpsertSubscriptionPlanRequest{RiskConfirmed: rawRequest.RiskConfirmed, RiskReason: rawRequest.RiskReason}
+	request := AdminUpsertSubscriptionPlanRequest{
+		RiskConfirmed: rawRequest.RiskConfirmed,
+		RiskReason:    rawRequest.RiskReason,
+		PriceProvided: displayProvided || microsProvided,
+	}
 	if err := common.Unmarshal(planPayload, &request.Plan); err != nil {
 		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
 	}
@@ -864,8 +869,6 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		updateMap := map[string]interface{}{
 			"title":                      req.Plan.Title,
 			"subtitle":                   req.Plan.Subtitle,
-			"price_amount":               req.Plan.PriceAmount,
-			"price_amount_micros":        req.Plan.PriceAmountMicros,
 			"currency":                   req.Plan.Currency,
 			"duration_unit":              req.Plan.DurationUnit,
 			"duration_value":             req.Plan.DurationValue,
@@ -894,6 +897,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"unlimited_purchase_enabled": req.Plan.UnlimitedPurchaseEnabled,
 			"timed_conversion_enabled":   req.Plan.TimedConversionEnabled,
 			"updated_at":                 common.GetTimestamp(),
+		}
+		if req.PriceProvided {
+			updateMap["price_amount"] = req.Plan.PriceAmount
+			updateMap["price_amount_micros"] = req.Plan.PriceAmountMicros
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err

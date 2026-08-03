@@ -306,6 +306,10 @@ export function SubscriptionsMutateDrawer({
                       <FormControl>
                         <Input
                           {...field}
+                          onChange={(event) => {
+                            field.onChange(event)
+                            form.setValue('price_amount_changed', true)
+                          }}
                           type='text'
                           inputMode='decimal'
                           placeholder='0.000000'

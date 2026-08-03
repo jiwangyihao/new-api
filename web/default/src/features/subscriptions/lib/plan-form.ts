@@ -28,6 +28,8 @@ export function getPlanFormSchema(t: TFunction) {
       .string()
       .trim()
       .regex(/^\d+(?:\.\d{1,6})?$/, t('Please enter amount')),
+    price_amount_source: z.enum(['new', 'exact', 'legacy']),
+    price_amount_changed: z.boolean(),
     duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
     duration_value: z.coerce.number().min(1),
     custom_seconds: z.coerce.number().min(0).optional(),
@@ -67,6 +69,8 @@ export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   title: '',
   subtitle: '',
   price_amount: '0',
+  price_amount_source: 'new',
+  price_amount_changed: true,
   duration_unit: 'month',
   duration_value: 1,
   custom_seconds: 0,
@@ -101,6 +105,8 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
       plan.price_amount_micros,
       plan.price_amount
     ),
+    price_amount_source: plan.price_amount_micros == null ? 'legacy' : 'exact',
+    price_amount_changed: false,
     duration_unit: plan.duration_unit || 'month',
     duration_value: Number(plan.duration_value || 1),
     custom_seconds: Number(plan.custom_seconds || 0),
@@ -152,11 +158,23 @@ function microsToDecimalText(
 }
 
 export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
+  const {
+    price_amount: priceAmount,
+    price_amount_source: priceAmountSource,
+    price_amount_changed: priceAmountChanged,
+    ...planValues
+  } = values
+  const includePrice = priceAmountSource === 'new' || priceAmountChanged
+
   return {
     plan: {
-      ...values,
-      price_amount: values.price_amount,
-      price_amount_micros: decimalTextToMicros(values.price_amount),
+      ...planValues,
+      ...(includePrice
+        ? {
+            price_amount: priceAmount,
+            price_amount_micros: decimalTextToMicros(priceAmount),
+          }
+        : {}),
       currency: 'CNY',
       duration_value: Number(values.duration_value || 0),
       custom_seconds: Number(values.custom_seconds || 0),

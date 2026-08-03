@@ -8,19 +8,19 @@
 
 ## 当前阶段
 
-Finding 1 调查：准备建立“历史 `price_amount_micros = NULL` 套餐无关编辑不得生成 micros”的 RED 行为测试。
+Finding 1 GREEN：历史 `price_amount_micros=NULL` 套餐的兼容 Number 仅用于显示；无关编辑省略两价格字段，后端按字段存在性保留数据库原值。正在形成 Finding 1 可恢复提交。
 
 ## RED / GREEN
 
 | Finding | RED | GREEN | 状态 |
 | --- | --- | --- | --- |
-| 1. 禁止从 JavaScript Number 伪造历史 micros | 待运行 | 待实现 | 调查中 |
+| 1. 禁止从 JavaScript Number 伪造历史 micros | 前端与后端 RED 已复现 | 前端 13/13、后端定向测试通过 | GREEN |
 | 2. 关键 schema 变化 fail-closed | 待运行 | 待实现 | 未开始 |
 | 3. 币种冻结与首个 Credit 权益共享线性化接缝 | 待运行 | 待实现 | 未开始 |
 
 ## 下一条命令
 
-从 `web/default` 运行现有 `plan-form` 定向测试，确认历史 NULL 精确值的当前污染路径，再持久化最小 RED 用例。
+更新 Finding 1 证据并提交；随后复现 Finding 2 的非必要旧列 ALTER 风险。
 
 ## 阻塞
 
@@ -28,7 +28,7 @@ Finding 1 调查：准备建立“历史 `price_amount_micros = NULL` 套餐无�
 
 ## 最近安全提交
 
-开始本轮修复前：`9e3329d0f4b509d1179c895c52f01af7a19f0ca4`。
+恢复记录提交：`f160e8a10`；实现前候选：`9e3329d0f4b509d1179c895c52f01af7a19f0ca4`。
 
 ## 范围边界
 

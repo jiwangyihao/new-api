@@ -87,3 +87,27 @@ func TestAdminUpdateSubscriptionPlanRoundTripsExactPriceMicros(t *testing.T) {
 	AdminListSubscriptionPlans(listContext)
 	assert.Contains(t, listRecorder.Body.String(), `"price_amount_micros":"40654321"`)
 }
+
+func TestAdminUpdateSubscriptionPlanPreservesLegacyPriceWhenPriceFieldsAreAbsent(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	plan := model.SubscriptionPlan{
+		Title:             "Legacy exact pending",
+		PriceAmount:       40.123456,
+		PriceAmountMicros: nil,
+		Currency:          "CNY",
+		DurationUnit:      model.SubscriptionDurationMonth,
+		DurationValue:     1,
+		Enabled:           true,
+	}
+	require.NoError(t, model.DB.Create(&plan).Error)
+
+	recorder := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Legacy renamed","currency":"CNY","duration_unit":"month","duration_value":1,"enabled":false}}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, "Legacy renamed", plan.Title)
+	assert.False(t, plan.Enabled)
+	assert.Equal(t, 40.123456, plan.PriceAmount)
+	assert.Nil(t, plan.PriceAmountMicros, "unrelated updates must leave legacy exact prices pending")
+}

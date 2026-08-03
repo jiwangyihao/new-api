@@ -63,6 +63,7 @@ type TimedSubscriptionGrantRequest struct {
 	SourceId          int
 	SourcePriceMicros int64
 	SourceCurrency    string
+	Reason            string
 }
 
 type timedSubscriptionGrantSourceSnapshot struct {
@@ -74,6 +75,7 @@ type timedSubscriptionGrantSourceSnapshot struct {
 	PlanId                  int    `json:"plan_id"`
 	SourcePriceMicros       int64  `json:"source_price_micros,string"`
 	SourceCurrency          string `json:"source_currency"`
+	Reason                  string `json:"reason,omitempty"`
 	GrantCredit             int64  `json:"grant_credit"`
 	DurationUnit            string `json:"duration_unit"`
 	DurationValue           int    `json:"duration_value"`
@@ -149,6 +151,7 @@ func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantReques
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.SourceType = strings.TrimSpace(request.SourceType)
 	request.SourceCurrency = strings.ToUpper(strings.TrimSpace(request.SourceCurrency))
+	request.Reason = strings.TrimSpace(request.Reason)
 	if request.UserId <= 0 || request.Plan == nil || request.Plan.Id <= 0 || request.Plan.EntitlementType != SubscriptionEntitlementTimed || request.SourcePriceMicros <= 0 || request.SourceCurrency == "" || request.Plan.MonthlyTokenLimit <= 0 || request.IdempotencyKey == "" {
 		return normalizedTimedSubscriptionGrantRequest{}, ErrTimedSubscriptionGrantInvalid
 	}
@@ -169,6 +172,9 @@ func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantReques
 		sourceKey = request.SourceType + ":" + strconv.Itoa(request.SourceId)
 		grantSource = SubscriptionGrantRedemption
 	case TimedSubscriptionGrantSourceAdmin:
+		if request.Reason == "" {
+			return normalizedTimedSubscriptionGrantRequest{}, ErrTimedSubscriptionGrantInvalid
+		}
 		sourceKey = TimedSubscriptionGrantSourceAdmin + ":" + request.IdempotencyKey
 		grantSource = SubscriptionGrantAdmin
 	default:
@@ -178,7 +184,7 @@ func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantReques
 	snapshot := timedSubscriptionGrantSourceSnapshot{
 		IdempotencyKey: request.IdempotencyKey, SourceType: request.SourceType, SourceKey: sourceKey, SourceId: request.SourceId,
 		UserId: request.UserId, PlanId: request.Plan.Id, SourcePriceMicros: request.SourcePriceMicros,
-		SourceCurrency: request.SourceCurrency, GrantCredit: request.Plan.MonthlyTokenLimit,
+		SourceCurrency: request.SourceCurrency, Reason: request.Reason, GrantCredit: request.Plan.MonthlyTokenLimit,
 		DurationUnit: request.Plan.DurationUnit, DurationValue: request.Plan.DurationValue, CustomSeconds: request.Plan.CustomSeconds,
 		QuotaResetPeriod: NormalizeResetPeriod(request.Plan.QuotaResetPeriod), QuotaResetCustomSeconds: request.Plan.QuotaResetCustomSeconds,
 		ValuationRuleVersion: CreditValuationRuleVersion,

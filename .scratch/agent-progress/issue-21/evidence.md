@@ -108,3 +108,21 @@
 - 重放同一兑换码返回既有 fulfillment，权益 `end_time` 不变化且 grant 数量保持 1。
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 15.00 秒。
+
+## RED 6：管理员 timed 售后授予
+
+- 测试：`TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays`，直接驱动真实 Gin handler 与 SQLite。
+- 命令：`go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1`。
+- 结果：预期 RED；仅提交 `plan_id` 的旧 payload 返回 `success:true` 并创建权益，而合同要求 reason/idempotency 必填。
+- 后续 GREEN 让 handler 校验 reason/idempotency 与显式 `source_price_micros/source_currency`，不把当前套餐标价伪装成 exact；失败重试相同 key 不续期。
+
+## GREEN 6：管理员 timed 售后授予
+
+- 管理员 payload 现显式要求 `reason`、`idempotency_key`、`source_price_micros`、`source_currency`；模型不从当前套餐标价推导 exact。
+- `AdminBindSubscription` 只接受启用、非试用、非邀请试用的 timed plan，并把显式价格/币种与原因传入统一领域入口。
+- 缺少审计字段返回 `success:false` 且不创建权益；同一完整 payload 重试复用原 grant，不续期，grant 数量保持 1；`source_snapshot` 冻结原因。
+- 命令：`go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 16.51 秒。
+- 额外证明：当前 Plan 为 `40 CNY`，管理员 payload 显式冻结 `25,000,000 USD`，grant 按 payload 持久化；未从 Plan 推导估值。
+- 组合命令：`go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1 && go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`。
+- 结果：两包均 PASS，耗时约 25.80 秒。

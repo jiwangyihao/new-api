@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-领域 GREEN：购买与兑换真实入口均原子写 timed grant；兑换码改价/改币种历史已冻结。
+领域 GREEN：购买、兑换、管理员售后授予均进入统一 timed grant，显式冻结来源价格/币种并支持可重试幂等。
 
 ## 已完成
 
@@ -13,9 +13,9 @@
 
 ## 下一步
 
-1. 提交兑换 timed grant 安全点。
-2. 通过管理员 HTTP handler 写 RED，要求 reason/idempotency 并迁移售后授予。
-3. 补 disabled plan、试用/邀请排除与不可变更新/删除行为。
+1. 提交管理员 timed grant 安全点。
+2. 补 disabled plan、试用/邀请排除与 grant 更新/删除拒绝行为。
+3. 完成领域定向门禁后进入 grant 时间线分析 tracer。
 
 ## 阻塞
 
@@ -23,4 +23,4 @@
 
 ## 最近安全提交
 
-- `ff635938c feat(subscription): 为计时订单冻结估值授予`。
+- `6fc4cb813 feat(subscription): 为计时兑换冻结估值授予`。

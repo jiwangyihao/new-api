@@ -1446,21 +1446,38 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 	})
 }
 
-// Admin bind (no payment). Creates a UserSubscription from a plan.
-func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
-	if userId <= 0 || planId <= 0 {
-		return "", errors.New("invalid userId or planId")
+type AdminTimedSubscriptionGrantRequest struct {
+	UserId            int
+	PlanId            int
+	IdempotencyKey    string
+	Reason            string
+	SourcePriceMicros int64
+	SourceCurrency    string
+}
+
+// AdminBindSubscription grants a paid timed entitlement from explicit audited valuation facts.
+func AdminBindSubscription(request AdminTimedSubscriptionGrantRequest) (string, error) {
+	if request.UserId <= 0 || request.PlanId <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" || request.SourcePriceMicros <= 0 || strings.TrimSpace(request.SourceCurrency) == "" {
+		return "", ErrTimedSubscriptionGrantInvalid
 	}
-	plan, err := GetSubscriptionPlanById(planId)
+	plan, err := GetSubscriptionPlanById(request.PlanId)
 	if err != nil {
 		return "", err
 	}
-	if plan.EntitlementType == SubscriptionEntitlementCreditBalance {
-		return "", errors.New("Credit 余额套餐不能通过普通绑定接口创建权益")
+	if plan.EntitlementType != SubscriptionEntitlementTimed || !plan.Enabled || plan.IsTrial || plan.InviteTrial {
+		return "", ErrTimedSubscriptionGrantInvalid
 	}
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "admin")
-		return err
+		_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId:            request.UserId,
+			Plan:              plan,
+			IdempotencyKey:    request.IdempotencyKey,
+			SourceType:        TimedSubscriptionGrantSourceAdmin,
+			SourcePriceMicros: request.SourcePriceMicros,
+			SourceCurrency:    request.SourceCurrency,
+			Reason:            request.Reason,
+		})
+		return grantErr
 	})
 	if err != nil {
 		return "", err

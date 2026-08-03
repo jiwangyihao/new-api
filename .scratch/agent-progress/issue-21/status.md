@@ -2,11 +2,11 @@
 
 ## 当前阶段
 
-浏览器续作恢复进行中：两个 production dist 已就绪，隔离后端已按协调器给定的原生命令成功监听 `31021`。真实 `GET /api/status` 返回 `success:true`、`setup:false`，目标 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 已存在。
+浏览器续作验收已完成：两个 production dist、端口 `31021` 隔离服务、真实 setup/login、管理员 timed grant 失败重试与 CNY/USD 跨币种分析均通过。真实浏览器未拦截或 mock API；隔离 SQLite 保存两条连续 immutable grant。
 
-固定现场：受监督服务名 `issue21-backend-recovery`；启动器 `cmd.exe`；命令内显式设置 `PORT=31021`、目标 `SQLITE_PATH` 与隔离 `SESSION_SECRET`。服务日志和 TCP 端口两项 readiness 均通过。
+管理员 smoke：首个 CNY 请求在后端受控停止时失败，UI 展示 `Timed grant failed` 与“重试复用同一 key”；服务恢复后完整 payload 原样重放成功；套餐改为 USD、reason 改变后的下一次成功使用新 key。计划列表仅显示启用、非 trial/invite-trial、正 micros 的 timed 计划。
 
-下一步直接进入既定 smoke：真实 `POST /api/setup` 创建隔离 root、`POST /api/user/login` 建立浏览器 session，通过公开管理员 API 建立最小用户/有价 timed 计划，再由 default UI 验证失败重试 key、新成功 attempt 和 CNY/USD 跨币种分析。
+分析 smoke：同一 `snapshot_at=1785785996` 下 summary/users/subscriptions/plans/sources 五接口 recognized 均为 `CNY=39998102`、`USD=10000000` micros；subscription 三个 singular 均为 null，当前 Plan 价格只显示 `$10.00`，页面仍显示 `¥40.00, $10.00`、confidence exact、warnings `—`、unknown timed `0`。下一步执行最终定向窄门禁，然后清理服务、浏览器、目标 DB、dist 与依赖产物。
 
 ## 已完成
 
@@ -26,12 +26,12 @@
 
 ## 剩余门禁
 
-- 真实浏览器管理员 timed grant（失败同 key 重试、成功后新 key）与跨币种展示 smoke。
-- 浏览器完成后运行既定最终窄门禁、更新 evidence、`git diff --check` 并保持工作树 clean。
+- 执行验收文档规定的 Go 领域/API tracer、两个前端定向测试、typecheck、六语言 sync、`git diff --check`。
+- 清理浏览器/服务/隔离 SQLite/dist/依赖产物，更新 COMPLETE 证据并保持工作树 clean。
 
 ## 阻塞
 
-- 无启动阻塞；目标端口、健康响应和目标 SQLite 文件均已证明。
+- 无产品阻塞；真实浏览器两条 smoke 已通过。
 - 明确不触碰其他数据库、Credit 核心、FX、marker/ready、历史迁移或发布。
 
 ## 最近安全提交
@@ -41,3 +41,4 @@
 - 跨币种展示：`1809124c5 feat(analytics): 展示计时跨币种运营剩余价值`。
 - 六语言：`5ea548998 feat(i18n): 补全计时授予六语言`。
 - 强五接口 API tracer：`1481d4f97 test(analytics): 强化计时五接口金额追踪`。
+- 浏览器续作恢复：`94c208a8b`、`b9f4d226f`、`c4aa6bb02`、`2ac7995ba`。

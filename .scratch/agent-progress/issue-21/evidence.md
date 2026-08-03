@@ -302,3 +302,21 @@
 - 健康证明：真实 `GET http://127.0.0.1:31021/api/status` 返回 HTTP JSON，`success=true`、`data.setup=false`、`version=v0.0.0`；这不是进程创建替代 readiness。
 - 数据库证明：路径检查确认仅目标 `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 存在；未连接或修改其他数据库。
 - 下一动作：直接进入既定 setup/login、管理员 timed grant 与跨币种浏览器 smoke，不再探索启动方案。
+
+## 真实浏览器管理员 timed grant smoke
+
+- 隔离数据建立：真实 `POST /api/setup` 创建 `rooti21`；真实 `POST /api/user/login` 建立 session；真实管理员 API 创建用户 `timeduser`（ID 2）与启用有价 timed 计划 `Issue 21 Timed Smoke`（Plan 2，`40,000,000 CNY` micros）。主题通过真实 `PUT /api/option/` 切为 default。
+- 登录：default UI `/sign-in` 真实提交 `/api/user/login?turnstile=`，HTTP 200 后导航 `/dashboard/overview` 并收到 HttpOnly `session` cookie；随后真实打开 `/users` → 目标用户行 → `Manage Subscriptions`。
+- 资格过滤：最终真实下拉 options 仅为 `Issue 21 Timed Smoke ($10.00)`；额外创建的 disabled、trial、invite-trial、zero-price timed 计划均未出现。资格结果为 eligible=true，disabled/trial/inviteTrial/zero=false。
+- 首次人为失败：保持表单事实不变，停止受监督后端后点击提交；浏览器捕获真实 `POST /api/subscription/admin/users/2/subscriptions` payload：`{"plan_id":2,"reason":"Issue 21 controlled retry smoke","source_price_micros":"40000000","source_currency":"CNY","idempotency_key":"admin-timed-2-d153d8ac-e27d-4818-b1d4-c80a9b694056"}`。UI 随后可见 `Timed grant failed`、`Request failed` 和 `Retrying without changes reuses the same idempotency key.`。
+- 同键重试：按同一隔离命令恢复服务，再点击同一表单；浏览器捕获完全相同 payload/key，响应 HTTP 200、`{"data":null,"message":"","success":true}`。真实 SQLite 此时只有一条 grant，冻结 `40,000,000 CNY`、confidence exact、来源 admin、同一 key。
+- 新 attempt：通过浏览器 session 的真实管理员 API 把当前 Plan 改为 `10,000,000 USD`；历史 grant 仍为 CNY。重新打开 UI，reason 改为 `Issue 21 second USD grant` 后，浏览器捕获新 payload：`{"plan_id":2,"reason":"Issue 21 second USD grant","source_price_micros":"10000000","source_currency":"USD","idempotency_key":"admin-timed-2-644c3d1c-8def-467f-872c-103647a54f76"}`，HTTP 200 success。
+- SQLite 结果：`user_subscriptions` 只有一条 active timed 权益（ID 1），续期后窗口为 `1785785869..1791056269`；`timed_subscription_valuation_grants` 恰有两条首尾相接 immutable grant：CNY `1785785869..1788464269` 与 USD `1788464269..1791056269`，key 不同、各自金额/币种未被当前 Plan 覆盖。
+
+## 真实浏览器跨币种分析 smoke
+
+- 路径：default UI `/admin-analytics` → `Paid subscription value`；浏览器捕获真实 summary、users、subscriptions、`breakdown/plans`、`breakdown/sources` 五接口，均 HTTP 200，未拦截、mock fetch 或注入静态响应。
+- 固定快照：`snapshot_at=1785785996`。五接口 summary recognized 均精确为 `CNY=39998102`、`USD=10000000` micros；users、subscriptions、plans、sources 各自行金额也与 summary 完全相同。
+- subscriptions 响应：`recognized_remaining_value=null`、`token_based_value=null`、`time_based_value=null`；三组 `*_by_currency` 含 CNY/USD；`plan_price={amount:10,currency:"USD"}`；`valuation_confidence="exact"`；warnings 空；unknown timed count 0。当前 Plan USD 未把历史 CNY 重写或补猜 singular。
+- 可见 UI：同一卡片/明细显示 `¥40.00, $10.00`；Plan price 单独显示 `$10.00`；可见 `Valuation confidence / exact`、`Valuation warnings / —`、`Unknown timed subscriptions / 0`、`Valuation basis / timed_grant_timeline`。页面术语为 `Paid subscription value` / remaining value，未称退款、负债或实收。
+- 临时全页截图已生成于系统临时目录，仅作运行观察，未提交二进制；最终关闭浏览器并删除临时业务资源。

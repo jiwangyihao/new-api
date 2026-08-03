@@ -214,6 +214,48 @@ func TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage(t *testing.T) {
 	require.Contains(t, item.ValuationWarnings, adminTimedWarningMissingGrants)
 }
 
+func TestPaidSubscriptionValueDeduplicatesOverlappingTimedGrants(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(23, 999, "EUR")
+	user := adminPaidTestUser(23, "timed-overlap")
+	sub := adminPaidTestSubscription(23, user.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	sub.StartTime = snapshot
+	sub.EndTime = snapshot + 100
+	sub.TokenLimit = 0
+	sub.TokenUsed = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&[]TimedSubscriptionValuationGrant{
+		{
+			IdempotencyKey: "timeline-overlap-order", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:23", SourceId: 23,
+			EventStartTime: snapshot, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 20_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 20_000_000, ValuationCurrency: "CNY",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+		},
+		{
+			IdempotencyKey: "timeline-overlap-admin", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:timeline-overlap-admin",
+			EventStartTime: snapshot + 50, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 10_000_000, SourceCurrency: "USD", ValuationAmountMicros: 10_000_000, ValuationCurrency: "USD",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 50,
+		},
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	response, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Equal(t, 1, response.Data.Summary.UnknownTimedSubscriptionCount)
+	require.Len(t, response.Data.Subscriptions.Items, 1)
+	item := response.Data.Subscriptions.Items[0]
+	adminPaidRequireAmount(t, item.RecognizedRemainingValueByCurrency, "CNY", 20)
+	adminPaidRequireNoCurrency(t, item.RecognizedRemainingValueByCurrency, "USD")
+	require.Contains(t, item.ValuationWarnings, adminTimedWarningOverlappingGrants)
+}
+
 func TestPaidSubscriptionValueMonthlyTokenValueUsesPlanPriceAndProratesTailByTime(t *testing.T) {
 	snapshot := time.Date(2026, 6, 6, 16, 36, 1, 0, time.UTC).Unix()
 	plan := adminPaidTestPlan(1, 40, adminPaidTestCurrencyCNY)

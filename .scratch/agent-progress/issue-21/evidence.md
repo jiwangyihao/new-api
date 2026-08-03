@@ -189,3 +189,11 @@
 - GREEN：对裁剪后的 grant coverage 合并区间做完整性检查；任一内部或边界缺口稳定返回 `missing_timed_grants` warning 与 unknown，不回退当前 Plan 的 EUR 价格。
 - GREEN 命令：`gofmt -w model/timed_subscription_analytics.go && go test ./model -run '^TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage$' -count=1 && go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
 - 结果：两个真实 SQLite tracer 均 PASS，耗时约 15.48 秒。
+
+## GREEN 11：重叠 grant 稳定去重
+
+- 测试：先创建覆盖完整剩余窗口的早期 CNY grant，再创建覆盖后半窗口的后期 USD grant。
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueDeduplicatesOverlappingTimedGrants$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 14.68 秒。
+- 观察：recognized 仅为早期 CNY 20；后期 USD 重叠秒不重复计值；subscription warning 含 `overlapping_grants`，summary unknown timed count 为 1。
+- 扩展回归：`go test ./model -run '^TestPaidSubscriptionValue' -count=1` 暴露多条旧 fixture 未创建 grant，因此按新合同得到 unknown/0；这是测试夹具迁移缺口，不是允许回退当前 Plan 价格的理由。

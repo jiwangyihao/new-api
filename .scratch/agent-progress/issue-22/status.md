@@ -96,3 +96,11 @@
 - 已停止 `issue22-browser-api` 监督进程；未打开浏览器 tab，未留下运行服务。classic `dist` 与 node_modules 均为 gitignored 构建产物。
 - 下一执行者唯一动作：用 hub 启动 `go run .`，显式 env `PORT=3112`、隔离 `SQLITE_PATH`、非默认 `SESSION_SECRET`；初始化管理员与真实领域数据后，通过 Orca 浏览器验证真实五接口页面显示 32 CNY、Credit 时间值不适用、moving-weighted、Exact/current-only，再清理服务/tab/临时 DB。
 - 严格禁止继续扩展后端、#23、FX、marker/ready；MySQL/PostgreSQL 未实测，三数据库零 SKIP 仍归 #27。
+
+## 2026-08-04 Browser-only 最终续作恢复点
+- 恢复前 HEAD：`3742bea5e5a4ea9acc20b0641923b7ba5c32fbf8`；`git status --short` 为空。
+- 本续作唯一范围：真实 `3112` 应用、隔离 SQLite、真实五接口 API、Orca 受控浏览器 smoke、窄复核与资源清理；禁止修改业务代码、测试合同、数据库 schema、支付或结算逻辑。
+- 端口：`3112`；隔离数据库：`.scratch/agent-progress/issue-22/browser-smoke.db`；监督服务名：`issue22-browser-final`。
+- `web/default/dist` 与 `web/classic/dist` 均已存在；启动前未发现残留 `browser-smoke.db`。
+- 下一动作：提交本恢复点，再按恢复合同通过 `cmd.exe` 显式注入环境并启动监督服务。
+- 当前阻塞：无。

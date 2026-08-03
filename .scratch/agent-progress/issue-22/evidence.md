@@ -115,3 +115,12 @@
 - 第二次仍未注入 `PORT`/`SQLITE_PATH`/`SESSION_SECRET`，再次因错误端口超时。协调器明确要求停止继续排障；监督进程已停止。
 - 结论：真实浏览器证据为诚实未完成，不能由组件测试/API 测试替代。下一执行者按 status 中的显式 env 启动，完成唯一剩余 smoke。
 - 数据库范围：真实 SQLite 定向测试已通过；没有可用 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN`，未运行 MySQL 5.7/PostgreSQL 9.6，不冒充三数据库 PASS。
+
+## 2026-08-04 Browser-only 最终续作恢复核对
+- `git rev-parse HEAD`：`3742bea5e5a4ea9acc20b0641923b7ba5c32fbf8`；`git status --short` 无输出。
+- `git worktree list --porcelain` 确认当前隔离树仍为 `jiwangyihao/issue-22-credit-tracer`，父集成树位于 `C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
+- 已完整读取 `credit-operational-value-issue-22-browser-recovery.md` 及其要求的 progress、执行合同、Wave 1、Issue #22、验收、Gate C 恢复、父 PRD #19 与 Issue #22；当前指令覆盖既有已完成实现步骤。
+- `web/default/dist` 与 `web/classic/dist` 均可读取；本次未重建产物，未触碰 lockfile。
+- `.scratch/agent-progress/issue-22/browser-smoke.db*` 无匹配文件，证明启动前无本续作遗留隔离数据库。
+- 固定启动合同：服务名 `issue22-browser-final`；`PORT=3112`；`SQLITE_PATH=.scratch/agent-progress/issue-22/browser-smoke.db`；非默认临时 `SESSION_SECRET` 仅注入进程环境，不落盘。
+- 当前未声明真实 API 或浏览器通过；下一步在提交恢复点后启动真实应用并验证 readiness 四项证据。

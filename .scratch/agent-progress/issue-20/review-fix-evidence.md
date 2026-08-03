@@ -43,11 +43,18 @@
 - `GrantCreditBalanceTx` 当前锁序是用户行 → 幂等 ledger 查询 → 可选未锁 `TargetPlanSnapshot` / 普通计划读取 → 用户现有权益行。订单回调明确传入从购买快照构造的 `TargetPlanSnapshot`，因此可能完全不重读权威全局 Credit plan。
 - controller 币种更新当前锁序是全局 Credit 套餐行 → `CreditValuationCurrencyLockedTx` 计数权益/估值状态/ledger。两条路径没有共享计划锁，故首个 grant 与币种更新可各自观察旧状态并同时成功。
 - 转换入口另有 `conversion_guard_version` 原子 update，但仅覆盖 conversion enablement；订单、兑换、管理员 increase 仍没有同一接缝。disabled-plan 的新 grant 拒绝分别存在于购买/兑换/转换入口，既有权益消费不经过 grant。
-- 工具卡点：读取 `model/subscription.go:1260-1335` 时 socket 断开一次；未产生文件改动，后续重试。
+- 最终方案：新增 model 计划级数据库 guard，MySQL/PostgreSQL 使用同一全局 Credit plan 行 `FOR UPDATE`，SQLite 依靠同一写事务的单写语义；grant 与币种更新都必须在任何权益/估值存在性判断或写入前调用。锁序固定为 Credit plan → 权益/估值/ledger；controller 不再私有持有冻结规则。
+- `TargetPlanSnapshot` 只保留订单定价/授予事实，不能充当当前全局 Credit plan 权威状态或绕过 guard；grant 必须按 `TargetPlanId` 重读并验证唯一计划。
+- disabled-plan 合同：新的 allocation 由共享 guard 稳定拒绝；已有权益消费不调用 allocation guard，语义保持不变。
 
 ### RED / GREEN
 
-待持久化 model guard 行为级并发测试。
+- RED：先持久化 `TestCreditBalancePlanGuardLinearizesFirstGrantAndCurrencyUpdate` 与 `TestCreditBalancePlanGuardRejectsNewAllocationWhenPlanDisabled`；旧实现因共享 guard 和稳定 allocation 错误不存在而无法构建，证明 model 接缝缺失。
+- Worker 修复：`AcquireCreditBalancePlanGuardTx` 在 MySQL/PostgreSQL 对唯一全局 Credit plan 使用 `SELECT ... FOR UPDATE`；SQLite 在同一行执行无值变化的事务写以取得单写 guard。`GuardCreditValuationCurrencyUpdateTx` 在同一 guard 下执行冻结检查；controller 只消费该 model 合同。
+- Worker GREEN：定向用例 `-count=1`、`-count=10` 与窄范围 `go test -race` 均通过。
+- 协调器接管后发现完整 controller 回归中的两个既有不可变支付快照测试失败：当前计划在下单后停用或删除时，Stripe/Epay 回调无法按已授权订单快照履约。最小复现为 `go test ./controller -run "Test(StripeCreditWebhookFulfillsImmutableSnapshotWithoutInvitation|SubscriptionEpayCreditPurchaseUsesImmutableSnapshot)" -count=1`，修复前稳定 FAIL。
+- 协调器修正：所有 allocation 先尝试取得当前全局计划 guard；新兑换、转换和管理员授予必须读取并服从当前计划状态；只有 `source_type=subscription_order` 且计划身份与 entitlement 类型匹配的不可变订单快照可在 guard 后提供履约配置，当前计划已删除时也可完成已授权订单。幂等重放先于停用拒绝，已有权益消费不经过 allocation 接缝。
+- 最终 GREEN：guard 用例 `-count=10` 通过；窄范围 `-race` 通过；上述 Stripe/Epay 最小复现通过；`go test ./model ./controller ./router -count=1` 三包全部通过。SQLite 使用真实文件数据库、WAL 与单写事务证明合法串行结果；未把它宣称为 MySQL/PostgreSQL 行锁实测。
 
 ## 外部数据库边界
 

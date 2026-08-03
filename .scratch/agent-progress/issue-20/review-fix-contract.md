@@ -16,11 +16,11 @@
 
 ## Finding 3：共享计划级线性化接缝
 
-- 共享深模块接口应在事务内锁定并重读唯一全局 Credit 套餐；grant 与币种更新都必须调用它，不能信任 `TargetPlanSnapshot` 作为计划权威状态。
-- 统一计划级顺序以“先锁全局 Credit 套餐”为业务线性化点；guard 内再检查权益/估值状态/ledger，之后各入口继续其既有用户、订单、兑换或源权益锁。
-- 所有生产 allocation 汇聚到 `GrantCreditBalanceTx`，因此在该入口强制 guard 即可覆盖订单、兑换、转换和管理员 increase；recovery/decrease 不创建首个 Credit 权益，不扩大本 finding。
-- 合法串行结果仅为：币种先提交，后续首个 grant 重读新币种；或首个 grant 先提交，随后币种更新返回 `ErrCreditValuationCurrencyLocked`。
-- disabled-plan 既有权益消费语义不变；新购买、兑换、转换和管理员 grant 的既有拒绝边界必须保留。
+- `AcquireCreditBalancePlanGuardTx(tx)` 是 allocation 与 valuation_currency 更新唯一共享线性化接缝：MySQL/PostgreSQL 锁定唯一全局 Credit plan 行，SQLite 通过同一行的事务写取得单写 guard。
+- `GuardCreditValuationCurrencyUpdateTx(tx, currency)` 在计划 guard 内判断权益、估值状态与 ledger；controller 不再拥有私有冻结规则。
+- `GrantCreditBalanceTx` 的共享锁序固定为全局 Credit plan → 用户 → Credit 权益/ledger；它必须先获取当前全局计划 guard，并按 `TargetPlanId` 校验权威计划身份。
+- 新购买、兑换、转换和管理员授予读取当前计划状态，停用计划拒绝新的 allocation。已经由不可变订单快照授权、等待支付回调的订单仍按其 `TargetPlanSnapshot` 履约；快照不能跳过计划 guard 或改变全局计划身份。
+- 合法串行结果仅为：币种先提交，后续首个 grant 在 guard 后使用相应授权事实；或首个 grant 先提交，随后币种更新返回 `ErrCreditValuationCurrencyLocked`。幂等重放与已有权益消费保持可用。
 
 ## 明确非所有权
 

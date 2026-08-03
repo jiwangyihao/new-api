@@ -8,7 +8,7 @@
 
 ## 当前阶段
 
-Finding 2 已 GREEN 并提交；Finding 3 调查中。已确认所有生产 Credit allocation 都汇聚到 `model.GrantCreditBalanceTx`，但该函数当前先锁用户、随后可信任未锁 `TargetPlanSnapshot`，未与 controller 的币种更新共享套餐行锁。
+三项 Standards finding 均已 GREEN。协调器停止无界 Worker 后直接审阅差异，发现并修复不可变支付快照履约回归；后端三包、前端定向/typecheck、重复并发与窄范围 race 均通过，当前进入提交与冻结新 HEAD。
 
 ## RED / GREEN
 
@@ -16,23 +16,23 @@ Finding 2 已 GREEN 并提交；Finding 3 调查中。已确认所有生产 Cred
 | --- | --- | --- | --- |
 | 1. 禁止从 JavaScript Number 伪造历史 micros | 前端与后端 RED 已复现 | 前端 13/13、后端定向测试通过 | GREEN |
 | 2. 关键 schema 变化 fail-closed | SQLite 伪装 MySQL 元数据失败时 `migrateDB` 曾继续 | 错误传播且历史 micros 保持 NULL | GREEN，已提交 |
-| 3. 币种冻结与首个 Credit 权益共享线性化接缝 | 入口与锁序已定位 | 待 RED / GREEN | 调查中 |
+| 3. 币种冻结与首个 Credit 权益共享线性化接缝 | guard 接缝缺失时确定性交错测试无法构建 | `-count=10`、窄范围 `-race`、不可变订单回调与后端三包回归通过 | GREEN |
 
 ## 下一条命令
 
-继续读取订单完成事务锁序，定义 model 计划级 guard，并先写并发/事务 RED 测试。
+运行前端 production build 与 `git diff --check`，提交协调器接管后的 Finding 3 修复和最终证据，确认 clean tree。
 
 ## 阻塞与工具卡点
 
-无业务阻塞。读取 `model/subscription.go:1260-1335` 时工具 socket 曾断开一次；工作树当时 clean，重试即可。
+无业务阻塞。
 
 ## 最近安全提交
 
-最近安全提交：`929cedb60`（Finding 2）；此前 `947b412ba`（Finding 1）、`f160e8a10`（恢复记录）。当前 HEAD `929cedb6092da7305a48b1b91728f9f73e2fbbbd`。
+最近安全提交：`eb5470059`（Finding 3 调查合同）；此前 `929cedb60`（Finding 2）、`947b412ba`（Finding 1）、`f160e8a10`（恢复记录）。Finding 3 与协调器回归修复待本次提交。
 
 ## 未提交现场
 
-持久化前 `git status --short` 无输出：staged 0、unstaged 0、untracked 0。本次仅修改三份 review-fix 进度文件以保存调查进展。
+共享 guard、controller 接缝、确定性交错/停用计划测试、不可变订单快照兼容修复及三份进度证据均为已跟踪文件；无未跟踪文件。原修复 Worker 已由协调器停止，不再等待 `worker_done`。
 
 ## 范围边界
 

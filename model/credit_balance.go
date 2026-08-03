@@ -212,6 +212,14 @@ func GetCreditBalancePlanTx(tx *gorm.DB) (*SubscriptionPlan, error) {
 	return &plan, nil
 }
 
+func authorizedCreditBalanceOrderPlanSnapshot(request CreditBalanceGrantRequest) (*SubscriptionPlan, bool) {
+	plan := request.TargetPlanSnapshot
+	if request.SourceType != CreditBalanceLedgerSourceSubscriptionOrder || plan == nil || plan.Id != request.TargetPlanId || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
+		return nil, false
+	}
+	return plan, true
+}
+
 func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*CreditBalanceGrantResult, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
@@ -226,6 +234,21 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		return nil, errors.New("invalid credit balance grant")
 	}
 
+	guardedPlan, err := AcquireCreditBalancePlanGuardTx(tx)
+	authorizedPlan, hasAuthorizedPlan := authorizedCreditBalanceOrderPlanSnapshot(request)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) || !hasAuthorizedPlan {
+			return nil, err
+		}
+		guardedPlan = nil
+	} else if guardedPlan.Id != request.TargetPlanId {
+		return nil, errors.New("credit balance target plan mismatch")
+	}
+	plan := guardedPlan
+	if hasAuthorizedPlan {
+		plan = authorizedPlan
+	}
+
 	var user User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "setting").Where("id = ?", request.UserId).First(&user).Error; err != nil {
 		return nil, err
@@ -235,18 +258,10 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	} else if found {
 		return result, nil
 	}
+	if !hasAuthorizedPlan && !plan.Enabled {
+		return nil, ErrCreditBalanceAllocationUnavailable
+	}
 
-	plan := request.TargetPlanSnapshot
-	if plan == nil {
-		var err error
-		plan, err = GetCreditBalancePlanTx(tx)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if plan.Id != request.TargetPlanId || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
-		return nil, errors.New("credit balance target plan mismatch")
-	}
 	hadUsableSubscription, err := hasUsableSubscriptionTx(tx, request.UserId)
 	if err != nil {
 		return nil, err

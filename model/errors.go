@@ -15,6 +15,7 @@ var (
 	ErrCreditValuationCurrencyRequired    = errors.New("credit_valuation_currency_required")
 	ErrCreditValuationUnsupportedCurrency = errors.New("credit_valuation_unsupported_currency")
 	ErrCreditValuationCurrencyLocked      = errors.New("credit_valuation_currency_locked")
+	ErrCreditBalanceAllocationUnavailable = errors.New("credit_balance_allocation_unavailable")
 	ErrSubscriptionPlanPriceInvalid       = errors.New("subscription_plan_price_invalid")
 	ErrSubscriptionPlanPriceNegative      = errors.New("subscription_plan_price_negative")
 	ErrSubscriptionPlanPricePrecision     = errors.New("subscription_plan_price_precision")

@@ -649,18 +649,9 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 	}
 	var updated model.SubscriptionPlan
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		var plan model.SubscriptionPlan
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error; err != nil {
+		plan, err := model.GuardCreditValuationCurrencyUpdateTx(tx, currency)
+		if err != nil {
 			return err
-		}
-		if plan.ValuationCurrency != nil && !strings.EqualFold(*plan.ValuationCurrency, currency) {
-			locked, err := model.CreditValuationCurrencyLockedTx(tx)
-			if err != nil {
-				return err
-			}
-			if locked {
-				return model.ErrCreditValuationCurrencyLocked
-			}
 		}
 		var businessCodeValue any
 		if businessCode != "" {

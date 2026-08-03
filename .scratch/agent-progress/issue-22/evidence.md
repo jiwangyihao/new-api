@@ -46,3 +46,9 @@
 - micros 与多币种 DTO：后端聚合和排序使用 `int64` micros，JSON 权威金额为十进制字符串 `amount_micros`；兼容 `amount` 只由 micros 派生。summary/user/plan/source 的 `*_by_currency` 保持数组形状，可按原币种并列承载，不跨币种相加。
 - current-only 边界：当 `CreditValuationState.updated_at > snapshot_at` 时，返回最新状态、版本和 `snapshot_semantics=current_only`，不伪造历史回放。现有 paid-value 查询签名与顶层 warning shape 未扩展；UI 只把该稳定语义显示为非阻断提示。
 - 范围边界：#22 仅验证 CNY→CNY；不实现运行时 FX、汇率字段写入、marker 创建/CAS/状态转换或启动自动 ready。
+
+## 2026-08-04 默认前端恢复 RED
+- 恢复提交：`7f5455011`；后端安全点已覆盖订单冻结来源、人民币余额/受控完成入口、真实 `request_id` 消费和五接口 32 CNY。
+- RED 命令：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts`。
+- RED 结果：`13 pass / 3 fail`。`amount=999, amount_micros=32000000` 实际显示 `¥999.00`；`amount_micros=9007199254740993000000` 实际显示 `$0.00`；Credit 明细缺少 exact 字段与本地化语义值。
+- 后续 GREEN 仅改 `web/default` 通用 micros/BigInt、Credit UI、current-only 与 i18n；不再扩张后端或 #23–#28 范围。

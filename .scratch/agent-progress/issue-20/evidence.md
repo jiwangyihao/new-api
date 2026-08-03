@@ -30,6 +30,8 @@
 - RED：管理员创建对缺少 micros、负数、超过六位小数、micros 溢出、兼容值不一致均未提供稳定 code，且三类非法请求会落库。
 - GREEN：原始 JSON 十进制文本进入统一价格模块；上述请求在写事务前按 `subscription_plan_price_*`/`credit_valuation_overflow` 稳定 code 原子拒绝。
 - GREEN：`TestAdminUpdateSubscriptionPlanRoundTripsExactPriceMicros` 证明编辑同时写兼容 DECIMAL 与权威 micros，随后管理列表刷新返回同一 micros 字符串。
+- RED：Credit 计划首次配置缺少/使用 EUR 时仍成功；已有 Credit 权益后从 CNY 改 USD 还连带修改其他配置。
+- GREEN：专用接口只接受 CNY/USD，首次配置必填；事务锁定计划并检查 Credit 权益、估值状态或账本，存量存在时返回 `credit_valuation_currency_locked` 并回滚全部字段。
 
 当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
 ## 最终验证待办

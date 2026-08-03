@@ -204,6 +204,45 @@ func TestAdminCreditBalancePlanRejectsEnabledEntryBeforeConfiguration(t *testing
 	assert.Contains(t, recorder.Body.String(), "必须先确认 Credit 余额套餐配置")
 }
 
+func TestAdminCreditBalancePlanRequiresSupportedValuationCurrencyOnFirstConfiguration(t *testing.T) {
+	tests := []struct {
+		name     string
+		currency string
+		wantCode string
+	}{
+		{name: "missing", wantCode: "credit_valuation_currency_required"},
+		{name: "unsupported", currency: `,"valuation_currency":"EUR"`, wantCode: "credit_valuation_unsupported_currency"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupSubscriptionAdminPlanFieldsTest(t)
+			seedCreditBalancePlanForAdminTest(t)
+			body := `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false` + test.currency + `}`
+
+			recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, body)
+
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			assert.Contains(t, recorder.Body.String(), `"code":"`+test.wantCode+`"`)
+		})
+	}
+}
+
+func TestAdminCreditBalancePlanFreezesValuationCurrencyAfterCreditEntitlement(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	plan := seedCreditBalancePlanForAdminTest(t)
+	configured := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"CNY"}`)
+	require.Contains(t, configured.Body.String(), `"success":true`)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: 3001, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementCreditBalance, Status: model.SubscriptionStatusActive}).Error)
+
+	recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":99,"queue_capacity":99,"business_code":"changed","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"USD"}`)
+
+	assert.Contains(t, recorder.Body.String(), `"code":"credit_valuation_currency_locked"`)
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	assert.Equal(t, "CNY", plan.Currency)
+	assert.Equal(t, 7, plan.ConcurrencyLimit, "currency rejection must roll back all plan fields")
+	assert.Equal(t, 13, plan.QueueCapacity)
+}
+
 func TestAdminOrdinaryPlanAPIsCannotMutateCreditBalanceIdentity(t *testing.T) {
 	setupSubscriptionAdminPlanFieldsTest(t)
 	plan := seedCreditBalancePlanForAdminTest(t)

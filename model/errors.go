@@ -9,14 +9,17 @@ var (
 
 // Credit valuation errors
 var (
-	ErrCreditValuationDivisionByZero  = errors.New("credit_valuation_division_by_zero")
-	ErrCreditValuationOverflow        = errors.New("credit_valuation_overflow")
-	ErrCreditValuationNegativeInput   = errors.New("credit_valuation_negative_input")
-	ErrSubscriptionPlanPriceInvalid   = errors.New("subscription_plan_price_invalid")
-	ErrSubscriptionPlanPriceNegative  = errors.New("subscription_plan_price_negative")
-	ErrSubscriptionPlanPricePrecision = errors.New("subscription_plan_price_precision")
-	ErrSubscriptionPlanPriceRequired  = errors.New("subscription_plan_price_micros_required")
-	ErrSubscriptionPlanPriceMismatch  = errors.New("subscription_plan_price_mismatch")
+	ErrCreditValuationDivisionByZero      = errors.New("credit_valuation_division_by_zero")
+	ErrCreditValuationOverflow            = errors.New("credit_valuation_overflow")
+	ErrCreditValuationNegativeInput       = errors.New("credit_valuation_negative_input")
+	ErrCreditValuationCurrencyRequired    = errors.New("credit_valuation_currency_required")
+	ErrCreditValuationUnsupportedCurrency = errors.New("credit_valuation_unsupported_currency")
+	ErrCreditValuationCurrencyLocked      = errors.New("credit_valuation_currency_locked")
+	ErrSubscriptionPlanPriceInvalid       = errors.New("subscription_plan_price_invalid")
+	ErrSubscriptionPlanPriceNegative      = errors.New("subscription_plan_price_negative")
+	ErrSubscriptionPlanPricePrecision     = errors.New("subscription_plan_price_precision")
+	ErrSubscriptionPlanPriceRequired      = errors.New("subscription_plan_price_micros_required")
+	ErrSubscriptionPlanPriceMismatch      = errors.New("subscription_plan_price_mismatch")
 )
 
 // User auth errors

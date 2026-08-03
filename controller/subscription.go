@@ -591,6 +591,7 @@ type AdminUpdateCreditBalancePlanRequest struct {
 	PurchaseEnabled   bool   `json:"purchase_enabled"`
 	RedemptionEnabled bool   `json:"redemption_enabled"`
 	ConversionEnabled bool   `json:"conversion_enabled"`
+	ValuationCurrency string `json:"valuation_currency"`
 }
 
 func getCreditBalancePlan() (*model.SubscriptionPlan, error) {
@@ -633,39 +634,57 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "必须先确认 Credit 余额套餐配置")
 		return
 	}
-	plan, err := getCreditBalancePlan()
+	currency, err := model.NormalizeCreditValuationCurrency(req.ValuationCurrency)
 	if err != nil {
-		common.ApiError(c, err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Credit 估值币种必须为 CNY 或 USD", "code": err.Error()})
 		return
 	}
-	var businessCodeValue any
-	if businessCode != "" {
-		businessCodeValue = businessCode
-	}
-	updates := map[string]any{
-		"model_limits":                      "",
-		"concurrency_limit":                 req.ConcurrencyLimit,
-		"queue_capacity":                    req.QueueCapacity,
-		"business_code":                     businessCodeValue,
-		"credit_balance_configured":         req.Configured,
-		"credit_balance_purchase_enabled":   req.PurchaseEnabled,
-		"credit_balance_redemption_enabled": req.RedemptionEnabled,
-		"credit_balance_conversion_enabled": req.ConversionEnabled,
-		"updated_at":                        common.GetTimestamp(),
-	}
-	if err := model.DB.Model(&model.SubscriptionPlan{}).
-		Where("id = ? AND entitlement_type = ?", plan.Id, model.SubscriptionEntitlementCreditBalance).
-		Updates(updates).Error; err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	model.InvalidateSubscriptionPlanCache(plan.Id)
-	updated, err := getCreditBalancePlan()
+	var updated model.SubscriptionPlan
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		var plan model.SubscriptionPlan
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error; err != nil {
+			return err
+		}
+		if plan.CreditBalanceConfigured && !strings.EqualFold(plan.Currency, currency) {
+			locked, err := model.CreditValuationCurrencyLockedTx(tx)
+			if err != nil {
+				return err
+			}
+			if locked {
+				return model.ErrCreditValuationCurrencyLocked
+			}
+		}
+		var businessCodeValue any
+		if businessCode != "" {
+			businessCodeValue = businessCode
+		}
+		updates := map[string]any{
+			"model_limits":                      "",
+			"currency":                          currency,
+			"concurrency_limit":                 req.ConcurrencyLimit,
+			"queue_capacity":                    req.QueueCapacity,
+			"business_code":                     businessCodeValue,
+			"credit_balance_configured":         req.Configured,
+			"credit_balance_purchase_enabled":   req.PurchaseEnabled,
+			"credit_balance_redemption_enabled": req.RedemptionEnabled,
+			"credit_balance_conversion_enabled": req.ConversionEnabled,
+			"updated_at":                        common.GetTimestamp(),
+		}
+		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.First(&updated, plan.Id).Error
+	})
 	if err != nil {
+		if errors.Is(err, model.ErrCreditValuationCurrencyLocked) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "已有 Credit 估值数据，不能修改估值币种", "code": err.Error()})
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, updated)
+	model.InvalidateSubscriptionPlanCache(updated.Id)
+	common.ApiSuccess(c, &updated)
 }
 
 func validateTimedPlanCreditEligibility(plan *model.SubscriptionPlan) string {

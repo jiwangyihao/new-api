@@ -83,6 +83,49 @@ func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testi
 	require.Equal(t, int64(1), grantCount)
 }
 
+func TestTimedSubscriptionValuationGrantNormalizesIdentityBeforePersistAndReplay(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_052, Title: "Normalized Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_051, Username: "timed-normalized", Status: common.UserStatusEnabled, AffCode: "timed-normalized-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	request := TimedSubscriptionGrantRequest{
+		UserId: 21_051, Plan: &plan, IdempotencyKey: "  subscription_order:21053  ",
+		SourceType: "  subscription_order  ", SourceId: 21_053,
+		SourcePriceMicros: priceMicros, SourceCurrency: " cny ",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&grant).Error)
+	require.Equal(t, "subscription_order:21053", grant.IdempotencyKey)
+	require.Equal(t, TimedSubscriptionGrantSourceOrder, grant.SourceType)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+
+	request.IdempotencyKey = "subscription_order:21053"
+	request.SourceType = TimedSubscriptionGrantSourceOrder
+	request.SourceCurrency = "CNY"
+	var replay *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		replay, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
 func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *testing.T) {
 	setupTimedSubscriptionValuationTestDB(t)
 	priceMicros := int64(40_000_000)

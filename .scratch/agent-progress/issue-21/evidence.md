@@ -134,3 +134,11 @@
 - 不可变：真实 SQLite 上 GORM update/delete 均被模型 hook 拒绝，grant 原金额仍保留。
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 14.49 秒。
+
+## GREEN 8：规范化身份落库与重放
+
+- grant 落库、快照和查重统一使用 `normalized.request`；带前后空白的 idempotency/source/currency 分别持久化为 `subscription_order:21053`、`subscription_order`、`CNY`。
+- 使用无空白的同一身份重试返回既有权益，grant 数量保持 1，不再次续期。
+- 新来源资格锁定后完整读取数据库 Plan；期限、重置和 Credit 使用数据库事实，来源价格/币种仍来自调用方冻结值。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1 && go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1`。
+- 结果：两包均 PASS，耗时约 25.97 秒。

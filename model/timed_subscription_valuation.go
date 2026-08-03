@@ -133,16 +133,16 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 		return nil, err
 	}
 	grant := &TimedSubscriptionValuationGrant{
-		IdempotencyKey:        request.IdempotencyKey,
+		IdempotencyKey:        normalized.request.IdempotencyKey,
 		UserSubscriptionId:    creation.Subscription.Id,
-		UserId:                request.UserId,
-		PlanId:                request.Plan.Id,
-		SourceType:            request.SourceType,
+		UserId:                normalized.request.UserId,
+		PlanId:                normalized.request.Plan.Id,
+		SourceType:            normalized.request.SourceType,
 		SourceKey:             normalized.sourceKey,
-		SourceId:              request.SourceId,
+		SourceId:              normalized.request.SourceId,
 		EventStartTime:        creation.EventStartTime,
 		EventEndTime:          creation.EventEndTime,
-		GrantCredit:           request.Plan.MonthlyTokenLimit,
+		GrantCredit:           normalized.request.Plan.MonthlyTokenLimit,
 		SourcePriceMicros:     normalized.priceMicros,
 		SourceCurrency:        normalized.sourceCurrency,
 		ValuationAmountMicros: normalized.priceMicros,

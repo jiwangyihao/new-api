@@ -88,6 +88,22 @@ summary/users/subscriptions/plans/sources 使用同一 timed 行投影。来源�
 
 实际触碰的共享文件将在实现过程中逐项补充。
 
+### 实际共享增量
+
+- `dto/admin_analytics.go`：因 Issue #22 通用 DTO 尚未集成，本切片只增加 timed 必需的 nullable singular、`*_by_currency`、`amount_micros`、timed unknown/warnings 字段；未实现 Credit 状态或 Credit 分支。集成时以 #22 通用骨架为主，保留这些 timed 字段与 null 语义。
+
+## timed 五接口计算器恢复合同
+
+- 独立文件：`model/timed_subscription_analytics.go`；入口 `adminCalculateTimedSubscriptionValue(sub, grants, snapshotAt)`，不读取当前 Plan 价格。
+- 输入排序：按 grant `created_at,id`，最早记录覆盖重叠秒；后续重叠区间不计值并产生稳定 `overlapping_grants` warning/unknown。
+- 窗口：每条 grant 与 `[snapshot_at, subscription.end_time)` 相交；管理员缩短或失效后的实际 `end_time` 直接裁剪。
+- 金额：全程 `int64` micros 和 `mulDivFloor`；逐 `valuation_currency` 计算 time/token/recognized，禁止跨币种相加。
+- token：`token_limit<=0` 时 token 不可用，recognized=time；否则当前周期按 `max(token_limit-token_used,0)/token_limit` 折减，`NextResetTime` 之后的未来区间完整。
+- 来源：按 grant `source_type` 映射 order/redemption/admin/unknown；一条权益含多个来源时权益 `source_attribution=mixed_grants`，source endpoint 分别归集。
+- 缺 grant/非法 grant：返回 unknown/warning，不回退当前 Plan 价格。
+- 五接口最窄接线待完成：paid row 需携带逐币种值与来源投影，summary/users/subscriptions/plans/sources 必须复用同一 row；跨币种 subscription singular 为 null，单币种才保留兼容 singular。
+- 当前真实 RED fixture：Plan=`999 EUR`；grants=`40 CNY` + `10 USD`；50% 当前 Credit；预期 recognized=`10 CNY + 5 USD` 且无 EUR。
+
 ## 明确非所有权
 
 不实现 Credit 请求通用结算、Credit 正向入账、破坏性恢复、转换 FX/在途结算、历史回填、migration ready 切换、三数据库发布门禁或生产部署；不改变计时→Credit 转换数量公式；不新增退款自动撤销或 grant reversal schema。

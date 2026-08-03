@@ -42,7 +42,7 @@ func setupAdminAnalyticsTestDBs(t *testing.T) adminAnalyticsModelTestDBs {
 
 	DB = businessDB
 	LOG_DB = logDB
-	require.NoError(t, DB.AutoMigrate(&User{}, &Token{}, &SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &InvitationMonthlyEntitlement{}, &InvitationRewardEvent{}, &Channel{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &Token{}, &SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &TimedSubscriptionValuationGrant{}, &InvitationMonthlyEntitlement{}, &InvitationRewardEvent{}, &Channel{}))
 	require.NoError(t, LOG_DB.AutoMigrate(&Log{}))
 
 	t.Cleanup(func() {

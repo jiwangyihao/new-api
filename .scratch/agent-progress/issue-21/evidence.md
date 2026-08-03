@@ -142,3 +142,14 @@
 - 新来源资格锁定后完整读取数据库 Plan；期限、重置和 Credit 使用数据库事实，来源价格/币种仍来自调用方冻结值。
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1 && go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1`。
 - 结果：两包均 PASS，耗时约 25.97 秒。
+
+## RED 9：timed grant 五接口时间线
+
+- 测试：`TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews`，真实 SQLite 创建当前 Plan=`999 EUR`，同一 timed 权益含 `40 CNY` 与 `10 USD` 两条首尾相接 grant，当前 Credit 剩余 50%。
+- 预期：summary/users/subscriptions/plans/sources 统一只读 grant；recognized 为 `10 CNY + 5 USD`，不得出现 EUR。
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 观察 RED：CNY 期望 10、实际 0，证明现有 paid row 仍按查询时当前 Plan 价格/币种计算。
+- 已创建 `model/timed_subscription_analytics.go`：按 `CreatedAt,Id` 最早 grant 去重、实际 `end_time` 裁剪、当前周期 Credit 比例、逐币种 time/token/recognized、按 grant source 投影、missing/invalid/overlap warning。
+- 曾观察编译错误：新文件自定义 `minInt64/maxInt64` 与 `model/credit_balance.go` 重复；已删除重复 helper，改为复用现有包内函数。尚未接入五接口，因此当前保持 RED，不能记录为 GREEN。
+- `dto/admin_analytics.go` 当前只落盘 timed 最窄字段：`amount_micros`、nullable singular、三组 `*_by_currency`、timed confidence/warnings/unknown count；尚未验证编译兼容与五接口响应。
+- 最窄测试重跑首次停在编译层：nullable singular DTO 尚未同步现有 row builder/sorter，错误位于 `admin_analytics_paid_subscription.go:826,827,970`（值/指针类型不匹配）。该半接线不是可恢复安全状态；安全提交前撤回 DTO 代码增量，只在 contract 保留冻结 shape，确保测试回到业务 RED 而非编译 RED。

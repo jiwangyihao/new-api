@@ -90,3 +90,11 @@
 - GREEN：`go test ./controller -run TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation -count=1` 返回 `go test: 1 packages ok`。
 - 冻结改价证据：订单创建后数据库当前档位更新为 `price_amount=99`、`price_amount_micros=99000000` 且 `enabled=false`；签名 webhook 后 ledger/state 仍 exact=`40000000` CNY、available=1000、version=1。
 - 幂等/资格证据：同一签名 payload 重放仍只有 ledger/state 各 1；已授权订单履约成功，新 disabled 档位 checkout 返回“套餐未启用”，订单总数仍为 1。
+
+## 2026-08-04 BillingSession 同步 200 RED→GREEN
+- RED：在真实 Kyren 购买用例继续调用 `PreConsumeBilling` 与 `SettleBillingWithInput`；预扣后状态已正确变为 800/32000000，但最终结算后记录仍为 `status=consumed`、`finalized_at=0`。证明 BillingSession 未接到已有最小 request target seam。
+- GREEN 实现：`SubscriptionPreConsumeResult` 只返回本次预扣是否由 Credit 估值跟踪；`SubscriptionFunding` 保存该事实，并在 `BillingSession.SettleWithInput` 调用既有 `SettleCreditRequestTarget(request_id,target,true)`。普通 timed/legacy funding 保持原 delta 路径。
+- GREEN 主命令：`go test ./controller -run TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation -count=1` 返回 `go test: 1 packages ok`。
+- 主链路观察：真实 `relayInfo.RequestId=kyren-credit-billing-session-200`；预扣记录 applied=200、deducted_exact=8000000、valuation_subscription_id=真实 Credit entitlement；最终 status=settled、finalized_at 非零、settlement_version=1。
+- 持久化重放：重新构造第二个 `RelayInfo` / `BillingSession`，复用同一 request_id 与目标 200；`PreConsumeBilling` 读取既有预扣记录，`SettleBillingWithInput` 再次进入深模块幂等路径，finalized_at/settlement_version/state_version 均不变。主命令再次返回 `go test: 1 packages ok`。
+- 定向回归：`go test ./model ./service ./controller -run 'Test(CreditValuationRequestFinalizesSameTargetIdempotently|SubscriptionBillingPreConsumesEstimatedTokens|SubscriptionBillingSettleAvoidsHotSubscriptionRead|SettleBillingWithInputDoesNotUsePreConsumeQuotaWhenEstimateMissing|CreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve|SubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation)' -count=1` 返回 `go test: 3 packages ok`。

@@ -1836,6 +1836,7 @@ type SubscriptionPreConsumeResult struct {
 	TokenUsedAfter             int64
 	TokenRemaining             int64
 	DistributorTokenBilling    bool
+	CreditValuationTracked     bool
 	ConcurrencyLimit           int
 	QueueCapacity              int
 	PlanId                     int
@@ -2884,6 +2885,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 				return err
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
+			returnValue.CreditValuationTracked = existing.ValuationSubscriptionId > 0
 			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
 			return nil
 		}
@@ -2956,6 +2958,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return err
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
+		returnValue.CreditValuationTracked = record.ValuationSubscriptionId > 0
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
 	}

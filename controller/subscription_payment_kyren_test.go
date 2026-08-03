@@ -16,7 +16,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -374,6 +378,66 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	assert.Zero(t, timedCount)
 	var eventCount int64
 	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+
+	const requestID = "kyren-credit-billing-session-200"
+	billingRecorder := httptest.NewRecorder()
+	billingContext, _ := gin.CreateTestContext(billingRecorder)
+	billingContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          userID,
+		OriginModelName: "gpt-4o",
+		RequestId:       requestID,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_only"},
+	}
+	relayInfo.SetEstimatePromptTokens(200)
+	require.Nil(t, service.PreConsumeBilling(billingContext, 200, relayInfo))
+	require.IsType(t, &service.BillingSession{}, relayInfo.Billing)
+	assert.Equal(t, ledger.UserSubscriptionId, relayInfo.SubscriptionId)
+	assert.Equal(t, int64(200), relayInfo.SubscriptionPreConsumed)
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(800), state.AvailableCredit)
+	assert.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	assert.Zero(t, state.EstimatedCostMicros)
+	assert.Zero(t, state.UnknownCredit)
+	assert.Equal(t, int64(2), state.StateVersion)
+	var preConsume model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, int64(200), preConsume.AppliedCredit)
+	assert.Equal(t, int64(8_000_000), preConsume.DeductedExactCostMicros)
+	assert.Equal(t, requestID, preConsume.RequestId)
+	assert.Equal(t, ledger.UserSubscriptionId, preConsume.ValuationSubscriptionId)
+	assert.Equal(t, int64(1), preConsume.SettlementVersion)
+
+	require.NoError(t, service.SettleBillingWithInput(billingContext, relayInfo, service.BillingSettleInput{
+		WalletQuota:        200,
+		SubscriptionTokens: 200,
+	}))
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, "settled", preConsume.Status)
+	assert.NotZero(t, preConsume.FinalizedAt)
+	finalizedAt := preConsume.FinalizedAt
+	settlementReplayInfo := &relaycommon.RelayInfo{
+		UserId:          userID,
+		OriginModelName: "gpt-4o",
+		RequestId:       requestID,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_only"},
+	}
+	settlementReplayInfo.SetEstimatePromptTokens(200)
+	require.Nil(t, service.PreConsumeBilling(billingContext, 200, settlementReplayInfo))
+	require.IsType(t, &service.BillingSession{}, settlementReplayInfo.Billing)
+	require.NoError(t, service.SettleBillingWithInput(billingContext, settlementReplayInfo, service.BillingSettleInput{
+		WalletQuota:        200,
+		SubscriptionTokens: 200,
+	}))
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, finalizedAt, preConsume.FinalizedAt)
+	assert.Equal(t, int64(1), preConsume.SettlementVersion)
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(800), state.AvailableCredit)
+	assert.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	assert.Equal(t, int64(2), state.StateVersion)
 	assert.Zero(t, eventCount)
 }
 

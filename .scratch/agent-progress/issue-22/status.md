@@ -73,3 +73,10 @@
 - 真实 HMAC 签名 `order.paid` webhook 仍按订单快照履约；state/ledger exact 均为 `40,000,000`，重复 webhook 后只有一条 ledger、一行 state 且 version=1。
 - 已授权订单按冻结快照履约；同一 disabled 档位的新 checkout 被拒绝且不创建第二张订单。
 - 下一步：从此真实 Kyren 购买结果经 BillingSession 的真实 request_id 同步预扣/结算目标 200。
+
+## 2026-08-04 Gate C BillingSession GREEN
+- 从真实 Kyren webhook 入账得到的 1,000 Credit 状态继续走 `PreConsumeBilling`，`relayInfo.RequestId=kyren-credit-billing-session-200` 传播到 `SubscriptionFunding` 与 `SubscriptionPreConsumeRecord`。
+- BillingSession 足额预扣 200 后，状态为 available=800、exact=32000000、estimated=0、unknown=0、version=2；请求快照扣除 exact=8000000。
+- `SettleBillingWithInput` 现通过 `SubscriptionFunding` 的窄 seam 识别已跟踪 Credit 请求，以相同累计目标 200 调用既有深模块最终化；新建第二个 BillingSession 并复用同一 request_id/目标后，数量、价值、version 与 finalized_at 均不变。
+- 保持范围：仅同目标一次同步最终化；未实现 target 增减、少结算、退款、异步 identity、coalescer 或 FX。
+- Gate C 三段已闭环；下一步提交安全点并收敛既有 RouterProvider UI RED。

@@ -63,3 +63,11 @@
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 11.57 秒。
 - 权威来源检查：grant、source snapshot 与冲突指纹均使用请求中的 micros/原币种，不从当前 Plan 标价推导。
+
+## GREEN 2：冲突与续期追加
+
+- 测试：`TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal`。
+- 同一幂等键把冻结价格从 `40,000,000` 改为 `50,000,000` 时返回 `ErrTimedSubscriptionGrantIdempotencyMismatch`，事务后权益 `end_time` 不变。
+- 第二个稳定订单来源使用新 key，续期窗口从上一 grant 结束时开始，并追加 USD grant；历史 CNY grant 的金额与币种保持不变。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(CreatesTimelineAndReplaysSource|RejectsConflictAndAppendsRenewal)$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 10.92 秒。

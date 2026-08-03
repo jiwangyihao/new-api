@@ -83,6 +83,63 @@ func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testi
 	require.Equal(t, int64(1), grantCount)
 }
 
+func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_102, Title: "Timed Pro", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_101, Username: "timed-renew", Status: common.UserStatusEnabled, AffCode: "timed-renew-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	firstRequest := TimedSubscriptionGrantRequest{
+		UserId: 21_101, Plan: &plan, IdempotencyKey: "subscription-order:21103",
+		SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_103,
+		SourcePriceMicros: priceMicros, SourceCurrency: "CNY",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, firstRequest)
+		return err
+	}))
+
+	conflict := firstRequest
+	conflict.SourcePriceMicros = 50_000_000
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, conflict)
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantIdempotencyMismatch)
+	var afterConflict UserSubscription
+	require.NoError(t, DB.First(&afterConflict, first.Subscription.Id).Error)
+	require.Equal(t, first.EventEndTime, afterConflict.EndTime)
+
+	renewalRequest := firstRequest
+	renewalRequest.IdempotencyKey = "subscription-order:21104"
+	renewalRequest.SourceId = 21_104
+	renewalRequest.SourcePriceMicros = 50_000_000
+	renewalRequest.SourceCurrency = "USD"
+	var renewal *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		renewal, err = GrantTimedSubscriptionTx(tx, renewalRequest)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, renewal.Subscription.Id)
+	require.Equal(t, first.EventEndTime, renewal.EventStartTime)
+	require.Equal(t, int64(3600), renewal.EventEndTime-renewal.EventStartTime)
+
+	var grants []TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Order("id asc").Find(&grants).Error)
+	require.Len(t, grants, 2)
+	require.Equal(t, []string{"CNY", "USD"}, []string{grants[0].ValuationCurrency, grants[1].ValuationCurrency})
+	require.Equal(t, []int64{40_000_000, 50_000_000}, []int64{grants[0].ValuationAmountMicros, grants[1].ValuationAmountMicros})
+}
+
 func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	t.Helper()
 	oldDB := DB

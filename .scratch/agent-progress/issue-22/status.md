@@ -87,3 +87,12 @@
 - 修复两个已有 TypeScript nullable 映射错误：仅收紧 `adminAnalyticsCreditOverviewValues` 与 `adminAnalyticsCreditRankingValue` 的返回类型，实际实现本就总返回 string。
 - 新增 22 个 Credit 分析可见键，en/zh/fr/ja/ru/vi 全部存在且非空；`i18n:sync` 对六语言均为 missing=0、extras=0。
 - `bun run typecheck` 与 `bun run build` 已 GREEN；下一步只做真实 SQLite 五接口回归、真实浏览器 smoke 与最终窄门禁。
+
+## 2026-08-04 HANDOFF_READY
+- 最终已提交 HEAD：`f4a6dd4e5cec1fa556c8882c803c34c62c849f5a`；Gate C、SQLite 五接口、UI 17/17、typecheck、build、六语言均已 GREEN。
+- SQLite 五接口窄回归再次通过：model/service/controller 三包均为 `ok`。
+- 真实浏览器尚未完成，不能宣称通过。启动现场先缺少 `web/classic/dist`；classic frozen lock 因既有漂移失败，按既有 #20 先例使用 `bun install --no-save && bun run build` 成功生成嵌入产物。
+- 后续服务误未传环境而实际监听 3000，readiness 检查 3112 超时；再次启动仍未把 `PORT=3112` / `SQLITE_PATH=.scratch/agent-progress/issue-22/browser-smoke.db` / 非默认 `SESSION_SECRET` 注入 env，故继续监听错误端口。协调器要求停止排障并交接。
+- 已停止 `issue22-browser-api` 监督进程；未打开浏览器 tab，未留下运行服务。classic `dist` 与 node_modules 均为 gitignored 构建产物。
+- 下一执行者唯一动作：用 hub 启动 `go run .`，显式 env `PORT=3112`、隔离 `SQLITE_PATH`、非默认 `SESSION_SECRET`；初始化管理员与真实领域数据后，通过 Orca 浏览器验证真实五接口页面显示 32 CNY、Credit 时间值不适用、moving-weighted、Exact/current-only，再清理服务/tab/临时 DB。
+- 严格禁止继续扩展后端、#23、FX、marker/ready；MySQL/PostgreSQL 未实测，三数据库零 SKIP 仍归 #27。

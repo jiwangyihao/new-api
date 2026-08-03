@@ -106,3 +106,12 @@
 - 初次 typecheck RED：`index.tsx:1021/1101` 两个 `string | undefined` 映射与既有 helper 实际总返回 string 不符。最小修复仅收紧两个 helper 的交叉返回类型；未改运行时行为。
 - typecheck/build GREEN：`bun run typecheck && bun run build` 成功；Rsbuild v2.0.1 于 22.8 秒完成 production build。
 - i18n：为本切片新增 22 个 Credit 分析键，六语言均有人工翻译；程序化核验 en/zh/fr/ja/ru/vi 的 missing=[]、blank=[]。`bun run i18n:sync` 报告六语言 missingCount=0、extrasCount=0；报告内其余历史 untranslatedCount 不属于本切片且未改动。
+
+## 2026-08-04 SQLite 回归与浏览器交接
+- SQLite 窄回归：`go test ./model ./service ./controller -run 'Test(CreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|PaidSubscriptionValue|SubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance|SubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure|SubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|CreditValuationRequestFinalizesSameTargetIdempotently)' -count=1` 返回 `go test: 3 packages ok`。
+- 浏览器服务首次启动失败：Go embed 报 `main.go:77:12: pattern web/classic/dist: no matching files found`。
+- classic 依赖：`bun install --frozen-lockfile` 因既有 lockfile 漂移失败；未修改锁文件，`bun install --no-save && bun run build` 成功（Vite 18024 modules、约 1m34s），仅生成 gitignored embed 产物。
+- 浏览器服务随后实际成功初始化空 SQLite 并输出 `New API v0.0.0 ready`，但因启动调用未把 env 传入，监听 `http://localhost:3000` 而 readiness 等待 3112；未进行初始化或写入验收数据。
+- 第二次仍未注入 `PORT`/`SQLITE_PATH`/`SESSION_SECRET`，再次因错误端口超时。协调器明确要求停止继续排障；监督进程已停止。
+- 结论：真实浏览器证据为诚实未完成，不能由组件测试/API 测试替代。下一执行者按 status 中的显式 env 启动，完成唯一剩余 smoke。
+- 数据库范围：真实 SQLite 定向测试已通过；没有可用 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN`，未运行 MySQL 5.7/PostgreSQL 9.6，不冒充三数据库 PASS。

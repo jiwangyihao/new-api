@@ -2,11 +2,11 @@
 
 ## 当前阶段
 
-浏览器续作恢复进行中：已从 clean HEAD `2f9701976282d1c53d7ce0914088a302498f6f32` 接管，不重做已完成领域/API/UI/i18n 实现。`web/default/dist` 与 `web/classic/dist` 已由真实 production build 生成，两个 lockfile 与跟踪文件均无漂移。
+浏览器续作恢复进行中：两个 production dist 已就绪，但受监督启动调用实际携带 `env={}`，因此前两次日志均明确显示默认 `http://localhost:3000/`，并在仓库根目录误建默认 `one-api.db`；这不是产品行为失败。当前错误实例也由空 env 调用产生，必须先停止。
 
-固定恢复参数：后端端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`；隔离 session secret 只通过进程环境传入。下一步启动隔离后端，通过 `/api/status` 证明 readiness，再用真实 API 建立 root、用户、timed 计划与浏览器数据。
+固定恢复参数不变：端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`。下一次只允许由启动命令本身显式设置 `PORT=31021`、`SQLITE_PATH=.scratch/agent-progress/issue-21/browser/issue21-smoke.db`、隔离 `SESSION_SECRET`，不再依赖 hub 的空 `env` 字段。
 
-classic 的 `bun install --frozen-lockfile` 因既有 package/lock 漂移稳定拒绝；按恢复合同改用 `bun install --no-save`，随后 `bun run build` 成功，`git status --short` 与两个 lockfile diff 均为空。本续作严格禁止 Credit 核心、FX、marker/ready、历史迁移与发布范围。
+下一步：停止当前错误实例；仅在路径确认后删除本续作误建的仓库根 `one-api.db`；按上述唯一命令重启，并同时以 `GET /api/status` 成功响应和目标 SQLite 文件存在证明 readiness。成功后直接进入既定浏览器 smoke，不探索其他启动方案。
 
 ## 已完成
 
@@ -31,8 +31,8 @@ classic 的 `bun install --frozen-lockfile` 因既有 package/lock 漂移稳定�
 
 ## 阻塞
 
-- 无产品阻塞；Go embed 所需两个 production dist 已生成且未纳入提交。
-- 明确不触碰 Credit 核心、FX、marker/ready、历史迁移或发布。
+- 启动编排错误：空 `env` 令应用监听默认 `3000` 并误建根目录 `one-api.db`；已定位，待按唯一显式命令恢复。
+- 产品代码无阻塞；明确不触碰其他数据库、Credit 核心、FX、marker/ready、历史迁移或发布。
 
 ## 最近安全提交
 

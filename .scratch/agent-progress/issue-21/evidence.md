@@ -283,3 +283,12 @@
 - classic 保守恢复：执行 `bun install --no-save && bun run build && git status --short`；安装不保存依赖合同，Vite `✓ built in 1m 4s`，生成 `web/classic/dist/index.html`，最终 status 无输出。
 - 产物检查：`web/default/dist/index.html` 与 `web/classic/dist/index.html` 均存在；`git status --short && git diff -- web/classic/bun.lock web/default/bun.lock` 无输出，跟踪文件和两个 lockfile 零漂移。
 - 结论：前次 Go embed 编译阻塞已从根因解除；dist、依赖目录均为非提交临时产物，最终清理。
+
+## 启动环境注入诊断
+
+- 第一次 `issue21-backend-recovery` 启动调用实际为 `env={}`；日志明确显示 `Local: http://localhost:3000/`，readiness 对 `127.0.0.1:31021` 超时。进程已停止，路径确认后仅删除该次误建的仓库根 `one-api.db`。
+- 第二次重启仍错误携带 `env={}`；日志再次明确显示 `Local: http://localhost:3000/`，目标端口未监听。进程已停止，路径确认后仅删除再次误建的同一路径 `one-api.db`。
+- 当前第三个错误实例的启动调用 payload 同样显示 `env={}` 且 `31021` readiness 超时；未把进程创建或默认 3000 当作通过，下一动作是停止该实例。
+- 根因不是应用读取环境变量失败，而是编排调用没有实际传入值。唯一恢复路径：让启动命令本身显式设置 `PORT=31021`、`SQLITE_PATH=.scratch/agent-progress/issue-21/browser/issue21-smoke.db`、隔离 `SESSION_SECRET` 后执行 `go run .`。
+- 恢复判据：真实 `GET http://127.0.0.1:31021/api/status` 成功，且目标 `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 存在；两项同时满足后直接进入浏览器 smoke。
+- 清理边界：只删除本续作误建且路径确认的仓库根 `one-api.db`，不得触碰任何其他数据库。

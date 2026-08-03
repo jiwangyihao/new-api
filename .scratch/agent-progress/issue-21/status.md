@@ -2,9 +2,11 @@
 
 ## 当前阶段
 
-HANDOFF_READY：代码与定向 SQLite/API 验收安全点为 `1481d4f97 test(analytics): 强化计时五接口金额追踪`。管理员 timed grant UI、跨币种运营剩余价值展示、六语言与强五接口 API tracer 均已提交；停止新增实现与测试。
+浏览器续作恢复进行中：已在 clean HEAD `2f9701976282d1c53d7ce0914088a302498f6f32` 接管，不重做已完成领域/API/UI/i18n 实现。当前只生成 Go embed 产物、启动隔离应用、完成真实浏览器 smoke、执行最终窄门禁并清理交付。
 
-真实浏览器 smoke 尚未完成。首次受监督启动 `go run .` 在编译期失败：`main.go:77:12: pattern web/classic/dist: no matching files found`，原因是当前工作树缺少 Go embed 所需的 `web/default/dist` 与 `web/classic/dist`，尚未进入数据库、登录或 UI 行为。
+固定恢复参数：后端端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`；前端构建命令分别为 `bun install --frozen-lockfile` 与 `bun run build`（`web/default`、`web/classic`）。下一步先构建两个 production dist，再以显式隔离 `SQLITE_PATH`、`PORT`、`SESSION_SECRET` 启动服务并通过健康端点确认 readiness。
+
+前次 `go run .` 仅因 `web/default/dist` 与 `web/classic/dist` 缺失在 Go embed 编译期失败；尚未进入数据库、登录或 UI 行为。本续作严格禁止 Credit 核心、FX、marker/ready、历史迁移与发布范围。
 
 ## 已完成
 

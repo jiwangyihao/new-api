@@ -265,3 +265,12 @@
 - 已确认浏览器路径接缝：新库 `POST /api/setup` → `/api/user/login`；管理员 `/users` 的 User Subscription Management Sheet 调用 `/api/subscription/admin/users/:id/subscriptions`；跨币种面板位于 `/admin-analytics` 的 paid-subscription-value tab，读取五个 paid-subscription-value 端点。
 - 恢复后必须用真实 session 和真实 API 数据观察：失败重试复用同一 `admin-timed-*` key，成功后产生新 key；计时明细显示 CNY/USD by-currency，singular null 不按当前 Plan 币种补猜。
 - 本轮按协调指令停止探索；浏览器 smoke 与其后的最终窄门禁仍未执行，不能宣称完成。
+
+## 浏览器续作恢复（2026-08-04）
+
+- 恢复指令：已完整读取父树 `docs/agents/credit-operational-value-issue-21-browser-recovery.md`，并按其唯一范围执行浏览器与最终交付。
+- 基线：`git rev-parse HEAD` 为 `2f9701976282d1c53d7ce0914088a302498f6f32`；`git status --short` 无输出，工作树 clean。
+- 固定现场：端口 `31021`；临时数据库 `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`；隔离 session secret 仅通过启动环境传入，不写入仓库。
+- 计划构建：在 `web/default` 与 `web/classic` 分别执行 `bun install --frozen-lockfile`、`bun run build`；若 classic frozen install 因既有锁文件漂移失败，只采用不改锁文件的最保守恢复，并记录原始错误。
+- 下一动作：提交本恢复状态安全点，然后生成两个真实 dist、启动隔离后端并用健康端点证明 `127.0.0.1:31021` readiness。
+- 范围：不修改既有 timed 领域实现；不触碰 Credit、FX、request settlement、migration marker/ready、历史迁移或生产发布。

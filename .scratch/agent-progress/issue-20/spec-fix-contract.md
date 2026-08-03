@@ -28,7 +28,9 @@ M1 范围严格收敛为 SQLite 专属诊断：
 - 不重建历史 Credit/计时估值，不启用数量/估值强制双写。
 - 不实现 #21–#26 的购买、结算、兑换、转换、恢复、FX、移动平均或分析业务路径。
 
-## 恢复锚点
+## 最终提交与收尾检查
 
-- H1 安全提交：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`。
-- 当前未提交文件：三份 `spec-fix-*.md`、`model/subscription_price_diagnostic.go`、`model/subscription_price_diagnostic_test.go`。
+- H1 实现提交：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`。
+- M1 实现提交：`c3b3f6848ad5cb3dca4bdce3385499f74875c208`。
+- 三份 spec-fix 文档完成一致更新后统一提交；提交后 `git status --short` 必须无输出。
+- 本合同确认：不实施 #27 历史回填、migration marker 写入、`ready` 裁决或 Credit 数量/估值强制双写。

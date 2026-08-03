@@ -105,7 +105,10 @@ FAIL github.com/QuantumNous/new-api/controller
 
 最小源头修复仅删除 `exactMicros == 0` 的“未提供”旁路；字段存在性仍由 `AmountMicrosProvided` 决定，未引入默认零或历史写入。
 
-## 最近安全 HEAD 与未提交文件
+## 最终提交与收尾检查
 
-- 最近安全 HEAD：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`（H1）。
-- 当前未提交：三份 `spec-fix-*.md`、`model/subscription_price_diagnostic.go`、`model/subscription_price_diagnostic_test.go`。
+- H1 实现提交：`cf2b743b84ac74977d654d63dab52ecd8bb0d9fb`。
+- M1 实现提交：`c3b3f6848ad5cb3dca4bdce3385499f74875c208`。
+- 证据收尾提交前未提交文件：三份 `spec-fix-*.md`；无实现代码未提交。
+- 证据收尾提交后执行 `git status --short`，须无输出后才发送 `worker_done`。
+- 未实现 #27 历史回填、migration marker 写入或 `ready` 裁决；未启用 Credit 数量/估值强制双写。

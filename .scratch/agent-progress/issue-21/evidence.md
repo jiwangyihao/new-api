@@ -256,3 +256,12 @@
 - 实际 API 响应摘要：summary recognized/token=`10,000,000 CNY + 5,000,000 USD` micros，time=`20,000,000 CNY + 10,000,000 USD` micros，active count=1；users、plans 与 summary recognized 相同；subscriptions 三个 singular 均为 `null`、三组 by-currency 与 summary 对账、`source_attribution=mixed_grants`、confidence=`exact`；sources 两行 order/admin 合计同一 CNY/USD recognized，无 EUR。
 - API 命令：`go test ./controller -run "^(TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestPaidSubscriptionValueEndpointsReturnPanelEnvelope|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$" -count=1`。
 - API 结果：PASS；五个运营分析端点的真实 SQLite 金额/nullable/mixed-source 合同与管理员授予 API 同批通过。
+
+## HANDOFF_READY：真实浏览器启动现场
+
+- 受监督进程：`issue21-backend`，应用 `go run .`。
+- 结果：进程在 601 ms 内以 exit 1 结束，未达到 HTTP readiness；完整错误为 `main.go:77:12: pattern web/classic/dist: no matching files found`。
+- 根因：`main.go` 使用 `//go:embed web/default/dist` 与 `//go:embed web/classic/dist`，当前工作树两个 dist 均不存在；因此这次没有数据库、API、登录或浏览器行为证据。
+- 已确认浏览器路径接缝：新库 `POST /api/setup` → `/api/user/login`；管理员 `/users` 的 User Subscription Management Sheet 调用 `/api/subscription/admin/users/:id/subscriptions`；跨币种面板位于 `/admin-analytics` 的 paid-subscription-value tab，读取五个 paid-subscription-value 端点。
+- 恢复后必须用真实 session 和真实 API 数据观察：失败重试复用同一 `admin-timed-*` key，成功后产生新 key；计时明细显示 CNY/USD by-currency，singular null 不按当前 Plan 币种补猜。
+- 本轮按协调指令停止探索；浏览器 smoke 与其后的最终窄门禁仍未执行，不能宣称完成。

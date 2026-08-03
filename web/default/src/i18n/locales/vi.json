@@ -1133,6 +1133,8 @@
     "Credit Reset": "Đặt lại credit",
     "Credit balance": "Số dư Credit",
     "Credit balance plan": "Gói số dư Credit",
+    "Credit valuation currency": "Tiền tệ định giá Credit",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "Không thể thay đổi tiền tệ này sau khi đã có quyền lợi Credit hoặc bản ghi định giá.",
     "Credit balance plan saved": "Đã lưu gói số dư Credit",
     "Credit balance purchase eligible": "Đủ điều kiện mua số dư Credit",
     "Credit balance purchase is unavailable for this plan.": "Gói này hiện không hỗ trợ mua số dư Credit.",

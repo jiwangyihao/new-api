@@ -36,6 +36,8 @@ export function creditBalancePlanToFormValues(
     purchase_enabled: plan.credit_balance_purchase_enabled === true,
     redemption_enabled: plan.credit_balance_redemption_enabled === true,
     conversion_enabled: plan.credit_balance_conversion_enabled === true,
+    valuation_currency:
+      plan.valuation_currency?.toUpperCase() === 'USD' ? 'USD' : 'CNY',
   }
 }
 
@@ -50,6 +52,7 @@ export function creditBalancePlanFormToRequest(
     purchase_enabled: values.configured && values.purchase_enabled,
     redemption_enabled: values.configured && values.redemption_enabled,
     conversion_enabled: values.configured && values.conversion_enabled,
+    valuation_currency: values.valuation_currency,
   }
 }
 

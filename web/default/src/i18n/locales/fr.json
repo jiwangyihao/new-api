@@ -1133,6 +1133,8 @@
     "Credit Reset": "Réinitialisation des crédits",
     "Credit balance": "Solde Credit",
     "Credit balance plan": "Forfait de solde Credit",
+    "Credit valuation currency": "Devise de valorisation du Credit",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "Cette devise ne peut plus être modifiée après la création de droits Credit ou d’enregistrements de valorisation.",
     "Credit balance plan saved": "Forfait de solde Credit enregistré",
     "Credit balance purchase eligible": "Éligible à l’achat de solde Credit",
     "Credit balance purchase is unavailable for this plan.": "L’achat de solde Credit n’est pas disponible pour ce forfait.",

@@ -51,6 +51,7 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 		"title":                      {},
 		"subtitle":                   {},
 		"price_amount":               {},
+		"price_amount_micros":        {},
 		"currency":                   {},
 		"duration_unit":              {},
 		"duration_value":             {},

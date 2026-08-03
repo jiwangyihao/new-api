@@ -70,6 +70,7 @@ function makeCreditBalancePlan(
     title: 'Credit balance',
     price_amount: 0,
     currency: 'CNY',
+    valuation_currency: 'CNY',
     duration_unit: 'month',
     duration_value: 1,
     quota_reset_period: 'never',
@@ -118,6 +119,7 @@ describe('Credit balance plan admin component', () => {
       concurrency_limit: 7,
       queue_capacity: 13,
       business_code: 'credit_balance_global',
+      valuation_currency: 'CNY',
       configured: true,
       purchase_enabled: true,
       redemption_enabled: false,
@@ -130,6 +132,7 @@ describe('Credit balance plan admin component', () => {
       concurrency_limit: 9,
       queue_capacity: 21,
       business_code: ' credit_balance_global ',
+      valuation_currency: 'USD',
       configured: true,
       purchase_enabled: false,
       redemption_enabled: true,
@@ -140,6 +143,7 @@ describe('Credit balance plan admin component', () => {
       concurrency_limit: 9,
       queue_capacity: 21,
       business_code: 'credit_balance_global',
+      valuation_currency: 'USD',
       configured: true,
       purchase_enabled: false,
       redemption_enabled: true,
@@ -152,6 +156,7 @@ describe('Credit balance plan admin component', () => {
       concurrency_limit: 1,
       queue_capacity: 2,
       business_code: 'credit_balance_global',
+      valuation_currency: 'CNY',
       configured: false,
       purchase_enabled: true,
       redemption_enabled: true,
@@ -255,6 +260,7 @@ describe('Credit balance plan admin component', () => {
         concurrency_limit: 9,
         queue_capacity: 21,
         business_code: 'client_business_code',
+        valuation_currency: 'CNY',
         configured: true,
         purchase_enabled: false,
         redemption_enabled: true,
@@ -1031,7 +1037,10 @@ describe('Credit balance plan admin component', () => {
       view.queryByRole('button', { name: /Pay with Account Balance/ }),
       null
     )
-    assert.doesNotMatch(view.getByRole('dialog').textContent || '', /Account Balance/)
+    assert.doesNotMatch(
+      view.getByRole('dialog').textContent || '',
+      /Account Balance/
+    )
   })
 
   test('renders the persisted configuration as an accessible admin form', async () => {

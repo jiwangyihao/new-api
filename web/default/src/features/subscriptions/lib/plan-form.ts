@@ -24,7 +24,12 @@ export function getPlanFormSchema(t: TFunction) {
   return z.object({
     title: z.string().min(1, t('Please enter plan title')),
     subtitle: z.string().optional(),
-    price_amount: z.coerce.number().min(0, t('Please enter amount')),
+    price_amount: z
+      .string()
+      .trim()
+      .regex(/^\d+(?:\.\d{1,6})?$/, t('Please enter amount')),
+    price_amount_source: z.enum(['new', 'exact', 'legacy']),
+    price_amount_changed: z.boolean(),
     duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
     duration_value: z.coerce.number().min(1),
     custom_seconds: z.coerce.number().min(0).optional(),
@@ -63,7 +68,9 @@ export type PlanFormValues = z.infer<ReturnType<typeof getPlanFormSchema>>
 export const PLAN_FORM_DEFAULTS: PlanFormValues = {
   title: '',
   subtitle: '',
-  price_amount: 0,
+  price_amount: '0',
+  price_amount_source: 'new',
+  price_amount_changed: true,
   duration_unit: 'month',
   duration_value: 1,
   custom_seconds: 0,
@@ -94,7 +101,12 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
   return {
     title: plan.title || '',
     subtitle: plan.subtitle || '',
-    price_amount: Number(plan.price_amount || 0),
+    price_amount: microsToDecimalText(
+      plan.price_amount_micros,
+      plan.price_amount
+    ),
+    price_amount_source: plan.price_amount_micros == null ? 'legacy' : 'exact',
+    price_amount_changed: false,
     duration_unit: plan.duration_unit || 'month',
     duration_value: Number(plan.duration_value || 1),
     custom_seconds: Number(plan.custom_seconds || 0),
@@ -122,11 +134,47 @@ export function planToFormValues(plan: SubscriptionPlan): PlanFormValues {
   }
 }
 
+export function decimalTextToMicros(value: string): string {
+  const normalized = value.trim()
+  const [whole, fraction = ''] = normalized.split('.')
+  return (
+    BigInt(whole) * 1_000_000n +
+    BigInt(fraction.padEnd(6, '0'))
+  ).toString()
+}
+
+function microsToDecimalText(
+  micros: string | null | undefined,
+  fallback: number
+): string {
+  if (micros == null) return String(fallback || 0)
+  const value = BigInt(micros)
+  const whole = value / 1_000_000n
+  const fraction = (value % 1_000_000n)
+    .toString()
+    .padStart(6, '0')
+    .replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : whole.toString()
+}
+
 export function formValuesToPlanPayload(values: PlanFormValues): PlanPayload {
+  const {
+    price_amount: priceAmount,
+    price_amount_source: priceAmountSource,
+    price_amount_changed: priceAmountChanged,
+    ...planValues
+  } = values
+  const includePrice = priceAmountSource === 'new' || priceAmountChanged
+
   return {
     plan: {
-      ...values,
-      price_amount: Number(values.price_amount || 0),
+      ...planValues,
+      ...(includePrice
+        ? {
+            price_amount: priceAmount,
+            price_amount_micros: decimalTextToMicros(priceAmount),
+          }
+        : {}),
       currency: 'CNY',
       duration_value: Number(values.duration_value || 0),
       custom_seconds: Number(values.custom_seconds || 0),

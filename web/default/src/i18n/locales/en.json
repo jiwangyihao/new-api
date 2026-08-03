@@ -1133,6 +1133,8 @@
     "Credit Reset": "Credit Reset",
     "Credit balance": "Credit balance",
     "Credit balance plan": "Credit balance plan",
+    "Credit valuation currency": "Credit valuation currency",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "This currency cannot be changed after Credit entitlements or valuation records exist.",
     "Credit balance plan saved": "Credit balance plan saved",
     "Credit balance purchase eligible": "Credit balance purchase eligible",
     "Credit balance purchase is unavailable for this plan.": "Credit balance purchase is unavailable for this plan.",

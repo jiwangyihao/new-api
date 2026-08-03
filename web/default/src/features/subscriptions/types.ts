@@ -208,6 +208,8 @@ export const subscriptionPlanSchema = z.object({
   title: z.string(),
   subtitle: z.string().optional(),
   price_amount: z.number(),
+  price_amount_micros: z.string().nullable().optional(),
+  valuation_currency: z.string().nullable().optional(),
   currency: z.string().default('USD'),
   duration_unit: z.enum(['year', 'month', 'day', 'hour', 'custom']),
   duration_value: z.number(),
@@ -267,6 +269,7 @@ export interface PublicSubscriptionPlan {
   title: string
   subtitle: string
   price_amount: number
+  price_amount_micros?: string | null
   currency: string
   kyren_product_id?: string
   duration_unit: SubscriptionPlan['duration_unit']
@@ -372,7 +375,10 @@ export interface UpdateCodexProModeResponse {
 }
 
 export interface PlanPayload {
-  plan: Partial<SubscriptionPlan>
+  plan: Omit<Partial<SubscriptionPlan>, 'price_amount'> & {
+    price_amount?: string
+    price_amount_micros?: string
+  }
   risk_confirmed?: boolean
   risk_reason?: string
 }
@@ -382,6 +388,7 @@ export interface CreditBalancePlanUpdateRequest {
   queue_capacity: number
   business_code: string
   configured: boolean
+  valuation_currency: 'CNY' | 'USD'
   purchase_enabled: boolean
   redemption_enabled: boolean
   conversion_enabled: boolean

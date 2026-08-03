@@ -33,28 +33,38 @@ const (
 )
 
 type CreditBalanceLedger struct {
-	Id                    int    `json:"id"`
-	UserId                int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
-	UserSubscriptionId    int    `json:"user_subscription_id" gorm:"not null;index"`
-	Type                  string `json:"type" gorm:"type:varchar(32);not null;index"`
-	IdempotencyKey        string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
-	SourceType            string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
-	SourceId              int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
-	SourceSnapshot        string `json:"source_snapshot,omitempty" gorm:"type:text"`
-	GrossCredit           int64  `json:"gross_credit" gorm:"type:bigint;not null"`
-	DebtOffset            int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
-	DebtFormed            int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
-	AvailableCreditBefore int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
-	SettlementDebtBefore  int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
-	BalanceBefore         int64  `json:"balance_before" gorm:"type:bigint;not null"`
-	BalanceAfter          int64  `json:"balance_after" gorm:"type:bigint;not null"`
-	AvailableCreditAfter  int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
-	SettlementDebtAfter   int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
-	OperatorUserId        int    `json:"operator_user_id" gorm:"not null;default:0"`
-	PaymentProvider       string `json:"payment_provider,omitempty" gorm:"type:varchar(50);not null;default:''"`
-	ParameterFingerprint  string `json:"-" gorm:"type:varchar(64);not null;default:''"`
-	Reason                string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
-	CreatedAt             int64  `json:"created_at" gorm:"type:bigint;not null;index"`
+	Id                         int    `json:"id"`
+	UserId                     int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
+	UserSubscriptionId         int    `json:"user_subscription_id" gorm:"not null;index"`
+	Type                       string `json:"type" gorm:"type:varchar(32);not null;index"`
+	IdempotencyKey             string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
+	SourceType                 string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
+	SourceId                   int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
+	SourceSnapshot             string `json:"source_snapshot,omitempty" gorm:"type:text"`
+	GrossCredit                int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	DebtOffset                 int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
+	DebtFormed                 int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
+	AvailableCreditBefore      int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtBefore       int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
+	BalanceBefore              int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	BalanceAfter               int64  `json:"balance_after" gorm:"type:bigint;not null"`
+	AvailableCreditAfter       int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtAfter        int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
+	OperatorUserId             int    `json:"operator_user_id" gorm:"not null;default:0"`
+	PaymentProvider            string `json:"payment_provider,omitempty" gorm:"type:varchar(50);not null;default:''"`
+	ParameterFingerprint       string `json:"-" gorm:"type:varchar(64);not null;default:''"`
+	Reason                     string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
+	ValuationCurrency          string `json:"valuation_currency" gorm:"type:varchar(8);not null;default:''"`
+	ValuationGrossCostMicros   int64  `json:"valuation_gross_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationNetCostMicros     int64  `json:"valuation_net_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationConfidence        string `json:"valuation_confidence" gorm:"type:varchar(16);not null;default:''"`
+	ValuationRuleVersion       int    `json:"valuation_rule_version" gorm:"not null;default:0"`
+	ValuationStateVersionAfter int64  `json:"valuation_state_version_after" gorm:"type:bigint;not null;default:0"`
+	FxSourceCurrency           string `json:"fx_source_currency" gorm:"type:varchar(8);not null;default:''"`
+	FxRateNumerator            int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
+	FxRateDenominator          int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
+	FxCapturedAt               int64  `json:"fx_captured_at" gorm:"type:bigint;not null;default:0"`
+	CreatedAt                  int64  `json:"created_at" gorm:"type:bigint;not null;index"`
 }
 
 type CreditBalanceLedgerHistoryItem struct {
@@ -142,6 +152,7 @@ func SubscriptionPlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSna
 		Id:                      snapshot.PlanID,
 		Title:                   snapshot.PlanTitle,
 		PriceAmount:             snapshot.PriceAmount,
+		PriceAmountMicros:       snapshot.ListPriceMicros,
 		Currency:                snapshot.Currency,
 		EntitlementType:         snapshot.PlanEntitlementType,
 		TotalAmount:             snapshot.TotalAmount,
@@ -201,6 +212,14 @@ func GetCreditBalancePlanTx(tx *gorm.DB) (*SubscriptionPlan, error) {
 	return &plan, nil
 }
 
+func authorizedCreditBalanceOrderPlanSnapshot(request CreditBalanceGrantRequest) (*SubscriptionPlan, bool) {
+	plan := request.TargetPlanSnapshot
+	if request.SourceType != CreditBalanceLedgerSourceSubscriptionOrder || plan == nil || plan.Id != request.TargetPlanId || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
+		return nil, false
+	}
+	return plan, true
+}
+
 func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*CreditBalanceGrantResult, error) {
 	if tx == nil {
 		return nil, errors.New("tx is nil")
@@ -215,6 +234,21 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		return nil, errors.New("invalid credit balance grant")
 	}
 
+	guardedPlan, err := AcquireCreditBalancePlanGuardTx(tx)
+	authorizedPlan, hasAuthorizedPlan := authorizedCreditBalanceOrderPlanSnapshot(request)
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) || !hasAuthorizedPlan {
+			return nil, err
+		}
+		guardedPlan = nil
+	} else if guardedPlan.Id != request.TargetPlanId {
+		return nil, errors.New("credit balance target plan mismatch")
+	}
+	plan := guardedPlan
+	if hasAuthorizedPlan {
+		plan = authorizedPlan
+	}
+
 	var user User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "setting").Where("id = ?", request.UserId).First(&user).Error; err != nil {
 		return nil, err
@@ -224,18 +258,10 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	} else if found {
 		return result, nil
 	}
+	if !hasAuthorizedPlan && !plan.Enabled {
+		return nil, ErrCreditBalanceAllocationUnavailable
+	}
 
-	plan := request.TargetPlanSnapshot
-	if plan == nil {
-		var err error
-		plan, err = GetCreditBalancePlanTx(tx)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if plan.Id != request.TargetPlanId || plan.EntitlementType != SubscriptionEntitlementCreditBalance {
-		return nil, errors.New("credit balance target plan mismatch")
-	}
 	hadUsableSubscription, err := hasUsableSubscriptionTx(tx, request.UserId)
 	if err != nil {
 		return nil, err

@@ -1133,6 +1133,8 @@
     "Credit Reset": "Credit リセット",
     "Credit balance": "Credit 残高",
     "Credit balance plan": "Credit 残高プラン",
+    "Credit valuation currency": "Credit 評価通貨",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "Credit 権利または評価レコードが存在した後は、この通貨を変更できません。",
     "Credit balance plan saved": "Credit 残高プランを保存しました",
     "Credit balance purchase eligible": "Credit 残高購入対象",
     "Credit balance purchase is unavailable for this plan.": "このプランでは Credit 残高を購入できません。",

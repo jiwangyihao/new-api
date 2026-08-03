@@ -1133,6 +1133,8 @@
     "Credit Reset": "Credit 重置",
     "Credit balance": "Credit 余额",
     "Credit balance plan": "Credit 余额套餐",
+    "Credit valuation currency": "Credit 估值币种",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "存在 Credit 权益或估值记录后，不能修改此币种。",
     "Credit balance plan saved": "Credit 余额套餐已保存",
     "Credit balance purchase eligible": "Credit 余额购买资格",
     "Credit balance purchase is unavailable for this plan.": "此套餐当前无法购买 Credit 余额。",

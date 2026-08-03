@@ -54,7 +54,7 @@ func TestAdminUpdateSubscriptionPlanPersistsDistributorFields(t *testing.T) {
 		RewardEligible: true,
 	}).Error)
 
-	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"gpt_abuse_warning_limit":7,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated","kyren_product_id":"prod_kyren_plan"}}`)
+	recorder := performAdminSubscriptionPlanUpdate(t, 8901, `{"plan":{"title":"Basic Updated","price_amount":40,"price_amount_micros":"40000000","duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":3,"queue_capacity":12,"gpt_abuse_warning_limit":7,"is_trial":true,"invite_trial":true,"public_visible":false,"trial_duration_hours":24,"reward_eligible":false,"business_code":"basic_monthly_updated","kyren_product_id":"prod_kyren_plan"}}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var plan model.SubscriptionPlan
@@ -88,7 +88,7 @@ func TestAdminUpdateSubscriptionPlanPersistsCNYCurrency(t *testing.T) {
 		Currency:       "USD",
 	}).Error)
 
-	recorder := performAdminSubscriptionPlanUpdate(t, 8902, `{"plan":{"title":"Standard Updated","price_amount":80,"currency":"CNY","duration_unit":"month","duration_value":1,"enabled":true,"sort_order":8,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":2000000000,"concurrency_limit":5,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"standard_monthly"}}`)
+	recorder := performAdminSubscriptionPlanUpdate(t, 8902, `{"plan":{"title":"Standard Updated","price_amount":80,"price_amount_micros":"80000000","currency":"CNY","duration_unit":"month","duration_value":1,"enabled":true,"sort_order":8,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":2000000000,"concurrency_limit":5,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"standard_monthly"}}`)
 
 	require.Equal(t, http.StatusOK, recorder.Code)
 	var plan model.SubscriptionPlan
@@ -100,7 +100,7 @@ func TestAdminCreateSubscriptionPlanDefaultsCurrencyToCNY(t *testing.T) {
 	setupSubscriptionAdminPlanFieldsTest(t)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Basic","price_amount":40,"duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":1,"queue_capacity":6,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"basic_monthly","kyren_product_id":"prod_kyren_create"}}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Basic","price_amount":40,"price_amount_micros":"40000000","duration_unit":"month","duration_value":1,"enabled":true,"sort_order":9,"max_purchase_per_user":0,"total_amount":0,"monthly_token_limit":1000000000,"concurrency_limit":1,"queue_capacity":6,"is_trial":false,"public_visible":true,"trial_duration_hours":0,"reward_eligible":true,"business_code":"basic_monthly","kyren_product_id":"prod_kyren_create"}}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	AdminCreateSubscriptionPlan(ctx)
@@ -117,7 +117,7 @@ func TestAdminCreateSubscriptionPlanRejectsNegativeQueueCapacity(t *testing.T) {
 	setupSubscriptionAdminPlanFieldsTest(t)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Bad Queue","price_amount":40,"duration_unit":"month","duration_value":1,"queue_capacity":-1}}`))
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(`{"plan":{"title":"Bad Queue","price_amount":40,"price_amount_micros":"40000000","duration_unit":"month","duration_value":1,"queue_capacity":-1}}`))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	AdminCreateSubscriptionPlan(ctx)
@@ -172,7 +172,7 @@ func TestAdminCreditBalancePlanLifecycleUsesDedicatedAuthenticatedAPI(t *testing
 	setupSubscriptionAdminPlanFieldsTest(t)
 	seedCreditBalancePlanForAdminTest(t)
 
-	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":" credit_balance_global ","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true}`)
+	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":" credit_balance_global ","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true,"valuation_currency":"CNY"}`)
 	require.Equal(t, http.StatusOK, update.Code, update.Body.String())
 	assert.Contains(t, update.Body.String(), `"success":true`)
 
@@ -202,6 +202,59 @@ func TestAdminCreditBalancePlanRejectsEnabledEntryBeforeConfiguration(t *testing
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.Contains(t, recorder.Body.String(), "必须先确认 Credit 余额套餐配置")
+}
+
+func TestAdminCreditBalancePlanRequiresSupportedValuationCurrencyOnFirstConfiguration(t *testing.T) {
+	tests := []struct {
+		name     string
+		currency string
+		wantCode string
+	}{
+		{name: "missing", wantCode: "credit_valuation_currency_required"},
+		{name: "unsupported", currency: `,"valuation_currency":"EUR"`, wantCode: "credit_valuation_unsupported_currency"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupSubscriptionAdminPlanFieldsTest(t)
+			seedCreditBalancePlanForAdminTest(t)
+			body := `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false` + test.currency + `}`
+
+			recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, body)
+
+			assert.Contains(t, recorder.Body.String(), `"success":false`)
+			assert.Contains(t, recorder.Body.String(), `"code":"`+test.wantCode+`"`)
+		})
+	}
+}
+
+func TestAdminCreditBalancePlanFreezesValuationCurrencyAfterCreditEntitlement(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	plan := seedCreditBalancePlanForAdminTest(t)
+	configured := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"CNY"}`)
+	require.Contains(t, configured.Body.String(), `"success":true`)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: 3001, PlanId: plan.Id, EntitlementType: model.SubscriptionEntitlementCreditBalance, Status: model.SubscriptionStatusActive}).Error)
+
+	recorder := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":99,"queue_capacity":99,"business_code":"changed","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"USD"}`)
+
+	assert.Contains(t, recorder.Body.String(), `"code":"credit_valuation_currency_locked"`)
+	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
+	require.NotNil(t, plan.ValuationCurrency)
+	assert.Equal(t, "CNY", *plan.ValuationCurrency)
+	assert.Equal(t, "USD", plan.Currency, "valuation currency must not rewrite the plan purchase currency")
+	assert.Equal(t, 7, plan.ConcurrencyLimit, "currency rejection must roll back all plan fields")
+	assert.Equal(t, 13, plan.QueueCapacity)
+}
+
+func TestAdminCreditBalancePlanReturnsIndependentValuationCurrency(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	seedCreditBalancePlanForAdminTest(t)
+	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"CNY"}`)
+	require.Contains(t, update.Body.String(), `"valuation_currency":"CNY"`)
+	require.Contains(t, update.Body.String(), `"currency":"USD"`)
+
+	get := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodGet, "")
+	require.Contains(t, get.Body.String(), `"valuation_currency":"CNY"`)
+	require.Contains(t, get.Body.String(), `"currency":"USD"`)
 }
 
 func TestAdminOrdinaryPlanAPIsCannotMutateCreditBalanceIdentity(t *testing.T) {
@@ -256,7 +309,7 @@ func TestAdminTimedPlanCreditEligibilityRequiresStandardMonthlyPlan(t *testing.T
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			setupSubscriptionAdminPlanFieldsTest(t)
-			body := `{"plan":{"title":"Invalid eligibility","price_amount":40,"duration_unit":"` + test.durationUnit + `","duration_value":` + strconv.Itoa(test.durationValue) + `,"quota_reset_period":"` + test.resetPeriod + `","quota_reset_custom_seconds":3600,"monthly_token_limit":` + strconv.FormatInt(test.monthlyTokenLimit, 10) + `,"is_trial":` + strconv.FormatBool(test.isTrial) + `,"invite_trial":` + strconv.FormatBool(test.inviteTrial) + `,"unlimited_purchase_enabled":true,"timed_conversion_enabled":` + strconv.FormatBool(index%2 == 0) + `}}`
+			body := `{"plan":{"title":"Invalid eligibility","price_amount":40,"price_amount_micros":"40000000","duration_unit":"` + test.durationUnit + `","duration_value":` + strconv.Itoa(test.durationValue) + `,"quota_reset_period":"` + test.resetPeriod + `","quota_reset_custom_seconds":3600,"monthly_token_limit":` + strconv.FormatInt(test.monthlyTokenLimit, 10) + `,"is_trial":` + strconv.FormatBool(test.isTrial) + `,"invite_trial":` + strconv.FormatBool(test.inviteTrial) + `,"unlimited_purchase_enabled":true,"timed_conversion_enabled":` + strconv.FormatBool(index%2 == 0) + `}}`
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Request = httptest.NewRequest(http.MethodPost, "/api/subscription/admin/plans", bytes.NewBufferString(body))
@@ -285,13 +338,13 @@ func TestAdminTimedPlanCreditEligibilitySwitchesRemainIndependent(t *testing.T) 
 	}
 	require.NoError(t, model.DB.Create(&plan).Error)
 
-	first := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Independent switches","price_amount":40,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":1000,"enabled":true,"unlimited_purchase_enabled":false,"timed_conversion_enabled":true,"business_code":"independent_credit_switches"}}`)
+	first := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Independent switches","price_amount":40,"price_amount_micros":"40000000","currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":1000,"enabled":true,"unlimited_purchase_enabled":false,"timed_conversion_enabled":true,"business_code":"independent_credit_switches"}}`)
 	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
 	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
 	assert.False(t, plan.UnlimitedPurchaseEnabled)
 	assert.True(t, plan.TimedConversionEnabled)
 
-	second := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Independent switches","price_amount":40,"currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":1000,"enabled":true,"unlimited_purchase_enabled":true,"timed_conversion_enabled":false,"business_code":"independent_credit_switches"}}`)
+	second := performAdminSubscriptionPlanUpdate(t, plan.Id, `{"plan":{"title":"Independent switches","price_amount":40,"price_amount_micros":"40000000","currency":"CNY","duration_unit":"month","duration_value":1,"quota_reset_period":"monthly","monthly_token_limit":1000,"enabled":true,"unlimited_purchase_enabled":true,"timed_conversion_enabled":false,"business_code":"independent_credit_switches"}}`)
 	require.Equal(t, http.StatusOK, second.Code, second.Body.String())
 	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
 	assert.True(t, plan.UnlimitedPurchaseEnabled)

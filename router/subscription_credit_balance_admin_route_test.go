@@ -47,7 +47,7 @@ func TestCreditBalanceAdminRoutePersistsDedicatedConfiguration(t *testing.T) {
 	updateRequest := httptest.NewRequest(
 		http.MethodPut,
 		"/api/subscription/admin/credit-balance-plan",
-		bytes.NewBufferString(`{"model_limits":" gpt-4o,claude-3-7-sonnet,gpt-4o ","concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true}`),
+		bytes.NewBufferString(`{"model_limits":" gpt-4o,claude-3-7-sonnet,gpt-4o ","concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":true,"redemption_enabled":false,"conversion_enabled":true,"valuation_currency":"CNY"}`),
 	)
 	updateRequest.Header.Set("Content-Type", "application/json")
 	updateRequest.Header.Set("Authorization", "Bearer "+accessToken)

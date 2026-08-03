@@ -1133,6 +1133,8 @@
     "Credit Reset": "Сброс кредитов",
     "Credit balance": "Баланс Credit",
     "Credit balance plan": "План баланса Credit",
+    "Credit valuation currency": "Валюта оценки Credit",
+    "This currency cannot be changed after Credit entitlements or valuation records exist.": "Эту валюту нельзя изменить после появления прав Credit или записей оценки.",
     "Credit balance plan saved": "План баланса Credit сохранён",
     "Credit balance purchase eligible": "Доступна покупка баланса Credit",
     "Credit balance purchase is unavailable for this plan.": "Покупка баланса Credit недоступна для этого плана.",

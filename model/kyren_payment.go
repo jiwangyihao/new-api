@@ -18,6 +18,9 @@ type SubscriptionEntitlementSnapshot struct {
 	PlanTitle                               string  `json:"plan_title"`
 	PlanEntitlementType                     string  `json:"plan_entitlement_type"`
 	PriceAmount                             float64 `json:"price_amount"`
+	ListPriceMicros                         *int64  `json:"list_price_micros,string,omitempty"`
+	ListPriceCurrency                       string  `json:"list_price_currency,omitempty"`
+	ValuationRuleVersion                    int     `json:"valuation_rule_version,omitempty"`
 	Currency                                string  `json:"currency"`
 	PaymentAmountCents                      int64   `json:"payment_amount_cents"`
 	PaymentCurrency                         string  `json:"payment_currency"`
@@ -71,6 +74,9 @@ func NewSubscriptionEntitlementSnapshot(plan *SubscriptionPlan, purchaseMode str
 		PlanTitle:                 plan.Title,
 		PlanEntitlementType:       planEntitlementType,
 		PriceAmount:               plan.PriceAmount,
+		ListPriceMicros:           plan.PriceAmountMicros,
+		ListPriceCurrency:         strings.ToUpper(strings.TrimSpace(plan.Currency)),
+		ValuationRuleVersion:      CreditValuationRuleVersion,
 		Currency:                  strings.ToUpper(strings.TrimSpace(plan.Currency)),
 		TotalAmount:               plan.TotalAmount,
 		MonthlyTokenLimit:         plan.MonthlyTokenLimit,

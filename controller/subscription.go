@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -31,6 +32,7 @@ type PublicSubscriptionPlan struct {
 	Title                    string                              `json:"title"`
 	Subtitle                 string                              `json:"subtitle"`
 	PriceAmount              float64                             `json:"price_amount"`
+	PriceAmountMicros        *int64                              `json:"price_amount_micros,string"`
 	Currency                 string                              `json:"currency"`
 	DurationUnit             string                              `json:"duration_unit"`
 	DurationValue            int                                 `json:"duration_value"`
@@ -56,6 +58,7 @@ func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDT
 			Title:                    p.Title,
 			Subtitle:                 p.Subtitle,
 			PriceAmount:              p.PriceAmount,
+			PriceAmountMicros:        p.PriceAmountMicros,
 			Currency:                 p.Currency,
 			DurationUnit:             p.DurationUnit,
 			DurationValue:            p.DurationValue,
@@ -520,6 +523,72 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	Plan          model.SubscriptionPlan `json:"plan"`
 	RiskConfirmed bool                   `json:"risk_confirmed"`
 	RiskReason    string                 `json:"risk_reason"`
+	PriceProvided bool                   `json:"-"`
+}
+
+type rawAdminUpsertSubscriptionPlanRequest struct {
+	Plan          json.RawMessage `json:"plan"`
+	RiskConfirmed bool            `json:"risk_confirmed"`
+	RiskReason    string          `json:"risk_reason"`
+}
+
+func decodeAdminUpsertSubscriptionPlanRequest(c *gin.Context) (AdminUpsertSubscriptionPlanRequest, error) {
+	var rawRequest rawAdminUpsertSubscriptionPlanRequest
+	if err := common.DecodeJson(c.Request.Body, &rawRequest); err != nil || common.GetJsonType(rawRequest.Plan) != "object" {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	var rawPlan map[string]json.RawMessage
+	if err := common.Unmarshal(rawRequest.Plan, &rawPlan); err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	displayRaw, displayProvided := rawPlan["price_amount"]
+	microsRaw, microsProvided := rawPlan["price_amount_micros"]
+	if microsProvided && common.GetJsonType(microsRaw) != "string" {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	price, err := model.NormalizeSubscriptionPlanPrice(model.SubscriptionPlanPriceInput{
+		DisplayAmount:         common.JsonRawMessageToString(displayRaw),
+		DisplayAmountProvided: displayProvided,
+		AmountMicros:          common.JsonRawMessageToString(microsRaw),
+		AmountMicrosProvided:  microsProvided,
+	})
+	if err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, err
+	}
+	delete(rawPlan, "price_amount")
+	delete(rawPlan, "price_amount_micros")
+	planPayload, err := common.Marshal(rawPlan)
+	if err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	request := AdminUpsertSubscriptionPlanRequest{
+		RiskConfirmed: rawRequest.RiskConfirmed,
+		RiskReason:    rawRequest.RiskReason,
+		PriceProvided: displayProvided || microsProvided,
+	}
+	if err := common.Unmarshal(planPayload, &request.Plan); err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	request.Plan.PriceAmount = price.DisplayAmount
+	request.Plan.PriceAmountMicros = price.AmountMicros
+	return request, nil
+}
+
+func respondSubscriptionPlanPriceError(c *gin.Context, err error) {
+	message := "套餐价格无效"
+	switch {
+	case errors.Is(err, model.ErrSubscriptionPlanPriceRequired):
+		message = "有价套餐必须提供精确微单位价格"
+	case errors.Is(err, model.ErrSubscriptionPlanPriceNegative):
+		message = "价格不能为负数"
+	case errors.Is(err, model.ErrSubscriptionPlanPricePrecision):
+		message = "价格最多支持六位小数"
+	case errors.Is(err, model.ErrCreditValuationOverflow):
+		message = "价格超出支持范围"
+	case errors.Is(err, model.ErrSubscriptionPlanPriceMismatch):
+		message = "精确价格与兼容价格不一致"
+	}
+	c.JSON(http.StatusOK, gin.H{"success": false, "message": message, "code": err.Error()})
 }
 
 type AdminUpdateCreditBalancePlanRequest struct {
@@ -530,6 +599,7 @@ type AdminUpdateCreditBalancePlanRequest struct {
 	PurchaseEnabled   bool   `json:"purchase_enabled"`
 	RedemptionEnabled bool   `json:"redemption_enabled"`
 	ConversionEnabled bool   `json:"conversion_enabled"`
+	ValuationCurrency string `json:"valuation_currency"`
 }
 
 func getCreditBalancePlan() (*model.SubscriptionPlan, error) {
@@ -572,39 +642,48 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "必须先确认 Credit 余额套餐配置")
 		return
 	}
-	plan, err := getCreditBalancePlan()
+	currency, err := model.NormalizeCreditValuationCurrency(req.ValuationCurrency)
 	if err != nil {
-		common.ApiError(c, err)
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Credit 估值币种必须为 CNY 或 USD", "code": err.Error()})
 		return
 	}
-	var businessCodeValue any
-	if businessCode != "" {
-		businessCodeValue = businessCode
-	}
-	updates := map[string]any{
-		"model_limits":                      "",
-		"concurrency_limit":                 req.ConcurrencyLimit,
-		"queue_capacity":                    req.QueueCapacity,
-		"business_code":                     businessCodeValue,
-		"credit_balance_configured":         req.Configured,
-		"credit_balance_purchase_enabled":   req.PurchaseEnabled,
-		"credit_balance_redemption_enabled": req.RedemptionEnabled,
-		"credit_balance_conversion_enabled": req.ConversionEnabled,
-		"updated_at":                        common.GetTimestamp(),
-	}
-	if err := model.DB.Model(&model.SubscriptionPlan{}).
-		Where("id = ? AND entitlement_type = ?", plan.Id, model.SubscriptionEntitlementCreditBalance).
-		Updates(updates).Error; err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	model.InvalidateSubscriptionPlanCache(plan.Id)
-	updated, err := getCreditBalancePlan()
+	var updated model.SubscriptionPlan
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		plan, err := model.GuardCreditValuationCurrencyUpdateTx(tx, currency)
+		if err != nil {
+			return err
+		}
+		var businessCodeValue any
+		if businessCode != "" {
+			businessCodeValue = businessCode
+		}
+		updates := map[string]any{
+			"model_limits":                      "",
+			"valuation_currency":                currency,
+			"concurrency_limit":                 req.ConcurrencyLimit,
+			"queue_capacity":                    req.QueueCapacity,
+			"business_code":                     businessCodeValue,
+			"credit_balance_configured":         req.Configured,
+			"credit_balance_purchase_enabled":   req.PurchaseEnabled,
+			"credit_balance_redemption_enabled": req.RedemptionEnabled,
+			"credit_balance_conversion_enabled": req.ConversionEnabled,
+			"updated_at":                        common.GetTimestamp(),
+		}
+		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(updates).Error; err != nil {
+			return err
+		}
+		return tx.First(&updated, plan.Id).Error
+	})
 	if err != nil {
+		if errors.Is(err, model.ErrCreditValuationCurrencyLocked) {
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "已有 Credit 估值数据，不能修改估值币种", "code": err.Error()})
+			return
+		}
 		common.ApiError(c, err)
 		return
 	}
-	common.ApiSuccess(c, updated)
+	model.InvalidateSubscriptionPlanCache(updated.Id)
+	common.ApiSuccess(c, &updated)
 }
 
 func validateTimedPlanCreditEligibility(plan *model.SubscriptionPlan) string {
@@ -640,9 +719,9 @@ func rejectCreditBalancePlanMutation(c *gin.Context, id int) bool {
 }
 
 func AdminCreateSubscriptionPlan(c *gin.Context) {
-	var req AdminUpsertSubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+	req, err := decodeAdminUpsertSubscriptionPlanRequest(c)
+	if err != nil {
+		respondSubscriptionPlanPriceError(c, err)
 		return
 	}
 	if req.Plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
@@ -654,14 +733,6 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	req.Plan.Id = 0
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
-		return
-	}
-	if req.Plan.PriceAmount < 0 {
-		common.ApiErrorMsg(c, "价格不能为负数")
-		return
-	}
-	if req.Plan.PriceAmount > 9999 {
-		common.ApiErrorMsg(c, "价格不能超过9999")
 		return
 	}
 	req.Plan.Currency = normalizeSubscriptionPlanCurrency(req.Plan.Currency)
@@ -697,7 +768,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, message)
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	err = model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -717,21 +788,13 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	if rejectCreditBalancePlanMutation(c, id) {
 		return
 	}
-	var req AdminUpsertSubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+	req, err := decodeAdminUpsertSubscriptionPlanRequest(c)
+	if err != nil {
+		respondSubscriptionPlanPriceError(c, err)
 		return
 	}
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
-		return
-	}
-	if req.Plan.PriceAmount < 0 {
-		common.ApiErrorMsg(c, "价格不能为负数")
-		return
-	}
-	if req.Plan.PriceAmount > 9999 {
-		common.ApiErrorMsg(c, "价格不能超过9999")
 		return
 	}
 	req.Plan.Id = id
@@ -774,7 +837,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	var previousMonthlyCredit int64
 	var existingTimedEntitlementCount int64
 	riskSnapshotTime := model.GetDBTimestamp()
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var current model.SubscriptionPlan
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "title", "entitlement_type", "monthly_token_limit").First(&current, id).Error; err != nil {
 			return err
@@ -797,7 +860,6 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		updateMap := map[string]interface{}{
 			"title":                      req.Plan.Title,
 			"subtitle":                   req.Plan.Subtitle,
-			"price_amount":               req.Plan.PriceAmount,
 			"currency":                   req.Plan.Currency,
 			"duration_unit":              req.Plan.DurationUnit,
 			"duration_value":             req.Plan.DurationValue,
@@ -826,6 +888,10 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"unlimited_purchase_enabled": req.Plan.UnlimitedPurchaseEnabled,
 			"timed_conversion_enabled":   req.Plan.TimedConversionEnabled,
 			"updated_at":                 common.GetTimestamp(),
+		}
+		if req.PriceProvided {
+			updateMap["price_amount"] = req.Plan.PriceAmount
+			updateMap["price_amount_micros"] = req.Plan.PriceAmountMicros
 		}
 		if err := tx.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Updates(updateMap).Error; err != nil {
 			return err

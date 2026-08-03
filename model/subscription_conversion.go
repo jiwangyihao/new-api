@@ -22,37 +22,48 @@ type subscriptionConversionHooks struct {
 }
 
 type SubscriptionConversion struct {
-	Id                     int    `json:"id"`
-	UserId                 int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_subscription_conversion_user_key,priority:1"`
-	IdempotencyKey         string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_subscription_conversion_user_key,priority:2"`
-	SourceSubscriptionId   int    `json:"source_subscription_id" gorm:"not null;uniqueIndex:idx_subscription_conversions_source_subscription_id"`
-	SourcePlanId           int    `json:"source_plan_id" gorm:"not null;index"`
-	SourcePlanTitle        string `json:"source_plan_title" gorm:"type:varchar(255);not null"`
-	TargetSubscriptionId   int    `json:"target_subscription_id" gorm:"not null;index"`
-	TargetPlanId           int    `json:"target_plan_id" gorm:"not null;index"`
-	LedgerId               int    `json:"ledger_id" gorm:"not null;uniqueIndex"`
-	SourceStatus           string `json:"source_status" gorm:"type:varchar(32);not null"`
-	GrantSource            string `json:"grant_source" gorm:"type:varchar(32);not null"`
-	DatabaseNow            int64  `json:"database_now" gorm:"type:bigint;not null"`
-	SourceStartTime        int64  `json:"source_start_time" gorm:"type:bigint;not null"`
-	SourceEndTime          int64  `json:"source_end_time" gorm:"type:bigint;not null"`
-	RemainingSeconds       int64  `json:"remaining_seconds" gorm:"type:bigint;not null"`
-	Full31DayBlocks        int64  `json:"full_31_day_blocks" gorm:"type:bigint;not null"`
-	CreditBasis            int64  `json:"credit_basis" gorm:"type:bigint;not null"`
-	CreditBasisSource      string `json:"credit_basis_source" gorm:"type:varchar(32);not null"`
-	CurrentRemainingCredit int64  `json:"current_remaining_credit" gorm:"type:bigint;not null"`
-	GrossCredit            int64  `json:"gross_credit" gorm:"type:bigint;not null"`
-	DebtOffset             int64  `json:"debt_offset" gorm:"type:bigint;not null"`
-	NetAvailableCredit     int64  `json:"net_available_credit" gorm:"type:bigint;not null"`
-	AvailableCreditAfter   int64  `json:"available_credit_after" gorm:"type:bigint;not null"`
-	SettlementDebtAfter    int64  `json:"settlement_debt_after" gorm:"type:bigint;not null"`
-	BalanceBefore          int64  `json:"balance_before" gorm:"type:bigint;not null"`
-	BalanceAfter           int64  `json:"balance_after" gorm:"type:bigint;not null"`
-	LastGrantedAt          int64  `json:"last_granted_at" gorm:"type:bigint;not null"`
-	LastGrantTimeSource    string `json:"last_grant_time_source" gorm:"type:varchar(64);not null"`
-	LastGrantSource        string `json:"last_grant_source" gorm:"type:varchar(32);not null"`
-	ConvertedAt            int64  `json:"converted_at" gorm:"type:bigint;not null;index"`
-	CreatedAt              int64  `json:"created_at" gorm:"type:bigint;not null"`
+	Id                         int    `json:"id"`
+	UserId                     int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_subscription_conversion_user_key,priority:1"`
+	IdempotencyKey             string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_subscription_conversion_user_key,priority:2"`
+	SourceSubscriptionId       int    `json:"source_subscription_id" gorm:"not null;uniqueIndex:idx_subscription_conversions_source_subscription_id"`
+	SourcePlanId               int    `json:"source_plan_id" gorm:"not null;index"`
+	SourcePlanTitle            string `json:"source_plan_title" gorm:"type:varchar(255);not null"`
+	TargetSubscriptionId       int    `json:"target_subscription_id" gorm:"not null;index"`
+	TargetPlanId               int    `json:"target_plan_id" gorm:"not null;index"`
+	LedgerId                   int    `json:"ledger_id" gorm:"not null;uniqueIndex"`
+	SourceStatus               string `json:"source_status" gorm:"type:varchar(32);not null"`
+	GrantSource                string `json:"grant_source" gorm:"type:varchar(32);not null"`
+	DatabaseNow                int64  `json:"database_now" gorm:"type:bigint;not null"`
+	SourceStartTime            int64  `json:"source_start_time" gorm:"type:bigint;not null"`
+	SourceEndTime              int64  `json:"source_end_time" gorm:"type:bigint;not null"`
+	RemainingSeconds           int64  `json:"remaining_seconds" gorm:"type:bigint;not null"`
+	Full31DayBlocks            int64  `json:"full_31_day_blocks" gorm:"type:bigint;not null"`
+	CreditBasis                int64  `json:"credit_basis" gorm:"type:bigint;not null"`
+	CreditBasisSource          string `json:"credit_basis_source" gorm:"type:varchar(32);not null"`
+	CurrentRemainingCredit     int64  `json:"current_remaining_credit" gorm:"type:bigint;not null"`
+	GrossCredit                int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	DebtOffset                 int64  `json:"debt_offset" gorm:"type:bigint;not null"`
+	NetAvailableCredit         int64  `json:"net_available_credit" gorm:"type:bigint;not null"`
+	AvailableCreditAfter       int64  `json:"available_credit_after" gorm:"type:bigint;not null"`
+	SettlementDebtAfter        int64  `json:"settlement_debt_after" gorm:"type:bigint;not null"`
+	BalanceBefore              int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	BalanceAfter               int64  `json:"balance_after" gorm:"type:bigint;not null"`
+	LastGrantedAt              int64  `json:"last_granted_at" gorm:"type:bigint;not null"`
+	LastGrantTimeSource        string `json:"last_grant_time_source" gorm:"type:varchar(64);not null"`
+	LastGrantSource            string `json:"last_grant_source" gorm:"type:varchar(32);not null"`
+	ConvertedAt                int64  `json:"converted_at" gorm:"type:bigint;not null;index"`
+	ValuationCurrency          string `json:"valuation_currency" gorm:"type:varchar(8);not null;default:''"`
+	ValuationSourcePriceMicros int64  `json:"valuation_source_price_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationCreditBasis       int64  `json:"valuation_credit_basis" gorm:"type:bigint;not null;default:0"`
+	ValuationGrossCostMicros   int64  `json:"valuation_gross_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationNetCostMicros     int64  `json:"valuation_net_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationConfidence        string `json:"valuation_confidence" gorm:"type:varchar(16);not null;default:''"`
+	ValuationRuleVersion       int    `json:"valuation_rule_version" gorm:"not null;default:0"`
+	FxSourceCurrency           string `json:"fx_source_currency" gorm:"type:varchar(8);not null;default:''"`
+	FxRateNumerator            int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
+	FxRateDenominator          int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
+	FxCapturedAt               int64  `json:"fx_captured_at" gorm:"type:bigint;not null;default:0"`
+	CreatedAt                  int64  `json:"created_at" gorm:"type:bigint;not null"`
 }
 
 func (c *SubscriptionConversion) BeforeUpdate(_ *gorm.DB) error {

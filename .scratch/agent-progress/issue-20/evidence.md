@@ -57,13 +57,10 @@
 - 静态产物：`web/default` 的 `bun run build` 成功；`web/classic` 安装本地依赖后 `bun run build` 成功，仅用于满足 `go:embed` 启动前提。
 - 启动命令：`PORT=3100 SQLITE_PATH='C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-20-valuation-foundation/.scratch/agent-progress/issue-20/browser-smoke.db' SESSION_SECRET='issue20-browser-smoke-session-secret' go run .`。
 - 隔离性：`.scratch/agent-progress/issue-20/browser-smoke.db` 实际落盘；`http://127.0.0.1:3100/api/setup` 可访问。初始化时响应 `database_type=sqlite`；重启后同一数据库返回 `status=true`。
-- default UI：受控 Chromium 打开 3100，标题为 `New API`，观察到 default 导航；使用隔离管理员账号登录后进入 `/dashboard/overview`。该证据只证明 default 首页与登录，不等同于套餐 create → edit → refresh。
-- Orca 内嵌标签阻塞：`orca tab create --worktree active --url http://127.0.0.1:3100 --json` 多次返回 `runtime_error: Tab creation timed out`；`orca tab list --worktree all --json` 返回 `tabs=[]`。
-- Orca 桌面控制阻塞：防火墙弹窗关闭后，`orca computer hotkey --app Orca --window-id 7870344 --restore-window --key CmdOrCtrl+L --json` 仍返回 `window_not_focused`；未继续探索新桌面控制方案。
-- 已发送 escalation `msg_065b59e8fd5f`；协调器随后用内置 browser tool 接管套餐完整往返。隔离账号、页面 URL、create/edit 值与精确 payload 期望已通过回复 `msg_8f2700429491` 交接。
-
-## 尚待协调器补入
-
-- default 管理套餐 create：`price_amount="9007199254.740991"` 与 `price_amount_micros="9007199254740991"` 的实际 network payload/响应。
-- edit 为 `40.654321` / `40654321` 后刷新显示 `40.654321` 的实际浏览器证据。
-- 完整浏览器结果到达后再关闭隔离后台进程；此前不发送 `worker_done`。
+- default UI：协调器使用真实受控 Chromium 登录隔离管理员并操作 `/subscriptions`，完整证据见 `.scratch/agent-progress/issue-20/browser-coordinator-evidence.md`。
+- 创建：表单金额 `40.123456`；`POST /api/subscription/admin/plans` 请求含 `price_amount: "40.123456"`、`price_amount_micros: "40123456"`、`currency: "CNY"`，HTTP 200；响应和随后列表 GET 均返回相同精确值。
+- 编辑与刷新：从真实行菜单重开表单，初始值为 `40.123456`；改为 `41.654321` 后 `PUT /api/subscription/admin/plans/2` 请求含 `price_amount: "41.654321"`、`price_amount_micros: "41654321"`，HTTP 200；列表 GET 和完整 reload 后再次打开表单均精确恢复 `41.654321`。
+- Credit 估值币种：UI 选择 CNY，设置 concurrency `4`、queue `8`、Business Code `issue20-credit`；PUT 请求、响应、刷新 GET 及页面 reload 均保持 `valuation_currency: "CNY"` 与相同配置。
+- 结论：真实浏览器 create → read → edit → refresh 与 Credit 估值币种往返通过；十进制字符串、micros 字符串、响应和刷新值一致，无精度漂移。
+- 本终端的 Orca 内嵌标签曾返回 `runtime_error: Tab creation timed out`，桌面键盘控制返回 `window_not_focused`；已持久化并发送 escalation `msg_065b59e8fd5f`。协调器随后以受控 Chromium 完成验收，因此该环境限制不再阻塞交付。
+- 隔离后台进程已停止，临时 `browser-smoke.db` 已删除；保留的浏览器证据不依赖临时数据库继续存在。

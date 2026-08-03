@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-收尾与交付：实现及定向门禁已完成；协调器正在使用已恢复的 3100 隔离实例补跑 default UI 的 create → edit → refresh 浏览器往返。
+收尾与交付：实现、定向门禁、真实 default UI create → read → edit → refresh 及 Credit 估值币种往返均已完成；正在提交最终证据并清理工作树。
 
 ## 已完成
 
@@ -10,19 +10,20 @@
 - 固定非所有权：不回填历史价格或估值；不修改 migration marker 状态；不决定或阻止 `ready`；不启用 Credit 数量/估值强制双写。
 - 后端 model/controller/router 定向回归通过；router 公开套餐 DTO 已显式覆盖 nullable `price_amount_micros`。
 - 前端 typecheck、两份定向测试（25 pass）、六语言 i18n 同步通过。
-- 隔离 SQLite 实例使用 3100 与 `.scratch/agent-progress/issue-20/browser-smoke.db`；default 首页与管理员登录已由受控 Chromium 验证。
-- Orca tab 创建与桌面键盘控制的确切环境错误已持久化并发送 escalation；未把 API、组件测试或登录 smoke 冒充完整浏览器往返。
+- 隔离 SQLite 实例使用 3100 与 `.scratch/agent-progress/issue-20/browser-smoke.db`；协调器以真实受控 Chromium 完成 default 管理 UI create → read → edit → refresh。
+- 浏览器实测证明请求中的 `price_amount` 原始十进制字符串、`price_amount_micros` 精确字符串、响应、列表读取及 reload 后表单值一致；Credit `valuation_currency` CNY 与独立配置同样通过 PUT/GET/reload。
+- 本终端的 Orca tab/桌面控制错误已持久化并发送 escalation，随后由协调器接管唯一浏览器验收项；未把 API 或组件测试冒充浏览器通过。
 
 ## 下一步
 
-1. 接收协调器的 default UI create → edit → refresh 与 network payload 证据。
-2. 将浏览器结果补入 `evidence.md`，完成 TODO 与最终清洁检查。
-3. 按实时编排指令发送一次 `worker_done`；此前不发送。
+1. 提交协调器浏览器证据与最终状态。
+2. 确认 TODO 全部完成、隔离服务停止、临时数据库删除、工作树 clean。
+3. 发送一次 `worker_done` 并立即停止。
 
-## 阻塞
+## 遗留风险
 
-本终端的 Orca 浏览器控制受环境阻塞；协调器已接管该唯一浏览器验收项。MySQL/PostgreSQL DSN 未提供，真实外部数据库测试明确跳过，不能宣称三数据库实际通过。
+MySQL/PostgreSQL DSN 未提供，真实外部数据库测试明确跳过；最终证据只覆盖真实 SQLite、跨方言 SQL/迁移合同测试，不能宣称三数据库实际通过。
 
 ## 最近安全提交
 
-`b1ca3541b`：`test(subscription): 覆盖公开套餐精确价格字段`；主实现安全点为 `4823efa37`。
+`b1ca3541b`：`test(subscription): 覆盖公开套餐精确价格字段`；恢复/门禁证据提交为 `88450e1e1`，主实现安全点为 `4823efa37`。

@@ -223,9 +223,10 @@ type SubscriptionPlan struct {
 	Title    string `json:"title" gorm:"type:varchar(128);not null"`
 	Subtitle string `json:"subtitle" gorm:"type:varchar(255);default:''"`
 
-	// Display money amount (follow existing code style: float64 for money)
-	PriceAmount float64 `json:"price_amount" gorm:"precision:10;scale:6;not null;default:0"`
-	Currency    string  `json:"currency" gorm:"type:varchar(8);not null;default:'USD'"`
+	// PriceAmount is the legacy display amount; PriceAmountMicros is authoritative for valuation.
+	PriceAmount       float64 `json:"price_amount" gorm:"precision:10;scale:6;not null;default:0"`
+	PriceAmountMicros int64   `json:"price_amount_micros,string" gorm:"type:bigint;not null;default:0"`
+	Currency          string  `json:"currency" gorm:"type:varchar(8);not null;default:'USD'"`
 
 	DurationUnit  string `json:"duration_unit" gorm:"type:varchar(16);not null;default:'month'"`
 	DurationValue int    `json:"duration_value" gorm:"type:int;not null;default:1"`

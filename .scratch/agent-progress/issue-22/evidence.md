@@ -27,3 +27,14 @@
 - 2026-08-03：`go test ./model -run 'TestCreditValuationOrderIngress(CreatesExactState|PreservesLegacyPathWhenMarkerNotReady)' -count=1` 返回 `go test: 1 packages ok`。
 - 2026-08-03：`go test ./model -run 'Test(CreditValuationRequestPreConsumeRemovesMovingAverageCost|CreditBalanceLifecycleAcrossBillingStrategiesAndCache|PreConsumeUserSubscriptionByUnitsReturnsPlanMetadata)' -count=1` 返回 `go test: 1 packages ok`。
 - 2026-08-03：`go test ./model -run 'TestCreditValuationRequest(FinalizesSameTargetIdempotently|PreConsumeRemovesMovingAverageCost)' -count=10` 返回 `go test: 1 packages ok`。
+
+
+## 五接口 Credit tracer
+- RED：新增 `TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY` 后，paid-value DTO 将 `time_based_value` 改为 nullable，但旧行构造仍写入值对象，编译稳定失败于 `cannot use dto.AdminAnalyticsMoneyAmount as *dto.AdminAnalyticsMoneyAmount`；旧 row guard 同时只接受 `plan.price_amount > 0`，无法表示零价全局 Credit 池。
+- GREEN：`go test ./model -run TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY -count=1` 返回 `go test: 1 packages ok`。
+- 真实路径：订单创建冻结 `40,000,000` micros CNY / `1,000` Credit，经 `CompleteSubscriptionOrderTx` 入账，再由真实 `request_id` 预扣并最终结算 200；验收主流程未直接插入 `CreditValuationState`。
+- 五视图一致：summary/users/subscriptions/plans/sources 均读取同一状态，recognized/exact 为 `32,000,000` micros CNY，estimated 为 0，unknown 为 0；summary `active_paid_subscription_count=1`。
+- 明细语义：`available_credit=800`、`time_based_value=null`、basis=`credit_moving_weighted_average`、source=`credit_balance_pool`、attribution=`moving_weighted_pool`。
+- 回归：`go test ./model -run 'Test(PaidSubscriptionValue|CreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)' -count=1` 返回 `go test: 1 packages ok`。
+- 编译诊断：`dto/admin_analytics.go` 与 `model/admin_analytics_paid_subscription.go` 的 LSP diagnostics 均为 `OK`。
+- 边界：本安全点未改 paid-value 查询签名、未扩展 warning 设计、未写 FX 字段、未创建或转换 migration marker。

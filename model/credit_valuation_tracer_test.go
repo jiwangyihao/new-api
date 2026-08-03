@@ -1,10 +1,12 @@
 package model
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -264,4 +266,69 @@ func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {
 	var replayedState CreditValuationState
 	require.NoError(t, db.First(&replayedState, firstRecord.ValuationSubscriptionId).Error)
 	require.Equal(t, firstState.StateVersion, replayedState.StateVersion)
+}
+
+func TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completeCreditValuationOrder(t, db, &order)
+	const requestID = "credit-valuation-five-views"
+	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, SettleCreditRequestTarget(requestID, 200, true))
+
+	query := AdminAnalyticsQuery{
+		SnapshotAt:   GetDBTimestamp(),
+		EndTimestamp: GetDBTimestamp(),
+		RangeMode:    AdminAnalyticsRangeModeSnapshot,
+		Currency:     "CNY",
+		Limit:        20,
+	}
+	summary, err := GetAdminPaidSubscriptionValueSummary(query)
+	require.NoError(t, err)
+	users, err := GetAdminPaidSubscriptionValueUsers(query)
+	require.NoError(t, err)
+	subscriptions, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	plans, err := GetAdminPaidSubscriptionValuePlanBreakdown(query)
+	require.NoError(t, err)
+	sources, err := GetAdminPaidSubscriptionValueSourceBreakdown(query)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, summary.Data.Summary.ActivePaidSubscriptionCount)
+	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(summary.Data.Summary.RecognizedRemainingValueByCurrency, "CNY"))
+	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(summary.Data.Summary.ExactRemainingValueByCurrency, "CNY"))
+	require.Zero(t, moneyBreakdownMicros(summary.Data.Summary.EstimatedRemainingValueByCurrency, "CNY"))
+	require.Zero(t, summary.Data.Summary.UnknownCostCredit)
+
+	require.Len(t, users.Data.Users.Items, 1)
+	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(users.Data.Users.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
+	require.Len(t, subscriptions.Data.Subscriptions.Items, 1)
+	item := subscriptions.Data.Subscriptions.Items[0]
+	require.Equal(t, SubscriptionEntitlementCreditBalance, item.EntitlementType)
+	require.Equal(t, int64(800), item.AvailableCredit)
+	require.Equal(t, "32000000", item.RecognizedRemainingValue.AmountMicros)
+	require.Equal(t, "32000000", item.ExactRemainingValue.AmountMicros)
+	require.Nil(t, item.TimeBasedValue)
+	require.Equal(t, "credit_moving_weighted_average", item.ValuationBasis)
+	require.Equal(t, "credit_balance_pool", string(item.Source))
+	require.Equal(t, "moving_weighted_pool", item.SourceAttribution)
+
+	require.Len(t, plans.Data.Plans.Items, 1)
+	require.Equal(t, creditPlan.Id, plans.Data.Plans.Items[0].PlanID)
+	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(plans.Data.Plans.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
+	require.Len(t, sources.Data.Sources.Items, 1)
+	require.Equal(t, "credit_balance_pool", string(sources.Data.Sources.Items[0].Source))
+	require.Equal(t, "moving_weighted_pool", sources.Data.Sources.Items[0].SourceAttribution)
+	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(sources.Data.Sources.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
+}
+
+func moneyBreakdownMicros(items []dto.AdminAnalyticsMoneyBreakdown, currency string) int64 {
+	for _, item := range items {
+		if item.Currency == currency {
+			value, _ := strconv.ParseInt(item.AmountMicros, 10, 64)
+			return value
+		}
+	}
+	return 0
 }

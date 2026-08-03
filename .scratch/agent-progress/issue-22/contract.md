@@ -29,3 +29,6 @@
 
 ## 明确非所有权
 不实现 #23–#28 的追加/少结算/退款/异步任务/coalescer、转换/售后、恢复、跨币种 FX、有理数汇率、历史迁移/marker 生命周期、三数据库矩阵和发布切换。#22 对 marker 仅只读。
+
+## 五接口安全点收敛
+协调器要求本安全点只完成现有 summary/users/subscriptions/plans/sources 的真实 SQLite tracer：冻结 `40 CNY / 1,000 Credit`，消费 200 后五个视图一致返回 `32,000,000` micros CNY、活动数 1、estimated 0、unknown 0。此安全点不重构查询签名、不扩展 warning 设计；通过后立即提交，再进入默认前端与六语言。FX 和 migration marker 生命周期仍明确排除。

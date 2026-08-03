@@ -80,3 +80,10 @@
 - `SettleBillingWithInput` 现通过 `SubscriptionFunding` 的窄 seam 识别已跟踪 Credit 请求，以相同累计目标 200 调用既有深模块最终化；新建第二个 BillingSession 并复用同一 request_id/目标后，数量、价值、version 与 finalized_at 均不变。
 - 保持范围：仅同目标一次同步最终化；未实现 target 增减、少结算、退款、异步 identity、coalescer 或 FX。
 - Gate C 三段已闭环；下一步提交安全点并收敛既有 RouterProvider UI RED。
+
+## 2026-08-04 UI 与六语言 GREEN 安全点
+- TanStack 测试夹具已使用真实 `createRouter` + `createMemoryHistory` + `RouterProvider`，未删除 `Link`、绕过页面或弱化关键 32 CNY/current-only 行为。
+- `format` / `panel-fields` / paid-value 页面共 17 项测试 GREEN；`amount_micros`、BigInt、exact/estimated/unknown、Credit 时间值不适用、moving-weighted、confidence、current-only 均被覆盖。
+- 修复两个已有 TypeScript nullable 映射错误：仅收紧 `adminAnalyticsCreditOverviewValues` 与 `adminAnalyticsCreditRankingValue` 的返回类型，实际实现本就总返回 string。
+- 新增 22 个 Credit 分析可见键，en/zh/fr/ja/ru/vi 全部存在且非空；`i18n:sync` 对六语言均为 missing=0、extras=0。
+- `bun run typecheck` 与 `bun run build` 已 GREEN；下一步只做真实 SQLite 五接口回归、真实浏览器 smoke 与最终窄门禁。

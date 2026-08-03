@@ -98,3 +98,11 @@
 - 主链路观察：真实 `relayInfo.RequestId=kyren-credit-billing-session-200`；预扣记录 applied=200、deducted_exact=8000000、valuation_subscription_id=真实 Credit entitlement；最终 status=settled、finalized_at 非零、settlement_version=1。
 - 持久化重放：重新构造第二个 `RelayInfo` / `BillingSession`，复用同一 request_id 与目标 200；`PreConsumeBilling` 读取既有预扣记录，`SettleBillingWithInput` 再次进入深模块幂等路径，finalized_at/settlement_version/state_version 均不变。主命令再次返回 `go test: 1 packages ok`。
 - 定向回归：`go test ./model ./service ./controller -run 'Test(CreditValuationRequestFinalizesSameTargetIdempotently|SubscriptionBillingPreConsumesEstimatedTokens|SubscriptionBillingSettleAvoidsHotSubscriptionRead|SettleBillingWithInputDoesNotUsePreConsumeQuotaWhenEstimateMissing|CreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve|SubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation)' -count=1` 返回 `go test: 3 packages ok`。
+
+## 2026-08-04 UI RED→GREEN 与六语言
+- Router RED：`bun test src/features/admin-analytics/paid-value-panel.test.tsx` 为 `0 pass / 1 fail`，`Link` 因缺少 `RouterProvider` 触发 `router.isServer` 空引用。
+- Router GREEN：测试使用真实内存 history/router/provider 包住完整 `AdminAnalyticsPage`；`bun test ...paid-value-panel.test.tsx` 返回 `1 pass / 0 fail`，继续断言至少三处 `¥32.00`、确值、时间值不适用、移动加权、Exact、current-only 提示与刷新动作。
+- 组合 UI GREEN：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/panel-fields.test.ts src/features/admin-analytics/paid-value-panel.test.tsx` 返回 `17 pass / 0 fail`。
+- 初次 typecheck RED：`index.tsx:1021/1101` 两个 `string | undefined` 映射与既有 helper 实际总返回 string 不符。最小修复仅收紧两个 helper 的交叉返回类型；未改运行时行为。
+- typecheck/build GREEN：`bun run typecheck && bun run build` 成功；Rsbuild v2.0.1 于 22.8 秒完成 production build。
+- i18n：为本切片新增 22 个 Credit 分析键，六语言均有人工翻译；程序化核验 en/zh/fr/ja/ru/vi 的 missing=[]、blank=[]。`bun run i18n:sync` 报告六语言 missingCount=0、extrasCount=0；报告内其余历史 untranslatedCount 不属于本切片且未改动。

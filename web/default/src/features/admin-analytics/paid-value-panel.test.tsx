@@ -2,6 +2,12 @@
 import type { InternalAxiosRequestConfig } from 'axios'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
+import {
   cleanup,
   fireEvent,
   render,
@@ -208,20 +214,30 @@ test('Credit paid-value panel displays exact micros and refreshes current-only s
     1_800_000_000
   )
 
+  const rootRoute = createRootRoute({
+    component: () => (
+      <AdminAnalyticsPage
+        search={search}
+        onSearchChange={(next) => changes.push(next)}
+        onDrilldown={() => undefined}
+      />
+    ),
+  })
+  const router = createRouter({
+    routeTree: rootRoute,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+
   const view = render(
     <I18nextProvider i18n={i18n}>
       <QueryClientProvider client={queryClient}>
-        <AdminAnalyticsPage
-          search={search}
-          onSearchChange={(next) => changes.push(next)}
-          onDrilldown={() => undefined}
-        />
+        <RouterProvider router={router} />
       </QueryClientProvider>
     </I18nextProvider>
   )
 
   await waitFor(() => assert.ok(view.getAllByText('¥32.00').length >= 3))
-  assert.ok(view.getByText('Exact remaining value'))
+  assert.ok(view.getAllByText('Exact remaining value').length >= 2)
   assert.ok(view.getByText('Not applicable'))
   assert.ok(view.getByText('Moving weighted average'))
   assert.ok(view.getByText('Exact'))

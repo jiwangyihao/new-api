@@ -87,7 +87,7 @@ function localizedAdminAnalyticsValue(
 export function adminAnalyticsCreditOverviewValues(
   quota: AdminAnalyticsOverviewQuota,
   subscriptions: AdminAnalyticsOverviewSubscriptions
-): AdminAnalyticsCardValue[] {
+): Array<AdminAnalyticsCardValue & { value: string }> {
   return [
     {
       labelKey: 'adminAnalytics.metrics.availableCredit',
@@ -122,7 +122,7 @@ export function adminAnalyticsCreditOverviewValues(
 
 export function adminAnalyticsCreditRankingValue(
   item: AdminAnalyticsSubscriptionRankingItem
-): AdminAnalyticsCardValue {
+): AdminAnalyticsCardValue & { value: string } {
   const labelKey = adminAnalyticsLifecycleLabelKeys[item.lifecycle_state]
   const amount =
     item.lifecycle_state === 'credit_debt'

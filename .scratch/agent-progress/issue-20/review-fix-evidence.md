@@ -37,13 +37,17 @@
 
 ## Finding 3：计划级线性化
 
-### 待复现症状
+### 当前入口与锁序证据
 
-并发修改 `valuation_currency` 与创建首个 Credit 权益时，只允许两个串行结果之一，不得两者均成功并留下权益存在但币种被普通接口修改的状态。
+- 生产 allocation 入口：订单完成 `CompleteSubscriptionOrderTx`、兑换 `Redeem`、计时转换 `confirmTimedSubscriptionConversion`、管理员 increase `AdjustCreditBalance`；四者最终均调用 `GrantCreditBalanceTx`。直接调用的其余引用均为测试。
+- `GrantCreditBalanceTx` 当前锁序是用户行 → 幂等 ledger 查询 → 可选未锁 `TargetPlanSnapshot` / 普通计划读取 → 用户现有权益行。订单回调明确传入从购买快照构造的 `TargetPlanSnapshot`，因此可能完全不重读权威全局 Credit plan。
+- controller 币种更新当前锁序是全局 Credit 套餐行 → `CreditValuationCurrencyLockedTx` 计数权益/估值状态/ledger。两条路径没有共享计划锁，故首个 grant 与币种更新可各自观察旧状态并同时成功。
+- 转换入口另有 `conversion_guard_version` 原子 update，但仅覆盖 conversion enablement；订单、兑换、管理员 increase 仍没有同一接缝。disabled-plan 的新 grant 拒绝分别存在于购买/兑换/转换入口，既有权益消费不经过 grant。
+- 工具卡点：读取 `model/subscription.go:1260-1335` 时 socket 断开一次；未产生文件改动，后续重试。
 
 ### RED / GREEN
 
-待记录。
+待持久化 model guard 行为级并发测试。
 
 ## 外部数据库边界
 

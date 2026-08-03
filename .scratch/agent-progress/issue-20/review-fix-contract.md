@@ -16,11 +16,11 @@
 
 ## Finding 3：共享计划级线性化接缝
 
-- 最终接口与锁顺序待入口清单和 RED 测试确认。
-- 普通 Credit 套餐更新与所有现存 Credit allocation/grant 路径必须在各自数据库事务中经过同一个 model/service 深模块 guard。
-- guard 必须重新读取并锁定权威全局 Credit plan，不信任未锁的 `TargetPlanSnapshot`。
-- 合法串行结果仅为：币种先提交、首个权益随后使用新币种；或权益先提交、普通币种修改稳定拒绝。
-- disabled-plan 既有消费与新 grant 拒绝语义不变。
+- 共享深模块接口应在事务内锁定并重读唯一全局 Credit 套餐；grant 与币种更新都必须调用它，不能信任 `TargetPlanSnapshot` 作为计划权威状态。
+- 统一计划级顺序以“先锁全局 Credit 套餐”为业务线性化点；guard 内再检查权益/估值状态/ledger，之后各入口继续其既有用户、订单、兑换或源权益锁。
+- 所有生产 allocation 汇聚到 `GrantCreditBalanceTx`，因此在该入口强制 guard 即可覆盖订单、兑换、转换和管理员 increase；recovery/decrease 不创建首个 Credit 权益，不扩大本 finding。
+- 合法串行结果仅为：币种先提交，后续首个 grant 重读新币种；或首个 grant 先提交，随后币种更新返回 `ErrCreditValuationCurrencyLocked`。
+- disabled-plan 既有权益消费语义不变；新购买、兑换、转换和管理员 grant 的既有拒绝边界必须保留。
 
 ## 明确非所有权
 

@@ -32,6 +32,7 @@ type PublicSubscriptionPlan struct {
 	Title                    string                              `json:"title"`
 	Subtitle                 string                              `json:"subtitle"`
 	PriceAmount              float64                             `json:"price_amount"`
+	PriceAmountMicros        *int64                              `json:"price_amount_micros,string"`
 	Currency                 string                              `json:"currency"`
 	DurationUnit             string                              `json:"duration_unit"`
 	DurationValue            int                                 `json:"duration_value"`
@@ -57,6 +58,7 @@ func toPublicSubscriptionPlan(p model.SubscriptionPlan) PublicSubscriptionPlanDT
 			Title:                    p.Title,
 			Subtitle:                 p.Subtitle,
 			PriceAmount:              p.PriceAmount,
+			PriceAmountMicros:        p.PriceAmountMicros,
 			Currency:                 p.Currency,
 			DurationUnit:             p.DurationUnit,
 			DurationValue:            p.DurationValue,
@@ -552,6 +554,7 @@ func decodeAdminUpsertSubscriptionPlanRequest(c *gin.Context) (AdminUpsertSubscr
 	if err != nil {
 		return AdminUpsertSubscriptionPlanRequest{}, err
 	}
+	delete(rawPlan, "price_amount")
 	delete(rawPlan, "price_amount_micros")
 	planPayload, err := common.Marshal(rawPlan)
 	if err != nil {
@@ -736,14 +739,6 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
 		return
 	}
-	if req.Plan.PriceAmount < 0 {
-		common.ApiErrorMsg(c, "价格不能为负数")
-		return
-	}
-	if req.Plan.PriceAmount > 9999 {
-		common.ApiErrorMsg(c, "价格不能超过9999")
-		return
-	}
 	req.Plan.Currency = normalizeSubscriptionPlanCurrency(req.Plan.Currency)
 	if req.Plan.DurationUnit == "" {
 		req.Plan.DurationUnit = model.SubscriptionDurationMonth
@@ -804,14 +799,6 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	}
 	if strings.TrimSpace(req.Plan.Title) == "" {
 		common.ApiErrorMsg(c, "套餐标题不能为空")
-		return
-	}
-	if req.Plan.PriceAmount < 0 {
-		common.ApiErrorMsg(c, "价格不能为负数")
-		return
-	}
-	if req.Plan.PriceAmount > 9999 {
-		common.ApiErrorMsg(c, "价格不能超过9999")
 		return
 	}
 	req.Plan.Id = id

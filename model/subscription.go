@@ -224,7 +224,7 @@ type SubscriptionPlan struct {
 	Subtitle string `json:"subtitle" gorm:"type:varchar(255);default:''"`
 
 	// PriceAmount is the legacy display amount; a non-nil PriceAmountMicros is authoritative for valuation.
-	PriceAmount       float64 `json:"price_amount" gorm:"precision:10;scale:6;not null;default:0"`
+	PriceAmount       float64 `json:"price_amount" gorm:"precision:19;scale:6;not null;default:0"`
 	PriceAmountMicros *int64  `json:"price_amount_micros,string" gorm:"type:bigint"`
 	Currency          string  `json:"currency" gorm:"type:varchar(8);not null;default:'USD'"`
 

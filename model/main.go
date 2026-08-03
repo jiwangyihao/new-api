@@ -588,7 +588,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 ` + "`id`" + ` integer,
 ` + "`title`" + ` varchar(128) NOT NULL,
 ` + "`subtitle`" + ` varchar(255) DEFAULT '',
-` + "`price_amount`" + ` decimal(10,6) NOT NULL,
+` + "`price_amount`" + ` decimal(19,6) NOT NULL,
 ` + "`price_amount_micros`" + ` bigint,
 ` + "`currency`" + ` varchar(8) NOT NULL DEFAULT 'USD',
 ` + "`duration_unit`" + ` varchar(16) NOT NULL DEFAULT 'month',
@@ -645,7 +645,7 @@ PRIMARY KEY (` + "`id`" + `)
 		required := []sqliteColumnDef{
 			{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
 			{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
-			{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},
+			{Name: "price_amount", DDL: "`price_amount` decimal(19,6) NOT NULL"},
 			{Name: "price_amount_micros", DDL: "`price_amount_micros` bigint"},
 			{Name: "currency", DDL: "`currency` varchar(8) NOT NULL DEFAULT 'USD'"},
 			{Name: "duration_unit", DDL: "`duration_unit` varchar(16) NOT NULL DEFAULT 'month'"},
@@ -897,8 +897,8 @@ func migrateTokenModelLimitsToText() error {
 	return nil
 }
 
-// migrateSubscriptionPlanPriceAmount migrates price_amount column from float/double to decimal(10,6)
-// This is safe to run multiple times - it checks the column type first
+// migrateSubscriptionPlanPriceAmount migrates price_amount to decimal(19,6).
+// This is safe to run multiple times because it verifies precision and scale.
 func migrateSubscriptionPlanPriceAmount() {
 	// SQLite doesn't support ALTER COLUMN, and its type affinity handles this automatically
 	// Skip early to avoid GORM parsing the existing table DDL which may cause issues
@@ -921,29 +921,26 @@ func migrateSubscriptionPlanPriceAmount() {
 
 	var alterSQL string
 	if common.UsingPostgreSQL {
-		// PostgreSQL: Check if already decimal/numeric
-		var dataType string
-		if err := DB.Raw(`SELECT data_type FROM information_schema.columns
+		var precision, scale int
+		if err := DB.Raw(`SELECT COALESCE(numeric_precision, 0), COALESCE(numeric_scale, 0) FROM information_schema.columns
 			WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?`,
-			tableName, columnName).Scan(&dataType).Error; err != nil {
+			tableName, columnName).Row().Scan(&precision, &scale); err != nil {
 			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if dataType == "numeric" {
-			return // Already decimal/numeric
+		} else if precision >= 19 && scale == 6 {
+			return
 		}
-		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(10,6) USING %s::decimal(10,6)`,
+		alterSQL = fmt.Sprintf(`ALTER TABLE %s ALTER COLUMN %s TYPE decimal(19,6) USING %s::decimal(19,6)`,
 			tableName, columnName, columnName)
 	} else if common.UsingMySQL {
-		// MySQL: Check if already decimal
 		var columnType string
 		if err := DB.Raw(`SELECT COLUMN_TYPE FROM information_schema.columns
 				WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
 			tableName, columnName).Scan(&columnType).Error; err != nil {
 			common.SysLog(fmt.Sprintf("Warning: failed to query metadata for %s.%s: %v", tableName, columnName, err))
-		} else if strings.HasPrefix(strings.ToLower(columnType), "decimal") {
-			return // Already decimal
+		} else if strings.HasPrefix(strings.ToLower(columnType), "decimal(19,6)") {
+			return
 		}
-		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s decimal(10,6) NOT NULL DEFAULT 0",
-			tableName, columnName)
+		alterSQL = fmt.Sprintf("ALTER TABLE %s MODIFY COLUMN %s decimal(19,6) NOT NULL DEFAULT 0", tableName, columnName)
 	} else {
 		return
 	}
@@ -952,7 +949,7 @@ func migrateSubscriptionPlanPriceAmount() {
 		if err := DB.Exec(alterSQL).Error; err != nil {
 			common.SysLog(fmt.Sprintf("Warning: failed to migrate %s.%s to decimal: %v", tableName, columnName, err))
 		} else {
-			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(10,6)", tableName, columnName))
+			common.SysLog(fmt.Sprintf("Successfully migrated %s.%s to decimal(19,6)", tableName, columnName))
 		}
 	}
 }

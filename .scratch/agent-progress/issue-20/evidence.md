@@ -35,6 +35,10 @@
 - RED：估值状态、迁移 marker、计时 grant 与请求/低频快照结构不存在，schema 测试编译失败。
 - GREEN：附加式模型注册到标准/快速迁移；真实 SQLite 两次迁移均成功，状态 user 唯一、grant 幂等键及来源组合唯一由数据库拒绝重复，marker 保持空表且 #20 未写状态。
 - GREEN：比例测试补齐普通值、向下取整、完全清空吸收余数、零分母、`MaxInt64` 宽中间乘积和结果溢出。
+- RED：只读价格诊断类型/入口不存在；GREEN：按套餐 ID 排序输出 `negative`、`invalid_decimal`、`precision_exceeds_six`/`overflow`，前后 `price_amount_micros` 快照完全一致。
+- RED：前端 `Number` 往返破坏大十进制；GREEN：表单保持原始字符串，以 `BigInt` 生成 micros，序列化 payload 同时保留原十进制与精确 micros；刷新由 micros 还原文本。
+- GREEN：Credit 计划 UI 显式选择 CNY/USD 并提示冻结条件；六语言新增文案，i18n 报告六语言 `missingCount=0`、`extrasCount=0`。
+- GREEN：`bun run typecheck` 与两份定向前端测试通过（25 pass, 0 fail）。
 
 当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
 ## 最终验证待办

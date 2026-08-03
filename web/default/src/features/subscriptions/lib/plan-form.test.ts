@@ -60,7 +60,7 @@ describe('subscription plan distributor form mapping', () => {
     const values: PlanFormValues = {
       ...PLAN_FORM_DEFAULTS,
       title: 'Basic',
-      price_amount: 40,
+      price_amount: '40',
       monthly_token_limit: 1_000_000_000,
       concurrency_limit: 1,
       queue_capacity: 10,
@@ -113,7 +113,7 @@ describe('subscription plan distributor form mapping', () => {
     const payload = formValuesToPlanPayload({
       ...PLAN_FORM_DEFAULTS,
       title: 'Pro',
-      price_amount: 40,
+      price_amount: '40',
       kyren_product_id: 'prod_kyren',
     })
 
@@ -128,5 +128,43 @@ describe('subscription plan distributor form mapping', () => {
     })
 
     assert.equal(payload.plan.business_code, undefined)
+  })
+})
+
+describe('subscription plan exact price round-trip', () => {
+  test('builds authoritative micros from the original decimal input', () => {
+    const values = {
+      ...PLAN_FORM_DEFAULTS,
+      title: 'Exact price',
+      price_amount: '9007199254.740991',
+    } satisfies PlanFormValues
+
+    const payload = formValuesToPlanPayload(values)
+
+    assert.equal(payload.plan.price_amount_micros, '9007199254740991')
+    const serialized = JSON.stringify(payload)
+    const parsed = JSON.parse(serialized) as {
+      plan: { price_amount: string; price_amount_micros: string }
+    }
+    assert.equal(parsed.plan.price_amount, '9007199254.740991')
+    assert.equal(parsed.plan.price_amount_micros, '9007199254740991')
+  })
+
+  test('refreshes the original decimal text from authoritative micros', () => {
+    const plan = {
+      ...formValuesToPlanPayload({
+        ...PLAN_FORM_DEFAULTS,
+        title: 'Exact price',
+        price_amount: '40.123456',
+      }).plan,
+      id: 1,
+      title: 'Exact price',
+      price_amount: 40.123456,
+      price_amount_micros: '40123456',
+    } as SubscriptionPlan
+
+    const values = planToFormValues(plan)
+
+    assert.equal(values.price_amount, '40.123456')
   })
 })

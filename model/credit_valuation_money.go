@@ -36,6 +36,11 @@ func ParseDecimalAmountMicros(text string) (int64, error) {
 	if len(parts) > 2 || parts[0] == "" {
 		return 0, ErrSubscriptionPlanPriceInvalid
 	}
+	for _, digit := range parts[0] {
+		if digit < '0' || digit > '9' {
+			return 0, ErrSubscriptionPlanPriceInvalid
+		}
+	}
 	whole, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
 		return 0, ErrCreditValuationOverflow

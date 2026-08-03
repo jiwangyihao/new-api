@@ -306,12 +306,9 @@ export function SubscriptionsMutateDrawer({
                       <FormControl>
                         <Input
                           {...field}
-                          type='number'
-                          step='0.01'
-                          min={0}
-                          onChange={(e) =>
-                            field.onChange(parseFloat(e.target.value) || 0)
-                          }
+                          type='text'
+                          inputMode='decimal'
+                          placeholder='0.000000'
                         />
                       </FormControl>
                       <FormMessage />

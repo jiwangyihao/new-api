@@ -152,6 +152,7 @@ func SubscriptionPlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSna
 		Id:                      snapshot.PlanID,
 		Title:                   snapshot.PlanTitle,
 		PriceAmount:             snapshot.PriceAmount,
+		PriceAmountMicros:       snapshot.ListPriceMicros,
 		Currency:                snapshot.Currency,
 		EntitlementType:         snapshot.PlanEntitlementType,
 		TotalAmount:             snapshot.TotalAmount,

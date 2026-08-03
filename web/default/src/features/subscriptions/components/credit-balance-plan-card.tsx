@@ -36,6 +36,13 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { getCreditBalancePlan } from '../api'
 import {
@@ -111,6 +118,7 @@ export function CreditBalancePlanCard() {
     plan.credit_balance_purchase_enabled,
     plan.credit_balance_redemption_enabled,
     plan.credit_balance_conversion_enabled,
+    plan.currency,
   ])
 
   return (
@@ -244,7 +252,7 @@ function CreditBalancePlanEditor({
               />
             </div>
 
-            <div className='space-y-2 md:col-span-2'>
+            <div className='space-y-2'>
               <Label htmlFor='credit-balance-business-code'>
                 {t('Business Code')}
               </Label>
@@ -256,6 +264,31 @@ function CreditBalancePlanEditor({
                   setField('business_code', event.target.value)
                 }
               />
+            </div>
+
+            <div className='space-y-2'>
+              <Label htmlFor='credit-valuation-currency'>
+                {t('Credit valuation currency')}
+              </Label>
+              <Select
+                value={values.valuation_currency}
+                onValueChange={(value) =>
+                  setField('valuation_currency', value as 'CNY' | 'USD')
+                }
+              >
+                <SelectTrigger id='credit-valuation-currency'>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value='CNY'>CNY</SelectItem>
+                  <SelectItem value='USD'>USD</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className='text-muted-foreground text-xs'>
+                {t(
+                  'This currency cannot be changed after Credit entitlements or valuation records exist.'
+                )}
+              </p>
             </div>
           </div>
 

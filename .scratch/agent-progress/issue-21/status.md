@@ -2,28 +2,31 @@
 
 ## 当前阶段
 
-计时五接口最窄接线已 GREEN：paid row 只读不可变 grant 时间线，summary/users/subscriptions/plans/sources 统一返回 CNY/USD，当前 Plan 的 `999 EUR` 不再进入计时估值。
+Orca 1.4.167 重启后由当前 Dispatch `ctx_7d91bd847e54` 接管。已核对工作树为 clean HEAD `f812e77fcd6e3d2875ce7b973ccc49c87e612590`；该提交及其祖先中的 timed grant 领域写入、不可变性、真实调用点、五接口逐币种分析、缺口/重叠 warning 与实际 `end_time` 裁剪均作为已验收恢复基线，不重做。
+
+当前只完成管理员 timed grant UI、跨币种 timed 展示、六语言、真实浏览器 smoke 与最终定向门禁。
 
 ## 已完成
 
-- 已保留 `ccd516aaa test(analytics): 保存计时 grant 时间线 RED` 与 `226d3c76d fix(analytics): 恢复计时五接口业务 RED` 两个可恢复安全点。
-- 已将 `adminCalculateTimedSubscriptionValue` 接入 timed paid row，并按 grant 来源、币种和窗口投影。
-- summary/users/subscriptions/plans/sources 复用同一 row；跨币种 subscription singular 为 null，`*_by_currency` 返回精确 micros。
-- 当前 Plan 的 `999 EUR` 不参与计时金额；测试断言 CNY 10、USD 5 且无 EUR。
-- 指定真实 SQLite tracer 已 GREEN；未扩展 UI、Credit、FX 或 marker。
+- 统一 `GrantTimedSubscriptionTx` 与不可变 `TimedSubscriptionValuationGrant` 已接入订单、兑换和管理员真实入口。
+- 重放、参数冲突、续期追加、改价/改币种冻结、disabled 新来源拒绝和 grant 更新/删除拒绝已有真实 SQLite 证据。
+- summary/users/subscriptions/plans/sources 已统一读取 grant 时间线；跨币种 singular 为 null，`*_by_currency` 保留原币种。
+- `missing_timed_grants`、`overlapping_grants` 与实际失效窗口裁剪已有定向 GREEN。
+- 已读取 `skill://shadcn-ui` 与 `skill://i18n-translate`，UI 将复用现有 Base UI/shadcn 组合并维护 en/zh/fr/ru/ja/vi。
 
 ## 下一步
 
-1. 在新 RED→GREEN 周期补重叠窗口去重、失效裁剪和 missing grant warning。
-2. 再完成管理员 reason/key UI、六语言与浏览器证据。
-3. 保持 Credit 核心、FX、marker/ready 为明确非所有权。
+1. 以组件可观察行为写管理员 reason/idempotency/retry payload 的 UI RED，再最小实现。
+2. 补 timed 三组 `*_by_currency` 与 nullable singular 的展示行为。
+3. 补齐六语言并运行 i18n 同步检查。
+4. 启动真实应用，完成管理员授予重试与跨币种浏览器 smoke；最后运行定向门禁和 `git diff --check`。
 
 ## 阻塞
 
 - 当前没有外部阻塞。
-- 下一行为缺口是重叠/裁剪/warning 的公开 tracer；五接口主路径已 GREEN。
+- 明确不触碰 Credit 核心、FX、marker/ready、历史迁移或发布。
 
 ## 最近安全提交
 
-- 上一安全点：`226d3c76d fix(analytics): 恢复计时五接口业务 RED`。
-- 当前 GREEN 由紧随其后的提交承载。
+- `f812e77fcd6e3d2875ce7b973ccc49c87e612590 test(analytics): 覆盖计时失效窗口裁剪`。
+- 本接管记录尚待提交。

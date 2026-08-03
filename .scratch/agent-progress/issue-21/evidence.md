@@ -204,3 +204,12 @@
 - 命令：`go test ./model -run '^TestPaidSubscriptionValueClipsTimedGrantAtActualSubscriptionEnd$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 18.64 秒。
 - 观察：recognized 为 8 CNY；grant 超出实际 `subscription.end_time` 的 60 秒不计值，裁剪后的可交付窗口完整覆盖，因此不误报 `missing_timed_grants`。
+
+## Orca 1.4.167 恢复接管
+
+- 当前 Dispatch：`ctx_7d91bd847e54`；协调消息：`msg_2cef5a4086be`。
+- `git rev-parse HEAD`：`f812e77fcd6e3d2875ce7b973ccc49c87e612590`。
+- `git status --short`：无输出，工作树 clean。
+- 已读取 `.scratch/agent-progress/issue-21/{status,evidence,contract}.md`，确认不重做 timed grant 与五接口已验收实现。
+- 已读取 `skill://shadcn-ui` 与 `skill://i18n-translate`；剩余范围严格收敛为管理员 timed grant UI、跨币种 timed 展示、六语言、真实浏览器和最终定向门禁。
+- 禁止范围保持不变：Credit 核心、转换 FX、migration marker/ready、历史回填和生产发布。

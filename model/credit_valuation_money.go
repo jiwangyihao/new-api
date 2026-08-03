@@ -1,12 +1,25 @@
 package model
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
 )
 
 const amountMicrosPerUnit int64 = 1_000_000
+
+type SubscriptionPlanPriceInput struct {
+	DisplayAmount         string
+	DisplayAmountProvided bool
+	AmountMicros          string
+	AmountMicrosProvided  bool
+}
+
+type SubscriptionPlanPrice struct {
+	DisplayAmount float64
+	AmountMicros  *int64
+}
 
 func ParseDecimalAmountMicros(text string) (int64, error) {
 	text = strings.TrimSpace(text)
@@ -53,4 +66,50 @@ func ParseDecimalAmountMicros(text string) (int64, error) {
 		return 0, ErrCreditValuationOverflow
 	}
 	return int64(whole*uint64(amountMicrosPerUnit) + fractionMicros), nil
+}
+
+func NormalizeSubscriptionPlanPrice(input SubscriptionPlanPriceInput) (SubscriptionPlanPrice, error) {
+	displayMicros := int64(0)
+	if input.DisplayAmountProvided {
+		parsed, err := ParseDecimalAmountMicros(input.DisplayAmount)
+		if err != nil {
+			return SubscriptionPlanPrice{}, err
+		}
+		displayMicros = parsed
+	}
+
+	exactMicros := int64(0)
+	if input.AmountMicrosProvided {
+		if input.AmountMicros == "" || strings.TrimSpace(input.AmountMicros) != input.AmountMicros {
+			return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceInvalid
+		}
+		if strings.HasPrefix(input.AmountMicros, "-") {
+			return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceNegative
+		}
+		parsed, err := strconv.ParseUint(input.AmountMicros, 10, 64)
+		if err != nil || parsed > uint64(math.MaxInt64) {
+			return SubscriptionPlanPrice{}, ErrCreditValuationOverflow
+		}
+		exactMicros = int64(parsed)
+	}
+
+	if !input.AmountMicrosProvided {
+		if displayMicros > 0 {
+			return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceRequired
+		}
+		return SubscriptionPlanPrice{}, nil
+	}
+	if input.DisplayAmountProvided && displayMicros != exactMicros {
+		return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceMismatch
+	}
+	if exactMicros == 0 {
+		return SubscriptionPlanPrice{}, nil
+	}
+	displayText := strconv.FormatInt(exactMicros/amountMicrosPerUnit, 10) + "." +
+		fmt.Sprintf("%06d", exactMicros%amountMicrosPerUnit)
+	displayAmount, err := strconv.ParseFloat(displayText, 64)
+	if err != nil {
+		return SubscriptionPlanPrice{}, ErrSubscriptionPlanPriceInvalid
+	}
+	return SubscriptionPlanPrice{DisplayAmount: displayAmount, AmountMicros: &exactMicros}, nil
 }

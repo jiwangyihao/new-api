@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -522,6 +523,66 @@ type AdminUpsertSubscriptionPlanRequest struct {
 	RiskReason    string                 `json:"risk_reason"`
 }
 
+type rawAdminUpsertSubscriptionPlanRequest struct {
+	Plan          json.RawMessage `json:"plan"`
+	RiskConfirmed bool            `json:"risk_confirmed"`
+	RiskReason    string          `json:"risk_reason"`
+}
+
+func decodeAdminUpsertSubscriptionPlanRequest(c *gin.Context) (AdminUpsertSubscriptionPlanRequest, error) {
+	var rawRequest rawAdminUpsertSubscriptionPlanRequest
+	if err := common.DecodeJson(c.Request.Body, &rawRequest); err != nil || common.GetJsonType(rawRequest.Plan) != "object" {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	var rawPlan map[string]json.RawMessage
+	if err := common.Unmarshal(rawRequest.Plan, &rawPlan); err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	displayRaw, displayProvided := rawPlan["price_amount"]
+	microsRaw, microsProvided := rawPlan["price_amount_micros"]
+	if microsProvided && common.GetJsonType(microsRaw) != "string" {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	price, err := model.NormalizeSubscriptionPlanPrice(model.SubscriptionPlanPriceInput{
+		DisplayAmount:         common.JsonRawMessageToString(displayRaw),
+		DisplayAmountProvided: displayProvided,
+		AmountMicros:          common.JsonRawMessageToString(microsRaw),
+		AmountMicrosProvided:  microsProvided,
+	})
+	if err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, err
+	}
+	delete(rawPlan, "price_amount_micros")
+	planPayload, err := common.Marshal(rawPlan)
+	if err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	request := AdminUpsertSubscriptionPlanRequest{RiskConfirmed: rawRequest.RiskConfirmed, RiskReason: rawRequest.RiskReason}
+	if err := common.Unmarshal(planPayload, &request.Plan); err != nil {
+		return AdminUpsertSubscriptionPlanRequest{}, model.ErrSubscriptionPlanPriceInvalid
+	}
+	request.Plan.PriceAmount = price.DisplayAmount
+	request.Plan.PriceAmountMicros = price.AmountMicros
+	return request, nil
+}
+
+func respondSubscriptionPlanPriceError(c *gin.Context, err error) {
+	message := "套餐价格无效"
+	switch {
+	case errors.Is(err, model.ErrSubscriptionPlanPriceRequired):
+		message = "有价套餐必须提供精确微单位价格"
+	case errors.Is(err, model.ErrSubscriptionPlanPriceNegative):
+		message = "价格不能为负数"
+	case errors.Is(err, model.ErrSubscriptionPlanPricePrecision):
+		message = "价格最多支持六位小数"
+	case errors.Is(err, model.ErrCreditValuationOverflow):
+		message = "价格超出支持范围"
+	case errors.Is(err, model.ErrSubscriptionPlanPriceMismatch):
+		message = "精确价格与兼容价格不一致"
+	}
+	c.JSON(http.StatusOK, gin.H{"success": false, "message": message, "code": err.Error()})
+}
+
 type AdminUpdateCreditBalancePlanRequest struct {
 	ConcurrencyLimit  int    `json:"concurrency_limit"`
 	QueueCapacity     int    `json:"queue_capacity"`
@@ -640,9 +701,9 @@ func rejectCreditBalancePlanMutation(c *gin.Context, id int) bool {
 }
 
 func AdminCreateSubscriptionPlan(c *gin.Context) {
-	var req AdminUpsertSubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+	req, err := decodeAdminUpsertSubscriptionPlanRequest(c)
+	if err != nil {
+		respondSubscriptionPlanPriceError(c, err)
 		return
 	}
 	if req.Plan.EntitlementType == model.SubscriptionEntitlementCreditBalance {
@@ -697,7 +758,7 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, message)
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	err = model.DB.Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -717,9 +778,9 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	if rejectCreditBalancePlanMutation(c, id) {
 		return
 	}
-	var req AdminUpsertSubscriptionPlanRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.ApiErrorMsg(c, "参数错误")
+	req, err := decodeAdminUpsertSubscriptionPlanRequest(c)
+	if err != nil {
+		respondSubscriptionPlanPriceError(c, err)
 		return
 	}
 	if strings.TrimSpace(req.Plan.Title) == "" {
@@ -774,7 +835,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	var previousMonthlyCredit int64
 	var existingTimedEntitlementCount int64
 	riskSnapshotTime := model.GetDBTimestamp()
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var current model.SubscriptionPlan
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "title", "entitlement_type", "monthly_token_limit").First(&current, id).Error; err != nil {
 			return err
@@ -798,6 +859,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 			"title":                      req.Plan.Title,
 			"subtitle":                   req.Plan.Subtitle,
 			"price_amount":               req.Plan.PriceAmount,
+			"price_amount_micros":        req.Plan.PriceAmountMicros,
 			"currency":                   req.Plan.Currency,
 			"duration_unit":              req.Plan.DurationUnit,
 			"duration_value":             req.Plan.DurationValue,

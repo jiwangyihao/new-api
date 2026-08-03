@@ -15,6 +15,8 @@ var (
 	ErrSubscriptionPlanPriceInvalid   = errors.New("subscription_plan_price_invalid")
 	ErrSubscriptionPlanPriceNegative  = errors.New("subscription_plan_price_negative")
 	ErrSubscriptionPlanPricePrecision = errors.New("subscription_plan_price_precision")
+	ErrSubscriptionPlanPriceRequired  = errors.New("subscription_plan_price_micros_required")
+	ErrSubscriptionPlanPriceMismatch  = errors.New("subscription_plan_price_mismatch")
 )
 
 // User auth errors

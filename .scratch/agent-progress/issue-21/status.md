@@ -2,11 +2,11 @@
 
 ## 当前阶段
 
-浏览器续作验收已完成：两个 production dist、端口 `31021` 隔离服务、真实 setup/login、管理员 timed grant 失败重试与 CNY/USD 跨币种分析均通过。真实浏览器未拦截或 mock API；隔离 SQLite 保存两条连续 immutable grant。
+COMPLETE：Issue #21 浏览器续作与最终交付已完成。真实管理员 timed grant 失败重试、成功后新 key、CNY/USD 跨币种五接口与 UI smoke 均通过；最终定向门禁通过；临时资源已清理。
 
-管理员 smoke：首个 CNY 请求在后端受控停止时失败，UI 展示 `Timed grant failed` 与“重试复用同一 key”；服务恢复后完整 payload 原样重放成功；套餐改为 USD、reason 改变后的下一次成功使用新 key。计划列表仅显示启用、非 trial/invite-trial、正 micros 的 timed 计划。
+最终门禁：领域 SQLite tracer PASS；管理员 grant controller 与强五接口 API tracer PASS；`user-subscriptions-dialog` 2/2、`panel-fields` 10/10 PASS；`bun run typecheck` PASS；en/zh/fr/ru/ja/vi missing/extras 全为 0 且 sync 无 diff；production build 已用于真实 embed smoke；`git diff --check` PASS。
 
-分析 smoke：同一 `snapshot_at=1785785996` 下 summary/users/subscriptions/plans/sources 五接口 recognized 均为 `CNY=39998102`、`USD=10000000` micros；subscription 三个 singular 均为 null，当前 Plan 价格只显示 `$10.00`，页面仍显示 `¥40.00, $10.00`、confidence exact、warnings `—`、unknown timed `0`。下一步执行最终定向窄门禁，然后清理服务、浏览器、目标 DB、dist 与依赖产物。
+清理完成：浏览器 tab 数为 0；受监督服务 `issue21-backend-recovery` 为 exited；目标 SQLite、两个 dist、classic 临时 `node_modules`、误建 `one-api.db` 与临时截图均已删除。只保留已提交的小型文本证据；未触碰其他数据库、Credit、FX、marker/ready、历史迁移或发布。
 
 ## 已完成
 
@@ -26,13 +26,11 @@
 
 ## 剩余门禁
 
-- 执行验收文档规定的 Go 领域/API tracer、两个前端定向测试、typecheck、六语言 sync、`git diff --check`。
-- 清理浏览器/服务/隔离 SQLite/dist/依赖产物，更新 COMPLETE 证据并保持工作树 clean。
+- 无。
 
 ## 阻塞
 
-- 无产品阻塞；真实浏览器两条 smoke 已通过。
-- 明确不触碰其他数据库、Credit 核心、FX、marker/ready、历史迁移或发布。
+- 无。
 
 ## 最近安全提交
 

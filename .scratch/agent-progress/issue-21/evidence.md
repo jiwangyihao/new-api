@@ -320,3 +320,29 @@
 - subscriptions 响应：`recognized_remaining_value=null`、`token_based_value=null`、`time_based_value=null`；三组 `*_by_currency` 含 CNY/USD；`plan_price={amount:10,currency:"USD"}`；`valuation_confidence="exact"`；warnings 空；unknown timed count 0。当前 Plan USD 未把历史 CNY 重写或补猜 singular。
 - 可见 UI：同一卡片/明细显示 `¥40.00, $10.00`；Plan price 单独显示 `$10.00`；可见 `Valuation confidence / exact`、`Valuation warnings / —`、`Unknown timed subscriptions / 0`、`Valuation basis / timed_grant_timeline`。页面术语为 `Paid subscription value` / remaining value，未称退款、负债或实收。
 - 临时全页截图已生成于系统临时目录，仅作运行观察，未提交二进制；最终关闭浏览器并删除临时业务资源。
+
+## 最终定向窄门禁（浏览器通过后）
+
+- 领域 SQLite：`go test ./model -run "^(TestTimedSubscriptionValuationGrant|TestPaidSubscriptionValue(UsesTimedGrantTimelineAcrossFiveViews|WarnsForMissingTimedGrantCoverage|DeduplicatesOverlappingTimedGrants|ClipsTimedGrantAtActualSubscriptionEnd))" -count=1`；结果 `go test: 1 packages ok`。
+- Controller/API：`go test ./controller -run "^(TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestPaidSubscriptionValueEndpointsReturnPanelEnvelope|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$" -count=1`；结果 `go test: 1 packages ok`。
+- 前端组件：`bun test src/features/subscriptions/components/dialogs/user-subscriptions-dialog.test.tsx && bun test src/features/admin-analytics/panel-fields.test.ts`；结果分别 `2 pass, 0 fail` 与 `10 pass, 0 fail`。
+- 类型：`bun run typecheck`（`tsc -b`）PASS。
+- 六语言：`bun run i18n:sync` PASS；`_sync-report.json` 中 en/zh/fr/ru/ja/vi 的 `missingCount=0`、`extrasCount=0`；随后 `git status --short` 无输出，sync 未产生意外 diff。报告中的既有 untranslated 基线未伪装为本切片 missing/extras。
+- Production build：本续作前置阶段已真实完成 default Rsbuild 与 classic Vite production build；两份 `dist/index.html` 用于 Go embed smoke，两个 lockfile 零漂移。
+- 空白与工作树：门禁后 `git status --short && git diff --check` 无输出。
+- 数据库实际范围：本切片真实行为证明仅 SQLite；未运行、未宣称 MySQL/PostgreSQL。三数据库零 SKIP 仍属于 Issue #27。
+
+## 清理进行中
+
+- Chromium smoke 标签已关闭；临时全页截图未提交。
+- 受监督服务 `issue21-backend-recovery` 已停止；后续复核 `31021` 不再监听。
+- 正在删除且只删除本续作资源：`.scratch/agent-progress/issue-21/browser/`、`web/default/dist`、`web/classic/dist`、`web/classic/node_modules` 与临时截图；不触碰其他数据库或工作树。
+
+## 最终清理与交付复核
+
+- 浏览器：Chromium smoke tab 已关闭；`orca tab list --json` 返回 `tabs: []`。
+- 服务：`issue21-backend-recovery` 已停止；`hub describe` 显示 `exited`，未保留持久或 detached 进程。
+- 路径：复核 `.scratch/agent-progress/issue-21/browser`、`web/default/dist`、`web/classic/dist`、`web/classic/node_modules`、仓库根 `one-api.db` 均不存在。
+- 截图：系统临时截图已删除，未提交任何截图、数据库、dist 或依赖目录。
+- 工作树：清理后仅 `status.md` 与 `evidence.md` 的最终文本待提交，staged 0、untracked 0；提交后再次执行 `git diff --check` 与 `git status --short`。
+- 交付范围：本续作没有修改产品代码；仅提交恢复、构建、启动诊断、浏览器与门禁证据。真实数据库范围仅 SQLite；MySQL/PostgreSQL 未运行且不宣称通过。

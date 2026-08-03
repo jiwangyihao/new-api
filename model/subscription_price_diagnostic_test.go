@@ -35,3 +35,24 @@ func TestDiagnosePendingSubscriptionPlanPricesIsReadOnlyAndDeterministic(t *test
 	}, diagnostics)
 	require.Equal(t, before, after)
 }
+
+func TestSubscriptionPlanPriceDiagnosticQuerySupportsAllDialects(t *testing.T) {
+	tests := []struct {
+		dialect string
+		cast    string
+	}{
+		{dialect: "sqlite", cast: "CAST(price_amount AS TEXT)"},
+		{dialect: "postgres", cast: "CAST(price_amount AS TEXT)"},
+		{dialect: "mysql", cast: "CAST(price_amount AS CHAR)"},
+	}
+	for _, test := range tests {
+		t.Run(test.dialect, func(t *testing.T) {
+			query, err := subscriptionPlanPriceDiagnosticQuery(test.dialect)
+			require.NoError(t, err)
+			require.Contains(t, query, test.cast)
+			require.Contains(t, query, "WHERE price_amount_micros IS NULL ORDER BY id")
+		})
+	}
+	_, err := subscriptionPlanPriceDiagnosticQuery("unsupported")
+	require.Error(t, err)
+}

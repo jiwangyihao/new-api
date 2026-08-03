@@ -39,15 +39,16 @@ func TestCreditValuationMathMulDivFloorRoundsDown(t *testing.T) {
 	require.Equal(t, int64(6), got)
 }
 
-func TestCreditValuationMathMulDivFloorFullClearAbsorbsRemainder(t *testing.T) {
-	available := int64(3)
-	cost := int64(10)
-	consumed := available
-	got := cost
-	if consumed != available {
-		var err error
-		got, err = mulDivFloor(cost, consumed, available)
-		require.NoError(t, err)
-	}
-	require.Equal(t, cost, got)
+func TestCreditValuationMathProrateFloorFullClearAbsorbsRemainder(t *testing.T) {
+	got, err := prorateFloor(10, 3, 3)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(10), got)
+}
+
+func TestCreditValuationMathProrateFloorPartialRoundsDown(t *testing.T) {
+	got, err := prorateFloor(10, 2, 3)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(6), got)
 }

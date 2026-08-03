@@ -2,6 +2,7 @@ package model
 
 import (
 	"errors"
+	"fmt"
 
 	"gorm.io/gorm"
 )
@@ -18,6 +19,15 @@ type SubscriptionPlanPriceDiagnostic struct {
 	Reason string `json:"reason"`
 }
 
+func subscriptionPlanPriceDiagnosticQuery(dialect string) (string, error) {
+	cast := "CAST(price_amount AS TEXT)"
+	if dialect == "mysql" {
+		cast = "CAST(price_amount AS CHAR)"
+	} else if dialect != "sqlite" && dialect != "postgres" {
+		return "", fmt.Errorf("unsupported database dialect: %s", dialect)
+	}
+	return "SELECT id AS plan_id, " + cast + " AS price_text FROM subscription_plans WHERE price_amount_micros IS NULL ORDER BY id", nil
+}
 func DiagnosePendingSubscriptionPlanPrices(db *gorm.DB) ([]SubscriptionPlanPriceDiagnostic, error) {
 	if db == nil {
 		db = DB
@@ -26,7 +36,10 @@ func DiagnosePendingSubscriptionPlanPrices(db *gorm.DB) ([]SubscriptionPlanPrice
 		PlanId    int    `gorm:"column:plan_id"`
 		PriceText string `gorm:"column:price_text"`
 	}
-	query := `SELECT id AS plan_id, CAST(price_amount AS TEXT) AS price_text FROM subscription_plans WHERE price_amount_micros IS NULL ORDER BY id`
+	query, err := subscriptionPlanPriceDiagnosticQuery(db.Dialector.Name())
+	if err != nil {
+		return nil, err
+	}
 	if err := db.Raw(query).Scan(&rows).Error; err != nil {
 		return nil, err
 	}

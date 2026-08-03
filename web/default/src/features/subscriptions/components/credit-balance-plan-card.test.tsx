@@ -70,6 +70,7 @@ function makeCreditBalancePlan(
     title: 'Credit balance',
     price_amount: 0,
     currency: 'CNY',
+    valuation_currency: 'CNY',
     duration_unit: 'month',
     duration_value: 1,
     quota_reset_period: 'never',

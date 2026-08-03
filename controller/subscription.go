@@ -648,7 +648,7 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("entitlement_type = ?", model.SubscriptionEntitlementCreditBalance).First(&plan).Error; err != nil {
 			return err
 		}
-		if plan.CreditBalanceConfigured && !strings.EqualFold(plan.Currency, currency) {
+		if plan.ValuationCurrency != nil && !strings.EqualFold(*plan.ValuationCurrency, currency) {
 			locked, err := model.CreditValuationCurrencyLockedTx(tx)
 			if err != nil {
 				return err
@@ -663,7 +663,7 @@ func AdminUpdateCreditBalancePlan(c *gin.Context) {
 		}
 		updates := map[string]any{
 			"model_limits":                      "",
-			"currency":                          currency,
+			"valuation_currency":                currency,
 			"concurrency_limit":                 req.ConcurrencyLimit,
 			"queue_capacity":                    req.QueueCapacity,
 			"business_code":                     businessCodeValue,

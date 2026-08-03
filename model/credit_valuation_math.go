@@ -19,3 +19,16 @@ func mulDivFloor(a, b, denominator int64) (int64, error) {
 	}
 	return int64(quotient), nil
 }
+
+func prorateFloor(value, share, total int64) (int64, error) {
+	if value < 0 || share < 0 || total < 0 || share > total {
+		return 0, ErrCreditValuationNegativeInput
+	}
+	if total == 0 {
+		return 0, ErrCreditValuationDivisionByZero
+	}
+	if share == total {
+		return value, nil
+	}
+	return mulDivFloor(value, share, total)
+}

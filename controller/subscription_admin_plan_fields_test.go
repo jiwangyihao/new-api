@@ -238,9 +238,23 @@ func TestAdminCreditBalancePlanFreezesValuationCurrencyAfterCreditEntitlement(t 
 
 	assert.Contains(t, recorder.Body.String(), `"code":"credit_valuation_currency_locked"`)
 	require.NoError(t, model.DB.First(&plan, plan.Id).Error)
-	assert.Equal(t, "CNY", plan.Currency)
+	require.NotNil(t, plan.ValuationCurrency)
+	assert.Equal(t, "CNY", *plan.ValuationCurrency)
+	assert.Equal(t, "USD", plan.Currency, "valuation currency must not rewrite the plan purchase currency")
 	assert.Equal(t, 7, plan.ConcurrencyLimit, "currency rejection must roll back all plan fields")
 	assert.Equal(t, 13, plan.QueueCapacity)
+}
+
+func TestAdminCreditBalancePlanReturnsIndependentValuationCurrency(t *testing.T) {
+	setupSubscriptionAdminPlanFieldsTest(t)
+	seedCreditBalancePlanForAdminTest(t)
+	update := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodPut, `{"concurrency_limit":7,"queue_capacity":13,"business_code":"credit_balance_global","configured":true,"purchase_enabled":false,"redemption_enabled":false,"conversion_enabled":false,"valuation_currency":"CNY"}`)
+	require.Contains(t, update.Body.String(), `"valuation_currency":"CNY"`)
+	require.Contains(t, update.Body.String(), `"currency":"USD"`)
+
+	get := performAuthenticatedCreditBalancePlanRequest(t, common.RoleAdminUser, http.MethodGet, "")
+	require.Contains(t, get.Body.String(), `"valuation_currency":"CNY"`)
+	require.Contains(t, get.Body.String(), `"currency":"USD"`)
 }
 
 func TestAdminOrdinaryPlanAPIsCannotMutateCreditBalanceIdentity(t *testing.T) {

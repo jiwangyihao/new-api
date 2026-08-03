@@ -39,4 +39,7 @@ func TestSubscriptionPlanPriceMicrosMigrationLeavesLegacyRowPending(t *testing.T
 	var stored sql.NullInt64
 	require.NoError(t, db.Raw(`SELECT price_amount_micros FROM subscription_plans WHERE id = 1`).Scan(&stored).Error)
 	require.False(t, stored.Valid, "legacy prices must remain pending until #27 backfill")
+	var valuationCurrency sql.NullString
+	require.NoError(t, db.Raw(`SELECT valuation_currency FROM subscription_plans WHERE id = 1`).Scan(&valuationCurrency).Error)
+	require.False(t, valuationCurrency.Valid, "legacy plans must not receive an invented valuation currency")
 }

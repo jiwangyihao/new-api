@@ -274,3 +274,12 @@
 - 计划构建：在 `web/default` 与 `web/classic` 分别执行 `bun install --frozen-lockfile`、`bun run build`；若 classic frozen install 因既有锁文件漂移失败，只采用不改锁文件的最保守恢复，并记录原始错误。
 - 下一动作：提交本恢复状态安全点，然后生成两个真实 dist、启动隔离后端并用健康端点证明 `127.0.0.1:31021` readiness。
 - 范围：不修改既有 timed 领域实现；不触碰 Credit、FX、request settlement、migration marker/ready、历史迁移或生产发布。
+
+## Production dist 恢复
+
+- default：在 `web/default` 执行 `bun install --frozen-lockfile && bun run build`；依赖检查无变化，Rsbuild `ready built in 15.4 s`，生成 `web/default/dist/index.html`。
+- classic 首次 frozen install：在 `web/classic` 执行 `bun install --frozen-lockfile && bun run build`，Bun 返回 `lockfile had changes, but lockfile is frozen`；未修改 lockfile。
+- classic 直接构建：`bun run build` 返回 `bun: command not found: vite`，证明当前工作树尚无 classic 依赖目录。
+- classic 保守恢复：执行 `bun install --no-save && bun run build && git status --short`；安装不保存依赖合同，Vite `✓ built in 1m 4s`，生成 `web/classic/dist/index.html`，最终 status 无输出。
+- 产物检查：`web/default/dist/index.html` 与 `web/classic/dist/index.html` 均存在；`git status --short && git diff -- web/classic/bun.lock web/default/bun.lock` 无输出，跟踪文件和两个 lockfile 零漂移。
+- 结论：前次 Go embed 编译阻塞已从根因解除；dist、依赖目录均为非提交临时产物，最终清理。

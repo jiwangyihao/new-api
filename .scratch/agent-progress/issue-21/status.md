@@ -2,11 +2,11 @@
 
 ## 当前阶段
 
-浏览器续作恢复进行中：已在 clean HEAD `2f9701976282d1c53d7ce0914088a302498f6f32` 接管，不重做已完成领域/API/UI/i18n 实现。当前只生成 Go embed 产物、启动隔离应用、完成真实浏览器 smoke、执行最终窄门禁并清理交付。
+浏览器续作恢复进行中：已从 clean HEAD `2f9701976282d1c53d7ce0914088a302498f6f32` 接管，不重做已完成领域/API/UI/i18n 实现。`web/default/dist` 与 `web/classic/dist` 已由真实 production build 生成，两个 lockfile 与跟踪文件均无漂移。
 
-固定恢复参数：后端端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`；前端构建命令分别为 `bun install --frozen-lockfile` 与 `bun run build`（`web/default`、`web/classic`）。下一步先构建两个 production dist，再以显式隔离 `SQLITE_PATH`、`PORT`、`SESSION_SECRET` 启动服务并通过健康端点确认 readiness。
+固定恢复参数：后端端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`；隔离 session secret 只通过进程环境传入。下一步启动隔离后端，通过 `/api/status` 证明 readiness，再用真实 API 建立 root、用户、timed 计划与浏览器数据。
 
-前次 `go run .` 仅因 `web/default/dist` 与 `web/classic/dist` 缺失在 Go embed 编译期失败；尚未进入数据库、登录或 UI 行为。本续作严格禁止 Credit 核心、FX、marker/ready、历史迁移与发布范围。
+classic 的 `bun install --frozen-lockfile` 因既有 package/lock 漂移稳定拒绝；按恢复合同改用 `bun install --no-save`，随后 `bun run build` 成功，`git status --short` 与两个 lockfile diff 均为空。本续作严格禁止 Credit 核心、FX、marker/ready、历史迁移与发布范围。
 
 ## 已完成
 
@@ -31,7 +31,7 @@
 
 ## 阻塞
 
-- Go embed 前端产物缺失阻断真实后端启动；未把静态拦截或组件测试冒充浏览器证据。
+- 无产品阻塞；Go embed 所需两个 production dist 已生成且未纳入提交。
 - 明确不触碰 Credit 核心、FX、marker/ready、历史迁移或发布。
 
 ## 最近安全提交

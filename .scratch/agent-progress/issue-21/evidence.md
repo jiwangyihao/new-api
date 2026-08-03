@@ -32,3 +32,10 @@
 ## 数据库 / API / 浏览器
 
 尚未运行；后续持续记录精确命令、关键 payload、响应与可观察结果。
+
+## 恢复文件提交核验
+
+- `git show --stat --oneline 99a7ce6f5`：提交包含 `contract.md` 93 行、`evidence.md` 34 行、`status.md` 26 行，共 153 行。
+- `contract.md` 已覆盖 schema、来源身份、领域接口、稳定错误、分析 DTO/算法、UI payload、共享文件与明确非所有权。
+- `status.md` 已覆盖阶段、完成项、下一步、阻塞与最近安全提交；`evidence.md` 已建立 RED/GREEN、数据库、API、浏览器证据分区。
+- 核验时工作树 clean；上述文件不是两行占位文件。

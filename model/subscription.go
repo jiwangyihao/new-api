@@ -979,6 +979,9 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if err != nil {
 		return nil, err
 	}
+	if purchaseMode == SubscriptionPurchaseModeTimed && !hasSnapshot {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
 	completeTime, completeTimeErr := getDBTimestampStrictTx(tx)
 	if completeTimeErr != nil {
 		return nil, completeTimeErr
@@ -1062,7 +1065,23 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		}, nil
 	}
 
-	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
+	var creation *UserSubscriptionCreationResult
+	if hasSnapshot && !snapshot.IsTrial && !snapshot.InviteTrial {
+		if snapshot.ListPriceMicros == nil || *snapshot.ListPriceMicros <= 0 || strings.TrimSpace(snapshot.ListPriceCurrency) == "" {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId:            order.UserId,
+			Plan:              plan,
+			IdempotencyKey:    TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id),
+			SourceType:        TimedSubscriptionGrantSourceOrder,
+			SourceId:          order.Id,
+			SourcePriceMicros: *snapshot.ListPriceMicros,
+			SourceCurrency:    snapshot.ListPriceCurrency,
+		})
+	} else {
+		creation, err = CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
+	}
 	if err != nil {
 		return nil, err
 	}

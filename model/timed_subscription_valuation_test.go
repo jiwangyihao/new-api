@@ -140,6 +140,128 @@ func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *test
 	require.Equal(t, []int64{40_000_000, 50_000_000}, []int64{grants[0].ValuationAmountMicros, grants[1].ValuationAmountMicros})
 }
 
+func TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_202, Title: "Timed Order", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_201, Username: "timed-order", Status: common.UserStatusEnabled, AffCode: "timed-order-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(PaymentProviderBalance, "balance", PaymentMethodAccountBalance, 4000, "CNY")
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_203, UserId: 21_201, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-order-21203", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	var result *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		result, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, result)
+	require.NotNil(t, result.Subscription)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceOrder, "subscription_order:21203").First(&grant).Error)
+	require.Equal(t, result.Subscription.Id, grant.UserSubscriptionId)
+	require.Equal(t, snapshot.ListPriceMicros, &grant.SourcePriceMicros)
+	require.Equal(t, snapshot.ListPriceCurrency, grant.SourceCurrency)
+	require.Equal(t, result.EventStartTime, grant.EventStartTime)
+	require.Equal(t, result.EventEndTime, grant.EventEndTime)
+}
+
+func TestTimedSubscriptionValuationGrantPaidOrderWithoutSnapshotRejectsAtomically(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_302, Title: "Legacy Paid Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_301, Username: "timed-no-snapshot", Status: common.UserStatusEnabled, AffCode: "timed-no-snapshot-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	order := SubscriptionOrder{
+		Id: 21_303, UserId: 21_301, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-no-snapshot-21303", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		_, completeErr := CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+
+	var persisted SubscriptionOrder
+	require.NoError(t, DB.First(&persisted, order.Id).Error)
+	require.Equal(t, common.TopUpStatusPending, persisted.Status)
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantExplicitTrialOrderCreatesNoGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	plan := SubscriptionPlan{
+		Id: 21_402, Title: "Timed Trial", Enabled: true, IsTrial: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 100, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_401, Username: "timed-trial", Status: common.UserStatusEnabled, AffCode: "timed-trial-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_403, UserId: 21_401, PlanId: plan.Id, TradeNo: "timed-trial-21403",
+		PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	var result *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		result, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, result)
+	require.NotNil(t, result.Subscription)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
 func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	t.Helper()
 	oldDB := DB
@@ -162,7 +284,7 @@ func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	DB = db
 	LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
+	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
 
 	t.Cleanup(func() {
 		_ = sqlDB.Close()

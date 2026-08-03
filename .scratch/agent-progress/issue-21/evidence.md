@@ -71,3 +71,25 @@
 - 第二个稳定订单来源使用新 key，续期窗口从上一 grant 结束时开始，并追加 USD grant；历史 CNY grant 的金额与币种保持不变。
 - 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(CreatesTimelineAndReplaysSource|RejectsConflictAndAppendsRenewal)$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 10.92 秒。
+
+## RED 3：订单履约真实入口
+
+- 测试：`TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant`，通过 `CompleteSubscriptionOrderTx` 完成带 #20 权威价格快照的 timed 订单。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant$' -count=1`。
+- 结果：预期 RED；订单与权益创建成功，但查询 `source_type=subscription_order, source_key=subscription_order:21203` 返回 `record not found`。
+- 根因：订单履约仍直接调用 `CreateUserSubscriptionFromPlanWithResultTx`，未进入公开 timed grant 领域入口。
+
+## GREEN 3：订单履约真实入口
+
+- `CompleteSubscriptionOrderTx` 对带 #20 快照且非试用/邀请试用的 timed 订单调用 `GrantTimedSubscriptionTx`，传入 `ListPriceMicros/ListPriceCurrency`，不读取当前套餐标价。
+- 待修正：当前 GREEN 暂时允许无快照订单走低层创建，违反 paid timed 必须同事务写 grant 的合同；该结果不作为可提交安全点。下一 RED 锁定无可靠快照稳定拒绝、显式试用/邀请仍创建权益但不写 grant。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(OrderCompletionCreatesGrant|CreatesTimelineAndReplaysSource|RejectsConflictAndAppendsRenewal)$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 11.29 秒。
+
+## RED→GREEN 4：付费快照门禁与试用排除
+
+- RED：`TestTimedSubscriptionValuationGrantPaidOrderWithoutSnapshotRejectsAtomically` 首次运行得到 `Expected error ... but got nil`，证明无可靠快照的付费 timed 订单仍会创建无 grant 权益。
+- GREEN：`CompleteSubscriptionOrderTx` 在任何订单状态变更前对 timed paid 缺失履约快照返回 `ErrTimedSubscriptionGrantInvalid`；事务回滚后订单仍 pending，权益/grant 数量均为 0。
+- 排除：`TestTimedSubscriptionValuationGrantExplicitTrialOrderCreatesNoGrant` 证明快照明确 `IsTrial=true` 时权益仍创建而 grant 数量为 0。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(ExplicitTrialOrderCreatesNoGrant|PaidOrderWithoutSnapshotRejectsAtomically|OrderCompletionCreatesGrant|CreatesTimelineAndReplaysSource|RejectsConflictAndAppendsRenewal)$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 12.16 秒。

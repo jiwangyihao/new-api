@@ -232,3 +232,36 @@ func TestCreditValuationRequestPreConsumeRemovesMovingAverageCost(t *testing.T) 
 	require.Equal(t, CreditValuationRuleVersion, record.ValuationRuleVersion)
 	require.Equal(t, int64(1), record.SettlementVersion)
 }
+
+func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-valuation-final-200"
+	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, SettleCreditRequestTarget(requestID, 200, true))
+
+	var firstRecord SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&firstRecord).Error)
+	require.Equal(t, "settled", firstRecord.Status)
+	require.NotZero(t, firstRecord.FinalizedAt)
+	require.Equal(t, int64(200), firstRecord.AppliedCredit)
+	require.Equal(t, int64(1), firstRecord.SettlementVersion)
+
+	var firstState CreditValuationState
+	require.NoError(t, db.First(&firstState, firstRecord.ValuationSubscriptionId).Error)
+	require.Equal(t, int64(800), firstState.AvailableCredit)
+	require.Equal(t, int64(32_000_000), firstState.ExactCostMicros)
+	require.Equal(t, int64(2), firstState.StateVersion)
+
+	require.NoError(t, SettleCreditRequestTarget(requestID, 200, true))
+	var replayedRecord SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&replayedRecord).Error)
+	require.Equal(t, firstRecord.FinalizedAt, replayedRecord.FinalizedAt)
+	require.Equal(t, firstRecord.SettlementVersion, replayedRecord.SettlementVersion)
+	var replayedState CreditValuationState
+	require.NoError(t, db.First(&replayedState, firstRecord.ValuationSubscriptionId).Error)
+	require.Equal(t, firstState.StateVersion, replayedState.StateVersion)
+}

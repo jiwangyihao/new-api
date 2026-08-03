@@ -13,6 +13,8 @@
 - 范围校正：协调器明确 #22 只覆盖 CNY→CNY 同币种；未新增/写入 FX 来源合同。marker 仅允许只读 predicate，测试直接预置状态；生命周期写入仍归 #27。
 - RED：`TestCreditValuationRequestPreConsumeRemovesMovingAverageCost` 经真实 `request_id` 预扣后 subscription 已消费 200，但状态仍保持 `available=1000`，证明预扣旁路未双写。
 - GREEN：`ApplyCreditValuationOutflowTx` 按操作前 1,000 Credit 池移除 8,000,000 exact micros，并在同事务写预扣快照；状态变为 `available=800/exact=32000000/version=2`。
+- RED：同步最终结算测试编译失败 `undefined: SettleCreditRequestTarget`。
+- GREEN：最小 request seam 只允许预扣目标原值最终化；同一目标重放不更新 `settlement_version/state_version/finalized_at`，不同目标稳定返回 `credit_valuation_target_conflict`。
 
 ## 约束证据
 - 金额权威字段为十进制 micros；后端内部使用整数，前端使用 BigInt/字符串优先。
@@ -24,3 +26,4 @@
 - 2026-08-03：收到协调器范围指令；下一 GREEN 只消费订单冻结的 CNY micros/Credit 快照，测试预置已有 `ready` marker，生产代码不创建或修改 marker。
 - 2026-08-03：`go test ./model -run 'TestCreditValuationOrderIngress(CreatesExactState|PreservesLegacyPathWhenMarkerNotReady)' -count=1` 返回 `go test: 1 packages ok`。
 - 2026-08-03：`go test ./model -run 'Test(CreditValuationRequestPreConsumeRemovesMovingAverageCost|CreditBalanceLifecycleAcrossBillingStrategiesAndCache|PreConsumeUserSubscriptionByUnitsReturnsPlanMetadata)' -count=1` 返回 `go test: 1 packages ok`。
+- 2026-08-03：`go test ./model -run 'TestCreditValuationRequest(FinalizesSameTargetIdempotently|PreConsumeRemovesMovingAverageCost)' -count=10` 返回 `go test: 1 packages ok`。

@@ -313,6 +313,61 @@ func ApplyCreditValuationOutflowTx(tx *gorm.DB, lockedSub *UserSubscription, cre
 	}, nil
 }
 
+func SettleCreditRequestTargetTx(tx *gorm.DB, record *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
+	if tx == nil || record == nil || record.Id <= 0 || strings.TrimSpace(record.RequestId) == "" || targetCredit < 0 {
+		return ErrCreditValuationTargetConflict
+	}
+	if record.ValuationSubscriptionId <= 0 || record.ValuationRuleVersion != CreditValuationRuleVersion {
+		return ErrCreditValuationStateMismatch
+	}
+	// Issue #22 intentionally supports only the frozen tracer target: the
+	// pre-consumed amount finalized once with no positive or negative delta.
+	if targetCredit != record.AppliedCredit {
+		return ErrCreditValuationTargetConflict
+	}
+	if record.FinalizedAt > 0 {
+		if record.Status == "settled" && final {
+			return nil
+		}
+		return ErrCreditValuationTargetConflict
+	}
+	if !final {
+		return nil
+	}
+	now := getDBTimestampTx(tx)
+	result := tx.Model(&SubscriptionPreConsumeRecord{}).
+		Where("id = ? AND applied_credit = ? AND finalized_at = 0", record.Id, targetCredit).
+		Updates(map[string]any{
+			"status":       "settled",
+			"finalized_at": now,
+			"updated_at":   now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrCreditValuationTargetConflict
+	}
+	record.Status = "settled"
+	record.FinalizedAt = now
+	record.UpdatedAt = now
+	return nil
+}
+
+func SettleCreditRequestTarget(requestId string, targetCredit int64, final bool) error {
+	requestId = strings.TrimSpace(requestId)
+	if requestId == "" || targetCredit < 0 {
+		return ErrCreditValuationTargetConflict
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var record SubscriptionPreConsumeRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).First(&record).Error; err != nil {
+			return err
+		}
+		return SettleCreditRequestTargetTx(tx, &record, targetCredit, final)
+	})
+}
+
 func migrateCreditValuationSchema(db *gorm.DB) error {
 	if db == nil {
 		return ErrDatabase

@@ -2,7 +2,7 @@
 
 ## 当前阶段
 - 基线与合同：已完成。
-- 当前工作：真实 `request_id` 预扣 200 已原子移除 8 CNY；下一步实现同目标同步最终结算幂等。
+- 当前工作：真实 `request_id` 预扣 200 与同目标最终结算已 GREEN；补齐深模块边界后接入 BillingSession。
 - 基线：`53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
 - 工作树：`jiwangyihao/issue-22-credit-tracer`；父集成分支 `jiwangyihao/credit-operational-value-integration` 与本树同指该基线。
 
@@ -15,9 +15,9 @@
 从真实领域入口实现冻结 `40 CNY / 1,000 Credit` 购买、真实 `request_id` 同步消费 200 与五个 paid-value 分析接口；所有 Credit 数量和物化估值状态在同一事务由 `CreditValuation` 深模块写入。
 
 ## 下一步
-1. 增加目标累计 200 的一次同步最终结算与重复目标幂等测试。
-2. 补深模块移动平均、debt offset、清空余数与 fail-closed 行为。
-3. 完成领域切片后小步提交。
+1. 补深模块移动平均、debt offset、清空余数与 fail-closed 行为。
+2. 将同步 BillingSession 的最终目标 200 接入 request seam。
+3. 验证人民币余额与受控外部支付入口并提交领域安全点。
 
 ## 阻塞
 当前无外部阻塞。#21 timed grant 只保留窄扩展 seam，不实现其时间线。

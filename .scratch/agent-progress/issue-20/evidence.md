@@ -25,7 +25,8 @@
 - RED：负数、七位小数、`MaxInt64` 边界与越界输入缺少稳定错误；补充非负、精度和防溢出检查后通过。
 - GREEN：`go test ./model -run 'Test(ParseDecimalAmountMicros|CreditValuationMathMulDivFloor)' -count=1`，目标包通过。
 - RED：`go test ./controller -run TestAdminCreateSubscriptionPlanRoundTripsExactPriceMicros -count=1` 返回成功但响应缺少 `price_amount_micros`，SQLite 查询报 `no such column: price_amount_micros`。
-- GREEN：`SubscriptionPlan` 增加 `BIGINT NOT NULL DEFAULT 0` 权威字段并以 JSON 字符串序列化；同一定向测试通过，数据库值与响应均为 `40123456`。
+- GREEN：`SubscriptionPlan` 增加 nullable `BIGINT` 权威字段并以 JSON 字符串序列化；创建定向测试通过，数据库值与响应均为 `40123456`。
+- RED：旧套餐迁移后查询 `price_amount_micros` 报列不存在；SQLite 附加迁移增加 nullable 列后，`TestSubscriptionPlanPriceMicrosMigrationLeavesLegacyRowPending` 证明旧有价行仍为 `NULL`，未填充虚假精确值。
 
 当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
 ## 最终验证待办

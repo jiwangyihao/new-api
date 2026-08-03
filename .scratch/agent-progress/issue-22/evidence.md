@@ -60,3 +60,11 @@
 - 仍 RED：新增页面行为测试未提供 TanStack `RouterProvider`，`useLinkProps` 读取空 `router.isServer`；这不是页面行为已通过的证据。
 - `bun run typecheck` 在本安全点落盘时尚未结束；不得将其记录为 PASS。
 - 本提交明确为 WIP/RED 恢复点；未运行真实浏览器 smoke，未补六语言，未声明 Issue #22 UI 完成。
+
+## Gate C 未完成交接
+- 人民币余额已定位：`controller/subscription_payment_balance.go::SubscriptionRequestBalance`，现有真实 HTTP/SQLite 夹具为 `controller/subscription_balance_purchase_test.go::TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance`。缺口：该夹具尚未启用估值 schema/ready 前置并断言订单快照 `list_price_micros=40000000` 与 `CreditValuationState exact=40000000`。
+- 受控外部支付已定位：`controller/subscription_payment_kyren_test.go` 提供 `kyrenCheckoutFakeAPI`、`performSignedKyrenWebhook` 和 `TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation`。缺口：尚未在订单创建后改当前档位价格、再走签名 webhook，并断言 ledger/state 仍为冻结 40,000,000 micros。
+- BillingSession 已定位：`service/billing_session.go::NewBillingSession`、`service/billing.go::PreConsumeBilling/SettleBillingWithInput`、`service/funding_source.go::SubscriptionFunding.PreConsume`。缺口：尚未从上述外部购买结果用真实 `relayInfo.RequestId` 预扣 200、相同目标最终结算并断言 available=800/exact=32,000,000。
+- 最小 RED：分别增强现有余额与 Kyren 测试，或新增一个窄垂直测试；必须从 HTTP/payment 入口开始，禁止直接创建 `CreditValuationState`。BillingSession 只复用现有接口，不新增 API。
+- 禁止范围：不碰 #23 的 target 增减/退款/异步/coalescer，不碰 #26 FX，不碰 #27 marker 生命周期，不重做已有订单/request_id/五接口。
+- 本轮未运行 Gate C 新测试，故状态为诚实未完成；UI WIP 仍以 `91df0bd08` 的 RED/类型失败证据为准。

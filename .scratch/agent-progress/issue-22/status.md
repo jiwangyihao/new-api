@@ -6,7 +6,7 @@
 - 分析 tracer：summary/users/subscriptions/plans/sources 五个 paid-value 查询共享同一 `CreditValuationState`，均返回 `32,000,000` micros CNY；`active_paid_subscription_count=1`。
 - 分析 DTO：金额同时保留兼容 `amount` 与权威十进制字符串 `amount_micros`，所有分组继续使用 `*_by_currency` 数组承载多币种结果；#22 运行时仅实现 CNY→CNY，不引入 FX。
 - current-only 边界：Credit 状态晚于请求 `snapshot_at` 时，明细以 `snapshot_semantics=current_only` 标记最新状态；不伪造历史值，不扩展 paid-value 查询签名或 marker 生命周期。
-- 当前工作：UI 实现已达到 BigInt/micros 与字段级 GREEN，但新增 paid-value 页面行为测试仍 RED；立即保存诚实可恢复安全点，随后只补 purchase/BillingSession 未覆盖合同。
+- 当前工作：已停止实现并进入交接；Gate C 两个真实入口的补充验收尚未完成，UI RED 已由 `91df0bd08` 保存。
 - 基线：`53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
 - 工作树：`jiwangyihao/issue-22-credit-tracer`。
 
@@ -18,16 +18,19 @@
 - Credit 明细返回 `time_based_value=null`、`valuation_basis=credit_moving_weighted_average`、`available_credit=800`；状态晚于快照时返回 `snapshot_semantics=current_only`，供 UI 显示非阻断提示。
 
 ## 当前目标
-默认前端优先解析 `amount_micros` 并以 BigInt/字符串格式化，展示 exact/estimated/unknown、Credit 时间值不适用和移动加权平均术语；补齐 en/zh/fr/ru/ja/vi。
+形成干净、可恢复的交接安全点；不再修改代码或扩张范围。
 
-## 下一步
-1. 提交当前 UI WIP/RED：精确格式化与字段测试 GREEN，页面测试因缺少 RouterProvider 测试夹具而 RED。
-2. 仅审计并补齐 Issue #22 尚未覆盖的 purchase/BillingSession 合同测试与最小实现。
-3. 不重做订单、`request_id`、五接口，不实现 #23/#26/#27。
+## Gate C 未完成交接
+1. 人民币余额入口已定位：`controller/subscription_payment_balance.go` 的 `SubscriptionRequestBalance` → `service.CreateBalanceSubscriptionOrder` → `model.CompleteSubscriptionOrderTx`；现有夹具在 `controller/subscription_balance_purchase_test.go`。
+2. 受控外部入口已定位：`controller/subscription_payment_kyren_test.go` 的 Kyren fake checkout、`performSignedKyrenWebhook` 与 `TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation`；生产完成仍进入 `CompleteSubscriptionOrderTx`。
+3. BillingSession 入口已定位：`service.NewBillingSession` / `PreConsumeBilling` / `SettleBillingWithInput`，底层 `SubscriptionFunding.PreConsume` 传播 `relayInfo.RequestId`。最小 RED 应从已完成购买的 1,000 Credit 状态开始，经真实 request_id 预扣并以相同目标 200 最终化，断言 available=800、exact=32,000,000；不得设计新 API。
+
+## 禁止范围
+- 不重做已有订单、model request seam 或五接口；不实现 target 增减、退款、异步 identity、coalescer、FX、marker/ready 或 #23–#28。
+- 不宣称 Gate C 完成：尚未新增/运行人民币余额 exact 状态测试，也未新增/运行 Kyren 改价后 webhook + BillingSession 200 的垂直测试。
 
 ## 阻塞
-当前无外部阻塞。#21 timed grant 只保留窄扩展 seam，不实现其时间线。
-- 协调器收敛：五接口安全点不重构查询签名、不扩展 warning 设计；不实现 FX 或 migration marker 生命周期。
+无外部阻塞；由下一执行者按上述最小 RED 续作。
 
 ## 安全点
 - 已提交领域安全点：`06619f81b feat(valuation): 幂等完成 Credit 同步结算`。

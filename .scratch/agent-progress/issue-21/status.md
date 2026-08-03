@@ -2,9 +2,9 @@
 
 ## 当前阶段
 
-管理员 timed grant UI 与 timed 跨币种运营剩余价值展示均已 GREEN：表单收集 reason、冻结精确 micros/原币种，失败重试复用 key；分析明细在 singular 为 null 时展示三组 `*_by_currency`，同时披露置信度、warning 与 unknown timed 数量。
+管理员 timed grant UI、timed 跨币种运营剩余价值展示与六语言均已 GREEN：reason/精确 micros/原币种进入 payload，失败重试复用 key；跨币种 singular null 时显示三组原币种明细；新增文案在 en/zh/fr/ru/ja/vi 均有真实翻译。
 
-当前剩余：六语言、真实浏览器 smoke 与最终定向门禁。
+当前剩余：真实浏览器 smoke 与最终定向门禁。
 
 ## 已完成
 
@@ -16,9 +16,8 @@
 
 ## 下一步
 
-1. 补齐管理员授予与 timed 分析新增文案的 en/zh/fr/ru/ja/vi 翻译并运行同步检查。
-2. 启动真实应用，完成管理员授予重试与跨币种浏览器 smoke。
-3. 运行 Issue #21 定向门禁、`git diff --check`，更新最终证据并保持工作树 clean。
+1. 启动真实应用，完成管理员授予重试与跨币种浏览器 smoke。
+2. 运行 Issue #21 定向门禁、`git diff --check`，更新最终证据并保持工作树 clean。
 
 ## 阻塞
 
@@ -29,4 +28,5 @@
 
 - `f812e77fcd6e3d2875ce7b973ccc49c87e612590 test(analytics): 覆盖计时失效窗口裁剪`。
 - 管理员 UI：`8e143ca77 feat(subscription): 完成计时售后授予交互`。
-- 跨币种展示 GREEN 待提交。
+- 跨币种展示：`1809124c5 feat(analytics): 展示计时跨币种运营剩余价值`。
+- 六语言 GREEN 待提交。

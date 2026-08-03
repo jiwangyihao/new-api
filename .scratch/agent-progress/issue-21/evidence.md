@@ -238,3 +238,11 @@
 - GREEN：前端类型接受 nullable singular、三组 by-currency、`valuation_confidence`、`valuation_warnings`、`amount_micros` 与 summary unknown timed count；卡片在 singular null 时展示 by-currency，且展示置信度/warning。面板 summary 新增 unknown timed 权益数量。
 - GREEN 命令：`bunx prettier --write src/features/admin-analytics/types.ts src/features/admin-analytics/lib/panel-fields.ts src/features/admin-analytics/panel-fields.test.ts && bun test src/features/admin-analytics/panel-fields.test.ts`。
 - 结果：`10 pass, 0 fail`；跨币种显示 CNY 10/USD 5，token CNY 12/USD 6，time CNY 20/USD 10；`bun run typecheck` PASS。
+
+## GREEN 15：管理员 timed 与分析六语言
+
+- 新增 15 个 UI 键，覆盖 reason、精确估值资格、失败同 key 重试、成功/失败状态、timed 计划、估值置信度、估值 warning 与 unknown timed 数量。
+- en、zh、fr、ja、ru、vi 均提供人工翻译；非英语值逐键验证不等于英文源字符串。
+- 命令：`node scripts/add-issue-21-translations.mjs && bun run i18n:sync`；临时脚本随后删除。
+- 同步报告：六个 locale 的 `missingCount=0`、`extrasCount=0`；本切片 15 个键全部存在且非空。
+- 全仓既有 untranslated 基线仍由 `_reports/*.untranslated.json` 披露；本切片新增非英语键均已翻译，不把英语复制为其他语言。

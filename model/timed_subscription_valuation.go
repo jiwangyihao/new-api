@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TimedSubscriptionValuationGrant struct {
@@ -106,6 +107,18 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 		return nil, err
 	} else if found {
 		return existing, nil
+	}
+	var eligibility SubscriptionPlan
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.Plan.Id).First(&eligibility).Error; err != nil {
+		return nil, err
+	}
+	if !eligibility.Enabled || eligibility.EntitlementType != SubscriptionEntitlementTimed || eligibility.IsTrial || eligibility.InviteTrial {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	request.Plan = &eligibility
+	normalized, err = normalizeTimedSubscriptionGrantRequest(request)
+	if err != nil {
+		return nil, err
 	}
 
 	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, request.UserId, request.Plan, normalized.grantSource)

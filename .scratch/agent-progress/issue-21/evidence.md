@@ -126,3 +126,11 @@
 - 额外证明：当前 Plan 为 `40 CNY`，管理员 payload 显式冻结 `25,000,000 USD`，grant 按 payload 持久化；未从 Plan 推导估值。
 - 组合命令：`go test ./controller -run '^TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays$' -count=1 && go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`。
 - 结果：两包均 PASS，耗时约 25.80 秒。
+
+## GREEN 7：数据库计划资格与不可变性
+
+- `GrantTimedSubscriptionTx` 先按来源重放；新来源随后锁定并完整加载数据库 `SubscriptionPlan`，资格、期限、重置与 Credit 均使用数据库事实，仅价格/币种使用调用方权威来源快照。
+- disabled 语义：成功来源在计划停用后仍可原 key 重放；新 key 原子拒绝，权益 `end_time` 与 grant 数量不变。
+- 不可变：真实 SQLite 上 GORM update/delete 均被模型 hook 拒绝，grant 原金额仍保留。
+- 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 14.49 秒。

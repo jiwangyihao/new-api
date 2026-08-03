@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-领域 GREEN：购买、兑换、管理员售后授予均进入统一 timed grant，显式冻结来源价格/币种并支持可重试幂等。
+领域完成：购买、兑换、管理员售后授予、续期、重放、冲突、停用计划和 grant 不可变性均通过真实 SQLite 定向测试。
 
 ## 已完成
 
@@ -13,9 +13,9 @@
 
 ## 下一步
 
-1. 提交管理员 timed grant 安全点。
-2. 补 disabled plan、试用/邀请排除与 grant 更新/删除拒绝行为。
-3. 完成领域定向门禁后进入 grant 时间线分析 tracer。
+1. 提交领域门禁安全点。
+2. 进入 grant 时间线分析 RED：跨币种 singular null、窗口重叠去重、失效裁剪。
+3. 将 timed 投影接入 summary/users/subscriptions/plans/sources 五接口最窄 seam。
 
 ## 阻塞
 
@@ -23,4 +23,4 @@
 
 ## 最近安全提交
 
-- `6fc4cb813 feat(subscription): 为计时兑换冻结估值授予`。
+- `528673889 feat(subscription): 新增管理员计时售后授予`。

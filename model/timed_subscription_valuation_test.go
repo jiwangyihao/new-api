@@ -310,6 +310,85 @@ func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *test
 	require.Equal(t, int64(1), grantCount)
 }
 
+func TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRejectsNewGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_702, Title: "Disabled Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_701, Username: "timed-disabled", Status: common.UserStatusEnabled, AffCode: "timed-disabled-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	request := TimedSubscriptionGrantRequest{
+		UserId: 21_701, Plan: &plan, IdempotencyKey: "subscription_order:21703",
+		SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_703,
+		SourcePriceMicros: priceMicros, SourceCurrency: "CNY",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
+	plan.Enabled = false
+	originalEnd := first.EventEndTime
+	var replay *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		replay, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	require.Equal(t, originalEnd, replay.EventEndTime)
+
+	newSource := request
+	newSource.IdempotencyKey = "subscription_order:21704"
+	newSource.SourceId = 21_704
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, newSource)
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+	var persisted UserSubscription
+	require.NoError(t, DB.First(&persisted, first.Subscription.Id).Error)
+	require.Equal(t, originalEnd, persisted.EndTime)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_802, Title: "Immutable Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_801, Username: "timed-immutable", Status: common.UserStatusEnabled, AffCode: "timed-immutable-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		_, err := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: 21_801, Plan: &plan, IdempotencyKey: "subscription_order:21803",
+			SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_803,
+			SourcePriceMicros: priceMicros, SourceCurrency: "CNY",
+		})
+		return err
+	}))
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&grant).Error)
+	require.Error(t, DB.Model(&grant).Update("valuation_amount_micros", int64(1)).Error)
+	require.Error(t, DB.Delete(&grant).Error)
+	var persisted TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&persisted, grant.Id).Error)
+	require.Equal(t, priceMicros, persisted.ValuationAmountMicros)
+}
+
 func setupTimedSubscriptionValuationTestDB(t *testing.T) {
 	t.Helper()
 	oldDB := DB

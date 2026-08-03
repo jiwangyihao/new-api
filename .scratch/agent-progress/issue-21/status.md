@@ -2,20 +2,20 @@
 
 ## 当前阶段
 
-领域 RED：接缝探索已按协调器指令收敛，立即通过公开 timed 授予入口建立真实 SQLite tracer。
+领域 GREEN：公开 timed 授予 tracer 已通过，准备提交后追加冲突/续期行为。
 
 ## 已完成
 
 - 确认隔离工作树 `jiwangyihao/issue-21-timed-grants` 与父集成工作树均位于 `53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
 - 确认工作树初始 clean，未从 `origin/main` 取代码，未重做 Issue #20。
 - 按指定顺序读取父 PRD #19、Issue #21、执行合同、Wave 1 共享合同、Issue #20 消费合同、领域上下文、ADR 0001/0002、新规格相关章节与实施计划任务 5/8/9。
-- 读取并采用 `skill://tdd` 与 `skill://codebase-design`；确认现有 schema 已注册不可变 grant，低层 timed 创建函数返回实际服务窗口。
+- 首个真实 SQLite RED→GREEN 已完成：显式权威 micros/原币种、确定性 source identity、同事务 grant、相同来源重放不续期。
 
 ## 下一步
 
-1. 编写真实 SQLite RED：公开 `GrantTimedSubscriptionTx` 同事务创建权益和 grant，相同来源重放不续期。
-2. 只实现 RED 所需的最小 `TimedSubscriptionGrantRequest`、确定性 source identity 与 grant 写入。
-3. RED→GREEN 后立即提交，再逐条接入订单、兑换和管理员入口。
+1. 提交首个 timed 授予 tracer 安全点。
+2. 追加参数冲突与第二个稳定来源续期追加 grant 的行为测试。
+3. 逐条迁移订单、兑换与管理员调用点。
 
 ## 阻塞
 
@@ -23,4 +23,4 @@
 
 ## 最近安全提交
 
-- `f60433f52 docs(issue-21): 记录恢复合同核验`。
+- `4f6768767 docs(issue-21): 收敛首个领域 tracer`。

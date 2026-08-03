@@ -41,13 +41,29 @@
 - GREEN：`bun run typecheck` 与两份定向前端测试通过（25 pass, 0 fail）。
 
 当前实现成本：比例热路径只执行 `math/bits` 128 位乘积/除法和常数次分支；不使用浮点或 `big.Int`，无设计上的堆分配。
-## 最终验证待办
 
-- 精确金额解析、序列化和稳定错误码。
-- 套餐创建、编辑、读取往返。
-- Credit 估值币种首次配置与冻结。
-- 附加 migration/schema 可重复与唯一约束。
-- 只读非法价格诊断不写数据库。
-- 防溢出整数比例边界。
-- 管理 UI 真实浏览器请求 payload 与刷新结果。
-- 修改文件格式化、`git diff --check`、工作树清洁度。
+## 最终定向门禁
+
+- `go test ./model -run 'Test(ParseDecimalAmountMicros|CreditValuationMath|CreditValuationSchema|DiagnosePendingSubscriptionPlanPrices|SubscriptionPlanPriceDiagnosticQuerySupportsAllDialects|SubscriptionPlanPriceMicrosMigrationLeavesLegacyRowPending|EnsureSubscriptionPlanTableSQLiteCreatesCreditBalanceSchema)' -count=1`：通过，`go test: 1 packages ok`。
+- `go test ./controller -run 'Test(AdminCreateSubscriptionPlan|AdminUpdateSubscriptionPlan|AdminCreditBalancePlan|AdminPlanListExcludesDedicatedCreditBalancePlan|PublicPlanListNeverExposesCreditBalancePlan|SubscriptionBalancePayRejectsDisabledPlan|SubscriptionPurchaseDoesNotUpdateUserGroup)' -count=1`：通过，`go test: 1 packages ok`。
+- `go test ./router -run 'Test(CreditBalanceAdminRoutePersistsDedicatedConfiguration|SubscriptionPlansPublicRoute|SubscriptionPlansProtectedDTOOmitsLegacyBusinessGroupFields)' -count=1`：首次发现公开 DTO 允许键仍为 16；补入 nullable `price_amount_micros` 契约后通过，提交 `b1ca3541b`。
+- `bun run typecheck && bun test src/features/subscriptions/lib/plan-form.test.ts src/features/subscriptions/components/credit-balance-plan-card.test.tsx`：通过，`25 pass / 0 fail`。
+- `bun run i18n:sync`：完成；en、zh、fr、ru、ja、vi 均为 `missingCount=0`、`extrasCount=0`。报告中既有 untranslated 计数不属于本切片新增缺失。
+- `go test ./model -run TestCreditBalanceProductionMigrationExternalDatabases -count=1 -v`：测试包通过但 MySQL、PostgreSQL 两项均因 `TEST_MYSQL_DSN` / `TEST_POSTGRES_DSN` 未设置而 skip；这不是实际数据库验收，最终结论必须如实限定为真实 SQLite + 外部方言/SQL 合同测试。
+- `gofmt` 已作用于本切片 Go 文件；`git diff --check` 通过。
+
+## 隔离应用与浏览器证据
+
+- 静态产物：`web/default` 的 `bun run build` 成功；`web/classic` 安装本地依赖后 `bun run build` 成功，仅用于满足 `go:embed` 启动前提。
+- 启动命令：`PORT=3100 SQLITE_PATH='C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-20-valuation-foundation/.scratch/agent-progress/issue-20/browser-smoke.db' SESSION_SECRET='issue20-browser-smoke-session-secret' go run .`。
+- 隔离性：`.scratch/agent-progress/issue-20/browser-smoke.db` 实际落盘；`http://127.0.0.1:3100/api/setup` 可访问。初始化时响应 `database_type=sqlite`；重启后同一数据库返回 `status=true`。
+- default UI：受控 Chromium 打开 3100，标题为 `New API`，观察到 default 导航；使用隔离管理员账号登录后进入 `/dashboard/overview`。该证据只证明 default 首页与登录，不等同于套餐 create → edit → refresh。
+- Orca 内嵌标签阻塞：`orca tab create --worktree active --url http://127.0.0.1:3100 --json` 多次返回 `runtime_error: Tab creation timed out`；`orca tab list --worktree all --json` 返回 `tabs=[]`。
+- Orca 桌面控制阻塞：防火墙弹窗关闭后，`orca computer hotkey --app Orca --window-id 7870344 --restore-window --key CmdOrCtrl+L --json` 仍返回 `window_not_focused`；未继续探索新桌面控制方案。
+- 已发送 escalation `msg_065b59e8fd5f`；协调器随后用内置 browser tool 接管套餐完整往返。隔离账号、页面 URL、create/edit 值与精确 payload 期望已通过回复 `msg_8f2700429491` 交接。
+
+## 尚待协调器补入
+
+- default 管理套餐 create：`price_amount="9007199254.740991"` 与 `price_amount_micros="9007199254740991"` 的实际 network payload/响应。
+- edit 为 `40.654321` / `40654321` 后刷新显示 `40.654321` 的实际浏览器证据。
+- 完整浏览器结果到达后再关闭隔离后台进程；此前不发送 `worker_done`。

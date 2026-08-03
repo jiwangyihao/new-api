@@ -6,12 +6,13 @@
 - `SubscriptionPlan.price_amount_micros` 是前向估值的权威 `int64` 持久化字段；JSON 请求/响应使用十进制字符串，避免 JSON number 精度损失。
 - 现有 `price_amount` 仅用于兼容展示和既有支付路径；管理员写入由原始十进制输入严格解析 micros，再派生兼容值。
 - 有价套餐拒绝缺失精确值、负数、超过六位小数、`int64` 溢出及精确/兼容字段不一致，并返回稳定错误码。
-- 无价套餐的精确字段为字符串 `"0"`；历史新增列仍为待迁移值，不从旧浮点反推。
+- 历史套餐及无价套餐的精确字段保持 `null`；前向有价套餐必须提供 micros 字符串。不得用默认 `0` 伪造精确历史值，也不得从旧浮点反推。
 
 ## Credit 估值币种合同
 
-- 全局 `credit_balance` 套餐首次配置只接受 `CNY` 或 `USD`。
-- 存在任一 Credit 权益、`CreditValuationState` 或估值账本后，普通套餐接口不得改写币种；拒绝与套餐写入处于同一原子事务并使用稳定错误码。
+- 全局 `credit_balance` 套餐首次配置只接受 `CNY` 或 `USD`，写入 nullable `valuation_currency`；购买币种 `currency` 与估值币种相互独立。
+- API 直接返回 `valuation_currency`，刷新表单也只从该字段恢复；不得再以 `SubscriptionPlan.currency` 推导估值币种。
+- 存在任一 Credit 权益、`CreditValuationState` 或估值账本后，普通套餐接口不得改写估值币种；拒绝与套餐写入处于同一原子事务并使用稳定错误码。
 
 ## 附加式 schema 合同
 

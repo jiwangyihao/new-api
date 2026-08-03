@@ -4,7 +4,7 @@
 
 管理员 timed grant UI、timed 跨币种运营剩余价值展示与六语言均已 GREEN：reason/精确 micros/原币种进入 payload，失败重试复用 key；跨币种 singular null 时显示三组原币种明细；新增文案在 en/zh/fr/ru/ja/vi 均有真实翻译。
 
-当前剩余：真实浏览器 smoke 与最终定向门禁。
+当前剩余：真实浏览器管理员授予/跨币种 smoke 与最终前后端定向门禁。
 
 ## 已完成
 
@@ -16,8 +16,8 @@
 
 ## 下一步
 
-1. 启动真实应用，完成管理员授予重试与跨币种浏览器 smoke。
-2. 运行 Issue #21 定向门禁、`git diff --check`，更新最终证据并保持工作树 clean。
+1. 启动隔离 SQLite 的真实应用，完成管理员授予重试与跨币种浏览器 smoke。
+2. 运行 Issue #21 最终前后端定向门禁、`git diff --check`，更新完成证据并保持工作树 clean。
 
 ## 阻塞
 
@@ -29,4 +29,5 @@
 - `f812e77fcd6e3d2875ce7b973ccc49c87e612590 test(analytics): 覆盖计时失效窗口裁剪`。
 - 管理员 UI：`8e143ca77 feat(subscription): 完成计时售后授予交互`。
 - 跨币种展示：`1809124c5 feat(analytics): 展示计时跨币种运营剩余价值`。
-- 六语言 GREEN 待提交。
+- 六语言：`5ea548998 feat(i18n): 补全计时授予六语言`。
+- 强五接口 API tracer fixture 待提交。

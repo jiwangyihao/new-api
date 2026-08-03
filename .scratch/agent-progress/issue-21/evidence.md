@@ -246,3 +246,13 @@
 - 命令：`node scripts/add-issue-21-translations.mjs && bun run i18n:sync`；临时脚本随后删除。
 - 同步报告：六个 locale 的 `missingCount=0`、`extrasCount=0`；本切片 15 个键全部存在且非空。
 - 全仓既有 untranslated 基线仍由 `_reports/*.untranslated.json` 披露；本切片新增非英语键均已翻译，不把英语复制为其他语言。
+
+## 最终定向 SQLite / API tracer
+
+- 领域命令：`go test ./model -run "^(TestTimedSubscriptionValuationGrant|TestPaidSubscriptionValue(UsesTimedGrantTimelineAcrossFiveViews|WarnsForMissingTimedGrantCoverage|DeduplicatesOverlappingTimedGrants|ClipsTimedGrantAtActualSubscriptionEnd))" -count=1`。
+- 领域结果：PASS；真实 SQLite 覆盖统一授予、重放/冲突、续期追加、冻结价格/币种、不可变、五视图跨币种、缺口、重叠与实际失效裁剪。
+- API 初始门禁发现 controller fixture 未迁移 `timed_subscription_valuation_grants`，四个明细端点真实失败为 `no such table`。修复仅更新测试数据库迁移与 timed grant 夹具，不修改生产计算或恢复当前 Plan 价格回退。
+- 新增强 API tracer `TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews`：当前 Plan 为 `999 EUR`，不可变 grant 为 `40 CNY + 10 USD`，当前 Credit 50%；逐个真实 handler 解析响应。
+- 实际 API 响应摘要：summary recognized/token=`10,000,000 CNY + 5,000,000 USD` micros，time=`20,000,000 CNY + 10,000,000 USD` micros，active count=1；users、plans 与 summary recognized 相同；subscriptions 三个 singular 均为 `null`、三组 by-currency 与 summary 对账、`source_attribution=mixed_grants`、confidence=`exact`；sources 两行 order/admin 合计同一 CNY/USD recognized，无 EUR。
+- API 命令：`go test ./controller -run "^(TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestPaidSubscriptionValueEndpointsReturnPanelEnvelope|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$" -count=1`。
+- API 结果：PASS；五个运营分析端点的真实 SQLite 金额/nullable/mixed-source 合同与管理员授予 API 同批通过。

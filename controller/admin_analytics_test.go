@@ -19,7 +19,7 @@ func setupAdminAnalyticsControllerTestDBs(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.InvitationMonthlyEntitlement{}, &model.InvitationRewardEvent{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.InvitationMonthlyEntitlement{}, &model.InvitationRewardEvent{}, &model.TimedSubscriptionValuationGrant{}))
 	require.NoError(t, model.LOG_DB.AutoMigrate(&model.Log{}))
 	return db
 }
@@ -243,6 +243,113 @@ type adminAnalyticsPanelEnvelopeResponse struct {
 	} `json:"data"`
 }
 
+type adminPaidSubscriptionValueTypedEnvelope struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Data dto.AdminPaidSubscriptionValueResponse `json:"data"`
+	} `json:"data"`
+}
+
+func decodeAdminPaidSubscriptionValueEnvelope(t *testing.T, recorder *httptest.ResponseRecorder) adminPaidSubscriptionValueTypedEnvelope {
+	t.Helper()
+	var payload adminPaidSubscriptionValueTypedEnvelope
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &payload), recorder.Body.String())
+	require.True(t, payload.Success, recorder.Body.String())
+	return payload
+}
+
+func requireAdminPaidBreakdownMicros(t *testing.T, breakdown []dto.AdminAnalyticsMoneyBreakdown, expected map[string]string) {
+	t.Helper()
+	actual := make(map[string]string, len(breakdown))
+	for _, amount := range breakdown {
+		actual[amount.Currency] = amount.AmountMicros
+	}
+	require.Equal(t, expected, actual)
+}
+
+func TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews(t *testing.T) {
+	setupAdminAnalyticsControllerTestDBs(t)
+	snapshot := int64(1767225600)
+	planCode := "controller-timed-multi-currency"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: 2101, Title: "Current EUR plan must not value grants", Enabled: true, PriceAmount: 999, Currency: "EUR",
+		DurationUnit: model.SubscriptionDurationDay, DurationValue: 30, MonthlyTokenLimit: 1000,
+		QuotaResetPeriod: model.SubscriptionResetNever, BusinessCode: &planCode,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id: 2102, Username: "controller-timed-multi", DisplayName: "Controller Timed Multi", Status: 1,
+		Group: "default", AffCode: "aff-controller-timed-multi", CreatedAt: snapshot - 1000,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: 2103, UserId: 2102, PlanId: 2101, Status: "active", Source: model.SubscriptionGrantOrder,
+		GrantReason: model.SubscriptionGrantOrder, StartTime: snapshot - 100, EndTime: snapshot + 200,
+		TokenLimit: 1000, TokenUsed: 500, LastResetTime: snapshot - 100, NextResetTime: 0,
+	}).Error)
+	require.NoError(t, model.DB.Create(&[]model.TimedSubscriptionValuationGrant{
+		{
+			Id: 2111, IdempotencyKey: "controller-timed-order", UserSubscriptionId: 2103, UserId: 2102, PlanId: 2101,
+			SourceType: model.TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:2111", SourceId: 2111,
+			EventStartTime: snapshot - 100, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 40000000, SourceCurrency: "CNY", ValuationAmountMicros: 40000000, ValuationCurrency: "CNY",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{}`, CreatedAt: snapshot - 100,
+		},
+		{
+			Id: 2112, IdempotencyKey: "controller-timed-admin", UserSubscriptionId: 2103, UserId: 2102, PlanId: 2101,
+			SourceType: model.TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:controller-timed-admin",
+			EventStartTime: snapshot + 100, EventEndTime: snapshot + 200, GrantCredit: 1000,
+			SourcePriceMicros: 10000000, SourceCurrency: "USD", ValuationAmountMicros: 10000000, ValuationCurrency: "USD",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{"reason":"controller after-sales"}`, CreatedAt: snapshot - 50,
+		},
+	}).Error)
+
+	query := "?snapshot_at=" + strconv.FormatInt(snapshot, 10)
+	expectedRecognized := map[string]string{"CNY": "10000000", "USD": "5000000"}
+	expectedTime := map[string]string{"CNY": "20000000", "USD": "10000000"}
+
+	summary := decodeAdminPaidSubscriptionValueEnvelope(t, performAdminAnalyticsRequest(t,
+		"/api/admin-analytics/paid-subscription-value/summary"+query, GetAdminPaidSubscriptionValueSummary))
+	requireAdminPaidBreakdownMicros(t, summary.Data.Data.Summary.RecognizedRemainingValueByCurrency, expectedRecognized)
+	requireAdminPaidBreakdownMicros(t, summary.Data.Data.Summary.TokenBasedValueByCurrency, expectedRecognized)
+	requireAdminPaidBreakdownMicros(t, summary.Data.Data.Summary.TimeBasedValueByCurrency, expectedTime)
+	require.Equal(t, 1, summary.Data.Data.Summary.ActivePaidSubscriptionCount)
+
+	users := decodeAdminPaidSubscriptionValueEnvelope(t, performAdminAnalyticsRequest(t,
+		"/api/admin-analytics/paid-subscription-value/users"+query, GetAdminPaidSubscriptionValueUsers))
+	require.Len(t, users.Data.Data.Users.Items, 1)
+	requireAdminPaidBreakdownMicros(t, users.Data.Data.Users.Items[0].RecognizedRemainingValueByCurrency, expectedRecognized)
+
+	subscriptions := decodeAdminPaidSubscriptionValueEnvelope(t, performAdminAnalyticsRequest(t,
+		"/api/admin-analytics/paid-subscription-value/subscriptions"+query, GetAdminPaidSubscriptionValueSubscriptions))
+	require.Len(t, subscriptions.Data.Data.Subscriptions.Items, 1)
+	item := subscriptions.Data.Data.Subscriptions.Items[0]
+	require.Nil(t, item.RecognizedRemainingValue)
+	require.Nil(t, item.TokenBasedValue)
+	require.Nil(t, item.TimeBasedValue)
+	requireAdminPaidBreakdownMicros(t, item.RecognizedRemainingValueByCurrency, expectedRecognized)
+	requireAdminPaidBreakdownMicros(t, item.TokenBasedValueByCurrency, expectedRecognized)
+	requireAdminPaidBreakdownMicros(t, item.TimeBasedValueByCurrency, expectedTime)
+	require.Equal(t, "mixed_grants", item.SourceAttribution)
+	require.Equal(t, "exact", item.ValuationConfidence)
+
+	plans := decodeAdminPaidSubscriptionValueEnvelope(t, performAdminAnalyticsRequest(t,
+		"/api/admin-analytics/paid-subscription-value/breakdown/plans"+query, GetAdminPaidSubscriptionValuePlanBreakdown))
+	require.Len(t, plans.Data.Data.Plans.Items, 1)
+	requireAdminPaidBreakdownMicros(t, plans.Data.Data.Plans.Items[0].RecognizedRemainingValueByCurrency, expectedRecognized)
+
+	sources := decodeAdminPaidSubscriptionValueEnvelope(t, performAdminAnalyticsRequest(t,
+		"/api/admin-analytics/paid-subscription-value/breakdown/sources"+query, GetAdminPaidSubscriptionValueSourceBreakdown))
+	require.Len(t, sources.Data.Data.Sources.Items, 2)
+	combinedSources := map[string]string{}
+	for _, source := range sources.Data.Data.Sources.Items {
+		for _, amount := range source.RecognizedRemainingValueByCurrency {
+			combinedSources[amount.Currency] = amount.AmountMicros
+		}
+	}
+	require.Equal(t, expectedRecognized, combinedSources)
+}
+
 func TestPaidSubscriptionValueEndpointsReturnPanelEnvelope(t *testing.T) {
 	setupAdminAnalyticsControllerTestDBs(t)
 	now := int64(1767225600)
@@ -435,6 +542,40 @@ func seedAdminPaidSubscriptionControllerData(t *testing.T, snapshot int64) {
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 1001, UserId: 1001, PlanId: 10, Status: "active", StartTime: snapshot - 20*86400, EndTime: snapshot + 10*86400, TokenLimit: 1000000000, TokenUsed: 100000000, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder, LastResetTime: snapshot - 20*86400, NextResetTime: snapshot + 2*86400}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 1002, UserId: 1001, PlanId: 10, Status: "active", StartTime: snapshot - 10*86400, EndTime: snapshot + 20*86400, TokenLimit: 1000000000, TokenUsed: 200000000, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder, LastResetTime: snapshot - 10*86400, NextResetTime: snapshot + 2*86400}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{Id: 1003, UserId: 1003, PlanId: 11, Status: "active", StartTime: snapshot - 5*86400, EndTime: snapshot + 25*86400, TokenLimit: 1000000000, TokenUsed: 300000000, GrantReason: "admin", Source: "admin", LastResetTime: snapshot - 5*86400, NextResetTime: snapshot + 2*86400}).Error)
+	require.NoError(t, model.DB.Create(&[]model.TimedSubscriptionValuationGrant{
+		{
+			Id: 1101, IdempotencyKey: "controller-order-1001", UserSubscriptionId: 1001, UserId: 1001, PlanId: 10,
+			SourceType: model.TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:1101", SourceId: 1101,
+			EventStartTime: snapshot - 20*86400, EventEndTime: snapshot + 10*86400, GrantCredit: 1000000000,
+			SourcePriceMicros: 40000000, SourceCurrency: "CNY", ValuationAmountMicros: 40000000, ValuationCurrency: "CNY",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{}`, CreatedAt: snapshot - 20*86400,
+		},
+		{
+			Id: 1102, IdempotencyKey: "controller-order-1002", UserSubscriptionId: 1002, UserId: 1001, PlanId: 10,
+			SourceType: model.TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:1102", SourceId: 1102,
+			EventStartTime: snapshot - 10*86400, EventEndTime: snapshot + 5*86400, GrantCredit: 1000000000,
+			SourcePriceMicros: 40000000, SourceCurrency: "CNY", ValuationAmountMicros: 40000000, ValuationCurrency: "CNY",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{}`, CreatedAt: snapshot - 10*86400,
+		},
+		{
+			Id: 1103, IdempotencyKey: "controller-admin-1002", UserSubscriptionId: 1002, UserId: 1001, PlanId: 10,
+			SourceType: model.TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:controller-admin-1002", SourceId: 0,
+			EventStartTime: snapshot + 5*86400, EventEndTime: snapshot + 20*86400, GrantCredit: 1000000000,
+			SourcePriceMicros: 10000000, SourceCurrency: "USD", ValuationAmountMicros: 10000000, ValuationCurrency: "USD",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{"reason":"controller after-sales"}`, CreatedAt: snapshot - 5*86400,
+		},
+		{
+			Id: 1104, IdempotencyKey: "controller-admin-1003", UserSubscriptionId: 1003, UserId: 1003, PlanId: 11,
+			SourceType: model.TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:controller-admin-1003", SourceId: 0,
+			EventStartTime: snapshot - 5*86400, EventEndTime: snapshot + 25*86400, GrantCredit: 1000000000,
+			SourcePriceMicros: 80000000, SourceCurrency: "CNY", ValuationAmountMicros: 80000000, ValuationCurrency: "CNY",
+			Confidence: model.TimedSubscriptionValuationConfidenceExact, RuleVersion: 1, FxRateNumerator: 1, FxRateDenominator: 1,
+			SourceSnapshot: `{"reason":"controller after-sales"}`, CreatedAt: snapshot - 5*86400,
+		},
+	}).Error)
 }
 
 func TestAdminAnalyticsRejectsInvalidTimeRange(t *testing.T) {

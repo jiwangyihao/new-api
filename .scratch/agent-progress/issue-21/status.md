@@ -2,11 +2,11 @@
 
 ## 当前阶段
 
-浏览器续作恢复进行中：两个 production dist 已就绪，但受监督启动调用实际携带 `env={}`，因此前两次日志均明确显示默认 `http://localhost:3000/`，并在仓库根目录误建默认 `one-api.db`；这不是产品行为失败。当前错误实例也由空 env 调用产生，必须先停止。
+浏览器续作恢复进行中：两个 production dist 已就绪，隔离后端已按协调器给定的原生命令成功监听 `31021`。真实 `GET /api/status` 返回 `success:true`、`setup:false`，目标 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 已存在。
 
-固定恢复参数不变：端口 `31021`；临时 SQLite `.scratch/agent-progress/issue-21/browser/issue21-smoke.db`；受监督服务名 `issue21-backend-recovery`。下一次只允许由启动命令本身显式设置 `PORT=31021`、`SQLITE_PATH=.scratch/agent-progress/issue-21/browser/issue21-smoke.db`、隔离 `SESSION_SECRET`，不再依赖 hub 的空 `env` 字段。
+固定现场：受监督服务名 `issue21-backend-recovery`；启动器 `cmd.exe`；命令内显式设置 `PORT=31021`、目标 `SQLITE_PATH` 与隔离 `SESSION_SECRET`。服务日志和 TCP 端口两项 readiness 均通过。
 
-下一步：停止当前错误实例；仅在路径确认后删除本续作误建的仓库根 `one-api.db`；按上述唯一命令重启，并同时以 `GET /api/status` 成功响应和目标 SQLite 文件存在证明 readiness。成功后直接进入既定浏览器 smoke，不探索其他启动方案。
+下一步直接进入既定 smoke：真实 `POST /api/setup` 创建隔离 root、`POST /api/user/login` 建立浏览器 session，通过公开管理员 API 建立最小用户/有价 timed 计划，再由 default UI 验证失败重试 key、新成功 attempt 和 CNY/USD 跨币种分析。
 
 ## 已完成
 
@@ -31,8 +31,8 @@
 
 ## 阻塞
 
-- 启动编排错误：空 `env` 令应用监听默认 `3000` 并误建根目录 `one-api.db`；已定位，待按唯一显式命令恢复。
-- 产品代码无阻塞；明确不触碰其他数据库、Credit 核心、FX、marker/ready、历史迁移或发布。
+- 无启动阻塞；目标端口、健康响应和目标 SQLite 文件均已证明。
+- 明确不触碰其他数据库、Credit 核心、FX、marker/ready、历史迁移或发布。
 
 ## 最近安全提交
 

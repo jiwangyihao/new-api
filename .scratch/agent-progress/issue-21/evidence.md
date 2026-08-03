@@ -292,3 +292,13 @@
 - 根因不是应用读取环境变量失败，而是编排调用没有实际传入值。唯一恢复路径：让启动命令本身显式设置 `PORT=31021`、`SQLITE_PATH=.scratch/agent-progress/issue-21/browser/issue21-smoke.db`、隔离 `SESSION_SECRET` 后执行 `go run .`。
 - 恢复判据：真实 `GET http://127.0.0.1:31021/api/status` 成功，且目标 `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 存在；两项同时满足后直接进入浏览器 smoke。
 - 清理边界：只删除本续作误建且路径确认的仓库根 `one-api.db`，不得触碰任何其他数据库。
+
+## 隔离服务 readiness 恢复
+
+- 一次命令内显式环境的 `bash -lc ...` 尝试在 Windows 进程启动前失败：`ENOENT ... uv_spawn 'bash'`；未启动应用、未创建数据库。随后不再尝试 bash。
+- 第一次原生 `cmd.exe` 使用带引号的 `set "NAME=value"` 参数组合仍未传达目标环境，日志保持默认 `3000`；停止后用路径检查确认仅有仓库根 `one-api.db`，随后只删除该误建文件，目标 DB 尚不存在。
+- 最终严格使用协调器给定参数：`cmd.exe /d /s /c set PORT=31021&&set SQLITE_PATH=.scratch\agent-progress\issue-21\browser\issue21-smoke.db&&set SESSION_SECRET=issue21-browser-smoke-secret&&go run .`。
+- 受监督服务 `issue21-backend-recovery` 在约 5.2 秒后 ready；日志匹配 `http://localhost:31021`，TCP `127.0.0.1:31021` 同时接受连接。
+- 健康证明：真实 `GET http://127.0.0.1:31021/api/status` 返回 HTTP JSON，`success=true`、`data.setup=false`、`version=v0.0.0`；这不是进程创建替代 readiness。
+- 数据库证明：路径检查确认仅目标 `.scratch/agent-progress/issue-21/browser/issue21-smoke.db` 存在；未连接或修改其他数据库。
+- 下一动作：直接进入既定 setup/login、管理员 timed grant 与跨币种浏览器 smoke，不再探索启动方案。

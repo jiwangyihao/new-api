@@ -182,6 +182,38 @@ func TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews(t *testing.T
 	adminPaidRequireAmount(t, combined.breakdown(), "USD", 5)
 }
 
+func TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(22, 999, "EUR")
+	user := adminPaidTestUser(22, "timed-gap")
+	sub := adminPaidTestSubscription(22, user.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	sub.StartTime = snapshot - 100
+	sub.EndTime = snapshot + 100
+	sub.TokenLimit = 0
+	sub.TokenUsed = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&TimedSubscriptionValuationGrant{
+		IdempotencyKey: "timeline-gap", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+		SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:22", SourceId: 22,
+		EventStartTime: snapshot + 50, EventEndTime: snapshot + 100, GrantCredit: 1000,
+		SourcePriceMicros: 10_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 10_000_000, ValuationCurrency: "CNY",
+		Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+		FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	response, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Equal(t, 1, response.Data.Summary.UnknownTimedSubscriptionCount)
+	require.Len(t, response.Data.Subscriptions.Items, 1)
+	item := response.Data.Subscriptions.Items[0]
+	adminPaidRequireAmount(t, item.RecognizedRemainingValueByCurrency, "CNY", 10)
+	adminPaidRequireNoCurrency(t, item.RecognizedRemainingValueByCurrency, "EUR")
+	require.Contains(t, item.ValuationWarnings, adminTimedWarningMissingGrants)
+}
+
 func TestPaidSubscriptionValueMonthlyTokenValueUsesPlanPriceAndProratesTailByTime(t *testing.T) {
 	snapshot := time.Date(2026, 6, 6, 16, 36, 1, 0, time.UTC).Unix()
 	plan := adminPaidTestPlan(1, 40, adminPaidTestCurrencyCNY)

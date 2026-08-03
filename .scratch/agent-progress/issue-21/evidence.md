@@ -181,3 +181,11 @@
 - 命令：`gofmt -w model/admin_analytics_paid_subscription.go && go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
 - 结果：PASS，`go test: 1 packages ok`，耗时约 14.41 秒。
 - 真实 SQLite 观察：CNY recognized 10、USD recognized 5，summary/users/plans/sources 对账一致，当前 Plan 的 `999 EUR` 未出现。
+
+## RED→GREEN 10：grant 时间线缺口披露
+
+- RED：真实 SQLite 权益窗口 `[snapshot,snapshot+100)` 只有 `[snapshot+50,snapshot+100)` grant；金额按已知 CNY grant 计算，但 `unknown_timed_subscription_count` 实际为 0。
+- RED 命令：`go test ./model -run '^TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage$' -count=1`；失败为 `expected 1, actual 0`。
+- GREEN：对裁剪后的 grant coverage 合并区间做完整性检查；任一内部或边界缺口稳定返回 `missing_timed_grants` warning 与 unknown，不回退当前 Plan 的 EUR 价格。
+- GREEN 命令：`gofmt -w model/timed_subscription_analytics.go && go test ./model -run '^TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage$' -count=1 && go test ./model -run '^TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews$' -count=1`。
+- 结果：两个真实 SQLite tracer 均 PASS，耗时约 15.48 秒。

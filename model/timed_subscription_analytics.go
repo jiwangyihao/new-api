@@ -145,6 +145,10 @@ func adminCalculateTimedSubscriptionValue(sub UserSubscription, grants []TimedSu
 			result.BySourceCurrency[sourceKey] = sourceValue
 		}
 	}
+	if !adminTimedCoverageComplete(covered, snapshotAt, endTime) {
+		result.Unknown = true
+		result.Warnings = appendStableWarning(result.Warnings, adminTimedWarningMissingGrants)
+	}
 
 	for currency, value := range result.ByCurrency {
 		value.RecognizedMicros = value.TimeMicros
@@ -223,6 +227,25 @@ func adminTimedAddCovered(covered []adminTimedInterval, interval adminTimedInter
 		}
 	}
 	return merged
+}
+
+func adminTimedCoverageComplete(covered []adminTimedInterval, start int64, end int64) bool {
+	if end <= start {
+		return true
+	}
+	cursor := start
+	for _, interval := range covered {
+		if interval.Start > cursor {
+			return false
+		}
+		if interval.End > cursor {
+			cursor = interval.End
+		}
+		if cursor >= end {
+			return true
+		}
+	}
+	return false
 }
 
 func appendStableWarning(warnings []string, warning string) []string {

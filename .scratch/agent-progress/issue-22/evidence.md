@@ -7,7 +7,10 @@
 - `git merge-base HEAD jiwangyihao/credit-operational-value-integration`：`53c91e6e3a795b01b4c426c9a69ff532cd8712c8`。
 
 ## RED/GREEN
-- 尚未开始代码 RED；下一项必须是通过真实数据库/领域入口证明目标行为缺失的定向测试。
+- RED：`go test ./model -run TestCreditValuationOrderIngressCreatesExactState -count=1` 通过真实 SQLite、订单快照与 `CompleteSubscriptionOrderTx`，稳定失败于 `credit_valuation_states` 行不存在；证明现有完成入口仅增加 `token_limit`，未创建估值状态。
+- GREEN：实现只读 marker predicate、订单冻结来源构造、每份权益初始状态和 `GrantCreditBalanceTx` 同事务双写后，ready 用例通过；状态 `available=1000/exact=40000000 CNY/version=1`，ledger 同步记录 exact。
+- GREEN：marker 非 ready 且快照缺失 micros/估值币种时，订单仍走原数量路径成功入账 1,000 Credit，不创建状态且 ledger 估值字段保持 0；证明加表阶段兼容旧路径。
+- 范围校正：协调器明确 #22 只覆盖 CNY→CNY 同币种；未新增/写入 FX 来源合同。marker 仅允许只读 predicate，测试直接预置状态；生命周期写入仍归 #27。
 
 ## 约束证据
 - 金额权威字段为十进制 micros；后端内部使用整数，前端使用 BigInt/字符串优先。
@@ -15,4 +18,6 @@
 - 状态缺失/不一致、币种、溢出、档位和幂等问题必须稳定错误码并整体回滚。
 
 ## 运行记录
-后续每个命令、失败根因、修复与精确结果追加于此文件。
+- 2026-08-03：首次真实订单 tracer RED，预期状态 `available=1000/exact=40000000 CNY/version=1`，实际 `record not found`。
+- 2026-08-03：收到协调器范围指令；下一 GREEN 只消费订单冻结的 CNY micros/Credit 快照，测试预置已有 `ready` marker，生产代码不创建或修改 marker。
+- 2026-08-03：`go test ./model -run 'TestCreditValuationOrderIngress(CreatesExactState|PreservesLegacyPathWhenMarkerNotReady)' -count=1` 返回 `go test: 1 packages ok`。

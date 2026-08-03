@@ -10,13 +10,13 @@
 - 默认前端精确金额格式化、BigInt、置信度/current-only 与最小 Credit 展示骨架；可见文案覆盖六语言。
 
 ## 深模块接口与锁序
-调用方只传结构化来源事实或目标累计用量；模块派生 confidence、FX/比例/舍入、债务抵扣和 state_version。锁序：已锁定目标 `UserSubscription` → `CreditValuationState` → 本 tracer 请求记录/ledger；模块不提交事务、不清缓存、不发业务日志。
+调用方只传结构化来源事实或目标累计用量；模块派生 confidence、比例/舍入、债务抵扣和 state_version。锁序：已锁定目标 `UserSubscription` → `CreditValuationState` → 本 tracer 请求记录/ledger；模块不提交事务、不清缓存、不发业务日志。#22 仅接受来源币种已等于池币种的同币种事实，不定义 FX 接口。
 
 ## 状态不变量
 `available_credit=max(token_limit-token_used,0)`；成本非负；`unknown_credit<=available_credit`；币种为全局 Credit 估值币种；`state_version` 单调递增且幂等重放不递增；清空池吸收全部微单位余数；超量只形成 debt。
 
 ## 来源快照
-订单创建冻结充值档位的 `price_amount_micros`、档位 Credit、币种、规则版本和来源身份。完成/回调只消费快照，不读当前套餐价格或渠道实收金额补猜。重复回调不重复入账。
+订单创建冻结充值档位的 `price_amount_micros`、档位 Credit、币种、规则版本、目标池估值币种和来源身份。marker ready 时完成/回调只消费快照，不读当前套餐价格或渠道实收金额补猜；marker 非 ready 时保留既有数量写路径。重复回调不重复入账。
 
 ## 请求 seam
 只实现足额同步预扣 200 与目标累计 200 的一次最终结算；同一 `request_id`/目标重放幂等。禁止实现 #23 的通用追加、少结算、退款、异步任务与 coalescer。
@@ -28,4 +28,4 @@
 预计共享文件：`model/subscription.go`、`model/admin_analytics_paid_subscription.go`、`dto/admin_analytics.go`、`controller/admin_analytics.go`、默认前端 analytics 类型/格式化与 locale。#22 主改通用/Credit 区域；为 #21 timed 分支保留窄 seam，不重写其实现。
 
 ## 明确非所有权
-不实现 #23–#28 的追加/少结算/退款/异步任务/coalescer、转换/售后、恢复、FX 在途、历史迁移/ready、三数据库矩阵和发布切换。
+不实现 #23–#28 的追加/少结算/退款/异步任务/coalescer、转换/售后、恢复、跨币种 FX、有理数汇率、历史迁移/marker 生命周期、三数据库矩阵和发布切换。#22 对 marker 仅只读。

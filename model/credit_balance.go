@@ -3,7 +3,6 @@ package model
 import (
 	"errors"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -94,6 +93,7 @@ type CreditBalanceGrantRequest struct {
 	Reason                  string
 	PaymentProvider         string
 	TargetPlanSnapshot      *SubscriptionPlan
+	ValuationSource         *CreditValuationSourceSnapshot
 	PreserveActiveSelection bool
 }
 
@@ -137,6 +137,10 @@ func CreditBalancePlanFromEntitlementSnapshot(snapshot SubscriptionEntitlementSn
 		QueueCapacity:           snapshot.TargetCreditBalanceQueueCapacity,
 		GPTAbuseWarningLimit:    snapshot.TargetCreditBalanceGPTAbuseWarningLimit,
 		CreditBalanceConfigured: true,
+	}
+	valuationCurrency := strings.ToUpper(strings.TrimSpace(snapshot.TargetCreditBalanceValuationCurrency))
+	if valuationCurrency != "" {
+		plan.ValuationCurrency = &valuationCurrency
 	}
 	if businessCode != "" {
 		plan.BusinessCode = &businessCode
@@ -248,6 +252,23 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	if hasAuthorizedPlan {
 		plan = authorizedPlan
 	}
+	valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	var valuationIngress creditValuationIngress
+	if valuationReady {
+		if request.ValuationSource == nil {
+			return nil, ErrCreditValuationSourceRequired
+		}
+		valuationIngress, err = newForwardCreditValuationIngress(*request.ValuationSource)
+		if err != nil {
+			return nil, err
+		}
+		if valuationIngress.grossCredit != request.GrossCredit {
+			return nil, ErrCreditValuationSourceInvalid
+		}
+	}
 
 	var user User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "setting").Where("id = ?", request.UserId).First(&user).Error; err != nil {
@@ -267,33 +288,43 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		return nil, err
 	}
 
-	balance, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, plan)
+	balance, created, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, plan)
 	if err != nil {
 		return nil, err
 	}
 	if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
 		return nil, errors.New("invalid credit balance aggregate")
 	}
-	if request.GrossCredit > math.MaxInt64-balance.TokenLimit {
-		return nil, errors.New("credit balance overflow")
-	}
 	balanceBefore := balance.TokenLimit - balance.TokenUsed
-	settlementDebtBefore := int64(0)
-	if balanceBefore < 0 {
-		settlementDebtBefore = -balanceBefore
+	settlementDebtBefore := maxInt64(-balanceBefore, 0)
+	var valuationMutation CreditValuationMutationResult
+	if valuationReady {
+		if created {
+			if err := initializeCreditValuationStateTx(tx, balance, valuationIngress.currency); err != nil {
+				return nil, err
+			}
+		}
+		valuationMutation, err = ApplyCreditValuationIngressTx(tx, balance, valuationIngress)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		newLimit, ok := checkedAddInt64(balance.TokenLimit, request.GrossCredit)
+		if !ok {
+			return nil, ErrCreditValuationOverflow
+		}
+		if err := tx.Model(&UserSubscription{}).Where("id = ?", balance.Id).Updates(map[string]any{
+			"token_limit": newLimit,
+			"updated_at":  common.GetTimestamp(),
+		}).Error; err != nil {
+			return nil, err
+		}
+		balance.TokenLimit = newLimit
 	}
 	debtOffset := minInt64(request.GrossCredit, settlementDebtBefore)
-	newLimit := balance.TokenLimit + request.GrossCredit
-	balanceAfter := newLimit - balance.TokenUsed
+	balanceAfter := balance.TokenLimit - balance.TokenUsed
 	availableAfter := maxInt64(balanceAfter, 0)
 	debtAfter := maxInt64(-balanceAfter, 0)
-	if err := tx.Model(&UserSubscription{}).Where("id = ?", balance.Id).Updates(map[string]any{
-		"token_limit": newLimit,
-		"updated_at":  common.GetTimestamp(),
-	}).Error; err != nil {
-		return nil, err
-	}
-	balance.TokenLimit = newLimit
 
 	setting := user.GetSetting()
 	if !hadUsableSubscription && !request.PreserveActiveSelection {
@@ -327,6 +358,14 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		PaymentProvider:       request.PaymentProvider,
 		Reason:                request.Reason,
 		CreatedAt:             getDBTimestampTx(tx),
+	}
+	if valuationReady {
+		ledger.ValuationCurrency = valuationIngress.currency
+		ledger.ValuationGrossCostMicros = valuationMutation.GrossCostMicros
+		ledger.ValuationNetCostMicros = valuationMutation.NetCostMicros
+		ledger.ValuationConfidence = valuationIngress.confidence
+		ledger.ValuationRuleVersion = valuationIngress.ruleVersion
+		ledger.ValuationStateVersionAfter = valuationMutation.StateVersionAfter
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err
@@ -456,14 +495,14 @@ func hydrateCreditBalanceLedgerHistory(userId int, entries []CreditBalanceLedger
 	return result, nil
 }
 
-func getOrCreateCreditBalanceSubscriptionTx(tx *gorm.DB, userId int, plan *SubscriptionPlan) (*UserSubscription, error) {
+func getOrCreateCreditBalanceSubscriptionTx(tx *gorm.DB, userId int, plan *SubscriptionPlan) (*UserSubscription, bool, error) {
 	var balance UserSubscription
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND entitlement_type = ?", userId, SubscriptionEntitlementCreditBalance).Limit(1).Find(&balance)
 	if query.Error != nil {
-		return nil, query.Error
+		return nil, false, query.Error
 	}
 	if query.RowsAffected > 0 {
-		return &balance, nil
+		return &balance, false, nil
 	}
 	now := getDBTimestampTx(tx)
 	balance = UserSubscription{
@@ -483,17 +522,17 @@ func getOrCreateCreditBalanceSubscriptionTx(tx *gorm.DB, userId int, plan *Subsc
 	}
 	create := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&balance)
 	if create.Error != nil {
-		return nil, create.Error
+		return nil, false, create.Error
 	}
 	if create.RowsAffected == 1 {
-		return &balance, nil
+		return &balance, true, nil
 	}
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("user_id = ? AND entitlement_type = ?", userId, SubscriptionEntitlementCreditBalance).
 		First(&balance).Error; err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return &balance, nil
+	return &balance, false, nil
 }
 
 func hasUsableSubscriptionTx(tx *gorm.DB, userId int) (bool, error) {

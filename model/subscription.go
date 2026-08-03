@@ -1028,15 +1028,29 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		if order.PaymentProvider == PaymentProviderBalance {
 			reason = "人民币账户余额购买 Credit 余额"
 		}
+		var valuationSource *CreditValuationSourceSnapshot
+		valuationCurrency := strings.TrimSpace(snapshot.TargetCreditBalanceValuationCurrency)
+		if snapshot.ListPriceMicros != nil && *snapshot.ListPriceMicros > 0 && snapshot.MonthlyTokenLimit > 0 && valuationCurrency != "" {
+			valuationSource = &CreditValuationSourceSnapshot{
+				SourcePriceMicros: *snapshot.ListPriceMicros,
+				SourcePlanCredit:  snapshot.MonthlyTokenLimit,
+				GrossCredit:       order.CreditGrantAmount,
+				SourceCurrency:    snapshot.ListPriceCurrency,
+				ValuationCurrency: valuationCurrency,
+				RuleVersion:       snapshot.ValuationRuleVersion,
+			}
+		}
 		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
 			UserId:             order.UserId,
 			GrossCredit:        order.CreditGrantAmount,
 			IdempotencyKey:     order.TradeNo,
 			SourceType:         CreditBalanceLedgerSourceSubscriptionOrder,
 			SourceId:           order.Id,
+			SourceSnapshot:     order.EntitlementSnapshot,
 			Type:               CreditBalanceLedgerTypePurchase,
 			TargetPlanId:       order.CreditTargetPlanID,
 			TargetPlanSnapshot: targetPlan,
+			ValuationSource:    valuationSource,
 			PaymentProvider:    order.PaymentProvider,
 			Reason:             reason,
 		})

@@ -197,3 +197,10 @@
 - 结果：PASS，`go test: 1 packages ok`，耗时约 14.68 秒。
 - 观察：recognized 仅为早期 CNY 20；后期 USD 重叠秒不重复计值；subscription warning 含 `overlapping_grants`，summary unknown timed count 为 1。
 - 扩展回归：`go test ./model -run '^TestPaidSubscriptionValue' -count=1` 暴露多条旧 fixture 未创建 grant，因此按新合同得到 unknown/0；这是测试夹具迁移缺口，不是允许回退当前 Plan 价格的理由。
+
+## GREEN 12：实际权益窗口裁剪
+
+- 测试：grant 冻结 100 秒、20 CNY，但管理员实际权益 `end_time` 缩短至第 40 秒。
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueClipsTimedGrantAtActualSubscriptionEnd$' -count=1`。
+- 结果：PASS，`go test: 1 packages ok`，耗时约 18.64 秒。
+- 观察：recognized 为 8 CNY；grant 超出实际 `subscription.end_time` 的 60 秒不计值，裁剪后的可交付窗口完整覆盖，因此不误报 `missing_timed_grants`。

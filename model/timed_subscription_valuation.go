@@ -266,6 +266,9 @@ func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscri
 	if plan == nil || plan.Id != normalized.request.PlanId || (requireEnabled && !plan.Enabled) || plan.EntitlementType != SubscriptionEntitlementTimed || plan.IsTrial || plan.InviteTrial || plan.PriceAmountMicros == nil || *plan.PriceAmountMicros <= 0 || plan.MonthlyTokenLimit <= 0 {
 		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
 	}
+	if !validTimedSubscriptionGrantDuration(plan) || !validTimedSubscriptionGrantReset(plan) {
+		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
+	}
 	currency := strings.ToUpper(strings.TrimSpace(plan.Currency))
 	if currency != "CNY" && currency != "USD" {
 		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
@@ -276,7 +279,7 @@ func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscri
 		UserId: normalized.request.UserId, PlanId: plan.Id, SourcePriceMicros: *plan.PriceAmountMicros,
 		SourceCurrency: currency, Reason: normalized.request.Reason, GrantCredit: plan.MonthlyTokenLimit,
 		DurationUnit: plan.DurationUnit, DurationValue: plan.DurationValue, CustomSeconds: plan.CustomSeconds,
-		QuotaResetPeriod: NormalizeResetPeriod(plan.QuotaResetPeriod), QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
+		QuotaResetPeriod: plan.QuotaResetPeriod, QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
 		ValuationRuleVersion: CreditValuationRuleVersion,
 	}
 	payload, err := common.Marshal(snapshot)
@@ -287,6 +290,28 @@ func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscri
 		request: normalized.request, plan: plan, sourceKey: normalized.sourceKey, grantSource: normalized.grantSource,
 		sourceCurrency: currency, priceMicros: *plan.PriceAmountMicros, snapshot: string(payload),
 	}, nil
+}
+
+func validTimedSubscriptionGrantDuration(plan *SubscriptionPlan) bool {
+	switch plan.DurationUnit {
+	case SubscriptionDurationYear, SubscriptionDurationMonth, SubscriptionDurationDay, SubscriptionDurationHour:
+		return plan.DurationValue > 0
+	case SubscriptionDurationCustom:
+		return plan.CustomSeconds > 0
+	default:
+		return false
+	}
+}
+
+func validTimedSubscriptionGrantReset(plan *SubscriptionPlan) bool {
+	switch plan.QuotaResetPeriod {
+	case SubscriptionResetNever, SubscriptionResetDaily, SubscriptionResetWeekly, SubscriptionResetMonthly:
+		return true
+	case SubscriptionResetCustom:
+		return plan.QuotaResetCustomSeconds > 0
+	default:
+		return false
+	}
 }
 
 func findTimedSubscriptionGrantReplayTx(tx *gorm.DB, normalized normalizedTimedSubscriptionGrantRequest) (*UserSubscriptionCreationResult, bool, error) {

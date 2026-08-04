@@ -7,13 +7,13 @@
 - 分支：`jiwangyihao/issue-21-timed-grants`
 - 冻结 HEAD：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`
 - 起始工作树：clean
-- 最近安全提交：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`
-- 当前未提交文件：本检查点的 `final-spec-fix-{status,evidence,contract}.md`
+- 最近安全提交：`2d9f200e2`（最终 Spec 修复检查点）。
+- 当前未提交文件：Finding 1 的模型实现、模型/controller 回归测试与本状态/证据更新。
 
 ## 七项 Finding
 
-1. `IN_PROGRESS`：权威 timed Plan 的 duration/reset 严格资格校验。
-2. `PENDING`：缺失 Redemption 授权快照时禁止热路径补造 exact。
+1. `COMPLETE`：权威 timed Plan 的 duration/reset 严格资格校验；模型矩阵 `-count=10` 与真实 controller API 已 GREEN。
+2. `IN_PROGRESS`：缺失 Redemption 授权快照时禁止热路径补造 exact。
 3. `PENDING`：Credit redemption 当前资格与冻结事实分离。
 4. `PENDING`：已使用 Redemption 重放比较规范化 mode。
 5. `PENDING`：disabled trial / invite-trial 禁止新兑换。
@@ -34,7 +34,7 @@
 
 ## 下一步
 
-仅读取 Finding 1 已提交失败测试及 `model/timed_subscription_valuation.go`、必要 controller 路径，复现 RED 后完成最小 GREEN。
+只读 `model/redemption.go` 及已提交失败测试，复现 Finding 2 后完成最小 GREEN。
 
 ## 阻塞
 

@@ -428,6 +428,11 @@ func TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomicall
 		{name: "unsupported currency", mutate: func(plan *SubscriptionPlan) { plan.Currency = "EUR" }},
 		{name: "wrong entitlement type", mutate: func(plan *SubscriptionPlan) { plan.EntitlementType = SubscriptionEntitlementCreditBalance }},
 		{name: "disabled", mutate: func(plan *SubscriptionPlan) { plan.Enabled = false }},
+		{name: "unknown duration", mutate: func(plan *SubscriptionPlan) { plan.DurationUnit = "fortnight" }},
+		{name: "non-positive duration value", mutate: func(plan *SubscriptionPlan) { plan.DurationUnit = SubscriptionDurationMonth; plan.DurationValue = 0 }},
+		{name: "non-positive custom duration", mutate: func(plan *SubscriptionPlan) { plan.CustomSeconds = 0 }},
+		{name: "unknown reset", mutate: func(plan *SubscriptionPlan) { plan.QuotaResetPeriod = "sometimes" }},
+		{name: "non-positive custom reset", mutate: func(plan *SubscriptionPlan) { plan.QuotaResetPeriod = SubscriptionResetCustom; plan.QuotaResetCustomSeconds = 0 }},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -445,6 +450,9 @@ func TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomicall
 			require.NoError(t, DB.Create(&plan).Error)
 			if test.name == "disabled" {
 				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
+			}
+			if test.name == "non-positive duration value" {
+				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("duration_value", 0).Error)
 			}
 
 			err := DB.Transaction(func(tx *gorm.DB) error {

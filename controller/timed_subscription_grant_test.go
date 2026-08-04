@@ -57,6 +57,36 @@ func TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot(t *testing.T)
 	require.Equal(t, int64(1), count)
 }
 
+func TestAdminCreateTimedSubscriptionRejectsInvalidResetPlanAtomically(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}))
+	priceMicros := int64(40_000_000)
+	user := model.User{Id: 21_601, Username: "timed-invalid-reset", Status: common.UserStatusEnabled, AffCode: "timed-invalid-reset-aff"}
+	plan := model.SubscriptionPlan{
+		Id: 21_602, Title: "Timed Invalid Reset", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: model.SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: "sometimes",
+	}
+	require.NoError(t, model.DB.Create(&user).Error)
+	require.NoError(t, model.DB.Create(&plan).Error)
+
+	response := performAdminCreateTimedSubscription(t, user.Id, `{"plan_id":21602,"reason":"非法重置周期","idempotency_key":"admin-timed-invalid-reset"}`)
+	require.Equal(t, http.StatusOK, response.Code)
+	require.Contains(t, response.Body.String(), `"success":false`)
+	var subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var grantCount int64
+	require.NoError(t, model.DB.Model(&model.TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+	var persisted model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&persisted, plan.Id).Error)
+	require.Zero(t, persisted.ConversionGuardVersion)
+}
+
 func performAdminCreateTimedSubscription(t *testing.T, userID int, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()

@@ -32,6 +32,13 @@
 - 旧实现稳定 FAIL：`timed_subscription_grant_test.go:45` 期望 `40000000`，实际写入 `25000000`；测试因此 FAIL，证明 controller 提交的攻击值进入 exact grant。
 - 该 RED 同时证明兼容 payload 中的旧估值字段当前未被忽略，权限边界漏洞可由管理员 API 真实触发。
 
+### Model：旧快照不能覆盖 guard 内权威 Plan
+
+- 命令：`gofmt -w model/timed_subscription_valuation_test.go && go test ./model -run '^TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot$' -count=1 -v`。
+- 真实 SQLite 夹具：数据库 Plan 为 `40,000,000` micros CNY、1,000 Credit、3,600 秒、never reset；调用方传入旧/伪造 Plan 为 `25,000,000` micros USD、250 Credit、7,200 秒、daily reset。
+- 旧实现稳定 FAIL：`timed_subscription_valuation_test.go:123` 期望 `40000000`，实际 grant 为 `25000000`；证明 guard 后虽重读 Plan，但 normalize 仍采用调用方价币。
+- 同一测试还将锁定权威 Credit、duration、reset 与 source snapshot；修复必须使实际窗口为 3,600 秒并冻结数据库 Plan 全部事实。
+
 ## GREEN
 
 - 尚未实现。

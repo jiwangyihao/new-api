@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`RED_CONFIRMED`。
+- 状态：`MODEL_RED_CONFIRMED`。
 - Standards 四项 finding：保持 `COMPLETE`，不得回退。
-- AC2 / Gate B：Controller/API 权限攻击 RED 已确认；model 权威快照/原子性 RED 待补。
+- AC2 / Gate B：Controller/API 与 model 权威 Plan 快照 RED 均已确认；下一步仅做最小领域 GREEN。
 
 ## 权威事实
 
@@ -27,18 +27,19 @@ SubscriptionPlan guard -> authoritative SubscriptionPlan reread -> existing time
 
 ## 下一步
 
-1. 提交 Controller/API RED 与本进度证据。
-2. 补最小 model 权威 Plan 快照与非法 Plan 零写入 RED。
-3. 最小 GREEN：领域入口只在 Plan guard 内重读并冻结权威事实，controller 不再向领域层传估值字段。
+1. 提交 model 权威 Plan RED 与本进度证据。
+2. 最小 GREEN：请求仅保留 Plan identity/source intent；guard 内重读数据库 Plan 后再构造重放指纹与 grant。
+3. 补非法权威 Plan 零写入、disabled 重放/新 key、边界秒与零额度回归。
 
 ## 最近安全提交
 
+- `4212d2218`：复现管理员伪造计时估值（Controller/API RED）。
 - `0c7ef4aec`：建立 AC2 / Gate B 修复恢复现场。
 
 ## 未提交文件
 
-- `controller/timed_subscription_grant_test.go`：40 CNY Plan 对 25 USD 攻击 RED。
-- 本目录 `spec-fix-status.md`、`spec-fix-evidence.md`：RED 证据更新。
+- `model/timed_subscription_valuation_test.go`：权威 Plan 价币/Credit/duration/reset RED。
+- 本目录 `spec-fix-status.md`、`spec-fix-evidence.md`：model RED 证据更新。
 
 ## 阻塞
 

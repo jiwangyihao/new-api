@@ -83,6 +83,59 @@ func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testi
 	require.Equal(t, int64(1), grantCount)
 }
 
+func TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	authoritativePriceMicros := int64(40_000_000)
+	user := User{Id: 21_021, Username: "timed-authoritative", Status: common.UserStatusEnabled, AffCode: "timed-authoritative-aff"}
+	plan := SubscriptionPlan{
+		Id: 21_022, Title: "Authoritative Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &authoritativePriceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	stalePlan := plan
+	forgedPriceMicros := int64(25_000_000)
+	stalePlan.PriceAmountMicros = &forgedPriceMicros
+	stalePlan.Currency = "USD"
+	stalePlan.MonthlyTokenLimit = 250
+	stalePlan.CustomSeconds = 7200
+	stalePlan.QuotaResetPeriod = SubscriptionResetDaily
+
+	var creation *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: user.Id, Plan: &stalePlan, IdempotencyKey: "subscription_order:21023",
+			SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_023,
+			SourcePriceMicros: forgedPriceMicros, SourceCurrency: "USD",
+		})
+		return err
+	}))
+	require.NotNil(t, creation)
+	require.Equal(t, int64(3600), creation.EventEndTime-creation.EventStartTime)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceOrder, "subscription_order:21023").First(&grant).Error)
+	require.Equal(t, authoritativePriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, authoritativePriceMicros, grant.ValuationAmountMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+	require.Equal(t, "CNY", grant.ValuationCurrency)
+	require.Equal(t, int64(1000), grant.GrantCredit)
+
+	var snapshot timedSubscriptionGrantSourceSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(grant.SourceSnapshot, &snapshot))
+	require.Equal(t, authoritativePriceMicros, snapshot.SourcePriceMicros)
+	require.Equal(t, "CNY", snapshot.SourceCurrency)
+	require.Equal(t, int64(1000), snapshot.GrantCredit)
+	require.Equal(t, SubscriptionDurationCustom, snapshot.DurationUnit)
+	require.Equal(t, int64(3600), snapshot.CustomSeconds)
+	require.Equal(t, SubscriptionResetNever, snapshot.QuotaResetPeriod)
+}
+
 func TestTimedSubscriptionValuationGrantNormalizesIdentityBeforePersistAndReplay(t *testing.T) {
 	setupTimedSubscriptionValuationTestDB(t)
 	priceMicros := int64(40_000_000)

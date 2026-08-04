@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 B 合同
 
-状态：INVESTIGATING
+状态：VERIFYING
 
 ## 冻结输入
 

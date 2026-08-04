@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 B 证据
 
-状态：INVESTIGATING
+状态：VERIFYING
 
 冻结 HEAD：`774b35740c1879b285537031410731317d0142fc`。
 
@@ -32,11 +32,34 @@ go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/
 ```
 
 结果：退出码 1，约 0.79 秒；唯一失败为 `service/invitation_commission_test.go:375` 的 `require.NoError(t, err)`。夹具在 `service/invitation_commission_test.go:368-373` 直接 `model.DB.Create(&redemption)`，因此没有经过 `Redemption.Insert` 的事务冻结入口；`Redeem` 在缺少 `FulfillmentSnapshot` 时沿 `ErrRedemptionPlanIneligible` 稳定拒绝。
-该输出同时记录了测试清理期间对缺失 `models`、`vendors` 表的 SQL 日志，但未形成额外测试失败或 panic；当前未观察到 Redis 全局夹具 panic。最小测试仍需单独运行，以捕获 `redemption.plan_ineligible` 的稳定错误路径并建立快速 RED→GREEN 回路。
+包级原始输出同时记录了测试清理期间对缺失 `models`、`vendors` 表的 SQL 日志，但未形成额外测试失败或 panic；当前未观察到 Redis 全局夹具 panic。
 
-## 待补证据
+## 最小 GREEN
 
-- 最小失败测试的稳定错误及旁路夹具位置。
-- `Redemption.Insert` 冻结后的非空 `FulfillmentSnapshot`。
-- invitation 原幂等、资格、金额、记录数量与隔离断言保持。
-- 定向、`-count=10`、包级与 `git diff --check` 结果。
+夹具迁移：
+
+- option Plan 保持 enabled、显式 timed entitlement、月度 duration/reset、正 Credit 与不限时购买资格，并补齐权威 `30_000_000` micros CNY 标价。
+- Redemption 改由 `redemption.Insert()` 创建；紧接着断言 `strings.TrimSpace(redemption.FulfillmentSnapshot)` 非空，证明快照由权威前向入口冻结而非手写 JSON。
+- 随后仍通过真实 `model.Redeem(..., model.RedemptionModeCreditBalance)` 与 `HandleInvitationRewardForSubscriptionRedemption` 调用链验证 Credit 邀请隔离。
+
+命令：
+
+```text
+go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1 -v
+```
+
+结果：PASS，`github.com/QuantumNous/new-api/service` 通过。
+
+## service 包级 GREEN
+
+命令：
+
+```text
+go test ./service -count=1
+```
+
+结果：PASS，`github.com/QuantumNous/new-api/service` 通过，约 8.83 秒。未出现 Redis panic；原包级唯一失败已消失。
+
+## 断言保留
+
+测试继续断言：只产生一份 Credit 余额权益；邀请奖励事件、佣金记录和佣金账户均为零；两名直接邀请中仅 timed 对照用户符合活动资格；邀请人不获得月度权益。

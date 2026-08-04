@@ -79,4 +79,5 @@ go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/
 - `52cc9b193`：建立兑换夹具迁移检查点。
 - `1866aa042`：持久化最小 RED。
 - `df6531cf6`：通过 `Redemption.Insert` 构造合法 Credit 兑换夹具并记录 GREEN。
+- `934d7ba10`：收口迁移后的两条指定实跑证据。
 - 修改范围仅为 `service/invitation_commission_test.go` 与 `.scratch/agent-progress/issue-21/fixture-b-{status,evidence,contract}.md`；未修改生产代码、model/controller、CreditValuation、ledger 或 request settlement。

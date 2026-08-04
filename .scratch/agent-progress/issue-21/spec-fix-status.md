@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`AUTHORIZED_SOURCE_SNAPSHOTS_GREEN`。
+- 状态：`BOUNDARY_REGRESSIONS_GREEN`。
 - Standards 四项 finding：保持 `COMPLETE`，未改动。
-- AC2 / Gate B：管理员新 allocation 从 guard 内当前 enabled Plan 冻结；订单从持久化 `SubscriptionOrder.EntitlementSnapshot`、兑换从创建时持久化 `Redemption.FulfillmentSnapshot` 冻结已授权事实。
+- AC2 / Gate B：权威来源快照、非法 Plan 失败原子性、零额度拒绝、`[start,end)` 边界秒、成功重放与 disabled 新 key 均已定向 GREEN。
 
 ## 权威事实
 
@@ -27,9 +27,9 @@ SubscriptionPlan guard -> committed grant identity replay -> authoritative sourc
 
 ## 下一步
 
-1. 提交 order/redemption 已授权来源快照 GREEN 安全点。
-2. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
-3. 运行重复定向及 #22 Credit + #21 timed 组合回归。
+1. 提交四类窄回归与证据安全点。
+2. 运行 `-count=10` 权威/边界定向、窄 `-race` 并发、#22 Credit + #21 timed 五接口组合回归。
+3. 更新最终 COMPLETE 状态，确认 clean tree 并汇报协调器。
 
 ## 最近安全提交
 
@@ -40,10 +40,8 @@ SubscriptionPlan guard -> committed grant identity replay -> authoritative sourc
 
 ## 未提交文件
 
-- `model/redemption.go`：兑换创建事务持久化 entitlement source snapshot，兑换事务复用该冻结事实。
-- `model/timed_subscription_valuation.go`：按 admin/order/redemption source 读取各自权威事实。
-- `model/timed_subscription_valuation_test.go`、`model/timed_subscription_valuation_concurrency_test.go`：真实来源回归与直接 admin 夹具。
-- 本文件与 `spec-fix-evidence.md`：纠正来源快照范围并记录兑换 RED→GREEN。
+- `model/timed_subscription_valuation_test.go`：非法 Plan 原子性、zero Credit、半开秒边界回归。
+- 本文件与 `spec-fix-evidence.md`：记录四类定向 GREEN。
 
 ## 阻塞
 

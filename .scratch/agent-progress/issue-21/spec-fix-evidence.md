@@ -68,6 +68,14 @@
 - GREEN：`Redemption.Insert` 在同一事务锁定 Plan 并持久化 entitlement source snapshot；兑换时锁定兑换记录和当前 Plan 资格，但从已持久化 snapshot 构造 timed grant 事实。相同命令 PASS（1 package），grant 为原 `80,000,000 CNY`，重放不续期。
 - 兑换 `FulfillmentSnapshot` 仍在首次履约事务补齐事件时间与 fulfillment subscription，源 entitlement 部分不再被后来 Plan 改价重写。
 
+## GREEN：失败原子性、零额度、边界秒与 disabled 重放
+
+- 非法权威 Plan：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomically$' -count=1`；PASS（1 package）。缺失精确 micros、币种 `EUR`、非 timed entitlement、disabled Plan 均返回 `ErrTimedSubscriptionGrantInvalid`；`UserSubscription` 与 grant 行为 0，事务回滚后的 `conversion_guard_version` 仍为 0。
+- 零额度：`TestTimedSubscriptionValuationGrantRejectsZeroCreditPlanAtomically` PASS；zero Credit Plan 依现有规则非法，稳定拒绝且 subscription/grant 0 行。
+- 边界秒：`TestTimedSubscriptionValuationGrantUsesHalfOpenSecondBoundary` PASS；单秒 grant `[100,101)` 在 snapshot 100 计完整值，在 snapshot 101 计 0，终点不重复计值。
+- 幂等/disabled：`TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRejectsNewGrant` PASS；成功 key 在 disabled 后返回原 subscription/end，不新增行；新 key 稳定拒绝且原 end/grant count 不变。
+- 后三项组合命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(RejectsZeroCreditPlanAtomically|UsesHalfOpenSecondBoundary|DisabledPlanReplaysCommittedSourceButRejectsNewGrant)$' -count=1`；PASS（1 package）。
+
 ## 数据库范围
 
 - SQLite：权威快照真实事务/API 定向测试 PASS。

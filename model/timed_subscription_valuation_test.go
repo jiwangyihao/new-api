@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -415,6 +416,104 @@ func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *test
 	var grantCount int64
 	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
 	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomically(t *testing.T) {
+	priceMicros := int64(40_000_000)
+	tests := []struct {
+		name   string
+		mutate func(*SubscriptionPlan)
+	}{
+		{name: "missing exact micros", mutate: func(plan *SubscriptionPlan) { plan.PriceAmountMicros = nil }},
+		{name: "unsupported currency", mutate: func(plan *SubscriptionPlan) { plan.Currency = "EUR" }},
+		{name: "wrong entitlement type", mutate: func(plan *SubscriptionPlan) { plan.EntitlementType = SubscriptionEntitlementCreditBalance }},
+		{name: "disabled", mutate: func(plan *SubscriptionPlan) { plan.Enabled = false }},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupTimedSubscriptionValuationTestDB(t)
+			userID := 21_601 + index
+			plan := SubscriptionPlan{
+				Id: 21_602 + index, Title: "Invalid Authoritative Timed", Enabled: true,
+				EntitlementType: SubscriptionEntitlementTimed,
+				PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+				DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+				MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+			}
+			test.mutate(&plan)
+			require.NoError(t, DB.Create(&User{Id: userID, Username: "timed-invalid-" + strconv.Itoa(index), Status: common.UserStatusEnabled, AffCode: "timed-invalid-aff-" + strconv.Itoa(index)}).Error)
+			require.NoError(t, DB.Create(&plan).Error)
+			if test.name == "disabled" {
+				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
+			}
+
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+					UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-invalid-" + strconv.Itoa(index),
+					SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "非法权威计划原子性测试",
+				})
+				return grantErr
+			})
+			require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+
+			var subscriptionCount int64
+			require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+			require.Zero(t, subscriptionCount)
+			var grantCount int64
+			require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+			require.Zero(t, grantCount)
+			var persistedPlan SubscriptionPlan
+			require.NoError(t, DB.First(&persistedPlan, plan.Id).Error)
+			require.Zero(t, persistedPlan.ConversionGuardVersion)
+		})
+	}
+}
+
+func TestTimedSubscriptionValuationGrantRejectsZeroCreditPlanAtomically(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	user := User{Id: 21_651, Username: "timed-zero", Status: common.UserStatusEnabled, AffCode: "timed-zero-aff"}
+	plan := SubscriptionPlan{
+		Id: 21_652, Title: "Zero Credit Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 1,
+		MonthlyTokenLimit: 0, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: user.Id, PlanId: plan.Id, IdempotencyKey: "timed-zero-21653",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "零额度计划测试",
+		})
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantUsesHalfOpenSecondBoundary(t *testing.T) {
+	grant := TimedSubscriptionValuationGrant{
+		Id: 1, SourceType: TimedSubscriptionGrantSourceAdmin,
+		EventStartTime: 100, EventEndTime: 101,
+		ValuationAmountMicros: 1_000_000, ValuationCurrency: "CNY",
+	}
+	subscription := UserSubscription{StartTime: 100, EndTime: 101, TokenLimit: 1}
+
+	atStart, err := adminCalculateTimedSubscriptionValue(subscription, []TimedSubscriptionValuationGrant{grant}, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(1_000_000), atStart.ByCurrency["CNY"].TimeMicros)
+
+	atEnd, err := adminCalculateTimedSubscriptionValue(subscription, []TimedSubscriptionValuationGrant{grant}, 101)
+	require.NoError(t, err)
+	require.Empty(t, atEnd.ByCurrency)
 }
 
 func TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRejectsNewGrant(t *testing.T) {

@@ -173,25 +173,79 @@ func invitationCommissionTestUser(id int, username string) User {
 
 func seedInvitationCommissionPlan(t *testing.T, id int, code string, price float64, currency string) *SubscriptionPlan {
 	t.Helper()
-	plan := &SubscriptionPlan{Id: id, Title: code, PriceAmount: price, Currency: currency, Enabled: true, PublicVisible: true, RewardEligible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code, DurationUnit: SubscriptionDurationDay, DurationValue: 30}
+	priceMicros := int64(math.Round(price * float64(amountMicrosPerUnit)))
+	plan := &SubscriptionPlan{
+		Id:                id,
+		Title:             code,
+		PriceAmount:       price,
+		PriceAmountMicros: &priceMicros,
+		Currency:          currency,
+		DurationUnit:      SubscriptionDurationDay,
+		DurationValue:     30,
+		Enabled:           true,
+		PublicVisible:     true,
+		RewardEligible:    true,
+		TotalAmount:       1000,
+		MonthlyTokenLimit: 1000,
+		ConcurrencyLimit:  1,
+		BusinessCode:      &code,
+		EntitlementType:   SubscriptionEntitlementTimed,
+		QuotaResetPeriod:  SubscriptionResetNever,
+	}
 	require.NoError(t, DB.Create(plan).Error)
 	return plan
 }
 
+func seedInvitationCommissionOrder(t *testing.T, plan *SubscriptionPlan, order SubscriptionOrder) *SubscriptionOrder {
+	t.Helper()
+	require.NotNil(t, plan)
+	order.PlanId = plan.Id
+	snapshot := NewSubscriptionEntitlementSnapshot(plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(order.PaymentProvider, plan.Title, order.PaymentMethod, order.AmountCents, order.Currency)
+	payload, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order.EntitlementSnapshot = payload
+	require.NoError(t, DB.Create(&order).Error)
+	return &order
+}
+
+func seedInvitationCommissionRedemption(t *testing.T, plan *SubscriptionPlan, redemption Redemption) *Redemption {
+	t.Helper()
+	require.NotNil(t, plan)
+	redemption.PlanId = plan.Id
+	require.NoError(t, redemption.Insert())
+	require.NotEmpty(t, redemption.FulfillmentSnapshot)
+	return &redemption
+}
+
 func resetInvitationCommissionModelTables(t *testing.T) {
 	t.Helper()
+	tables := []struct {
+		model any
+		name  string
+	}{
+		{&InvitationCommissionWithdrawal{}, "invitation_commission_withdrawals"},
+		{&InvitationCommissionLedger{}, "invitation_commission_ledgers"},
+		{&InvitationCommissionRecord{}, "invitation_commission_records"},
+		{&InvitationCommissionAccount{}, "invitation_commission_accounts"},
+		{&InvitationRewardEvent{}, "invitation_reward_events"},
+		{&InvitationMonthlyEntitlement{}, "invitation_monthly_entitlements"},
+		{&TimedSubscriptionValuationGrant{}, "timed_subscription_valuation_grants"},
+		{&Redemption{}, "redemptions"},
+		{&UserSubscription{}, "user_subscriptions"},
+		{&SubscriptionOrder{}, "subscription_orders"},
+		{&TopUp{}, "top_ups"},
+		{&SubscriptionPlan{}, "subscription_plans"},
+		{&User{}, "users"},
+	}
 	cleanup := func() {
-		DB.Exec("DELETE FROM invitation_commission_withdrawals")
-		DB.Exec("DELETE FROM invitation_commission_ledgers")
-		DB.Exec("DELETE FROM invitation_commission_records")
-		DB.Exec("DELETE FROM invitation_commission_accounts")
-		DB.Exec("DELETE FROM invitation_reward_events")
-		DB.Exec("DELETE FROM redemptions")
-		DB.Exec("DELETE FROM user_subscriptions")
-		DB.Exec("DELETE FROM subscription_orders")
-		DB.Exec("DELETE FROM subscription_plans")
-		DB.Exec("DELETE FROM users")
+		for _, table := range tables {
+			if DB.Migrator().HasTable(table.model) {
+				assert.NoError(t, DB.Exec("DELETE FROM "+table.name).Error)
+			}
+		}
 		primaryBillableSubscriptionCache = sync.Map{}
+		ClearSubscriptionPlanCacheForTest()
 	}
 	cleanup()
 	t.Cleanup(cleanup)
@@ -210,16 +264,15 @@ func assertInvitationRewardEventHasNoRewardModeColumn(t *testing.T) {
 
 func TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9201, "inviter")
 	inviter.InvitationRewardMode = InvitationRewardModeCommission
 	invitee := invitationCommissionTestUser(9202, "invitee")
 	invitee.InviterId = 9201
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
-	_ = seedInvitationCommissionPlan(t, 9203, "commission_plan", 100, "CNY")
-	order := SubscriptionOrder{UserId: 9202, PlanId: 9203, Money: 100, AmountCents: 10000, Currency: "CNY", TradeNo: "source-at-transition", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&order).Error)
+	plan := seedInvitationCommissionPlan(t, 9203, "commission_plan", 100, "CNY")
+	order := seedInvitationCommissionOrder(t, plan, SubscriptionOrder{UserId: 9202, Money: 100, AmountCents: 10000, Currency: "CNY", TradeNo: "source-at-transition", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()})
 
 	var result *SubscriptionOrderCompletionResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -247,6 +300,13 @@ func TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition(t *
 	assert.Equal(t, int64(10000), event.SourceAmountCents)
 	assert.Equal(t, "CNY", event.SourceCurrency)
 	assertInvitationRewardEventHasNoRewardModeColumn(t)
+	var persistedOrder SubscriptionOrder
+	require.NoError(t, DB.First(&persistedOrder, order.Id).Error)
+	require.Positive(t, persistedOrder.FulfilledSubscriptionID)
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_id = ?", TimedSubscriptionGrantSourceOrder, order.Id).First(&grant).Error)
+	assert.Equal(t, persistedOrder.FulfilledSubscriptionID, grant.UserSubscriptionId)
+	assert.Equal(t, persistedOrder.FulfilledSubscriptionID, event.SourceSubscriptionId)
 
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", 9201).Update("invitation_reward_mode", InvitationRewardModeSubscription).Error)
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -269,17 +329,16 @@ func TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition(t *
 
 func TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &InvitationRewardEvent{}))
 	now := common.GetTimestamp()
 	inviter := invitationCommissionTestUser(9211, "renew-inviter")
 	invitee := invitationCommissionTestUser(9212, "renew-invitee")
 	invitee.InviterId = 9211
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
-	_ = seedInvitationCommissionPlan(t, 9213, "renew_plan", 50, "CNY")
+	plan := seedInvitationCommissionPlan(t, 9213, "renew_plan", 50, "CNY")
 	require.NoError(t, DB.Create(&UserSubscription{UserId: 9212, PlanId: 9213, Status: "active", StartTime: now - 100, EndTime: now + 86400, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
-	order := SubscriptionOrder{UserId: 9212, PlanId: 9213, AmountCents: 5000, Currency: "CNY", TradeNo: "renew-delta", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: now}
-	require.NoError(t, DB.Create(&order).Error)
+	order := seedInvitationCommissionOrder(t, plan, SubscriptionOrder{UserId: 9212, AmountCents: 5000, Currency: "CNY", TradeNo: "renew-delta", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: now})
 
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		var locked SubscriptionOrder
@@ -296,16 +355,15 @@ func TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta(t *testing
 
 func TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &Redemption{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &Redemption{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9221, "redeem-inviter")
 	inviter.InvitationRewardMode = InvitationRewardModeCommission
 	invitee := invitationCommissionTestUser(9222, "redeem-invitee")
 	invitee.InviterId = 9221
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
-	_ = seedInvitationCommissionPlan(t, 9223, "redeem_plan", 80, "CNY")
-	redemption := Redemption{Id: 9224, Key: "redeem-source-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, PlanId: 9223, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&redemption).Error)
+	plan := seedInvitationCommissionPlan(t, 9223, "redeem_plan", 80, "CNY")
+	redemption := seedInvitationCommissionRedemption(t, plan, Redemption{Id: 9224, Key: "redeem-source-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()})
 
 	result, err := Redeem("redeem-source-key", 9222, RedemptionModeTimed)
 
@@ -326,16 +384,16 @@ func TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent(t *testing.T) 
 
 func TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &Redemption{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &Redemption{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9225, "redeem-ineligible-inviter")
 	invitee := invitationCommissionTestUser(9226, "redeem-ineligible-invitee")
 	invitee.InviterId = 9225
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
 	plan := seedInvitationCommissionPlan(t, 9227, "redeem_ineligible_plan", 80, "CNY")
+	plan.RewardEligible = false
 	require.NoError(t, DB.Model(plan).Update("reward_eligible", false).Error)
-	redemption := Redemption{Id: 9228, Key: "redeem-ineligible-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, PlanId: 9227, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&redemption).Error)
+	redemption := seedInvitationCommissionRedemption(t, plan, Redemption{Id: 9228, Key: "redeem-ineligible-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp()})
 
 	result, err := Redeem("redeem-ineligible-key", 9226, RedemptionModeTimed)
 
@@ -353,16 +411,15 @@ func TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan(t *test
 
 func TestCompleteSubscriptionOrderReturnsResultForSuccessRetry(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9231, "retry-inviter")
 	inviter.InvitationRewardMode = InvitationRewardModeCommission
 	invitee := invitationCommissionTestUser(9232, "retry-invitee")
 	invitee.InviterId = 9231
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
-	_ = seedInvitationCommissionPlan(t, 9233, "retry_plan", 60, "CNY")
-	order := SubscriptionOrder{UserId: 9232, PlanId: 9233, AmountCents: 6000, Currency: "CNY", TradeNo: "retry-existing-event", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&order).Error)
+	plan := seedInvitationCommissionPlan(t, 9233, "retry_plan", 60, "CNY")
+	order := seedInvitationCommissionOrder(t, plan, SubscriptionOrder{UserId: 9232, AmountCents: 6000, Currency: "CNY", TradeNo: "retry-existing-event", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()})
 
 	first, err := CompleteSubscriptionOrder("retry-existing-event", "{}", PaymentProviderEpay, "alipay")
 	require.NoError(t, err)
@@ -387,16 +444,16 @@ func TestCompleteSubscriptionOrderReturnsResultForSuccessRetry(t *testing.T) {
 
 func TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TopUp{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &TopUp{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9261, "ineligible-order-inviter")
 	invitee := invitationCommissionTestUser(9262, "ineligible-order-invitee")
 	invitee.InviterId = inviter.Id
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
 	plan := seedInvitationCommissionPlan(t, 9263, "ineligible_order_plan", 110, "CNY")
+	plan.RewardEligible = false
 	require.NoError(t, DB.Model(plan).Update("reward_eligible", false).Error)
-	order := SubscriptionOrder{UserId: invitee.Id, PlanId: plan.Id, Money: 110, AmountCents: 11000, Currency: "CNY", TradeNo: "reward-ineligible-order-event", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&order).Error)
+	order := seedInvitationCommissionOrder(t, plan, SubscriptionOrder{UserId: invitee.Id, Money: 110, AmountCents: 11000, Currency: "CNY", TradeNo: "reward-ineligible-order-event", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()})
 
 	result, err := CompleteSubscriptionOrder(order.TradeNo, `{"money":"110.00","currency":"CNY"}`, PaymentProviderEpay, "alipay")
 
@@ -418,16 +475,15 @@ func TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan(t *testing
 
 func TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEvent(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9241, "concurrent-inviter")
 	inviter.InvitationRewardMode = InvitationRewardModeCommission
 	invitee := invitationCommissionTestUser(9242, "concurrent-invitee")
 	invitee.InviterId = 9241
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&invitee).Error)
-	_ = seedInvitationCommissionPlan(t, 9243, "concurrent_order_plan", 70, "CNY")
-	order := SubscriptionOrder{UserId: 9242, PlanId: 9243, AmountCents: 7000, Currency: "CNY", TradeNo: "concurrent-order", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&order).Error)
+	plan := seedInvitationCommissionPlan(t, 9243, "concurrent_order_plan", 70, "CNY")
+	order := seedInvitationCommissionOrder(t, plan, SubscriptionOrder{UserId: 9242, AmountCents: 7000, Currency: "CNY", TradeNo: "concurrent-order", PaymentProvider: PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()})
 
 	const workers = 8
 	results := make(chan *SubscriptionOrderCompletionResult, workers)
@@ -460,7 +516,7 @@ func TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEve
 			transitioned++
 		}
 	}
-	require.GreaterOrEqual(t, completed+len(errs), 1)
+	require.Equal(t, workers, completed+len(errs))
 	assert.Equal(t, 1, transitioned)
 	var orderAfter SubscriptionOrder
 	require.NoError(t, DB.Where("trade_no = ?", "concurrent-order").First(&orderAfter).Error)
@@ -475,7 +531,7 @@ func TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEve
 
 func TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAndEvent(t *testing.T) {
 	resetInvitationCommissionModelTables(t)
-	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &Redemption{}, &InvitationRewardEvent{}))
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}, &Redemption{}, &InvitationRewardEvent{}))
 	inviter := invitationCommissionTestUser(9251, "redeem-race-inviter")
 	inviter.InvitationRewardMode = InvitationRewardModeCommission
 	inviteeA := invitationCommissionTestUser(9252, "redeem-race-invitee-a")
@@ -485,9 +541,8 @@ func TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAnd
 	require.NoError(t, DB.Create(&inviter).Error)
 	require.NoError(t, DB.Create(&inviteeA).Error)
 	require.NoError(t, DB.Create(&inviteeB).Error)
-	_ = seedInvitationCommissionPlan(t, 9254, "concurrent_redemption_plan", 90, "CNY")
-	redemption := Redemption{Id: 9255, Key: "redeem-race-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, PlanId: 9254, AmountCents: 9000, Currency: "CNY", CreatedTime: common.GetTimestamp()}
-	require.NoError(t, DB.Create(&redemption).Error)
+	plan := seedInvitationCommissionPlan(t, 9254, "concurrent_redemption_plan", 90, "CNY")
+	redemption := seedInvitationCommissionRedemption(t, plan, Redemption{Id: 9255, Key: "redeem-race-key", Status: common.RedemptionCodeStatusEnabled, Type: RedemptionTypeSubscription, AmountCents: 9000, Currency: "CNY", CreatedTime: common.GetTimestamp()})
 
 	userIDs := []int{9252, 9253}
 	successes := make(chan int, len(userIDs))

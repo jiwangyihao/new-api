@@ -42,4 +42,11 @@ go test ./model -run '^(TestCompleteSubscriptionOrderTxCreatesInvitationRewardEv
 
 ## GREEN 与验收台账
 
-尚未运行；完成修复后逐项记录定向测试、十次并发/重放测试、`go test ./model -count=1`、`git diff --check` 与 clean-tree 结果。
+- 九项定向命令 `-count=1`：FAIL（12.388s），仅两项成功重放身份断言 RED：
+  - `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`：首次完成已成功，持久化 `InvitationRewardEvent.InviterId=9201`；order `FulfilledSubscriptionID > 0`，唯一 order timed grant 的 `UserSubscriptionId` 与 event `SourceSubscriptionId` 都等于该 fulfillment；成功重放仍返回 `InviterId=0`。
+  - `TestCompleteSubscriptionOrderReturnsResultForSuccessRetry`：首次结果 `InviterId=9231`，成功重放返回 `InviterId=0`。
+- 精确生产接缝：`model/subscription.go:1137-1161` 的 `subscriptionOrderCompletionResultFromExistingFulfillmentTx` 对普通 paid timed 直接转到 `subscriptionOrderCompletionResultFromTimedGrantTx`；`model/subscription.go:1164-1196` 只从 grant/subscription 恢复窗口和 subscription identity，未合入已持久化的 `InvitationRewardEvent.InviterId`。禁止在本夹具切片修改生产代码或弱化身份断言。
+- 其余七项独立组合（续期 delta、两项兑换、reward-ineligible order、两项并发、历史购买限制续期）`-count=1`：PASS；证明合法 timed Plan、订单 `EntitlementSnapshot`、`Redemption.Insert()`/`FulfillmentSnapshot` 与并发恰好一次夹具已经 GREEN。
+- 原三项中 `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent` 与 `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached` 已 GREEN；`TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition` 仅剩上述独立生产重放身份 blocker。
+- 未运行 `go test ./model -count=1` 和十次重放门禁：已知生产 RED 会确定失败；现场以 HANDOFF_READY 提交交由专门生产修复 Agent。
+- `gofmt`、`git diff --check` 与 clean-tree 结果在最终安全提交后记录。

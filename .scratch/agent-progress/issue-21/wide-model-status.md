@@ -37,11 +37,12 @@
 
 ## 当前阶段
 
-- 已完成：必读材料核查、基线恢复合同安全提交 `d85ccc1cd`、冻结三项最小复现。
-- 本地 RED：两项订单稳定返回 `timed_subscription_grant_invalid`，兑换稳定返回 `redemption.plan_ineligible`；另有初始化前清表的缺表日志噪声。
-- 进行中：建立合法 Plan、订单授权快照与 Redemption.Insert test-only helper，并迁移九项测试。
-- 下一步：先让三项最小复现 GREEN，再覆盖其余六项及并发不变量。
-- 阻塞：无；当前证据与冻结根因一致，尚未发现生产缺陷。
+- 状态：HANDOFF_READY（夹具迁移完成，独立生产 blocker 已隔离）。
+- 已完成：合法 paid timed Plan helper、订单不可变 `EntitlementSnapshot` helper、`Redemption.Insert()`/`FulfillmentSnapshot` helper；九项均已迁移，七项独立组合 GREEN。
+- 生产 blocker：两项 order success replay 在 event、grant、`FulfilledSubscriptionID` 均存在且一致时仍返回 `InviterId=0`；断言保留，生产代码未修改。
+- 精确接缝：`subscriptionOrderCompletionResultFromExistingFulfillmentTx` → `subscriptionOrderCompletionResultFromTimedGrantTx`（`model/subscription.go:1137-1196`）遗漏已持久化 invitation identity。
+- 下一步：专门生产修复 Agent 合并 event identity 后重跑九项、十次重放与完整 `model` 包；本 Worker 仅提交 clean 可恢复现场。
+- 阻塞：独立生产缺陷，已通过 Orca escalation 上报。
 
 ## 恢复命令
 

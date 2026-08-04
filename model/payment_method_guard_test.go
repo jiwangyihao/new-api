@@ -22,15 +22,20 @@ func insertUserForPaymentGuardTest(t *testing.T, id int, quota int) {
 
 func insertSubscriptionPlanForPaymentGuardTest(t *testing.T, id int) *SubscriptionPlan {
 	t.Helper()
+	priceMicros := int64(9_990_000)
 	plan := &SubscriptionPlan{
-		Id:            id,
-		Title:         "Guard Plan",
-		PriceAmount:   9.99,
-		Currency:      "USD",
-		DurationUnit:  SubscriptionDurationMonth,
-		DurationValue: 1,
-		Enabled:       true,
-		TotalAmount:   1000,
+		Id:                id,
+		Title:             "Guard Plan",
+		PriceAmount:       9.99,
+		PriceAmountMicros: &priceMicros,
+		Currency:          "USD",
+		DurationUnit:      SubscriptionDurationMonth,
+		DurationValue:     1,
+		Enabled:           true,
+		TotalAmount:       1000,
+		MonthlyTokenLimit: 1000,
+		EntitlementType:   SubscriptionEntitlementTimed,
+		QuotaResetPeriod:  SubscriptionResetNever,
 	}
 	require.NoError(t, DB.Create(plan).Error)
 	return plan
@@ -38,16 +43,25 @@ func insertSubscriptionPlanForPaymentGuardTest(t *testing.T, id int) *Subscripti
 
 func insertSubscriptionOrderForPaymentGuardTest(t *testing.T, tradeNo string, userID int, planID int, paymentProvider string) {
 	t.Helper()
+	var plan SubscriptionPlan
+	require.NoError(t, DB.First(&plan, planID).Error)
 	order := &SubscriptionOrder{
 		UserId:          userID,
 		PlanId:          planID,
 		Money:           9.99,
+		AmountCents:     999,
+		Currency:        plan.Currency,
 		TradeNo:         tradeNo,
 		PaymentMethod:   paymentProvider,
 		PaymentProvider: paymentProvider,
 		Status:          common.TopUpStatusPending,
 		CreateTime:      time.Now().Unix(),
 	}
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(order.PaymentProvider, plan.Title, order.PaymentMethod, order.AmountCents, order.Currency)
+	payload, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order.EntitlementSnapshot = payload
 	require.NoError(t, order.Insert())
 }
 
@@ -207,6 +221,7 @@ func TestCompleteSubscriptionOrder_RejectsInvalidStatus(t *testing.T) {
 
 func TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached(t *testing.T) {
 	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&TimedSubscriptionValuationGrant{}, &InvitationRewardEvent{}))
 
 	insertUserForPaymentGuardTest(t, 404, 0)
 	plan := insertSubscriptionPlanForPaymentGuardTest(t, 405)

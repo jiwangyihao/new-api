@@ -1,6 +1,6 @@
 # Issue #21 Fixture A 状态
 
-状态：FIRST_GROUP_GREEN
+状态：HANDOFF_READY_WITH_PRODUCTION_BLOCKER
 
 ## 冻结现场
 
@@ -13,34 +13,34 @@
 
 ## 当前阶段
 
-第一组已 GREEN 并准备提交：`TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue` 使用两条首尾相接 immutable grant，summary 断言权威 micros 与 `recognized=min(token,time)`；其余五个已知失败留给第二组。
+六个初始 paid-value 失败均已迁移 immutable grant 夹具：五个测试 GREEN；excluded timed summary 保留 expected=33 / actual=0 的真实生产 blocker。协调器已裁定不改生产代码、不降低断言，提交 clean handoff 后另派生产修复。
 
 ## 失败迁移矩阵
 
 | 测试 | 初始症状 | 迁移状态 |
 |---|---|---|
 | `TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue` | 期望 44 CNY，实际 0 | GREEN：合法 grant + 权威 micros/min 不变量 |
-| `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders` | 期望 99 CNY，实际 0 | 待迁移 |
-| `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` | 期望 33 CNY，实际 0 | 待迁移 |
-| `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows` | 期望 33 CNY，实际 0 | 待迁移 |
-| `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly/recognized_remaining_value` | 期望 subscription 1，实际 2 | 待迁移 |
-| `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency` | `RecognizedRemainingValue` 为 nil，测试第 989 行解引用 panic | 待迁移 |
+| `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders` | 期望 99 CNY，实际 0 | GREEN：三种来源完整 grant 时间线 |
+| `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` | 期望 33 CNY，实际 0 | BLOCKED：合法 grant 后暴露 summary excluded 生产聚合缺口 |
+| `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows` | 期望 33 CNY，实际 0 | GREEN：完整 order grant 时间线 |
+| `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly/recognized_remaining_value` | 期望 subscription 1，实际 2 | GREEN：CNY/USD 原币种 grant 排序 |
+| `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency` | `RecognizedRemainingValue` 为 nil，测试第 989 行解引用 panic | GREEN：完整 grant + 权威 micros |
 
 ## 下一步
 
-1. 提交第一组安全点。
-2. 迁移其余五个已知失败，不再枚举其他测试。
-3. 运行六测试组合与 `go test ./model -count=1`。
+无 Fixture A 可执行工作。协调器需另派生产修复处理 timed excluded summary，并由其他所有者迁移 `invitation_commission_test.go` / `payment_method_guard_test.go` 的冻结授权快照夹具。
 
 ## 最近安全提交
 
 - 冻结基线：`774b35740c1879b285537031410731317d0142fc`
 - RED 证据提交：`c9225c603`
+- 第一组 GREEN 提交：`f44d52b5f`
 
 ## 未提交文件
 
-- 第一组提交前：`model/admin_analytics_paid_subscription_test.go` 与更新后的 fixture-a evidence/status。
+- 最终 clean handoff 提交前：第二组测试迁移及本次 status/evidence 收口。
 
 ## 阻塞
 
-无。包级输出另有 Redis 测试全局状态产生的后台 gopool panic 日志；当前 paid-value 断言失败和 nil 解引用均有独立、直接的旧 timed grant 夹具根因信号。
+- Fixture A 生产 blocker：summary 顶层 excluded 分支未使用 timed-aware 金额累加；expected 33 / actual 0。
+- 包级其余九个失败属于 invitation/payment 旧授权快照夹具，超出本路所有权。

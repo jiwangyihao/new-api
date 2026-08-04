@@ -1,6 +1,6 @@
 # Issue #21 Fixture A 证据
 
-状态：FIRST_GROUP_GREEN
+状态：HANDOFF_READY_WITH_PRODUCTION_BLOCKER
 
 ## 基线与必读材料
 
@@ -56,3 +56,40 @@ go test ./model -count=1
 - 已经 Orca question 获协调器批准：保留测试前半段 `adminRecognizedRemainingValue` 的旧 44/76 单元断言，summary 改断言权威 `amount_micros` 且明确 `recognized=min(token,time)`，不硬编码兼容 float。
 - GREEN 命令：`go test ./model -run '^TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue$' -count=1`。
 - GREEN 结果：PASS，`go test: 1 packages ok`，约 5.7 秒测试时间。
+
+## GREEN 2：其余已知 paid-value 夹具
+
+- `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders`：为 order/admin/redemption 三种来源分别写入两条首尾相接 grant；保留 3 条活动权益、3 个用户与 99 CNY 断言。
+- `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows`：写入完整 order grant 时间线；保留 1 条活动权益与 33 CNY 断言。
+- `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly`：CNY/USD 权益各自写入原币种 grant；保留按所选 CNY 排序，USD 无 CNY 金额的断言。
+- `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency`：写入完整 order grant 时间线；保留 Plan CNY、订单 9.99 CNY、provider/method/order identity，并以权威 `amount_micros=44000000` 断言 recognized。
+- GREEN 命令：`go test ./model -run '^(TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders|TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows|TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly|TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency)$' -count=1`。
+- GREEN 结果：PASS，`go test: 1 packages ok`。
+
+## 生产 blocker：excluded timed summary
+
+- `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` 已迁移为两条首尾相接、30 天、`30,000,000` micros CNY 的 admin immutable grants，完整覆盖 subscription 服务窗口；原 expected=33 断言保持不变。
+- 定向与包级实际结果均为 expected 33 / actual 0。
+- 根因：paid row 的 `TimedValue.ByCurrency` 已有 33 CNY，但 summary 顶层 excluded 分支直接累加空的 `row.Value.RecognizedRemainingValueMicros`；同文件其他聚合通过 timed-aware helper 累加。该缺口不能由合法夹具修复。
+- 经 Orca question，协调器裁定：不得把 expected 改为 0，不得由 Fixture A 越界修改生产代码；保留真实失败并交由协调器另派生产修复。
+
+## 最终包级回归
+
+命令：`go test ./model -count=1`。
+
+结果：FAIL，退出码 1。Fixture A 所有旧夹具金额/排序/nil 问题除上述生产 blocker 外均已消失。精确剩余失败：
+
+- `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers`：expected 33 / actual 0（本路生产 blocker）。
+- `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`：`timed_subscription_grant_invalid`。
+- `TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta`：`timed_subscription_grant_invalid`。
+- `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent`：`redemption.plan_ineligible`。
+- `TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan`：`redemption.plan_ineligible`。
+- `TestCompleteSubscriptionOrderReturnsResultForSuccessRetry`：`timed_subscription_grant_invalid`。
+- `TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan`：`timed_subscription_grant_invalid`。
+- `TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEvent`：未创建 subscription/event，订单仍 pending。
+- `TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAndEvent`：0 个 fulfillment。
+- `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached`：`timed_subscription_grant_invalid`。
+
+后九项位于 `invitation_commission_test.go` / `payment_method_guard_test.go`，属于冻结基线已知的其他旧授权快照夹具，不在 Fixture A paid-value analytics 所有权内。包级日志另有 Redis client closed 与缺表 teardown 告警，但本次没有形成额外 `--- FAIL` 测试。
+
+按协调器收敛指令，未运行 `-count=10` 或更宽定向集合；最终证据仅声明实际运行的单次定向与包级回归。

@@ -17,6 +17,7 @@ const (
 
 	CreditValuationMutationGrant   = "grant"
 	CreditValuationMutationConsume = "consume"
+	CreditValuationMutationRestore = "restore"
 )
 
 type CreditValuationState struct {
@@ -321,7 +322,7 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 		return ErrCreditValuationStateMismatch
 	}
 	if targetCredit < route.AppliedCredit {
-		return ErrCreditValuationTargetConflict
+		return restoreCreditRequestTargetTx(tx, route, targetCredit, final)
 	}
 
 	delta := targetCredit - route.AppliedCredit
@@ -454,6 +455,217 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 	route.Status = status
 	route.FinalizedAt = finalizedAt
 	route.UpdatedAt = now
+	return nil
+}
+
+func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
+	var subscription UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.ValuationSubscriptionId).First(&subscription).Error; err != nil {
+		return err
+	}
+	if subscription.EntitlementType != SubscriptionEntitlementCreditBalance {
+		return ErrCreditValuationStateMismatch
+	}
+
+	var state CreditValuationState
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_subscription_id = ?", subscription.Id).First(&state).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrCreditValuationStateMissing
+	}
+	if err != nil {
+		return err
+	}
+	if err := validateCreditValuationState(&subscription, &state); err != nil {
+		return err
+	}
+
+	var record SubscriptionPreConsumeRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
+		return err
+	}
+	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
+		return ErrCreditValuationTargetConflict
+	}
+	if targetCredit < 0 || targetCredit >= record.AppliedCredit || (record.FinalizedAt > 0 && !final) {
+		return ErrCreditValuationTargetConflict
+	}
+
+	refund := record.AppliedCredit - targetCredit
+	if refund > subscription.TokenUsed {
+		return ErrCreditValuationStateMismatch
+	}
+	debtRefund := minInt64(refund, record.DebtFormedCredit)
+	snapshotRefund := refund - debtRefund
+	if snapshotRefund > record.DeductedAvailableCredit {
+		return ErrCreditValuationStateMismatch
+	}
+
+	removedExact := int64(0)
+	removedEstimated := int64(0)
+	removedUnknown := int64(0)
+	if snapshotRefund > 0 {
+		removedExact, err = prorateFloor(record.DeductedExactCostMicros, snapshotRefund, record.DeductedAvailableCredit)
+		if err != nil {
+			return err
+		}
+		removedEstimated, err = prorateFloor(record.DeductedEstimatedCostMicros, snapshotRefund, record.DeductedAvailableCredit)
+		if err != nil {
+			return err
+		}
+		removedUnknown, err = prorateFloor(record.DeductedUnknownCredit, snapshotRefund, record.DeductedAvailableCredit)
+		if err != nil {
+			return err
+		}
+	}
+
+	availableBefore := maxInt64(subscription.TokenLimit-subscription.TokenUsed, 0)
+	newTokenUsed := subscription.TokenUsed - refund
+	availableAfter := maxInt64(subscription.TokenLimit-newTokenUsed, 0)
+	newlyAvailable := availableAfter - availableBefore
+	restorableSnapshotCredit := minInt64(snapshotRefund, newlyAvailable)
+
+	restoredExact := int64(0)
+	restoredEstimated := int64(0)
+	restoredSnapshotUnknown := int64(0)
+	if snapshotRefund > 0 && restorableSnapshotCredit > 0 {
+		restoredExact, err = prorateFloor(removedExact, restorableSnapshotCredit, snapshotRefund)
+		if err != nil {
+			return err
+		}
+		restoredEstimated, err = prorateFloor(removedEstimated, restorableSnapshotCredit, snapshotRefund)
+		if err != nil {
+			return err
+		}
+		restoredSnapshotUnknown, err = prorateFloor(removedUnknown, restorableSnapshotCredit, snapshotRefund)
+		if err != nil {
+			return err
+		}
+	}
+	absorbedExact := removedExact - restoredExact
+	absorbedEstimated := removedEstimated - restoredEstimated
+	absorbedUnknown := removedUnknown - restoredSnapshotUnknown
+	restoredDebtUnknown := newlyAvailable - restorableSnapshotCredit
+
+	newExactCost, ok := checkedAddInt64(state.ExactCostMicros, restoredExact)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newEstimatedCost, ok := checkedAddInt64(state.EstimatedCostMicros, restoredEstimated)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newUnknownCredit, ok := checkedAddInt64(state.UnknownCredit, restoredSnapshotUnknown)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newUnknownCredit, ok = checkedAddInt64(newUnknownCredit, restoredDebtUnknown)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newStateVersion, ok := checkedAddInt64(state.StateVersion, 1)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newSettlementVersion, ok := checkedAddInt64(record.SettlementVersion, 1)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newAbsorbedExact, ok := checkedAddInt64(record.AbsorbedRestoreExactCostMicros, absorbedExact)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newAbsorbedEstimated, ok := checkedAddInt64(record.AbsorbedRestoreEstimatedCostMicros, absorbedEstimated)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newAbsorbedUnknown, ok := checkedAddInt64(record.AbsorbedRestoreUnknownCredit, absorbedUnknown)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newRestoredUnknown, ok := checkedAddInt64(record.RestoredUnknownCredit, restoredDebtUnknown)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+
+	now := getDBTimestampTx(tx)
+	if err := tx.Model(&UserSubscription{}).Where("id = ?", subscription.Id).Updates(map[string]any{
+		"token_used": newTokenUsed,
+		"updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	subscription.TokenUsed = newTokenUsed
+	subscription.UpdatedAt = now
+	state.AvailableCredit = availableAfter
+	state.ExactCostMicros = newExactCost
+	state.EstimatedCostMicros = newEstimatedCost
+	state.UnknownCredit = newUnknownCredit
+	state.StateVersion = newStateVersion
+	state.LastMutationType = CreditValuationMutationRestore
+	state.UpdatedAt = now
+	if err := validateCreditValuationState(&subscription, &state); err != nil {
+		return err
+	}
+	if err := tx.Model(&CreditValuationState{}).Where("user_subscription_id = ?", state.UserSubscriptionId).Updates(map[string]any{
+		"available_credit":      state.AvailableCredit,
+		"exact_cost_micros":     state.ExactCostMicros,
+		"estimated_cost_micros": state.EstimatedCostMicros,
+		"unknown_credit":        state.UnknownCredit,
+		"state_version":         state.StateVersion,
+		"last_mutation_type":    state.LastMutationType,
+		"updated_at":            state.UpdatedAt,
+	}).Error; err != nil {
+		return err
+	}
+
+	status := "consumed"
+	finalizedAt := int64(0)
+	if final {
+		status = "settled"
+		if targetCredit == 0 {
+			status = "refunded"
+		}
+		finalizedAt = now
+	}
+	result := tx.Model(&SubscriptionPreConsumeRecord{}).
+		Where("id = ? AND applied_credit = ?", record.Id, record.AppliedCredit).
+		Updates(map[string]any{
+			"applied_credit":                         targetCredit,
+			"deducted_available_credit":              record.DeductedAvailableCredit - snapshotRefund,
+			"debt_formed_credit":                     record.DebtFormedCredit - debtRefund,
+			"deducted_exact_cost_micros":             record.DeductedExactCostMicros - removedExact,
+			"deducted_estimated_cost_micros":         record.DeductedEstimatedCostMicros - removedEstimated,
+			"deducted_unknown_credit":                record.DeductedUnknownCredit - removedUnknown,
+			"absorbed_restore_exact_cost_micros":     newAbsorbedExact,
+			"absorbed_restore_estimated_cost_micros": newAbsorbedEstimated,
+			"absorbed_restore_unknown_credit":        newAbsorbedUnknown,
+			"restored_unknown_credit":                newRestoredUnknown,
+			"settlement_version":                     newSettlementVersion,
+			"status":                                 status,
+			"finalized_at":                           finalizedAt,
+			"updated_at":                             now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return ErrCreditValuationTargetConflict
+	}
+	record.AppliedCredit = targetCredit
+	record.DeductedAvailableCredit -= snapshotRefund
+	record.DebtFormedCredit -= debtRefund
+	record.DeductedExactCostMicros -= removedExact
+	record.DeductedEstimatedCostMicros -= removedEstimated
+	record.DeductedUnknownCredit -= removedUnknown
+	record.AbsorbedRestoreExactCostMicros = newAbsorbedExact
+	record.AbsorbedRestoreEstimatedCostMicros = newAbsorbedEstimated
+	record.AbsorbedRestoreUnknownCredit = newAbsorbedUnknown
+	record.RestoredUnknownCredit = newRestoredUnknown
+	record.SettlementVersion = newSettlementVersion
+	record.Status = status
+	record.FinalizedAt = finalizedAt
+	record.UpdatedAt = now
+	*route = record
 	return nil
 }
 

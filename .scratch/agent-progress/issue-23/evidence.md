@@ -69,6 +69,29 @@ go test: 1 packages ok
 ### 导出符号引用证据
 修改 `SettleCreditRequestTarget` 前使用 LSP references，找到 6 处：定义、`service/funding_source.go` 以及 `model/credit_valuation_tracer_test.go` 的 4 个调用。修改包内 `SettleCreditRequestTargetTx` 前使用 LSP references，只有定义和公开 wrapper 两处。
 
+### 循环 2：少结算恢复原请求快照
+RED 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetDecreaseRestoresOriginalSnapshot$' -count=1
+```
+关键输出：
+```text
+--- FAIL: TestCreditValuationRequestTargetDecreaseRestoresOriginalSnapshot
+credit_valuation_request_test.go:84: Received unexpected error
+FAIL github.com/QuantumNous/new-api/model
+```
+场景：40 CNY / 1,000 Credit 预扣 200（8 CNY 快照），随后交错入账 20 CNY / 1,000，再把目标降为 100。旧实现拒绝减少目标。
+
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTarget(DecreaseRestoresOriginalSnapshot|IncreaseUsesCurrentPool)$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+行为：少结算恢复原预扣快照的 4 CNY，而非使用交错入账后的新池平均；最终 `token_limit=2,000`、`token_used=100`、可用 1,900、exact `56,000,000` micros，请求活动快照降为 100 Credit / `4,000,000` micros，并终态 settled。
+
 ## 范围声明
 - 尚未运行项目级全量测试、格式化器或 lint；按 Dispatch 合同由协调器最终统一运行。
 - 本切片不新增 UI 或可见文案，因此当前不需要浏览器或 i18n 技能。

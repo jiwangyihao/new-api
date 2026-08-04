@@ -7,9 +7,8 @@
 - 工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-21-fixture-b-service`
 - 冻结基线与当前 HEAD：`774b35740c1879b285537031410731317d0142fc`
 - 起始工作树：clean
-- 最近安全提交：`774b35740c1879b285537031410731317d0142fc`
-- 当前未提交文件：本次 `fixture-b-*` 恢复进度文件；首个检查点提交后应为 0
-
+- 最近安全提交：`52cc9b193`（建立夹具迁移恢复检查点）
+- 当前未提交文件：本次 RED 证据更新；提交后应为 0
 ## 已完成
 
 - 已读取调试、TDD、Orca、父 PRD #19、Issue #21/#22、共享迁移合同、执行协议、Issue #21 验收、ADR/spec 相关合同与冻结 `final-spec-fix-*`。
@@ -18,9 +17,8 @@
 
 ## 当前阶段
 
-- RED：`TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption` 在 `service/invitation_commission_test.go:375` 收到意外错误。
-- 下一步：运行最小失败测试，捕获稳定领域错误并定位旁路创建的 `Redemption`。
-
+- RED：`go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1 -v` 稳定退出码 1，`service/invitation_commission_test.go:375` 收到意外错误；旁路 `DB.Create` 未冻结 `FulfillmentSnapshot`，真实 `Redeem` 按 `ErrRedemptionPlanIneligible` fail-closed。
+- 下一步：仅将该子测试改为合法 Plan 事实 + `Redemption.Insert`，断言 snapshot 非空后复跑。
 ## 阻塞
 
 无。

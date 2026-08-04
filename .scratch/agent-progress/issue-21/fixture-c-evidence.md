@@ -1,0 +1,55 @@
+# Issue #21 夹具迁移 C 证据
+
+## 冻结基线
+
+- `git rev-parse HEAD` → `774b35740c1879b285537031410731317d0142fc`。
+- `git branch --show-current` → `jiwangyihao/issue-21-fixture-c-controller`。
+- `git status --short` → 无输出，初始工作树 clean。
+
+## 已读取材料
+
+- 父 PRD #19、Issues #21/#22。
+- `docs/agents/credit-operational-value-execution.md`。
+- `docs/agents/credit-operational-value-wave-1-contract.md`。
+- `docs/agents/credit-operational-value-issue-21.md` 与 acceptance。
+- 共享夹具迁移合同。
+- `CONTEXT.md`、ADR 0002、2026-08-02 spec。
+- `.scratch/agent-progress/issue-21/spec-fix-*` 与 `final-spec-fix-*`。
+- Skills：`diagnosing-bugs`、`tdd`、`codebase-design`、Orca orchestration/CLI。
+
+## controller 包级冻结 RED
+
+- 命令：`go test ./controller -count=1`。
+- 结果：FAIL，`25.967s`；共 27 个失败测试，日志中出现 29 次 `timed_subscription_grant_invalid`，无 `panic:`。
+- 余额/真实购买（9）：`TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance`、`TestSubscriptionBalancePurchaseStoresCNYAmountSnapshot`、`TestSubscriptionBalancePurchaseInvokesInvitationRewardHandlerAndCreatesEvent`、`TestSubscriptionBalancePurchaseReturnsSuccessWhenInvitationRewardHandlerFails`、`TestSubscriptionBalancePayAllowsDecimalPlanPrice`、`TestSubscriptionBalancePayIdempotent`、`TestSubscriptionBalancePayTimedModeIgnoresHistoricalPurchaseLimit`、`TestSubscriptionBalancePayExtendsActiveSubscriptionWithoutNewRecord`、`TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck`。典型失败为 HTTP body `timed_subscription_grant_invalid`、余额未扣、订单/权益/grant 未创建。
+- 共享余额入口（1）：`TestSubscriptionPurchaseDoesNotUpdateUserGroup`，同样因非法 timed grant 夹具返回失败。
+- 邀请订单（2）：`TestCompleteSubscriptionOrderTriggersInvitationEntitlement`、`TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrder`；直接成功订单缺合法快照，导致履约失败、handler 未调用、订单仍 pending、奖励/权益未创建。
+- Kyren（11）：`TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation`、`TestKyrenWebhookCompletesSubscriptionOrder`、`TestKyrenWebhookRecordsInvitationRewardEventForRewardIneligibleSnapshot`、`TestKyrenWebhookRetriesInvitationRewardHandlerForSuccessfulSubscriptionOrder`、`TestKyrenWebhookRecoversStaleClaimedSubscriptionOrder`、`TestKyrenWebhookCompletesSubscriptionOrderUsingEntitlementSnapshot`、`TestKyrenWebhookCapturesOrderIDFromSnakeCasePayload`、`TestKyrenSuccessfulSubscriptionReplayStillValidatesPaymentSnapshot`、`TestKyrenSubscriptionOrderStoresEmptySnapshotWhenCurrencyUnsupported`、`TestKyrenSubscriptionOrderStoresCNYAmountSnapshot`、`TestKyrenWebhookRefundedRecordsManualActionAndReturnsSuccess`。成功/重放/退款前置订单均缺完整合法授权事实，主要表现为 HTTP 500 或直接 `timed_subscription_grant_invalid`；Credit webhook 因未履约而无活动权益。
+- Stripe（3）：`TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency`、`TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailureOverHTTP`、`TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailure`；成功订单/回调前置缺合法快照，重放失败或订单保持 pending。
+- Epay（1）：`TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior`；回调返回 `fail` 且邀请事件不存在。
+- 缺表日志：`two_fas`、`models`、`vendors`、`channel_group_channels`、`logs`、`token_group_bindings` 来自其他 controller 测试的局部数据库 setup 且未对应本次 FAIL；`subscription_orders` 缺表来自 `TestKyrenWebhookReturnsRetryableFailureWhenOrderLookupFails` 的故障注入，属于其预期接缝。本路当前没有缺表导致的失败。
+- Redis：仅观察到 `redis: client is closed` 的缓存失效日志，无 panic、无对应失败堆栈；后续迁移相关 setup 后再以完整包级回归确认本路未污染全局状态。
+
+后续为每组记录最小 RED→GREEN 命令、关键 provider/重放 `-count=10`、聚焦正则回归和完整 controller 包级结果。
+
+## 余额与 Kyren 夹具 GREEN
+
+- 新增 controller 测试共享 helper：权威 timed Plan 固定显式 `entitlement_type=timed`、enabled、非 trial/invite-trial、正 `price_amount_micros`、CNY、正 Credit、合法 duration/reset、稳定 business code；订单快照 helper 断言 identity、micros/币种、Credit、duration/reset 与 Plan 一致。
+- 余额真实购买测试继续通过 `SubscriptionRequestBalance` / `CreateBalanceSubscriptionOrderTx` 自然冻结 `EntitlementSnapshot`，不手写成功订单快照；额外断言订单授权快照完整。
+- Kyren 已授权 webhook 使用现有 pending-order helper，从权威 Plan 生成完整 entitlement snapshot；Kyren payment snapshot 继续独立承载 provider product/金额/币种，保留 unsupported currency 场景。
+- setup 最小迁移 `TimedSubscriptionValuationGrant` 表；未修改生产代码。
+- GREEN：`go test ./controller -run 'TestSubscription(Balance|PurchaseDoesNotUpdateUserGroup)|TestCreditBalance|TestKyren|TestSubscriptionKyren' -count=1` → PASS。
+- Redis 仍仅有 `client is closed` 缓存通知日志，无 panic、无失败；未发现本路 setup 污染。
+
+## Stripe、Epay、邀请订单 GREEN
+
+- Stripe 定向：`go test ./controller -run 'TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency|TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailure' -count=1` → PASS；成功订单重放仍校验 provider 金额/币种，handler 失败后的成功订单/事件合同保留。
+- Epay 定向：`go test ./controller -run '^TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior$' -count=1` → PASS；通过真实购买入口冻结完整快照并保留签名/金额/邀请事件断言。
+- 邀请订单定向：`go test ./controller -run 'TestCompleteSubscriptionOrderTriggersInvitationEntitlement|TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrder' -count=1` → PASS；直接 pending provider order 改用完整授权快照，奖励与重试断言不减少。
+
+## 最终门禁
+
+- 聚焦：`go test ./controller -run 'Balance|Kyren|Stripe|Epay|Payment|Invitation|SubscriptionOrder' -count=1` → PASS。
+- 关键重放：`go test ./controller -run 'TestSubscriptionBalancePayIdempotent|TestKyrenWebhookCompletesSubscriptionOrder|TestKyrenSuccessfulSubscriptionReplayStillValidatesPaymentSnapshot|TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency|TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior|TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrder' -count=10` → PASS。
+- 包级：`go test ./controller -count=1` → PASS。
+- 未运行项目全量 formatter/lint/前端套件、model/service 测试或三数据库实机；均不属于 C 路范围。

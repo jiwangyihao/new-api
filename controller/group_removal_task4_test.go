@@ -18,7 +18,7 @@ func TestSubscriptionPurchaseDoesNotUpdateUserGroup(t *testing.T) {
 	userID := 9701
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "grouped_buyer", Group: "vip", Quota: int(common.QuotaPerUnit * 100), Status: common.UserStatusEnabled}).Error)
 	code := "group-removal-plan"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9702, Title: "No group", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, UpgradeGroup: "svip", MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9702, Title: "No group", Enabled: true, PublicVisible: true, UpgradeGroup: "svip", MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9702,"idempotency_key":"no-group-change"}`)
 

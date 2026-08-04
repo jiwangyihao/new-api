@@ -64,7 +64,7 @@ func TestCompleteSubscriptionOrderTriggersInvitationEntitlement(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	model.DB = db
 	t.Cleanup(func() { model.DB = originalDB })
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.TopUp{}, &model.Log{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.TimedSubscriptionValuationGrant{}, &model.TopUp{}, &model.Log{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
 
 	inviterId := 8201
 	inviteeA := 8202
@@ -74,12 +74,12 @@ func TestCompleteSubscriptionOrderTriggersInvitationEntitlement(t *testing.T) {
 	require.NoError(t, model.DB.Create(&model.User{Id: inviteeB, Username: "complete-b", Status: common.UserStatusEnabled, AffCode: "complete-b", InviterId: inviterId}).Error)
 	basicCode := "basic_monthly"
 	paidCode := "standard_monthly"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 8211, Title: "Basic", Enabled: true, PriceAmount: 40, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &basicCode}).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 8212, Title: "Standard", Enabled: true, PriceAmount: 80, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, RewardEligible: true, BusinessCode: &paidCode}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 8211, Title: "Basic", Enabled: true, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &basicCode}, 40_000_000)
+	paidPlan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 8212, Title: "Standard", Enabled: true, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &paidCode}, 80_000_000)
 	now := time.Now().Unix()
 	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: inviteeA, PlanId: 8212, Status: "active", StartTime: now - 60, EndTime: now + 3600, GrantReason: "order", Source: "order"}).Error)
 	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{UserId: inviteeA, PlanId: 8212, Money: 80, TradeNo: "complete-a-order", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusSuccess, CreateTime: now - 60, CompleteTime: now - 60}).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionOrder{UserId: inviteeB, PlanId: 8212, Money: 80, TradeNo: "sub-entitlement-complete", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: now}).Error)
+	seedAuthorizedTimedSubscriptionOrderFixture(t, &paidPlan, model.SubscriptionOrder{UserId: inviteeB, PlanId: paidPlan.Id, Money: 80, TradeNo: "sub-entitlement-complete", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: now}, "")
 
 	require.NoError(t, completeSubscriptionOrderAndEvaluateInvitation("sub-entitlement-complete", `{}`, model.PaymentProviderEpay, "alipay"))
 
@@ -102,7 +102,7 @@ func TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrd
 		model.DB = originalDB
 		model.LOG_DB = originalLogDB
 	})
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.TopUp{}, &model.Log{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.TimedSubscriptionValuationGrant{}, &model.TopUp{}, &model.Log{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
 
 	inviterID := 8261
 	inviteeID := 8262
@@ -111,9 +111,8 @@ func TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrd
 	invitee := model.User{Id: inviteeID, Username: "retry-handler-invitee", Status: common.UserStatusEnabled, AffCode: "retry-handler-invitee", InviterId: inviterID}
 	require.NoError(t, model.DB.Create(&inviter).Error)
 	require.NoError(t, model.DB.Create(&invitee).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 8263, Title: "Retry Handler Plan", Enabled: true, PriceAmount: 80, Currency: "CNY", DurationUnit: model.SubscriptionDurationDay, DurationValue: 30, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &rewardCode}).Error)
-	order := model.SubscriptionOrder{UserId: inviteeID, PlanId: 8263, Money: 80, AmountCents: 8000, Currency: "CNY", TradeNo: "sub-retry-handler-order", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&order).Error)
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 8263, Title: "Retry Handler Plan", Enabled: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 30, MonthlyTokenLimit: 1_000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &rewardCode}, 80_000_000)
+	order := seedAuthorizedTimedSubscriptionOrderFixture(t, &plan, model.SubscriptionOrder{UserId: inviteeID, PlanId: plan.Id, Money: 80, AmountCents: 8000, Currency: "CNY", TradeNo: "sub-retry-handler-order", PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp()}, "")
 
 	calledOrderIDs := make([]int, 0, 2)
 	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {

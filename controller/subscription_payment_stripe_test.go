@@ -203,7 +203,7 @@ func TestStripeSubscriptionCompletionRejectsMissingProductSnapshot(t *testing.T)
 
 func TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency(t *testing.T) {
 	setupSubscriptionTrialPurchaseTest(t)
-	seedSubscriptionPurchasePlan(t, 9583, false, true, 40)
+	seedAuthoritativeSubscriptionPurchasePlan(t, 9583, true, 40_000_000)
 	var plan model.SubscriptionPlan
 	require.NoError(t, model.DB.First(&plan, 9583).Error)
 	entitlementSnapshot := model.NewSubscriptionEntitlementSnapshotFromPlan(&plan)
@@ -417,7 +417,7 @@ func TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailureOverHT
 	require.NoError(t, model.DB.AutoMigrate(&model.TopUp{}))
 	setting.StripeApiSecret = "sk_test_123"
 	setting.StripeWebhookSecret = "whsec_test"
-	seedSubscriptionPurchasePlan(t, 9579, false, true, 40)
+	seedAuthoritativeSubscriptionPurchasePlan(t, 9579, true, 40_000_000)
 	var plan model.SubscriptionPlan
 	require.NoError(t, model.DB.First(&plan, 9579).Error)
 	entitlementSnapshot := model.NewSubscriptionEntitlementSnapshot(&plan, model.SubscriptionPurchaseModeTimed, 0)
@@ -446,7 +446,7 @@ func TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailureOverHT
 func TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailure(t *testing.T) {
 	setupSubscriptionTrialPurchaseTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.TopUp{}))
-	seedSubscriptionPurchasePlan(t, 9574, false, true, 40)
+	seedAuthoritativeSubscriptionPurchasePlan(t, 9574, true, 40_000_000)
 	var plan model.SubscriptionPlan
 	require.NoError(t, model.DB.First(&plan, 9574).Error)
 	entitlementSnapshot := model.NewSubscriptionEntitlementSnapshot(&plan, model.SubscriptionPurchaseModeTimed, 0)

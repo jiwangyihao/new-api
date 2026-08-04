@@ -682,14 +682,104 @@ func TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly(t *t
 
 func TestPaidSubscriptionValueUsersDescSortUsesUserIDTieBreaker(t *testing.T) {
 	items := []dto.AdminPaidSubscriptionValueUser{
-		{UserID: 1, RecognizedRemainingValueByCurrency: []dto.AdminAnalyticsMoneyBreakdown{{Currency: adminPaidTestCurrencyCNY, Amount: 10}}},
-		{UserID: 2, RecognizedRemainingValueByCurrency: []dto.AdminAnalyticsMoneyBreakdown{{Currency: adminPaidTestCurrencyCNY, Amount: 10}}},
+		{UserID: 1, RecognizedRemainingValueByCurrency: []dto.AdminAnalyticsMoneyBreakdown{{Currency: adminPaidTestCurrencyCNY, Amount: 10, AmountMicros: "10000000"}}},
+		{UserID: 2, RecognizedRemainingValueByCurrency: []dto.AdminAnalyticsMoneyBreakdown{{Currency: adminPaidTestCurrencyCNY, Amount: 10, AmountMicros: "10000000"}}},
 	}
 
-	adminSortPaidSubscriptionUsers(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: dto.AdminAnalyticsSortDesc, Currency: adminPaidTestCurrencyCNY})
+	err := adminSortPaidSubscriptionUsers(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: dto.AdminAnalyticsSortDesc, Currency: adminPaidTestCurrencyCNY})
 
+	require.NoError(t, err)
 	require.Equal(t, 1, items[0].UserID)
 	require.Equal(t, 2, items[1].UserID)
+}
+
+func TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros(t *testing.T) {
+	const (
+		lowerMicros  = "9007199254740992"
+		higherMicros = "9007199254740993"
+	)
+	const compatibleAmount = 9_007_199_254.740992
+	breakdown := func(micros string) []dto.AdminAnalyticsMoneyBreakdown {
+		return []dto.AdminAnalyticsMoneyBreakdown{{Amount: compatibleAmount, AmountMicros: micros, Currency: adminPaidTestCurrencyCNY}}
+	}
+	money := func(micros string) *dto.AdminAnalyticsMoneyAmount {
+		return &dto.AdminAnalyticsMoneyAmount{Amount: compatibleAmount, AmountMicros: micros, Currency: adminPaidTestCurrencyCNY}
+	}
+
+	tests := []struct {
+		name     string
+		sort     func(dto.AdminAnalyticsSortOrder) ([]string, error)
+		wantAsc  []string
+		wantDesc []string
+	}{
+		{
+			name: "users",
+			sort: func(order dto.AdminAnalyticsSortOrder) ([]string, error) {
+				items := []dto.AdminPaidSubscriptionValueUser{
+					{UserID: 3, Username: "low-c", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+					{UserID: 2, Username: "high", RecognizedRemainingValueByCurrency: breakdown(higherMicros)},
+					{UserID: 1, Username: "low-a", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+				}
+				err := adminSortPaidSubscriptionUsers(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: order, Currency: adminPaidTestCurrencyCNY})
+				return []string{items[0].Username, items[1].Username, items[2].Username}, err
+			},
+			wantAsc:  []string{"low-a", "low-c", "high"},
+			wantDesc: []string{"high", "low-a", "low-c"},
+		},
+		{
+			name: "subscriptions",
+			sort: func(order dto.AdminAnalyticsSortOrder) ([]string, error) {
+				items := []dto.AdminPaidSubscriptionValueSubscription{
+					{SubscriptionID: 3, PlanName: "low-c", RecognizedRemainingValue: money(lowerMicros)},
+					{SubscriptionID: 2, PlanName: "high", RecognizedRemainingValue: money(higherMicros)},
+					{SubscriptionID: 1, PlanName: "low-a", RecognizedRemainingValue: money(lowerMicros)},
+				}
+				err := adminSortPaidSubscriptionItems(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: order, Currency: adminPaidTestCurrencyCNY})
+				return []string{items[0].PlanName, items[1].PlanName, items[2].PlanName}, err
+			},
+			wantAsc:  []string{"low-a", "low-c", "high"},
+			wantDesc: []string{"high", "low-c", "low-a"},
+		},
+		{
+			name: "plans",
+			sort: func(order dto.AdminAnalyticsSortOrder) ([]string, error) {
+				items := []dto.AdminPaidSubscriptionValuePlanGroup{
+					{PlanID: 3, PlanName: "low-c", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+					{PlanID: 2, PlanName: "high", RecognizedRemainingValueByCurrency: breakdown(higherMicros)},
+					{PlanID: 1, PlanName: "low-a", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+				}
+				err := adminSortPaidSubscriptionPlans(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: order, Currency: adminPaidTestCurrencyCNY})
+				return []string{items[0].PlanName, items[1].PlanName, items[2].PlanName}, err
+			},
+			wantAsc:  []string{"low-a", "low-c", "high"},
+			wantDesc: []string{"high", "low-c", "low-a"},
+		},
+		{
+			name: "sources",
+			sort: func(order dto.AdminAnalyticsSortOrder) ([]string, error) {
+				items := []dto.AdminPaidSubscriptionValueSourceGroup{
+					{GrantReason: "low-c", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+					{GrantReason: "high", RecognizedRemainingValueByCurrency: breakdown(higherMicros)},
+					{GrantReason: "low-a", RecognizedRemainingValueByCurrency: breakdown(lowerMicros)},
+				}
+				err := adminSortPaidSubscriptionSources(items, AdminAnalyticsQuery{SortBy: "recognized_remaining_value", SortOrder: order, Currency: adminPaidTestCurrencyCNY})
+				return []string{items[0].GrantReason, items[1].GrantReason, items[2].GrantReason}, err
+			},
+			wantAsc:  []string{"low-a", "low-c", "high"},
+			wantDesc: []string{"high", "low-c", "low-a"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			asc, err := test.sort(dto.AdminAnalyticsSortAsc)
+			require.NoError(t, err)
+			require.Equal(t, test.wantAsc, asc)
+			desc, err := test.sort(dto.AdminAnalyticsSortDesc)
+			require.NoError(t, err)
+			require.Equal(t, test.wantDesc, desc)
+		})
+	}
 }
 
 func TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency(t *testing.T) {

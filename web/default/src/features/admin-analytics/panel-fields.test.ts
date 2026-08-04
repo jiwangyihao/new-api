@@ -203,7 +203,7 @@ test('timed subscription value records render per-currency values when singular 
   const values = Object.fromEntries(
     paidSubscriptionValueSubscriptionCardValues(item).map((value) => [
       value.labelKey,
-      value.value,
+      value.value ?? value.valueKey,
     ])
   )
 
@@ -219,10 +219,91 @@ test('timed subscription value records render per-currency values when singular 
     values['adminAnalytics.metrics.timeBasedValue'],
     '¥20.00, $10.00'
   )
-  assert.equal(values['adminAnalytics.fields.valuationConfidence'], 'exact')
+  assert.equal(
+    values['adminAnalytics.fields.valuationConfidence'],
+    'adminAnalytics.valuationConfidence.exact'
+  )
   assert.equal(
     values['adminAnalytics.fields.valuationWarnings'],
     'overlapping_grants'
+  )
+})
+
+test('Credit value records expose exact valuation and localized semantics', () => {
+  const item: PaidSubscriptionValueSubscription = {
+    subscription_id: 4,
+    user_id: 1,
+    username: 'alice',
+    plan_id: 3,
+    plan_name: 'Credit balance',
+    source: 'credit_balance_pool',
+    grant_reason: 'order',
+    plan_price: { amount: 0, amount_micros: '0', currency: 'CNY' },
+    start_time: 1,
+    end_time: 0,
+    remaining_seconds: 0,
+    token_limit: 1_000,
+    token_used: 200,
+    available_credit: 800,
+    unknown_cost_credit: 0,
+    next_reset_time: 0,
+    token_based_value: {
+      amount: 32,
+      amount_micros: '32000000',
+      currency: 'CNY',
+    },
+    time_based_value: null,
+    recognized_remaining_value: {
+      amount: 32,
+      amount_micros: '32000000',
+      currency: 'CNY',
+    },
+    exact_remaining_value: {
+      amount: 32,
+      amount_micros: '32000000',
+      currency: 'CNY',
+    },
+    estimated_remaining_value: {
+      amount: 0,
+      amount_micros: '0',
+      currency: 'CNY',
+    },
+    valuation_basis: 'credit_moving_weighted_average',
+    valuation_confidence: 'exact',
+    valuation_state_version: 2,
+    valuation_updated_at: 1_700_000_000,
+    snapshot_semantics: 'current_only',
+    entitlement_type: 'credit_balance',
+    source_attribution: 'moving_weighted_pool',
+    excluded: false,
+    excluded_reason: '',
+  }
+
+  const values = paidSubscriptionValueSubscriptionCardValues(item)
+  const byLabel = new Map(values.map((value) => [value.labelKey, value]))
+  assert.equal(
+    byLabel.get('adminAnalytics.fields.recognizedRemainingValue')?.value,
+    '¥32.00'
+  )
+  assert.equal(
+    byLabel.get('adminAnalytics.fields.exactRemainingValue')?.value,
+    '¥32.00'
+  )
+  assert.equal(
+    byLabel.get('adminAnalytics.metrics.timeBasedValue')?.valueKey,
+    'adminAnalytics.values.notApplicable'
+  )
+  assert.equal(
+    byLabel.get('adminAnalytics.fields.valuationBasis')?.valueKey,
+    'adminAnalytics.valuationBasis.creditMovingWeightedAverage'
+  )
+  assert.equal(
+    byLabel.get('adminAnalytics.fields.valuationConfidence')?.valueKey,
+    'adminAnalytics.valuationConfidence.exact'
+  )
+  assert.equal(
+    byLabel.get('adminAnalytics.fields.snapshotSemantics')?.valueKey,
+    'adminAnalytics.snapshotSemantics.currentOnly'
   )
 })
 

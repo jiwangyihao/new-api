@@ -50,6 +50,7 @@ type SubscriptionEntitlementSnapshot struct {
 	TargetCreditBalanceConcurrencyLimit     int     `json:"target_credit_balance_concurrency_limit,omitempty"`
 	TargetCreditBalanceQueueCapacity        int     `json:"target_credit_balance_queue_capacity,omitempty"`
 	TargetCreditBalanceGPTAbuseWarningLimit int     `json:"target_credit_balance_gpt_abuse_warning_limit,omitempty"`
+	TargetCreditBalanceValuationCurrency    string  `json:"target_credit_balance_valuation_currency,omitempty"`
 }
 
 func NewSubscriptionEntitlementSnapshotFromPlan(plan *SubscriptionPlan) SubscriptionEntitlementSnapshot {
@@ -124,6 +125,9 @@ func (s *SubscriptionEntitlementSnapshot) SetTargetCreditBalancePlanSnapshot(pla
 	s.TargetCreditBalanceConcurrencyLimit = plan.ConcurrencyLimit
 	s.TargetCreditBalanceQueueCapacity = plan.QueueCapacity
 	s.TargetCreditBalanceGPTAbuseWarningLimit = plan.GPTAbuseWarningLimit
+	if plan.ValuationCurrency != nil {
+		s.TargetCreditBalanceValuationCurrency = strings.ToUpper(strings.TrimSpace(*plan.ValuationCurrency))
+	}
 }
 
 func (s SubscriptionEntitlementSnapshot) CreditGrantIdentity() (int64, int) {

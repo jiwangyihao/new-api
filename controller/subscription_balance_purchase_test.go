@@ -26,6 +26,20 @@ func setupSubscriptionBalancePurchaseTestDB(t *testing.T) {
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.CreditBalanceLedger{}, &model.Log{}, &model.TopUp{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
 }
 
+func enableCreditValuationRuntimeForControllerTest(t *testing.T) {
+	t.Helper()
+	require.NoError(t, model.DB.AutoMigrate(
+		&model.CreditValuationState{},
+		&model.CreditValuationMigration{},
+		&model.SubscriptionPreConsumeRecord{},
+	))
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version:           1,
+		Status:            model.CreditValuationMigrationReady,
+		ValuationCurrency: "CNY",
+	}).Error)
+}
+
 func performBalancePayRequest(t *testing.T, userID int, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	if !strings.Contains(body, `"purchase_mode"`) {
@@ -137,13 +151,16 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 
 func TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
+	enableCreditValuationRuntimeForControllerTest(t)
 	userID := 9581
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "credit_balance_buyer", Quota: 10000, Status: common.UserStatusEnabled}).Error)
+	priceMicros := int64(40_000_000)
 	optionCode := "credit_balance_option"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
 		Id:                       9582,
 		Title:                    "Credit option",
 		PriceAmount:              40,
+		PriceAmountMicros:        &priceMicros,
 		Currency:                 "CNY",
 		DurationUnit:             model.SubscriptionDurationMonth,
 		DurationValue:            1,
@@ -156,9 +173,12 @@ func TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance(t *testi
 		UnlimitedPurchaseEnabled: true,
 	}).Error)
 	creditCode := "credit_balance_global"
+	valuationCurrency := "CNY"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
 		Id:                           9583,
 		Title:                        "Credit 余额套餐",
+		Currency:                     "CNY",
+		ValuationCurrency:            &valuationCurrency,
 		EntitlementType:              model.SubscriptionEntitlementCreditBalance,
 		Enabled:                      true,
 		PublicVisible:                false,
@@ -169,6 +189,9 @@ func TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance(t *testi
 	}).Error)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9582,"purchase_mode":"credit_balance","idempotency_key":"credit-balance-first"}`)
+	replay := performBalancePayRequest(t, userID, `{"plan_id":9582,"purchase_mode":"credit_balance","idempotency_key":"credit-balance-first"}`)
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
+	assert.Contains(t, replay.Body.String(), `"message":"success"`)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	assert.Contains(t, recorder.Body.String(), `"message":"success"`)
@@ -186,18 +209,55 @@ func TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance(t *testi
 	var timedCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementTimed).Count(&timedCount).Error)
 	assert.Zero(t, timedCount)
+
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 9582).First(&order).Error)
+	snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.ListPriceMicros)
+	assert.Equal(t, int64(40_000_000), *snapshot.ListPriceMicros)
+	assert.Equal(t, int64(1000), snapshot.MonthlyTokenLimit)
+	assert.Equal(t, "CNY", snapshot.ListPriceCurrency)
+	assert.Equal(t, 9583, snapshot.TargetCreditBalancePlanID)
+	assert.Equal(t, "CNY", snapshot.TargetCreditBalanceValuationCurrency)
+	assert.Equal(t, model.PaymentProviderBalance, snapshot.PaymentProvider)
+	assert.Equal(t, model.PaymentMethodAccountBalance, snapshot.ProviderPaymentMethod)
+	assert.Equal(t, int64(4000), snapshot.PaymentAmountCents)
+	assert.Equal(t, "CNY", snapshot.PaymentCurrency)
+	assert.Equal(t, model.CreditValuationRuleVersion, snapshot.ValuationRuleVersion)
+
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, balance.Id).Error)
+	assert.Equal(t, int64(1000), state.AvailableCredit)
+	assert.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	assert.Zero(t, state.EstimatedCostMicros)
+	assert.Zero(t, state.UnknownCredit)
+	assert.Equal(t, "CNY", state.Currency)
+	assert.Equal(t, int64(1), state.StateVersion)
+	var orderCount, ledgerCount, stateCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ?", userID).Count(&orderCount).Error)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("user_id = ?", userID).Count(&ledgerCount).Error)
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_id = ?", userID).Count(&stateCount).Error)
+	assert.Equal(t, int64(1), orderCount)
+	assert.Equal(t, int64(1), ledgerCount)
+	assert.Equal(t, int64(1), stateCount)
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, 6000, user.Quota)
 }
 
 func TestSubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
+	enableCreditValuationRuntimeForControllerTest(t)
 	const userID = 9584
 	const optionPlanID = 9585
 	const creditPlanID = 9586
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "credit_balance_rollback", Quota: 10000, Status: common.UserStatusEnabled}).Error)
+	priceMicros := int64(40_000_000)
+	valuationCurrency := "CNY"
 	optionCode := "credit_balance_rollback_option"
 	creditCode := "credit_balance_rollback_global"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: optionPlanID, Title: "Credit rollback", PriceAmount: 40, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, Enabled: true, PublicVisible: true, BusinessCode: &optionCode, UnlimitedPurchaseEnabled: true}).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: optionPlanID, Title: "Credit rollback", PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, Enabled: true, PublicVisible: true, BusinessCode: &optionCode, UnlimitedPurchaseEnabled: true}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: creditPlanID, Title: "Credit 余额套餐", Currency: "CNY", ValuationCurrency: &valuationCurrency, EntitlementType: model.SubscriptionEntitlementCreditBalance, Enabled: true, CreditBalanceConfigured: true, CreditBalancePurchaseEnabled: true, BusinessCode: &creditCode}).Error)
 	require.NoError(t, model.DB.Exec(`CREATE TRIGGER reject_credit_balance_ledger_insert BEFORE INSERT ON credit_balance_ledgers BEGIN SELECT RAISE(FAIL, 'injected ledger failure'); END`).Error)
 
 	recorder := performRawBalancePayRequest(t, userID, `{"plan_id":9585,"purchase_mode":"credit_balance","idempotency_key":"credit-rollback"}`)
@@ -215,6 +275,8 @@ func TestSubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure(t *t
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&count).Error)
 	assert.Zero(t, count)
 	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("user_id = ?", userID).Count(&count).Error)
+	assert.Zero(t, count)
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_id = ?", userID).Count(&count).Error)
 	assert.Zero(t, count)
 }
 

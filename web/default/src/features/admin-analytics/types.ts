@@ -9,6 +9,7 @@ export type AdminAnalyticsSource =
   | 'redemption'
   | 'system'
   | 'unknown'
+  | 'credit_balance_pool'
 export type AdminUsageGroupBy =
   | 'user'
   | 'plan'
@@ -140,14 +141,14 @@ export interface AdminAnalyticsDrilldownTarget {
 
 export interface MoneyAmount {
   amount: number
-  currency: string
   amount_micros?: string
+  currency: string
 }
 
 export interface MoneyBreakdown {
   amount: number
-  currency: string
   amount_micros?: string
+  currency: string
 }
 
 export interface AdminAnalyticsOverviewUsers {
@@ -477,11 +478,15 @@ export interface PaidSubscriptionValueSummary {
   recognized_remaining_value_by_currency: MoneyBreakdown[]
   token_based_value_by_currency: MoneyBreakdown[]
   time_based_value_by_currency: MoneyBreakdown[]
+  exact_remaining_value_by_currency?: MoneyBreakdown[]
+  estimated_remaining_value_by_currency?: MoneyBreakdown[]
   excluded_remaining_value_by_currency: MoneyBreakdown[]
   active_paid_subscription_count: number
   active_paid_user_count: number
   token_value_unavailable_count: number
-  unknown_timed_subscription_count: number
+  unknown_cost_credit?: number
+  unknown_timed_subscription_count?: number
+  credit_valuation_state_missing_count?: number
 }
 
 export interface PaidSubscriptionValuePlanGroup {
@@ -493,6 +498,9 @@ export interface PaidSubscriptionValuePlanGroup {
   recognized_remaining_value_by_currency: MoneyBreakdown[]
   token_based_value_by_currency: MoneyBreakdown[]
   time_based_value_by_currency: MoneyBreakdown[]
+  exact_remaining_value_by_currency?: MoneyBreakdown[]
+  estimated_remaining_value_by_currency?: MoneyBreakdown[]
+  unknown_cost_credit?: number
   excluded_remaining_value_by_currency: MoneyBreakdown[]
   average_token_usage_ratio: number | null
 }
@@ -503,6 +511,9 @@ export interface PaidSubscriptionValueSourceGroup {
   user_count: number
   subscription_count: number
   recognized_remaining_value_by_currency: MoneyBreakdown[]
+  exact_remaining_value_by_currency?: MoneyBreakdown[]
+  estimated_remaining_value_by_currency?: MoneyBreakdown[]
+  unknown_cost_credit?: number
   excluded_remaining_value_by_currency: MoneyBreakdown[]
   source_attribution: string
 }
@@ -515,6 +526,9 @@ export interface PaidSubscriptionValueUser {
   recognized_remaining_value_by_currency: MoneyBreakdown[]
   token_based_value_by_currency: MoneyBreakdown[]
   time_based_value_by_currency: MoneyBreakdown[]
+  exact_remaining_value_by_currency?: MoneyBreakdown[]
+  estimated_remaining_value_by_currency?: MoneyBreakdown[]
+  unknown_cost_credit?: number
   earliest_end_time: number
   excluded: boolean
   excluded_reason: string
@@ -539,6 +553,8 @@ export interface PaidSubscriptionValueSubscription {
   remaining_seconds: number
   token_limit: number
   token_used: number
+  available_credit?: number
+  unknown_cost_credit?: number
   next_reset_time: number
   token_based_value: MoneyAmount | null
   time_based_value: MoneyAmount | null
@@ -546,9 +562,14 @@ export interface PaidSubscriptionValueSubscription {
   token_based_value_by_currency?: MoneyBreakdown[]
   time_based_value_by_currency?: MoneyBreakdown[]
   recognized_remaining_value_by_currency?: MoneyBreakdown[]
+  exact_remaining_value?: MoneyAmount
+  estimated_remaining_value?: MoneyAmount
   valuation_basis: string
   valuation_confidence?: string
   valuation_warnings?: string[]
+  valuation_state_version?: number
+  valuation_updated_at?: number
+  snapshot_semantics?: string
   source_attribution: string
   excluded: boolean
   excluded_reason: string

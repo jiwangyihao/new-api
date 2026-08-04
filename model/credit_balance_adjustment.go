@@ -125,7 +125,7 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			adjustment.LedgerId = grant.LedgerId
 			result = &CreditBalanceAdjustmentResult{Adjustment: adjustment, CreditBalance: grant}
 		} else {
-			if _, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, plan); err != nil {
+			if _, _, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, plan); err != nil {
 				return err
 			}
 			recovery, err := RecoverCreditBalanceTx(tx, CreditBalanceRecoveryRequest{

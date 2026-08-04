@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-同币种管理员售后 increase 首个 RED→GREEN 已完成，准备补齐资格、debt、幂等与兑换纵切。
+同币种管理员 increase exact ingress 与完整资格矩阵已 GREEN，按协调器收敛进入 debt offset、完整指纹重放/冲突和事务回滚。
 
 ## 已完成
 
@@ -12,13 +12,14 @@
 - 已确认 #20 精确价格合同与 #22 `CreditValuation` ingress、状态、账本和五接口分析已集成。
 - 已确认兑换和管理员 increase 应只消费 #22 的 `newForwardCreditValuationIngress` / `ApplyCreditValuationIngressTx`，不得重写移动平均或请求结算。
 - 已完成管理员 increase 的 `plan_id`、权威档位事实、exact ingress、结构化 ledger 和精确响应首个真实 SQLite纵切。
+- 已证明缺 plan、disabled/trial/invite、零/缺失精确价格、零分母、资格关闭、非 timed 和 unsupported currency 均原子拒绝，不留下 adjustment/ledger/state/subscription/邀请事件。
 
 ## 下一步
 
-1. 为缺失/disabled/trial/零价/零 Credit/不允许购买档位逐项补 RED→GREEN。
-2. 证明 debt offset、完整参数指纹重放/冲突和事务回滚。
-3. 为兑换冻结快照、幂等、debt offset、事务回滚和邀请隔离逐个执行 RED→GREEN。
-4. 实现管理员 UI 服务端权威预览、幂等键生命周期与六语言。
+1. 证明管理员 increase 全额/部分 debt offset。
+2. 证明完整参数指纹同 key 重放/冲突。
+3. 证明 ledger/终态故障整笔回滚。
+4. 完成兑换同币种冻结快照、幂等、debt offset 与邀请隔离。
 
 ## 阻塞
 
@@ -29,4 +30,5 @@
 
 - 起始安全提交：`ec1858fec89509bdec9a90a230a8496047c5becd`。
 - 恢复合同安全提交：`4e0640e2f`。
-- 当前首个 GREEN 待提交。
+- 管理员 exact ingress 安全提交：`b07addec3`。
+- 资格矩阵 GREEN 待提交。

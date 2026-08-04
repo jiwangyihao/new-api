@@ -23,6 +23,11 @@
 - RED 结果：编译失败，确认 `CreditBalanceAdjustmentRequest.PlanId`、结构化 ledger 字段和精确响应字段均缺失；代表公开领域合同尚不存在。
 - GREEN：同一命令通过，`go test: 1 packages ok`，耗时约 13.91 秒。
 - 行为：真实 SQLite ready marker 下，选择 `40 CNY / 1,000 Credit` 档位售后授予 800 Credit，得到 exact `32,000,000` micros CNY、state version 1，并结构化写入 plan、毛/净 Credit、源价格/分母、来源 key/status、指纹与 1:1 FX。
+
+### 管理员 increase 资格矩阵
+
+- GREEN：`go test ./model -run TestAdminCreditBalanceIncreaseRejectsIneligiblePlansAtomically -count=1` → `go test: 1 packages ok`，约 18.51 秒。
+- 行为：缺少 plan、disabled、trial、invite trial、零/缺失精确价格、零 Credit 分母、未开放不限时购买、非 timed、EUR 均返回稳定 sentinel；真实 SQLite 中 adjustment、ledger、state、subscription、邀请事件全部保持 0，证明原子拒绝。
 ## 实际数据库/API/浏览器范围
 
 - SQLite：已执行首个管理员领域纵切，真实内存 SQLite + GORM migration + ready marker。

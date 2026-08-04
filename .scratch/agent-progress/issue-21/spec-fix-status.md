@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`BOUNDARY_REGRESSIONS_GREEN`。
+- 状态：`COMPLETE`。
 - Standards 四项 finding：保持 `COMPLETE`，未改动。
-- AC2 / Gate B：权威来源快照、非法 Plan 失败原子性、零额度拒绝、`[start,end)` 边界秒、成功重放与 disabled 新 key 均已定向 GREEN。
+- AC2 / Gate B：管理员伪造价币已从根因关闭；admin/order/redemption 三类来源的权威事实、失败原子性、半开秒边界、零额度、重放/disabled 及 #22 组合合同均已验证。
 
 ## 权威事实
 
@@ -25,23 +25,28 @@ SubscriptionPlan guard -> committed grant identity replay -> authoritative sourc
 
 管理员新 allocation 在 guard 后重读当前 Plan；订单 source 锁定已成功订单并验证持久化 `EntitlementSnapshot`；兑换 source 锁定已使用兑换记录并读取创建时持久化的 entitlement snapshot。三条路径都在同一事务内验证 user/plan/source identity，调用方不能提供估值字段；已成功来源重放只校验冻结 request identity/reason。
 
-## 下一步
+## 完成证据
 
-1. 提交四类窄回归与证据安全点。
-2. 运行 `-count=10` 权威/边界定向、窄 `-race` 并发、#22 Credit + #21 timed 五接口组合回归。
-3. 更新最终 COMPLETE 状态，确认 clean tree 并汇报协调器。
+1. Controller/model 权威快照定向 `-count=10` PASS；并发接缝 `-race` PASS。
+2. 非法 Plan 零写入、zero Credit、`[start,end)`、成功重放/disabled 新 key PASS。
+3. #22 32 CNY Credit/current_only/权威 micros 与 #21 timed 五接口组合 PASS；前端 BigInt 两文件 7 tests PASS。
+4. MySQL/PostgreSQL 未运行，仍归 Issue #27；未修改 UI/i18n，未运行浏览器。
 
-## 最近安全提交
+## 安全提交
 
 - `4212d2218`：复现管理员伪造计时估值（Controller/API RED）。
 - `0c7ef4aec`：建立 AC2 / Gate B 修复恢复现场。
 - `014e4e5aa`：提交 model 权威 Plan 快照 RED。
-- `57aab92c5`：从权威计划冻结计时授予事实；完成生产/测试调用的 `PlanId` 干净迁移。
+- `57aab92c5`：从权威计划冻结计时授予事实并收窄调用接口。
+- `30079605e`：迁移兑换回归到权威来源语义。
+- `3f58584bb`：恢复订单不可变履约快照。
+- `66a9c9c46`：固化订单与兑换授权快照并迁移来源夹具。
+- `39ee1b3b4`：覆盖非法 Plan 原子性、zero Credit 与边界秒。
+- `bcc0468ef`：持久化兑换创建/更新时的授权计划快照。
 
 ## 未提交文件
 
-- `model/timed_subscription_valuation_test.go`：非法 Plan 原子性、zero Credit、半开秒边界回归。
-- 本文件与 `spec-fix-evidence.md`：记录四类定向 GREEN。
+- 本文件与 `spec-fix-evidence.md` 最终 COMPLETE 证据；提交后必须为 0。
 
 ## 阻塞
 

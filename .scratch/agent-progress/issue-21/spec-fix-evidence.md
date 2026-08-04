@@ -76,6 +76,24 @@
 - 幂等/disabled：`TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRejectsNewGrant` PASS；成功 key 在 disabled 后返回原 subscription/end，不新增行；新 key 稳定拒绝且原 end/grant count 不变。
 - 后三项组合命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant(RejectsZeroCreditPlanAtomically|UsesHalfOpenSecondBoundary|DisabledPlanReplaysCommittedSourceButRejectsNewGrant)$' -count=1`；PASS（1 package）。
 
+## 最终重复与组合验证
+
+- Controller 权威快照：`go test ./controller -run '^TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot$' -count=10`；PASS。
+- Model 七项权威/来源/原子性/边界集合：`go test ./model -run '^TestTimedSubscriptionValuationGrant(UsesAuthoritativePlanSnapshot|OrderCompletionUsesImmutableSnapshotAfterPlanChanges|RedemptionCreatesAndReplaysGrant|RejectsInvalidAuthoritativePlanAtomically|RejectsZeroCreditPlanAtomically|UsesHalfOpenSecondBoundary|DisabledPlanReplaysCommittedSourceButRejectsNewGrant)$' -count=10`；PASS。
+- 并发接缝：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1`；PASS。
+- 全部 timed grant 窄套件：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`；PASS。
+- 兑换控制器：`go test ./controller -run 'Redemption' -count=1`；PASS；创建/更新 snapshot、兑换履约与邀请奖励处理均保持。
+- #22 模型组合：`go test ./model -run '^(TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning|TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros|TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros|TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews)$' -count=1`；PASS。
+- #21 五接口：`go test ./controller -run '^TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews$' -count=1`；PASS。
+- BigInt UI：`bun test src/features/admin-analytics/lib/format.test.ts src/features/admin-analytics/paid-value-panel.test.tsx`；7 pass、0 fail。
+- 最终窄串联与 `git diff --check`：model/controller 均 PASS，diff check 无输出。
+
+## 未运行与范围
+
+- MySQL 5.7、PostgreSQL 9.6 未运行；三库零 SKIP 仍归 Issue #27，不声明 PASS。
+- 未修改 `web/default`、可见文本或 i18n；无需浏览器 smoke/typecheck。
+- 未实现 Issues #23–#28，未合并父分支、关闭 Issue、部署或回收工作树。
+
 ## 数据库范围
 
 - SQLite：权威快照真实事务/API 定向测试 PASS。

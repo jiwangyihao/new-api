@@ -55,6 +55,13 @@
 - 仅迁移该旧断言后，同一命令 PASS（1 package）；覆盖创建/重放、权威快照、身份冲突、续期、订单、trial、兑换、disabled Plan 与不可变 grant 现有回归。
 - 该调整未改变生产语义；兑换码只提供 source identity，不能再控制 grant 估值事实。
 
+## RED→GREEN：订单不可变履约快照
+
+- 纠正范围：管理员新 grant 的权威事实来自 guard 内当前 enabled Plan；已授权订单的履约事实来自持久化 `SubscriptionOrder.EntitlementSnapshot`，不能被购买后 Plan 改价或停用重写。
+- RED：`go test ./model -run '^TestTimedSubscriptionValuationGrantOrderCompletionUsesImmutableSnapshotAfterPlanChanges$' -count=1`；订单快照为 `40,000,000 CNY`、1,000 Credit、3,600 秒、never reset，创建订单后 Plan 改为 `25,000,000 USD`、250 Credit、7,200 秒、daily reset 并 disabled；57aab92c5 返回 `ErrTimedSubscriptionGrantInvalid`，无法履约。
+- GREEN：同一命令 PASS（1 package）。`GrantTimedSubscriptionTx` 仍先执行 Plan 行 guard；order source 随后在同一事务锁定已成功订单，验证 user/plan/source identity 与持久化快照，再从快照构造 plan 并冻结 40 CNY、1,000 Credit、3,600 秒、never reset；Plan 后续 disabled 不撤销已授权订单。
+- 管理员路径没有接受快照参数，仍从 guard 内当前数据库 Plan 重读并要求 enabled，因此客户端无法借用订单快照通道。
+
 ## 数据库范围
 
 - SQLite：权威快照真实事务/API 定向测试 PASS。

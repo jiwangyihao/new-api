@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`AUTHORITATIVE_PLAN_SNAPSHOT_GREEN_COMMITTED`。
+- 状态：`ORDER_SNAPSHOT_GREEN`。
 - Standards 四项 finding：保持 `COMPLETE`，未改动。
-- AC2 / Gate B：调用接口已收窄到 `UserId + PlanId + source identity/reason/key`；controller/API、model 权威 Plan 快照及全部 `TestTimedSubscriptionValuationGrant*` 窄回归均已 GREEN。
+- AC2 / Gate B：管理员新 allocation 仍从 guard 内当前 enabled Plan 冻结；订单履约已恢复从同事务锁定的 `SubscriptionOrder.EntitlementSnapshot` 冻结购买时授权事实。
 
 ## 权威事实
 
@@ -20,15 +20,15 @@
 ## 固定锁序
 
 ```text
-SubscriptionPlan guard -> committed grant identity replay -> authoritative SubscriptionPlan reread -> target UserSubscription -> new TimedSubscriptionValuationGrant
+SubscriptionPlan guard -> committed grant identity replay -> authoritative source lock/read -> target UserSubscription -> new TimedSubscriptionValuationGrant
 ```
 
-Plan guard 先线性化同一计划；已成功来源重放只校验冻结的 request identity/reason，因此 Plan 后续 disabled 时仍返回原 grant。只有新 allocation 进入权威 Plan 重读与 timed/enabled/精确估值事实校验；disabled Plan 的新 identity 稳定拒绝且零写入。
+管理员与兑换的新 allocation 在 guard 后重读当前 Plan；订单 source 则锁定已成功的 `SubscriptionOrder`，验证其 user/plan/source identity 与持久化 `EntitlementSnapshot`，从快照恢复价格、币种、Credit、duration/reset。已成功来源重放只校验冻结的 request identity/reason，因此 Plan 后续 disabled 时仍返回原 grant。
 
 ## 下一步
 
-1. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
-2. 每个 GREEN 后更新本状态与证据并提交安全点。
+1. 提交订单不可变履约快照 GREEN 安全点。
+2. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
 3. 运行重复定向及 #22 Credit + #21 timed 组合回归。
 
 ## 最近安全提交
@@ -40,8 +40,9 @@ Plan guard 先线性化同一计划；已成功来源重放只校验冻结的 re
 
 ## 未提交文件
 
-- `model/timed_subscription_valuation_test.go`：兑换测试改为断言授予时的当前权威 Plan 价币；`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` 已 PASS。
-- 本文件与 `spec-fix-evidence.md`：记录安全提交及窄回归证据。
+- `model/timed_subscription_valuation.go`：按 source 类型选择同事务权威事实；订单锁定并验证持久化 `EntitlementSnapshot`。
+- `model/timed_subscription_valuation_test.go`：订单购买后 Plan 改价、改币、改 Credit/duration/reset 且 disabled 的真实回归。
+- 本文件与 `spec-fix-evidence.md`：记录订单快照 RED→GREEN。
 
 ## 阻塞
 

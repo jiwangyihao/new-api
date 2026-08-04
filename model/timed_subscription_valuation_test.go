@@ -227,7 +227,7 @@ func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *test
 	require.Equal(t, []int64{40_000_000, 50_000_000}, []int64{grants[0].ValuationAmountMicros, grants[1].ValuationAmountMicros})
 }
 
-func TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant(t *testing.T) {
+func TestTimedSubscriptionValuationGrantOrderCompletionUsesImmutableSnapshotAfterPlanChanges(t *testing.T) {
 	setupTimedSubscriptionValuationTestDB(t)
 	priceMicros := int64(40_000_000)
 	plan := SubscriptionPlan{
@@ -249,6 +249,17 @@ func TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant(t *testing.T
 		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
 	}
 	require.NoError(t, DB.Create(&order).Error)
+	currentPriceMicros := int64(25_000_000)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"enabled":                    false,
+		"price_amount":               25,
+		"price_amount_micros":        currentPriceMicros,
+		"currency":                   "USD",
+		"monthly_token_limit":        250,
+		"custom_seconds":             7200,
+		"quota_reset_period":         SubscriptionResetDaily,
+		"quota_reset_custom_seconds": int64(86400),
+	}).Error)
 
 	var result *SubscriptionOrderCompletionResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -262,12 +273,20 @@ func TestTimedSubscriptionValuationGrantOrderCompletionCreatesGrant(t *testing.T
 	}))
 	require.NotNil(t, result)
 	require.NotNil(t, result.Subscription)
+	require.Equal(t, int64(1000), result.Subscription.TokenLimit)
+	require.Equal(t, int64(3600), result.EventEndTime-result.EventStartTime)
 
 	var grant TimedSubscriptionValuationGrant
 	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceOrder, "subscription_order:21203").First(&grant).Error)
 	require.Equal(t, result.Subscription.Id, grant.UserSubscriptionId)
 	require.Equal(t, snapshot.ListPriceMicros, &grant.SourcePriceMicros)
 	require.Equal(t, snapshot.ListPriceCurrency, grant.SourceCurrency)
+	require.Equal(t, int64(1000), grant.GrantCredit)
+	var sourceSnapshot timedSubscriptionGrantSourceSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(grant.SourceSnapshot, &sourceSnapshot))
+	require.Equal(t, snapshot.MonthlyTokenLimit, sourceSnapshot.GrantCredit)
+	require.Equal(t, snapshot.CustomSeconds, sourceSnapshot.CustomSeconds)
+	require.Equal(t, snapshot.QuotaResetPeriod, sourceSnapshot.QuotaResetPeriod)
 	require.Equal(t, result.EventStartTime, grant.EventStartTime)
 	require.Equal(t, result.EventEndTime, grant.EventEndTime)
 }

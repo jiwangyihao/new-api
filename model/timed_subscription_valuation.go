@@ -124,11 +124,11 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 		return existing, nil
 	}
 
-	var plan SubscriptionPlan
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.PlanId).First(&plan).Error; err != nil {
-		return nil, ErrTimedSubscriptionGrantInvalid
+	plan, requireEnabled, err := authoritativeTimedSubscriptionGrantPlanTx(tx, normalized)
+	if err != nil {
+		return nil, err
 	}
-	authoritative, err := freezeAuthoritativeTimedSubscriptionGrant(normalized, &plan)
+	authoritative, err := freezeAuthoritativeTimedSubscriptionGrant(normalized, plan, requireEnabled)
 	if err != nil {
 		return nil, err
 	}
@@ -210,8 +210,42 @@ func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantReques
 	}, nil
 }
 
-func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscriptionGrantRequest, plan *SubscriptionPlan) (authoritativeTimedSubscriptionGrant, error) {
-	if plan == nil || plan.Id != normalized.request.PlanId || !plan.Enabled || plan.EntitlementType != SubscriptionEntitlementTimed || plan.IsTrial || plan.InviteTrial || plan.PriceAmountMicros == nil || *plan.PriceAmountMicros <= 0 || plan.MonthlyTokenLimit <= 0 {
+func authoritativeTimedSubscriptionGrantPlanTx(tx *gorm.DB, normalized normalizedTimedSubscriptionGrantRequest) (*SubscriptionPlan, bool, error) {
+	if normalized.request.SourceType == TimedSubscriptionGrantSourceOrder {
+		var order SubscriptionOrder
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.SourceId).First(&order).Error; err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		if order.UserId != normalized.request.UserId || order.PlanId != normalized.request.PlanId || order.Status != common.TopUpStatusSuccess || strings.TrimSpace(order.EntitlementSnapshot) == "" {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		snapshot, err := UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+		if err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		purchaseMode, err := NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
+		if err != nil || purchaseMode != SubscriptionPurchaseModeTimed {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		if err := validateSubscriptionOrderEntitlementSnapshot(tx, &order, snapshot, purchaseMode, order.PaymentMethod); err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		plan, err := SubscriptionPlanFromEntitlementSnapshot(snapshot)
+		if err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		return plan, false, nil
+	}
+
+	var plan SubscriptionPlan
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.PlanId).First(&plan).Error; err != nil {
+		return nil, false, ErrTimedSubscriptionGrantInvalid
+	}
+	return &plan, true, nil
+}
+
+func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscriptionGrantRequest, plan *SubscriptionPlan, requireEnabled bool) (authoritativeTimedSubscriptionGrant, error) {
+	if plan == nil || plan.Id != normalized.request.PlanId || (requireEnabled && !plan.Enabled) || plan.EntitlementType != SubscriptionEntitlementTimed || plan.IsTrial || plan.InviteTrial || plan.PriceAmountMicros == nil || *plan.PriceAmountMicros <= 0 || plan.MonthlyTokenLimit <= 0 {
 		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
 	}
 	currency := strings.ToUpper(strings.TrimSpace(plan.Currency))

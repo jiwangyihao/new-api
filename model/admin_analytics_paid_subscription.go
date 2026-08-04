@@ -865,7 +865,7 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 		}
 		currency := adminPaidSubscriptionRowCurrency(row)
 		if row.Excluded {
-			excluded.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+			adminPaidRowAccumulateRecognized(row, &excluded)
 		}
 		main := adminIncludeInMain(row.Excluded, query.ExcludedMode) && row.Active
 		if main {

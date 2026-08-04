@@ -335,7 +335,6 @@
     "adminAnalytics.fields.unitInferenceBasis": "Основание вывода единиц",
     "adminAnalytics.fields.userId": "ID пользователя",
     "adminAnalytics.fields.valuationBasis": "Основание оценки",
-    "adminAnalytics.fields.valuationConfidence": "Достоверность оценки",
     "adminAnalytics.fields.valuationWarnings": "Предупреждения об оценке",
     "adminAnalytics.fields.wouldHaveActiveRemainingValue": "Активная остаточная стоимость без исключения",
     "adminAnalytics.fields.wouldHavePaidAmount": "Сумма приглашённых оплат без исключения",

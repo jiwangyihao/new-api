@@ -335,7 +335,6 @@
     "adminAnalytics.fields.unitInferenceBasis": "Unit inference basis",
     "adminAnalytics.fields.userId": "User ID",
     "adminAnalytics.fields.valuationBasis": "Valuation basis",
-    "adminAnalytics.fields.valuationConfidence": "Valuation confidence",
     "adminAnalytics.fields.valuationWarnings": "Valuation warnings",
     "adminAnalytics.fields.wouldHaveActiveRemainingValue": "Would-have active remaining value",
     "adminAnalytics.fields.wouldHavePaidAmount": "Would-have paid amount",

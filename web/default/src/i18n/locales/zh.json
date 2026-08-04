@@ -335,7 +335,6 @@
     "adminAnalytics.fields.unitInferenceBasis": "单元推断依据",
     "adminAnalytics.fields.userId": "用户 ID",
     "adminAnalytics.fields.valuationBasis": "计价依据",
-    "adminAnalytics.fields.valuationConfidence": "估值置信度",
     "adminAnalytics.fields.valuationWarnings": "估值警告",
     "adminAnalytics.fields.wouldHaveActiveRemainingValue": "若未排除的当前剩余价值",
     "adminAnalytics.fields.wouldHavePaidAmount": "若未排除的邀请付费金额",

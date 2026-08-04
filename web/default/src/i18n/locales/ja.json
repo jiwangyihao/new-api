@@ -335,7 +335,6 @@
     "adminAnalytics.fields.unitInferenceBasis": "単位推定根拠",
     "adminAnalytics.fields.userId": "ユーザー ID",
     "adminAnalytics.fields.valuationBasis": "評価根拠",
-    "adminAnalytics.fields.valuationConfidence": "評価の信頼度",
     "adminAnalytics.fields.valuationWarnings": "評価の警告",
     "adminAnalytics.fields.wouldHaveActiveRemainingValue": "除外しない場合の有効残価値",
     "adminAnalytics.fields.wouldHavePaidAmount": "除外しない場合の招待支払額",

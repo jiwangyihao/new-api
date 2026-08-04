@@ -40,3 +40,16 @@
 - setup 最小迁移 `TimedSubscriptionValuationGrant` 表；未修改生产代码。
 - GREEN：`go test ./controller -run 'TestSubscription(Balance|PurchaseDoesNotUpdateUserGroup)|TestCreditBalance|TestKyren|TestSubscriptionKyren' -count=1` → PASS。
 - Redis 仍仅有 `client is closed` 缓存通知日志，无 panic、无失败；未发现本路 setup 污染。
+
+## Stripe、Epay、邀请订单 GREEN
+
+- Stripe 定向：`go test ./controller -run 'TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency|TestStripeSubscriptionWebhookPropagatesInvitationRewardHandlerFailure' -count=1` → PASS；成功订单重放仍校验 provider 金额/币种，handler 失败后的成功订单/事件合同保留。
+- Epay 定向：`go test ./controller -run '^TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior$' -count=1` → PASS；通过真实购买入口冻结完整快照并保留签名/金额/邀请事件断言。
+- 邀请订单定向：`go test ./controller -run 'TestCompleteSubscriptionOrderTriggersInvitationEntitlement|TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrder' -count=1` → PASS；直接 pending provider order 改用完整授权快照，奖励与重试断言不减少。
+
+## 最终门禁
+
+- 聚焦：`go test ./controller -run 'Balance|Kyren|Stripe|Epay|Payment|Invitation|SubscriptionOrder' -count=1` → PASS。
+- 关键重放：`go test ./controller -run 'TestSubscriptionBalancePayIdempotent|TestKyrenWebhookCompletesSubscriptionOrder|TestKyrenSuccessfulSubscriptionReplayStillValidatesPaymentSnapshot|TestCompletedSubscriptionOrderReplayStillValidatesAmountAndCurrency|TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior|TestCompleteSubscriptionOrderRetriesInvitationRewardHandlerForSuccessfulOrder' -count=10` → PASS。
+- 包级：`go test ./controller -count=1` → PASS。
+- 未运行项目全量 formatter/lint/前端套件、model/service 测试或三数据库实机；均不属于 C 路范围。

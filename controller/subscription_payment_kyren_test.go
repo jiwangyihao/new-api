@@ -78,6 +78,7 @@ func setupKyrenPaymentControllerTestDB(t *testing.T) {
 		&model.SubscriptionPlan{},
 		&model.SubscriptionOrder{},
 		&model.UserSubscription{},
+		&model.TimedSubscriptionValuationGrant{},
 		&model.SubscriptionConversion{},
 		&model.TopUp{},
 		&model.Log{},
@@ -121,14 +122,9 @@ func seedKyrenPaymentPlan(t *testing.T, id int, productID string, tokenLimit int
 	model.InvalidateSubscriptionPlanCache(id)
 	t.Cleanup(func() { model.InvalidateSubscriptionPlanCache(id) })
 	businessCode := fmt.Sprintf("kyren_payment_%d", id)
-	plan := model.SubscriptionPlan{
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{
 		Id:                      id,
 		Title:                   fmt.Sprintf("Kyren Plan %d", id),
-		PriceAmount:             40,
-		Currency:                kyrenCurrencyCNY,
-		DurationUnit:            model.SubscriptionDurationMonth,
-		DurationValue:           1,
-		Enabled:                 true,
 		PublicVisible:           true,
 		TotalAmount:             8000,
 		MonthlyTokenLimit:       tokenLimit,
@@ -141,8 +137,7 @@ func seedKyrenPaymentPlan(t *testing.T, id int, productID string, tokenLimit int
 		MaxPurchasePerUser:      0,
 		TrialDurationHours:      0,
 		QuotaResetCustomSeconds: 0,
-	}
-	require.NoError(t, model.DB.Create(&plan).Error)
+	}, 40_000_000)
 	return plan
 }
 
@@ -155,9 +150,7 @@ func kyrenPaymentSnapshotJSON(t *testing.T, productID string, amount string, cur
 
 func kyrenEntitlementSnapshotJSON(t *testing.T, plan *model.SubscriptionPlan) string {
 	t.Helper()
-	payload, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshotFromPlan(plan))
-	require.NoError(t, err)
-	return payload
+	return marshalAuthorizedTimedOrderSnapshotFixture(t, plan, "", "", "", 0, "")
 }
 
 func seedPendingKyrenSubscriptionOrder(t *testing.T, tradeNo string, userID int, plan *model.SubscriptionPlan) {
@@ -295,6 +288,8 @@ func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testin
 
 func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
+	model.ClearDBTimestampCacheForTest()
+	t.Cleanup(model.ClearDBTimestampCacheForTest)
 	enableCreditValuationRuntimeForControllerTest(t)
 	setupSubscriptionControllerRedis(t)
 	userID := 6096
@@ -1065,7 +1060,7 @@ func TestKyrenWebhookRefundedRecordsManualActionAndReturnsSuccess(t *testing.T) 
 	plan := seedKyrenPaymentPlan(t, 6162, "prod_sub_refund", 1000, 1)
 	tradeNo := "kyren-sub-refunded"
 	seedPendingKyrenSubscriptionOrder(t, tradeNo, userID, &plan)
-	require.NoError(t, completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo, `{}`, model.PaymentProviderKyren, model.PaymentMethodKyren))
+	require.NoError(t, completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo, kyrenPaymentSnapshotJSON(t, plan.KyrenProductId, "40.00", kyrenCurrencyCNY), model.PaymentProviderKyren, model.PaymentMethodKyren))
 	payload := kyrenWebhookEventPayload(t, "order.refunded", "subscription", tradeNo, "prod_sub_refund", "40.00", kyrenCurrencyCNY)
 
 	recorder := performSignedKyrenWebhook(t, payload)

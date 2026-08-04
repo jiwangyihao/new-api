@@ -356,7 +356,6 @@ export interface AdminAnalyticsUserLifecycleTrendPoint {
   trial_users: number
 }
 
-
 export interface AdminAnalyticsUserLifecycleItem {
   user_id: number
   username: string
@@ -545,6 +544,7 @@ export interface PaidSubscriptionValueSubscription {
   username: string
   plan_id: number
   plan_name: string
+  entitlement_type?: 'timed' | 'credit_balance'
   source: AdminAnalyticsSource
   grant_reason: string
   plan_price: MoneyAmount
@@ -558,15 +558,18 @@ export interface PaidSubscriptionValueSubscription {
   next_reset_time: number
   token_based_value: MoneyAmount | null
   time_based_value: MoneyAmount | null
-  recognized_remaining_value: MoneyAmount
+  recognized_remaining_value: MoneyAmount | null
+  token_based_value_by_currency?: MoneyBreakdown[]
+  time_based_value_by_currency?: MoneyBreakdown[]
+  recognized_remaining_value_by_currency?: MoneyBreakdown[]
   exact_remaining_value?: MoneyAmount
   estimated_remaining_value?: MoneyAmount
   valuation_basis: string
   valuation_confidence?: string
+  valuation_warnings?: string[]
   valuation_state_version?: number
   valuation_updated_at?: number
   snapshot_semantics?: string
-  entitlement_type?: string
   source_attribution: string
   excluded: boolean
   excluded_reason: string
@@ -666,7 +669,6 @@ export interface InvitationPaidSubscriptionsResponse {
   invitees: AdminAnalyticsList<InvitationPaidInvitee>
   subscriptions: AdminAnalyticsList<InvitationPaidSubscriptionRecord>
 }
-
 
 export interface AdminAnalyticsInvitationTrendPoint {
   timestamp: number

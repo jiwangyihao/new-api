@@ -23,7 +23,7 @@ func setupSubscriptionBalancePurchaseTestDB(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
 	model.ClearSubscriptionPlanCacheForTest()
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.CreditBalanceLedger{}, &model.Log{}, &model.TopUp{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}, &model.CreditBalanceLedger{}, &model.Log{}, &model.TopUp{}, &model.InvitationRewardEvent{}, &model.InvitationMonthlyEntitlement{}))
 }
 
 func enableCreditValuationRuntimeForControllerTest(t *testing.T) {
@@ -120,7 +120,7 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 	userID := 9501
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_buyer", Quota: 10000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-basic"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9502, Title: "Basic", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9502, Title: "Basic", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9502,"idempotency_key":"balance-key-1"}`)
 
@@ -140,6 +140,7 @@ func TestSubscriptionBalancePayCreatesSubscriptionAndDeductsBalance(t *testing.T
 	assert.Equal(t, 40.0, order.Money)
 	assert.NotZero(t, order.CompleteTime)
 	assert.Equal(t, "BALSUBUSR9501NO"+common.Sha1([]byte("balance-key-1")), order.TradeNo)
+	assertAuthorizedTimedOrderSnapshotFixture(t, &order, &plan)
 	var topUpCount int64
 	require.NoError(t, model.DB.Model(&model.TopUp{}).Where("user_id = ?", userID).Count(&topUpCount).Error)
 	assert.Equal(t, int64(0), topUpCount)
@@ -652,7 +653,7 @@ func TestSubscriptionBalancePurchaseStoresCNYAmountSnapshot(t *testing.T) {
 	userID := 9551
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance-snapshot", Status: common.UserStatusEnabled, Quota: 6000}).Error)
 	code := "balance_snapshot"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9552, Title: "Balance Snapshot", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9552, Title: "Balance Snapshot", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9552,"idempotency_key":"snapshot"}`)
 
@@ -661,6 +662,7 @@ func TestSubscriptionBalancePurchaseStoresCNYAmountSnapshot(t *testing.T) {
 	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 9552).First(&order).Error)
 	assert.Equal(t, int64(4000), order.AmountCents)
 	assert.Equal(t, "CNY", order.Currency)
+	assertAuthorizedTimedOrderSnapshotFixture(t, &order, &plan)
 }
 
 func TestSubscriptionBalancePurchaseInvokesInvitationRewardHandlerAndCreatesEvent(t *testing.T) {
@@ -675,7 +677,7 @@ func TestSubscriptionBalancePurchaseInvokesInvitationRewardHandlerAndCreatesEven
 	require.NoError(t, model.DB.Create(&inviter).Error)
 	require.NoError(t, model.DB.Create(&invitee).Error)
 	code := "balance_handler_event"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Balance Handler Event", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: planID, Title: "Balance Handler Event", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}, 40_000_000)
 
 	receivedOrderIDs := make([]int, 0, 1)
 	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {
@@ -719,7 +721,7 @@ func TestSubscriptionBalancePurchaseReturnsSuccessWhenInvitationRewardHandlerFai
 	t.Cleanup(func() { model.InvalidateSubscriptionPlanCache(planID) })
 	require.NoError(t, model.DB.Create(&model.User{Id: inviteeID, Username: "balance-handler-fail", Status: common.UserStatusEnabled, Quota: 10000}).Error)
 	code := "balance_handler_failure"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: planID, Title: "Balance Handler Failure", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: planID, Title: "Balance Handler Failure", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code}, 40_000_000)
 	SetInvitationRewardOrderHandlerForTest(t, func(orderId int) error {
 		return errors.New("temporary reward handler failure")
 	})
@@ -763,7 +765,7 @@ func TestSubscriptionBalancePayAllowsDecimalPlanPrice(t *testing.T) {
 	userID := 9505
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_decimal", Quota: 10000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-decimal"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9506, Title: "Decimal", PriceAmount: 39.9, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9506, Title: "Decimal", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 39_900_000)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9506,"idempotency_key":"balance-decimal"}`)
 
@@ -842,7 +844,7 @@ func TestSubscriptionBalancePayIdempotent(t *testing.T) {
 	userID := 9521
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_idem", Quota: 10000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-standard"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9522, Title: "Standard", PriceAmount: 80, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9522, Title: "Standard", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 80_000_000)
 
 	first := performBalancePayRequest(t, userID, `{"plan_id":9522,"idempotency_key":"idem-key"}`)
 	second := performBalancePayRequest(t, userID, `{"plan_id":9522,"idempotency_key":"idem-key"}`)
@@ -870,7 +872,7 @@ func TestSubscriptionBalancePayTimedModeIgnoresHistoricalPurchaseLimit(t *testin
 	userID := 9541
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_limit", Quota: 20000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-limit"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9542, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9542, Title: "Limit", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
 
 	first := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-one"}`)
 	second := performBalancePayRequest(t, userID, `{"plan_id":9542,"idempotency_key":"limit-two"}`)
@@ -900,8 +902,7 @@ func TestSubscriptionBalancePayExtendsActiveSubscriptionWithoutNewRecord(t *test
 	userID := 9561
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_extend", Quota: 20000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-extend"
-	plan := &model.SubscriptionPlan{Id: 9562, Title: "Extend", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}
-	require.NoError(t, model.DB.Create(plan).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9562, Title: "Extend", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
 	initialEnd := common.GetTimestamp() + 3600
 	existing := &model.UserSubscription{UserId: userID, PlanId: 9562, Status: "active", StartTime: common.GetTimestamp() - 60, EndTime: initialEnd, TokenLimit: 1000, TokenUsed: 125, GrantReason: "order", Source: "order"}
 	require.NoError(t, model.DB.Create(existing).Error)
@@ -926,16 +927,15 @@ func TestSubscriptionBalancePayLocksUserBeforePurchaseLimitCheck(t *testing.T) {
 	setupSubscriptionBalancePurchaseTestDB(t)
 	userID := 9551
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_lock", Quota: 10000, Status: common.UserStatusEnabled}).Error)
-	plan := &model.SubscriptionPlan{Id: 9552, Title: "Lock", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1}
-	require.NoError(t, model.DB.Create(plan).Error)
-	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshot(plan, model.SubscriptionPurchaseModeTimed, 0))
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9552, Title: "Lock", Enabled: true, PublicVisible: true, MaxPurchasePerUser: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1}, 40_000_000)
+	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.NewSubscriptionEntitlementSnapshot(&plan, model.SubscriptionPurchaseModeTimed, 0))
 	require.NoError(t, err)
 
 	var order model.SubscriptionOrder
 	created := false
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var createErr error
-		created, _, createErr = service.CreateBalanceSubscriptionOrderTx(tx, userID, plan, "BALSUBUSR9551NOdb-lock", 4000, model.SubscriptionPurchaseModeTimed, snapshot, &order)
+		created, _, createErr = service.CreateBalanceSubscriptionOrderTx(tx, userID, &plan, "BALSUBUSR9551NOdb-lock", 4000, model.SubscriptionPurchaseModeTimed, snapshot, &order)
 		return createErr
 	})
 

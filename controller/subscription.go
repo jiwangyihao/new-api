@@ -956,8 +956,10 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 }
 
 type AdminBindSubscriptionRequest struct {
-	UserId int `json:"user_id"`
-	PlanId int `json:"plan_id"`
+	UserId         int    `json:"user_id"`
+	PlanId         int    `json:"plan_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Reason         string `json:"reason"`
 }
 
 func AdminBindSubscription(c *gin.Context) {
@@ -966,7 +968,9 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(model.AdminTimedSubscriptionGrantRequest{
+		UserId: req.UserId, PlanId: req.PlanId, IdempotencyKey: req.IdempotencyKey, Reason: req.Reason,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1126,7 +1130,9 @@ func AdminRecoverSubscriptionOrder(c *gin.Context) {
 }
 
 type AdminCreateUserSubscriptionRequest struct {
-	PlanId int `json:"plan_id"`
+	PlanId         int    `json:"plan_id"`
+	IdempotencyKey string `json:"idempotency_key"`
+	Reason         string `json:"reason"`
 }
 
 // AdminCreateUserSubscription creates a new user subscription from a plan (no payment).
@@ -1141,7 +1147,9 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(model.AdminTimedSubscriptionGrantRequest{
+		UserId: userId, PlanId: req.PlanId, IdempotencyKey: req.IdempotencyKey, Reason: req.Reason,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return

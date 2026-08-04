@@ -979,6 +979,9 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 	if err != nil {
 		return nil, err
 	}
+	if purchaseMode == SubscriptionPurchaseModeTimed && !hasSnapshot {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
 	completeTime, completeTimeErr := getDBTimestampStrictTx(tx)
 	if completeTimeErr != nil {
 		return nil, completeTimeErr
@@ -1076,7 +1079,21 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		}, nil
 	}
 
-	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
+	var creation *UserSubscriptionCreationResult
+	if hasSnapshot && !snapshot.IsTrial && !snapshot.InviteTrial {
+		if snapshot.ListPriceMicros == nil || *snapshot.ListPriceMicros <= 0 || strings.TrimSpace(snapshot.ListPriceCurrency) == "" {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId:         order.UserId,
+			PlanId:         plan.Id,
+			IdempotencyKey: TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id),
+			SourceType:     TimedSubscriptionGrantSourceOrder,
+			SourceId:       order.Id,
+		})
+	} else {
+		creation, err = CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1133,12 +1150,65 @@ func subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx *gorm.DB, ord
 			}
 			return &SubscriptionOrderCompletionResult{CreditBalance: grant, PurchaseMode: SubscriptionPurchaseModeCreditBalance, Transitioned: transitioned}, nil
 		}
+		if !snapshot.IsTrial && !snapshot.InviteTrial {
+			return subscriptionOrderCompletionResultFromTimedGrantTx(tx, order, transitioned)
+		}
 	}
 	result, err := subscriptionOrderCompletionResultFromExistingEventTx(tx, order, transitioned)
 	if result != nil {
 		result.PurchaseMode = SubscriptionPurchaseModeTimed
 	}
 	return result, err
+}
+
+func subscriptionOrderCompletionResultFromTimedGrantTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
+	if order.FulfilledSubscriptionID <= 0 {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	sourceKey := TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id)
+	var grant TimedSubscriptionValuationGrant
+	if err := tx.Where("source_type = ? AND source_key = ? AND source_id = ?", TimedSubscriptionGrantSourceOrder, sourceKey, order.Id).First(&grant).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		return nil, err
+	}
+	if grant.UserSubscriptionId != order.FulfilledSubscriptionID || grant.UserId != order.UserId || grant.PlanId != order.PlanId || grant.EventEndTime <= grant.EventStartTime {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	var subscription UserSubscription
+	if err := tx.Where("id = ?", order.FulfilledSubscriptionID).First(&subscription).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		return nil, err
+	}
+	if subscription.UserId != order.UserId || subscription.PlanId != order.PlanId {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	result := &SubscriptionOrderCompletionResult{
+		Subscription:         &subscription,
+		PurchaseMode:         SubscriptionPurchaseModeTimed,
+		Transitioned:         transitioned,
+		SourceSubscriptionId: subscription.Id,
+		EventStartTime:       grant.EventStartTime,
+		EventEndTime:         grant.EventEndTime,
+	}
+	var events []InvitationRewardEvent
+	if err := tx.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, order.Id).Limit(2).Find(&events).Error; err != nil {
+		return nil, err
+	}
+	if len(events) > 1 {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	if len(events) == 1 {
+		event := events[0]
+		if event.SourceOrderId != order.Id || event.SourceSubscriptionId != subscription.Id || event.InviteeId != order.UserId || event.InviterId <= 0 {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		result.InviterId = event.InviterId
+	}
+	return result, nil
 }
 func subscriptionOrderCompletionResultFromExistingEventTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {
@@ -1441,21 +1511,27 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 	})
 }
 
-// Admin bind (no payment). Creates a UserSubscription from a plan.
-func AdminBindSubscription(userId int, planId int, sourceNote string) (string, error) {
-	if userId <= 0 || planId <= 0 {
-		return "", errors.New("invalid userId or planId")
+type AdminTimedSubscriptionGrantRequest struct {
+	UserId         int
+	PlanId         int
+	IdempotencyKey string
+	Reason         string
+}
+
+// AdminBindSubscription grants a paid timed entitlement from the authoritative plan.
+func AdminBindSubscription(request AdminTimedSubscriptionGrantRequest) (string, error) {
+	if request.UserId <= 0 || request.PlanId <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" {
+		return "", ErrTimedSubscriptionGrantInvalid
 	}
-	plan, err := GetSubscriptionPlanById(planId)
-	if err != nil {
-		return "", err
-	}
-	if plan.EntitlementType == SubscriptionEntitlementCreditBalance {
-		return "", errors.New("Credit 余额套餐不能通过普通绑定接口创建权益")
-	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
-		_, err := CreateUserSubscriptionFromPlanTx(tx, userId, plan, "admin")
-		return err
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId:         request.UserId,
+			PlanId:         request.PlanId,
+			IdempotencyKey: request.IdempotencyKey,
+			SourceType:     TimedSubscriptionGrantSourceAdmin,
+			Reason:         request.Reason,
+		})
+		return grantErr
 	})
 	if err != nil {
 		return "", err

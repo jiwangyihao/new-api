@@ -1,0 +1,734 @@
+package model
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	user := User{Id: 21_001, Username: "timed-grant", Status: common.UserStatusEnabled, AffCode: "timed-grant-aff"}
+	plan := SubscriptionPlan{
+		Id: 21_002, Title: "Timed Basic", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	request := TimedSubscriptionGrantRequest{
+		UserId:         user.Id,
+		PlanId:         plan.Id,
+		IdempotencyKey: "timed-grant-21003",
+		SourceType:     TimedSubscriptionGrantSourceAdmin,
+		Reason:         "创建计时授予测试",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.NotNil(t, first)
+	require.NotNil(t, first.Subscription)
+	require.Equal(t, int64(3600), first.EventEndTime-first.EventStartTime)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceAdmin, "admin:timed-grant-21003").First(&grant).Error)
+	require.Equal(t, first.Subscription.Id, grant.UserSubscriptionId)
+	require.Equal(t, user.Id, grant.UserId)
+	require.Equal(t, plan.Id, grant.PlanId)
+	require.Equal(t, first.EventStartTime, grant.EventStartTime)
+	require.Equal(t, first.EventEndTime, grant.EventEndTime)
+	require.Equal(t, int64(1000), grant.GrantCredit)
+	require.Equal(t, priceMicros, grant.SourcePriceMicros)
+	require.Equal(t, priceMicros, grant.ValuationAmountMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+	require.Equal(t, "CNY", grant.ValuationCurrency)
+	require.Equal(t, "exact", grant.Confidence)
+	require.Equal(t, CreditValuationRuleVersion, grant.RuleVersion)
+	require.Equal(t, int64(1), grant.FxRateNumerator)
+	require.Equal(t, int64(1), grant.FxRateDenominator)
+	require.NotZero(t, grant.CreatedAt)
+	require.False(t, strings.TrimSpace(grant.SourceSnapshot) == "")
+
+	originalEndTime := first.Subscription.EndTime
+	var replay *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		replay, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.NotNil(t, replay)
+	require.NotNil(t, replay.Subscription)
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	require.Equal(t, first.EventStartTime, replay.EventStartTime)
+	require.Equal(t, first.EventEndTime, replay.EventEndTime)
+
+	var persisted UserSubscription
+	require.NoError(t, DB.First(&persisted, first.Subscription.Id).Error)
+	require.Equal(t, originalEndTime, persisted.EndTime)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	authoritativePriceMicros := int64(40_000_000)
+	user := User{Id: 21_021, Username: "timed-authoritative", Status: common.UserStatusEnabled, AffCode: "timed-authoritative-aff"}
+	plan := SubscriptionPlan{
+		Id: 21_022, Title: "Authoritative Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &authoritativePriceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	var creation *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: user.Id, PlanId: plan.Id, IdempotencyKey: "timed-authoritative-21023",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "权威计划快照测试",
+		})
+		return err
+	}))
+	require.NotNil(t, creation)
+	require.Equal(t, int64(3600), creation.EventEndTime-creation.EventStartTime)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceAdmin, "admin:timed-authoritative-21023").First(&grant).Error)
+	require.Equal(t, authoritativePriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, authoritativePriceMicros, grant.ValuationAmountMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+	require.Equal(t, "CNY", grant.ValuationCurrency)
+	require.Equal(t, int64(1000), grant.GrantCredit)
+
+	var snapshot timedSubscriptionGrantSourceSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(grant.SourceSnapshot, &snapshot))
+	require.Equal(t, authoritativePriceMicros, snapshot.SourcePriceMicros)
+	require.Equal(t, "CNY", snapshot.SourceCurrency)
+	require.Equal(t, int64(1000), snapshot.GrantCredit)
+	require.Equal(t, SubscriptionDurationCustom, snapshot.DurationUnit)
+	require.Equal(t, int64(3600), snapshot.CustomSeconds)
+	require.Equal(t, SubscriptionResetNever, snapshot.QuotaResetPeriod)
+}
+
+func TestTimedSubscriptionValuationGrantNormalizesIdentityBeforePersistAndReplay(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_052, Title: "Normalized Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_051, Username: "timed-normalized", Status: common.UserStatusEnabled, AffCode: "timed-normalized-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	request := TimedSubscriptionGrantRequest{
+		UserId: 21_051, PlanId: plan.Id, IdempotencyKey: "  timed-normalized-21053  ",
+		SourceType: "  admin  ", Reason: "  规范化测试  ",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&grant).Error)
+	require.Equal(t, "timed-normalized-21053", grant.IdempotencyKey)
+	require.Equal(t, TimedSubscriptionGrantSourceAdmin, grant.SourceType)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+
+	request.IdempotencyKey = "timed-normalized-21053"
+	request.SourceType = TimedSubscriptionGrantSourceAdmin
+	var replay *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		replay, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_102, Title: "Timed Pro", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_101, Username: "timed-renew", Status: common.UserStatusEnabled, AffCode: "timed-renew-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	firstRequest := TimedSubscriptionGrantRequest{
+		UserId: 21_101, PlanId: plan.Id, IdempotencyKey: "timed-renew-21103",
+		SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "首次管理员授予",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, firstRequest)
+		return err
+	}))
+
+	conflict := firstRequest
+	conflict.Reason = "冲突管理员授予"
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, conflict)
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantIdempotencyMismatch)
+	var afterConflict UserSubscription
+	require.NoError(t, DB.First(&afterConflict, first.Subscription.Id).Error)
+	require.Equal(t, first.EventEndTime, afterConflict.EndTime)
+
+	renewalRequest := firstRequest
+	renewalRequest.IdempotencyKey = "timed-renew-21104"
+	renewalRequest.Reason = "续期管理员授予"
+	renewalPriceMicros := int64(50_000_000)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"price_amount_micros": renewalPriceMicros,
+		"currency":            "USD",
+	}).Error)
+	var renewal *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		renewal, err = GrantTimedSubscriptionTx(tx, renewalRequest)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, renewal.Subscription.Id)
+	require.Equal(t, first.EventEndTime, renewal.EventStartTime)
+	require.Equal(t, int64(3600), renewal.EventEndTime-renewal.EventStartTime)
+
+	var grants []TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Order("id asc").Find(&grants).Error)
+	require.Len(t, grants, 2)
+	require.Equal(t, []string{"CNY", "USD"}, []string{grants[0].ValuationCurrency, grants[1].ValuationCurrency})
+	require.Equal(t, []int64{40_000_000, 50_000_000}, []int64{grants[0].ValuationAmountMicros, grants[1].ValuationAmountMicros})
+}
+
+func TestTimedSubscriptionValuationGrantOrderCompletionUsesImmutableSnapshotAfterPlanChanges(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_202, Title: "Timed Order", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_201, Username: "timed-order", Status: common.UserStatusEnabled, AffCode: "timed-order-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(PaymentProviderBalance, "balance", PaymentMethodAccountBalance, 4000, "CNY")
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_203, UserId: 21_201, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-order-21203", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+	currentPriceMicros := int64(25_000_000)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"enabled":                    false,
+		"price_amount":               25,
+		"price_amount_micros":        currentPriceMicros,
+		"currency":                   "USD",
+		"monthly_token_limit":        250,
+		"custom_seconds":             7200,
+		"quota_reset_period":         SubscriptionResetDaily,
+		"quota_reset_custom_seconds": int64(86400),
+	}).Error)
+
+	var result *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		result, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, result)
+	require.NotNil(t, result.Subscription)
+	require.Equal(t, int64(1000), result.Subscription.TokenLimit)
+	require.Equal(t, int64(3600), result.EventEndTime-result.EventStartTime)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceOrder, "subscription_order:21203").First(&grant).Error)
+	require.Equal(t, result.Subscription.Id, grant.UserSubscriptionId)
+	require.Equal(t, snapshot.ListPriceMicros, &grant.SourcePriceMicros)
+	require.Equal(t, snapshot.ListPriceCurrency, grant.SourceCurrency)
+	require.Equal(t, int64(1000), grant.GrantCredit)
+	var sourceSnapshot timedSubscriptionGrantSourceSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(grant.SourceSnapshot, &sourceSnapshot))
+	require.Equal(t, snapshot.MonthlyTokenLimit, sourceSnapshot.GrantCredit)
+	require.Equal(t, snapshot.CustomSeconds, sourceSnapshot.CustomSeconds)
+	require.Equal(t, snapshot.QuotaResetPeriod, sourceSnapshot.QuotaResetPeriod)
+	require.Equal(t, result.EventStartTime, grant.EventStartTime)
+	require.Equal(t, result.EventEndTime, grant.EventEndTime)
+}
+
+func TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&InvitationRewardEvent{}))
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_252, Title: "Timed Order Replay", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_251, Username: "timed-order-replay", Status: common.UserStatusEnabled, AffCode: "timed-order-replay-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(PaymentProviderBalance, "balance", PaymentMethodAccountBalance, 4000, "CNY")
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_253, UserId: 21_251, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-order-replay-21253", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	var first *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		first, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, first)
+	require.NotNil(t, first.Subscription)
+	require.True(t, first.Transitioned)
+	require.Positive(t, first.EventStartTime)
+	require.Greater(t, first.EventEndTime, first.EventStartTime)
+	var persistedOrder SubscriptionOrder
+	require.NoError(t, DB.First(&persistedOrder, order.Id).Error)
+	require.Equal(t, first.Subscription.Id, persistedOrder.FulfilledSubscriptionID)
+	var subscriptionCountBefore int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCountBefore).Error)
+	var grantCountBefore int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCountBefore).Error)
+	require.Equal(t, int64(1), subscriptionCountBefore)
+	require.Equal(t, int64(1), grantCountBefore)
+	var eventCount int64
+	require.NoError(t, DB.Model(&InvitationRewardEvent{}).Count(&eventCount).Error)
+	require.Zero(t, eventCount)
+
+	currentPriceMicros := int64(80_000_000)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"price_amount": 80, "price_amount_micros": currentPriceMicros, "currency": "USD", "custom_seconds": int64(7200),
+	}).Error)
+	var replay *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		replay, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+
+	require.NotNil(t, replay)
+	require.False(t, replay.Transitioned)
+	require.NotNil(t, replay.Subscription)
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	require.Equal(t, first.SourceSubscriptionId, replay.SourceSubscriptionId)
+	require.Equal(t, first.EventStartTime, replay.EventStartTime)
+	require.Equal(t, first.EventEndTime, replay.EventEndTime)
+	require.Equal(t, SubscriptionPurchaseModeTimed, replay.PurchaseMode)
+	var subscriptionCountAfter int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCountAfter).Error)
+	require.Equal(t, subscriptionCountBefore, subscriptionCountAfter)
+	var grantCountAfter int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCountAfter).Error)
+	require.Equal(t, grantCountBefore, grantCountAfter)
+}
+
+func TestTimedSubscriptionValuationGrantPaidOrderWithoutSnapshotRejectsAtomically(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_302, Title: "Legacy Paid Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_301, Username: "timed-no-snapshot", Status: common.UserStatusEnabled, AffCode: "timed-no-snapshot-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	order := SubscriptionOrder{
+		Id: 21_303, UserId: 21_301, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-no-snapshot-21303", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		_, completeErr := CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+
+	var persisted SubscriptionOrder
+	require.NoError(t, DB.First(&persisted, order.Id).Error)
+	require.Equal(t, common.TopUpStatusPending, persisted.Status)
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantExplicitTrialOrderCreatesNoGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	plan := SubscriptionPlan{
+		Id: 21_402, Title: "Timed Trial", Enabled: true, IsTrial: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 100, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_401, Username: "timed-trial", Status: common.UserStatusEnabled, AffCode: "timed-trial-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_403, UserId: 21_401, PlanId: plan.Id, TradeNo: "timed-trial-21403",
+		PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	var result *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		result, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, result)
+	require.NotNil(t, result.Subscription)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	redemptionPriceMicros := int64(80_000_000)
+	currentPlanPriceMicros := int64(50_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_502, Title: "Timed Redemption", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     80, PriceAmountMicros: &redemptionPriceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 7200,
+		MonthlyTokenLimit: 2000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_501, Username: "timed-redemption", Status: common.UserStatusEnabled, AffCode: "timed-redemption-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	redemption := Redemption{
+		Id: 21_503, Key: "timed-redemption-21503", Name: "timed-redemption", Type: RedemptionTypeSubscription,
+		PlanId: plan.Id, Status: common.RedemptionCodeStatusEnabled, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, redemption.Insert())
+	require.False(t, strings.TrimSpace(redemption.FulfillmentSnapshot) == "")
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"price_amount": 50, "price_amount_micros": currentPlanPriceMicros, "currency": "USD",
+	}).Error)
+	ClearSubscriptionPlanCacheForTest()
+
+	first, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.False(t, first.Replayed)
+	require.Greater(t, first.FulfillmentSubscriptionId, 0)
+
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceRedemption, "redemption:21503").First(&grant).Error)
+	require.Equal(t, first.FulfillmentSubscriptionId, grant.UserSubscriptionId)
+	require.Equal(t, redemptionPriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
+	firstEnd := grant.EventEndTime
+
+	replay, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)
+	require.NoError(t, err)
+	require.True(t, replay.Replayed)
+	require.Equal(t, first.FulfillmentSubscriptionId, replay.FulfillmentSubscriptionId)
+	var persisted UserSubscription
+	require.NoError(t, DB.First(&persisted, first.FulfillmentSubscriptionId).Error)
+	require.Equal(t, firstEnd, persisted.EndTime)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomically(t *testing.T) {
+	priceMicros := int64(40_000_000)
+	tests := []struct {
+		name   string
+		mutate func(*SubscriptionPlan)
+	}{
+		{name: "missing exact micros", mutate: func(plan *SubscriptionPlan) { plan.PriceAmountMicros = nil }},
+		{name: "unsupported currency", mutate: func(plan *SubscriptionPlan) { plan.Currency = "EUR" }},
+		{name: "wrong entitlement type", mutate: func(plan *SubscriptionPlan) { plan.EntitlementType = SubscriptionEntitlementCreditBalance }},
+		{name: "disabled", mutate: func(plan *SubscriptionPlan) { plan.Enabled = false }},
+		{name: "unknown duration", mutate: func(plan *SubscriptionPlan) { plan.DurationUnit = "fortnight" }},
+		{name: "non-positive duration value", mutate: func(plan *SubscriptionPlan) { plan.DurationUnit = SubscriptionDurationMonth; plan.DurationValue = 0 }},
+		{name: "non-positive custom duration", mutate: func(plan *SubscriptionPlan) { plan.CustomSeconds = 0 }},
+		{name: "unknown reset", mutate: func(plan *SubscriptionPlan) { plan.QuotaResetPeriod = "sometimes" }},
+		{name: "non-positive custom reset", mutate: func(plan *SubscriptionPlan) {
+			plan.QuotaResetPeriod = SubscriptionResetCustom
+			plan.QuotaResetCustomSeconds = 0
+		}},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupTimedSubscriptionValuationTestDB(t)
+			userID := 21_601 + index
+			plan := SubscriptionPlan{
+				Id: 21_602 + index, Title: "Invalid Authoritative Timed", Enabled: true,
+				EntitlementType: SubscriptionEntitlementTimed,
+				PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+				DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+				MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+			}
+			test.mutate(&plan)
+			require.NoError(t, DB.Create(&User{Id: userID, Username: "timed-invalid-" + strconv.Itoa(index), Status: common.UserStatusEnabled, AffCode: "timed-invalid-aff-" + strconv.Itoa(index)}).Error)
+			require.NoError(t, DB.Create(&plan).Error)
+			if test.name == "disabled" {
+				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
+			}
+			if test.name == "non-positive duration value" {
+				require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("duration_value", 0).Error)
+			}
+
+			err := DB.Transaction(func(tx *gorm.DB) error {
+				_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+					UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-invalid-" + strconv.Itoa(index),
+					SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "非法权威计划原子性测试",
+				})
+				return grantErr
+			})
+			require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+
+			var subscriptionCount int64
+			require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+			require.Zero(t, subscriptionCount)
+			var grantCount int64
+			require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+			require.Zero(t, grantCount)
+			var persistedPlan SubscriptionPlan
+			require.NoError(t, DB.First(&persistedPlan, plan.Id).Error)
+			require.Zero(t, persistedPlan.ConversionGuardVersion)
+		})
+	}
+}
+
+func TestTimedSubscriptionValuationGrantRejectsZeroCreditPlanAtomically(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	user := User{Id: 21_651, Username: "timed-zero", Status: common.UserStatusEnabled, AffCode: "timed-zero-aff"}
+	plan := SubscriptionPlan{
+		Id: 21_652, Title: "Zero Credit Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 1,
+		MonthlyTokenLimit: 0, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: user.Id, PlanId: plan.Id, IdempotencyKey: "timed-zero-21653",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "零额度计划测试",
+		})
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+	var subscriptionCount int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCount).Error)
+	require.Zero(t, subscriptionCount)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Zero(t, grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantUsesHalfOpenSecondBoundary(t *testing.T) {
+	grant := TimedSubscriptionValuationGrant{
+		Id: 1, SourceType: TimedSubscriptionGrantSourceAdmin,
+		EventStartTime: 100, EventEndTime: 101,
+		ValuationAmountMicros: 1_000_000, ValuationCurrency: "CNY",
+	}
+	subscription := UserSubscription{StartTime: 100, EndTime: 101, TokenLimit: 1}
+
+	atStart, err := adminCalculateTimedSubscriptionValue(subscription, []TimedSubscriptionValuationGrant{grant}, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(1_000_000), atStart.ByCurrency["CNY"].TimeMicros)
+
+	atEnd, err := adminCalculateTimedSubscriptionValue(subscription, []TimedSubscriptionValuationGrant{grant}, 101)
+	require.NoError(t, err)
+	require.Empty(t, atEnd.ByCurrency)
+}
+
+func TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRejectsNewGrant(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_702, Title: "Disabled Timed", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_701, Username: "timed-disabled", Status: common.UserStatusEnabled, AffCode: "timed-disabled-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	request := TimedSubscriptionGrantRequest{
+		UserId: 21_701, PlanId: plan.Id, IdempotencyKey: "timed-disabled-21703",
+		SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "禁用计划重放测试",
+	}
+	var first *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		first, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Update("enabled", false).Error)
+	plan.Enabled = false
+	originalEnd := first.EventEndTime
+	var replay *UserSubscriptionCreationResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var err error
+		replay, err = GrantTimedSubscriptionTx(tx, request)
+		return err
+	}))
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	require.Equal(t, originalEnd, replay.EventEndTime)
+
+	newSource := request
+	newSource.IdempotencyKey = "timed-disabled-21704"
+	newSource.Reason = "禁用计划新授予"
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantTimedSubscriptionTx(tx, newSource)
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrTimedSubscriptionGrantInvalid)
+	var persisted UserSubscription
+	require.NoError(t, DB.First(&persisted, first.Subscription.Id).Error)
+	require.Equal(t, originalEnd, persisted.EndTime)
+	var grantCount int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCount).Error)
+	require.Equal(t, int64(1), grantCount)
+}
+
+func TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_802, Title: "Immutable Timed", Enabled: true,
+		PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		EntitlementType: SubscriptionEntitlementTimed,
+		DurationUnit:    SubscriptionDurationHour, DurationValue: 1,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_801, Username: "timed-immutable", Status: common.UserStatusEnabled, AffCode: "timed-immutable-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		_, err := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
+			UserId: 21_801, PlanId: plan.Id, IdempotencyKey: "timed-immutable-21803",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "不可变授予测试",
+		})
+		return err
+	}))
+	var grant TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&grant).Error)
+	updateErr := DB.Model(&grant).Update("valuation_amount_micros", int64(1)).Error
+	deleteErr := DB.Delete(&grant).Error
+	require.ErrorIs(t, updateErr, ErrTimedSubscriptionGrantImmutable)
+	require.ErrorIs(t, deleteErr, ErrTimedSubscriptionGrantImmutable)
+	firstHookErr := grant.BeforeUpdate(DB)
+	secondHookErr := grant.BeforeUpdate(DB)
+	require.True(t, firstHookErr == secondHookErr, "repeated immutable hook calls must return the same error identity")
+	require.True(t, firstHookErr == ErrTimedSubscriptionGrantImmutable)
+	require.True(t, grant.BeforeDelete(DB) == ErrTimedSubscriptionGrantImmutable)
+	var persisted TimedSubscriptionValuationGrant
+	require.NoError(t, DB.First(&persisted, grant.Id).Error)
+	require.Equal(t, priceMicros, persisted.ValuationAmountMicros)
+}
+
+func setupTimedSubscriptionValuationTestDB(t *testing.T) {
+	t.Helper()
+	oldDB := DB
+	oldLogDB := LOG_DB
+	oldUsingSQLite := common.UsingSQLite
+	oldUsingMySQL := common.UsingMySQL
+	oldUsingPostgreSQL := common.UsingPostgreSQL
+	oldRedisEnabled := common.RedisEnabled
+
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+
+	safeName := strings.NewReplacer("/", "_", " ", "_", ":", "_").Replace(t.Name())
+	db, err := gorm.Open(sqlite.Open("file:"+safeName+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	DB = db
+	LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &Redemption{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
+
+	t.Cleanup(func() {
+		_ = sqlDB.Close()
+		DB = oldDB
+		LOG_DB = oldLogDB
+		common.UsingSQLite = oldUsingSQLite
+		common.UsingMySQL = oldUsingMySQL
+		common.UsingPostgreSQL = oldUsingPostgreSQL
+		common.RedisEnabled = oldRedisEnabled
+		ClearSubscriptionPlanCacheForTest()
+		resetDBTimestampCacheForTest()
+	})
+}

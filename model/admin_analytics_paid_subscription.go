@@ -407,6 +407,7 @@ type adminPaidSubscriptionRow struct {
 	Source            dto.AdminAnalyticsSource
 	SourceAttribution string
 	Value             adminSubscriptionValue
+	TimedValue        *adminTimedSubscriptionValue
 	Active            bool
 	StateMissing      bool
 	StateMismatch     bool
@@ -415,6 +416,75 @@ type adminPaidSubscriptionRow struct {
 	ExcludedAt        int64
 	ExcludedBy        int
 	Order             *SubscriptionOrder
+}
+
+func adminPaidRowAccumulateValues(row adminPaidSubscriptionRow, recognized *adminMoneyAccumulator, token *adminMoneyAccumulator, timeBased *adminMoneyAccumulator) {
+	if row.TimedValue == nil {
+		currency := adminPaidSubscriptionRowCurrency(row)
+		recognized.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		timeBased.addMicros(currency, row.Value.TimeBasedValueMicros)
+		if row.Value.TokenBasedValueAvailable {
+			token.addMicros(currency, row.Value.TokenBasedValueMicros)
+		}
+		return
+	}
+	for currency, value := range row.TimedValue.ByCurrency {
+		recognized.addMicros(currency, value.RecognizedMicros)
+		timeBased.addMicros(currency, value.TimeMicros)
+		if row.TimedValue.TokenAvailable {
+			token.addMicros(currency, value.TokenMicros)
+		}
+	}
+}
+
+func adminPaidRowAccumulateRecognized(row adminPaidSubscriptionRow, accumulator *adminMoneyAccumulator) {
+	if row.TimedValue == nil {
+		accumulator.addMicros(adminPaidSubscriptionRowCurrency(row), row.Value.RecognizedRemainingValueMicros)
+		return
+	}
+	for currency, value := range row.TimedValue.ByCurrency {
+		accumulator.addMicros(currency, value.RecognizedMicros)
+	}
+}
+
+func adminTimedSourcesMatchQuery(value adminTimedSubscriptionValue, sources []dto.AdminAnalyticsSource) bool {
+	if len(sources) == 0 {
+		return true
+	}
+	for _, source := range value.Sources {
+		if adminSourceInSet(source, sources) {
+			return true
+		}
+	}
+	return false
+}
+
+func adminTimedSourceProjection(value adminTimedSubscriptionValue) (dto.AdminAnalyticsSource, string) {
+	switch len(value.Sources) {
+	case 0:
+		return dto.AdminAnalyticsSourceUnknown, adminPaidSubscriptionSourceAttributionMixedOrUnknown
+	case 1:
+		return value.Sources[0], adminPaidSubscriptionSourceAttributionSnapshot
+	default:
+		return dto.AdminAnalyticsSourceUnknown, adminTimedSourceAttributionMixed
+	}
+}
+
+func adminTimedGrantsBySubscriptionID(subscriptionIDs []int) (map[int][]TimedSubscriptionValuationGrant, error) {
+	result := make(map[int][]TimedSubscriptionValuationGrant)
+	ids := adminUniquePositiveInts(subscriptionIDs)
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var grants []TimedSubscriptionValuationGrant
+	if err := DB.Where("user_subscription_id IN ?", ids).Order("created_at asc, id asc").Find(&grants).Error; err != nil {
+		return nil, err
+	}
+	for i := range grants {
+		grant := grants[i]
+		result[grant.UserSubscriptionId] = append(result[grant.UserSubscriptionId], grant)
+	}
+	return result, nil
 }
 
 type adminOrderLookupKey struct {
@@ -546,6 +616,7 @@ func loadAdminPaidSubscriptionValueRows(query AdminAnalyticsQuery, filterSubscri
 func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAnalyticsQuery) ([]adminPaidSubscriptionRow, error) {
 	userIDs := make([]int, 0, len(subs))
 	planIDs := make([]int, 0, len(subs))
+	subscriptionIDs := make([]int, 0, len(subs))
 	creditSubscriptionIDs := make([]int, 0, len(subs))
 	timedUserIDs := make([]int, 0, len(subs))
 	timedPlanIDs := make([]int, 0, len(subs))
@@ -555,6 +626,7 @@ func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAna
 		if subs[i].EntitlementType == SubscriptionEntitlementCreditBalance {
 			creditSubscriptionIDs = append(creditSubscriptionIDs, subs[i].Id)
 		} else {
+			subscriptionIDs = append(subscriptionIDs, subs[i].Id)
 			timedUserIDs = append(timedUserIDs, subs[i].UserId)
 			timedPlanIDs = append(timedPlanIDs, subs[i].PlanId)
 		}
@@ -564,6 +636,10 @@ func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAna
 		return nil, err
 	}
 	plans, err := adminPlansByID(planIDs)
+	if err != nil {
+		return nil, err
+	}
+	grantsBySubscriptionID, err := adminTimedGrantsBySubscriptionID(subscriptionIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -589,9 +665,6 @@ func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAna
 	rows := make([]adminPaidSubscriptionRow, 0, len(subs))
 	for i := range subs {
 		sub := subs[i]
-		if adminIsNonSalesGiftSubscription(sub) {
-			continue
-		}
 		user, ok := users[sub.UserId]
 		if !ok || !adminPaidUserMatchesQuery(user, query) {
 			continue
@@ -630,30 +703,40 @@ func adminBuildPaidRowsFromSubscriptions(subs []UserSubscription, query AdminAna
 			})
 			continue
 		}
-		if plan.PriceAmount <= 0 {
+		if sub.EntitlementType != SubscriptionEntitlementTimed || adminIsNonSalesGiftSubscription(sub) {
 			continue
 		}
-		source := normalizeAdminSubscriptionSource(sub.GrantReason, sub.Source)
-		if len(query.Sources) > 0 && !adminSourceInSet(source, query.Sources) {
+		timedValue, calcErr := adminCalculateTimedSubscriptionValue(sub, grantsBySubscriptionID[sub.Id], query.SnapshotAt)
+		if calcErr != nil {
+			return nil, calcErr
+		}
+		if !adminTimedSourcesMatchQuery(timedValue, query.Sources) {
 			continue
 		}
-		value, err := adminRecognizedRemainingValue(sub, plan, query.SnapshotAt)
-		if err != nil {
-			return nil, err
+		source, sourceAttribution := adminTimedSourceProjection(timedValue)
+		remainingSeconds := sub.EndTime - query.SnapshotAt
+		if remainingSeconds < 0 {
+			remainingSeconds = 0
 		}
 		rows = append(rows, adminPaidSubscriptionRow{
 			Subscription:      sub,
 			Plan:              plan,
 			User:              user,
 			Source:            source,
-			SourceAttribution: adminPaidSourceAttribution(sub),
-			Value:             value,
-			Active:            true,
-			Excluded:          excluded.UserID > 0,
-			ExcludedReason:    excluded.Reason,
-			ExcludedAt:        excluded.ExcludedAt,
-			ExcludedBy:        excluded.ExcludedBy,
-			Order:             orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
+			SourceAttribution: sourceAttribution,
+			Value: adminSubscriptionValue{
+				TokenBasedValueAvailable: timedValue.TokenAvailable,
+				TimeBasedValueAvailable:  true,
+				ValuationBasis:           adminTimedValuationBasisGrantTimeline,
+				RemainingSeconds:         remainingSeconds,
+			},
+			TimedValue:     &timedValue,
+			Active:         true,
+			Excluded:       excluded.UserID > 0,
+			ExcludedReason: excluded.Reason,
+			ExcludedAt:     excluded.ExcludedAt,
+			ExcludedBy:     excluded.ExcludedBy,
+			Order:          orders[adminOrderLookupKey{UserID: sub.UserId, PlanID: sub.PlanId}],
 		})
 	}
 	return rows, nil
@@ -774,6 +857,7 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 	sourceGroups := map[adminPaidSourceKey]*adminPaidSourceGroup{}
 	subscriptionItems := make([]dto.AdminPaidSubscriptionValueSubscription, 0, len(rows))
 
+	unknownTimedSubscriptionCount := 0
 	for i := range rows {
 		row := rows[i]
 		if row.Value.SnapshotSemantics == adminPaidSubscriptionSnapshotSemanticsCurrentOnly {
@@ -781,19 +865,14 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 		}
 		currency := adminPaidSubscriptionRowCurrency(row)
 		if row.Excluded {
-			excluded.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+			adminPaidRowAccumulateRecognized(row, &excluded)
 		}
 		main := adminIncludeInMain(row.Excluded, query.ExcludedMode) && row.Active
 		if main {
-			recognized.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+			adminPaidRowAccumulateValues(row, &recognized, &token, &timeBased)
 			exact.addMicros(currency, row.Value.ExactCostMicros)
 			estimated.addMicros(currency, row.Value.EstimatedCostMicros)
-			if row.Value.TimeBasedValueAvailable {
-				timeBased.addMicros(currency, row.Value.TimeBasedValueMicros)
-			}
-			if row.Value.TokenBasedValueAvailable {
-				token.addMicros(currency, row.Value.TokenBasedValueMicros)
-			} else {
+			if !row.Value.TokenBasedValueAvailable {
 				tokenUnavailableCount++
 			}
 			var ok bool
@@ -803,6 +882,9 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 			}
 			if row.StateMissing {
 				stateMissingCount++
+			}
+			if row.TimedValue != nil && row.TimedValue.Unknown {
+				unknownTimedSubscriptionCount++
 			}
 			activePaidSubscriptionCount++
 			mainUserIDs[row.User.Id] = struct{}{}
@@ -861,6 +943,7 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 			ActivePaidUserCount:                len(mainUserIDs),
 			TokenValueUnavailableCount:         tokenUnavailableCount,
 			UnknownCostCredit:                  unknownCostCredit,
+			UnknownTimedSubscriptionCount:      unknownTimedSubscriptionCount,
 			CreditValuationStateMissingCount:   stateMissingCount,
 		},
 		Users:         users,
@@ -903,18 +986,12 @@ func adminAccumulatePaidUserGroup(groups map[int]*adminPaidUserGroup, row adminP
 	}
 	currency := adminPaidSubscriptionRowCurrency(row)
 	if row.Excluded {
-		group.WouldHave.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		adminPaidRowAccumulateRecognized(row, &group.WouldHave)
 		group.WouldHaveCount++
 	} else if main {
-		group.Recognized.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		adminPaidRowAccumulateValues(row, &group.Recognized, &group.Token, &group.TimeBased)
 		group.Exact.addMicros(currency, row.Value.ExactCostMicros)
 		group.Estimated.addMicros(currency, row.Value.EstimatedCostMicros)
-		if row.Value.TokenBasedValueAvailable {
-			group.Token.addMicros(currency, row.Value.TokenBasedValueMicros)
-		}
-		if row.Value.TimeBasedValueAvailable {
-			group.TimeBased.addMicros(currency, row.Value.TimeBasedValueMicros)
-		}
 		var ok bool
 		group.UnknownCredit, ok = checkedAddInt64(group.UnknownCredit, row.Value.UnknownCredit)
 		if !ok {
@@ -988,18 +1065,12 @@ func adminAccumulatePaidPlanGroup(groups map[int]*adminPaidPlanGroup, row adminP
 	}
 	currency := adminPaidSubscriptionRowCurrency(row)
 	if row.Excluded {
-		group.ExcludedValue.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		adminPaidRowAccumulateRecognized(row, &group.ExcludedValue)
 		group.ExcludedCount++
 	} else if main {
-		group.Recognized.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		adminPaidRowAccumulateValues(row, &group.Recognized, &group.Token, &group.TimeBased)
 		group.Exact.addMicros(currency, row.Value.ExactCostMicros)
 		group.Estimated.addMicros(currency, row.Value.EstimatedCostMicros)
-		if row.Value.TokenBasedValueAvailable {
-			group.Token.addMicros(currency, row.Value.TokenBasedValueMicros)
-		}
-		if row.Value.TimeBasedValueAvailable {
-			group.TimeBased.addMicros(currency, row.Value.TimeBasedValueMicros)
-		}
 		var ok bool
 		group.UnknownCredit, ok = checkedAddInt64(group.UnknownCredit, row.Value.UnknownCredit)
 		if !ok {
@@ -1070,6 +1141,38 @@ type adminPaidSourceGroup struct {
 }
 
 func adminAccumulatePaidSourceGroup(groups map[adminPaidSourceKey]*adminPaidSourceGroup, row adminPaidSubscriptionRow, main bool) error {
+	if row.TimedValue != nil {
+		seenSources := map[dto.AdminAnalyticsSource]struct{}{}
+		for sourceCurrency, value := range row.TimedValue.BySourceCurrency {
+			key := adminPaidSourceKey{Source: sourceCurrency.Source, GrantReason: string(sourceCurrency.Source)}
+			group := groups[key]
+			if group == nil {
+				group = &adminPaidSourceGroup{Key: key, MainUserIDs: map[int]struct{}{}, Attribution: adminPaidSubscriptionSourceAttributionSnapshot}
+				groups[key] = group
+			}
+			recognizedMicros := value.TimeMicros
+			total := row.TimedValue.ByCurrency[sourceCurrency.Currency]
+			if row.TimedValue.TokenAvailable && total.TokenMicros < total.TimeMicros {
+				recognizedMicros = value.TokenMicros
+			}
+			if row.Excluded {
+				group.ExcludedValue.addMicros(sourceCurrency.Currency, recognizedMicros)
+			} else if main {
+				group.Recognized.addMicros(sourceCurrency.Currency, recognizedMicros)
+			}
+			seenSources[sourceCurrency.Source] = struct{}{}
+		}
+		for source := range seenSources {
+			group := groups[adminPaidSourceKey{Source: source, GrantReason: string(source)}]
+			if row.Excluded {
+				group.ExcludedCount++
+			} else if main {
+				group.MainCount++
+				group.MainUserIDs[row.User.Id] = struct{}{}
+			}
+		}
+		return nil
+	}
 	key := adminPaidSourceKey{Source: row.Source, GrantReason: row.Subscription.GrantReason}
 	group := groups[key]
 	if group == nil {
@@ -1126,43 +1229,73 @@ func adminPaidSubscriptionItem(row adminPaidSubscriptionRow) dto.AdminPaidSubscr
 	subscriptionID := row.Subscription.Id
 	currency := adminPaidSubscriptionRowCurrency(row)
 	item := dto.AdminPaidSubscriptionValueSubscription{
-		SubscriptionID:           row.Subscription.Id,
-		UserID:                   row.User.Id,
-		Username:                 row.User.Username,
-		PlanID:                   row.Plan.Id,
-		PlanName:                 row.Plan.Title,
-		Source:                   row.Source,
-		GrantReason:              row.Subscription.GrantReason,
-		PlanPrice:                adminPaidPlanPriceMoneyAmount(row.Plan),
-		StartTime:                row.Subscription.StartTime,
-		EndTime:                  row.Subscription.EndTime,
-		RemainingSeconds:         row.Value.RemainingSeconds,
-		TokenLimit:               row.Subscription.TokenLimit,
-		TokenUsed:                row.Subscription.TokenUsed,
-		AvailableCredit:          row.Value.AvailableCredit,
-		UnknownCostCredit:        row.Value.UnknownCredit,
-		NextResetTime:            row.Subscription.NextResetTime,
-		RecognizedRemainingValue: adminPaidMicrosMoneyAmount(currency, row.Value.RecognizedRemainingValueMicros),
-		ExactRemainingValue:      adminPaidMicrosMoneyAmount(currency, row.Value.ExactCostMicros),
-		EstimatedRemainingValue:  adminPaidMicrosMoneyAmount(currency, row.Value.EstimatedCostMicros),
-		ValuationBasis:           row.Value.ValuationBasis,
-		ValuationConfidence:      row.Value.ValuationConfidence,
-		ValuationStateVersion:    row.Value.StateVersion,
-		ValuationUpdatedAt:       row.Value.UpdatedAt,
-		SnapshotSemantics:        row.Value.SnapshotSemantics,
-		EntitlementType:          row.Subscription.EntitlementType,
-		SourceAttribution:        row.SourceAttribution,
-		Excluded:                 row.Excluded,
-		ExcludedReason:           row.ExcludedReason,
-		Drilldown:                &dto.AdminAnalyticsDrilldownTarget{Kind: "paid_subscription_value_subscription", UserID: &userID, PlanID: &planID, SubscriptionID: &subscriptionID, Tab: "paid-subscription-value"},
+		SubscriptionID:          row.Subscription.Id,
+		UserID:                  row.User.Id,
+		Username:                row.User.Username,
+		PlanID:                  row.Plan.Id,
+		PlanName:                row.Plan.Title,
+		EntitlementType:         row.Subscription.EntitlementType,
+		Source:                  row.Source,
+		GrantReason:             row.Subscription.GrantReason,
+		PlanPrice:               adminPaidPlanPriceMoneyAmount(row.Plan),
+		StartTime:               row.Subscription.StartTime,
+		EndTime:                 row.Subscription.EndTime,
+		RemainingSeconds:        row.Value.RemainingSeconds,
+		TokenLimit:              row.Subscription.TokenLimit,
+		TokenUsed:               row.Subscription.TokenUsed,
+		AvailableCredit:         row.Value.AvailableCredit,
+		UnknownCostCredit:       row.Value.UnknownCredit,
+		NextResetTime:           row.Subscription.NextResetTime,
+		ExactRemainingValue:     adminPaidMicrosMoneyAmount(currency, row.Value.ExactCostMicros),
+		EstimatedRemainingValue: adminPaidMicrosMoneyAmount(currency, row.Value.EstimatedCostMicros),
+		ValuationBasis:          row.Value.ValuationBasis,
+		ValuationConfidence:     row.Value.ValuationConfidence,
+		ValuationStateVersion:   row.Value.StateVersion,
+		ValuationUpdatedAt:      row.Value.UpdatedAt,
+		SnapshotSemantics:       row.Value.SnapshotSemantics,
+		SourceAttribution:       row.SourceAttribution,
+		Excluded:                row.Excluded,
+		ExcludedReason:          row.ExcludedReason,
+		Drilldown:               &dto.AdminAnalyticsDrilldownTarget{Kind: "paid_subscription_value_subscription", UserID: &userID, PlanID: &planID, SubscriptionID: &subscriptionID, Tab: "paid-subscription-value"},
 	}
-	if row.Value.TokenBasedValueAvailable {
-		value := adminPaidMicrosMoneyAmount(currency, row.Value.TokenBasedValueMicros)
-		item.TokenBasedValue = &value
-	}
-	if row.Value.TimeBasedValueAvailable {
-		value := adminPaidMicrosMoneyAmount(currency, row.Value.TimeBasedValueMicros)
-		item.TimeBasedValue = &value
+	if row.TimedValue == nil {
+		recognized := adminPaidMicrosMoneyAmount(currency, row.Value.RecognizedRemainingValueMicros)
+		item.RecognizedRemainingValue = &recognized
+		if row.Value.TokenBasedValueAvailable {
+			value := adminPaidMicrosMoneyAmount(currency, row.Value.TokenBasedValueMicros)
+			item.TokenBasedValue = &value
+		}
+		if row.Value.TimeBasedValueAvailable {
+			value := adminPaidMicrosMoneyAmount(currency, row.Value.TimeBasedValueMicros)
+			item.TimeBasedValue = &value
+		}
+	} else {
+		recognized := adminMoneyAccumulator{}
+		token := adminMoneyAccumulator{}
+		timeBased := adminMoneyAccumulator{}
+		adminPaidRowAccumulateValues(row, &recognized, &token, &timeBased)
+		item.RecognizedRemainingValueByCurrency = recognized.breakdown()
+		item.TimeBasedValueByCurrency = timeBased.breakdown()
+		if row.TimedValue.TokenAvailable {
+			item.TokenBasedValueByCurrency = token.breakdown()
+		}
+		if len(row.TimedValue.ByCurrency) == 1 {
+			for valueCurrency, value := range row.TimedValue.ByCurrency {
+				timeValue := adminPaidMicrosMoneyAmount(valueCurrency, value.TimeMicros)
+				item.TimeBasedValue = &timeValue
+				recognizedValue := adminPaidMicrosMoneyAmount(valueCurrency, value.RecognizedMicros)
+				item.RecognizedRemainingValue = &recognizedValue
+				if row.TimedValue.TokenAvailable {
+					tokenValue := adminPaidMicrosMoneyAmount(valueCurrency, value.TokenMicros)
+					item.TokenBasedValue = &tokenValue
+				}
+			}
+		}
+		item.ValuationConfidence = TimedSubscriptionValuationConfidenceExact
+		if row.TimedValue.Unknown {
+			item.ValuationConfidence = "unknown"
+		}
+		item.ValuationWarnings = append([]string(nil), row.TimedValue.Warnings...)
 	}
 	if row.Order != nil {
 		orderID := row.Order.Id
@@ -1339,11 +1472,18 @@ func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, 
 	return nil
 }
 
+func adminPaidSubscriptionItemRecognizedMicros(item dto.AdminPaidSubscriptionValueSubscription, currency string) (int64, error) {
+	if item.RecognizedRemainingValue != nil {
+		return adminMoneyAmountMicrosForCurrency(*item.RecognizedRemainingValue, currency)
+	}
+	return adminAmountMicrosInBreakdown(item.RecognizedRemainingValueByCurrency, currency)
+}
+
 func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) error {
 	recognizedMicros := make(map[int]int64, len(items))
 	if query.SortBy == "recognized_remaining_value" {
 		for i := range items {
-			amount, err := adminMoneyAmountMicrosForCurrency(items[i].RecognizedRemainingValue, query.Currency)
+			amount, err := adminPaidSubscriptionItemRecognizedMicros(items[i], query.Currency)
 			if err != nil {
 				return err
 			}

@@ -156,13 +156,7 @@ func DeleteRedemption(c *gin.Context) {
 func UpdateRedemption(c *gin.Context) {
 	statusOnly := c.Query("status_only")
 	redemption := model.Redemption{}
-	err := c.ShouldBindJSON(&redemption)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	cleanRedemption, err := model.GetRedemptionById(redemption.Id)
-	if err != nil {
+	if err := c.ShouldBindJSON(&redemption); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -171,25 +165,29 @@ func UpdateRedemption(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 			return
 		}
-		if err := applyRedemptionUpdate(cleanRedemption, redemption); err != nil {
+		redemption.Type = normalizeRedemptionCreateType(redemption.Type)
+		if redemption.Type == model.RedemptionTypeSubscription {
+			if _, err := validateRedemptionSubscriptionPlan(redemption.PlanId); err != nil {
+				common.ApiError(c, err)
+				return
+			}
+		} else if _, err := validateRedemptionWalletCents(redemption.Quota); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-	}
-	if statusOnly != "" {
-		cleanRedemption.Status = redemption.Status
-	}
-	err = cleanRedemption.Update()
-	if err != nil {
+		if err := redemption.Update(); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+	} else if err := redemption.UpdateStatus(redemption.Status); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    cleanRedemption,
+		"data":    redemption,
 	})
-	return
 }
 
 func DeleteInvalidRedemption(c *gin.Context) {

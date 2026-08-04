@@ -54,6 +54,11 @@ func resetDBTimestampCacheForTest() {
 	dbTimestampCacheUnixNano.Store(0)
 }
 
+// ClearDBTimestampCacheForTest clears process-wide database time state between isolated test databases.
+func ClearDBTimestampCacheForTest() {
+	resetDBTimestampCacheForTest()
+}
+
 // getDBTimestampStrictTx returns the database UTC time in whole UNIX seconds.
 // Unlike getDBTimestampTx it never falls back to an application clock.
 func getDBTimestampStrictTx(tx *gorm.DB) (int64, error) {

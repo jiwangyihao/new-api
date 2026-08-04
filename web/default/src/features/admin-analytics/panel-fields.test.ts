@@ -154,6 +154,8 @@ test('paid subscription value records expose valuation and order traceability fi
       'adminAnalytics.fields.tokenUsed',
       'adminAnalytics.fields.nextResetTime',
       'adminAnalytics.fields.valuationBasis',
+      'adminAnalytics.fields.valuationConfidence',
+      'adminAnalytics.fields.valuationWarnings',
       'adminAnalytics.fields.sourceAttribution',
       'adminAnalytics.fields.possibleOrderId',
       'adminAnalytics.fields.paymentProvider',
@@ -161,6 +163,69 @@ test('paid subscription value records expose valuation and order traceability fi
       'adminAnalytics.fields.orderRecordedAmount',
       'adminAnalytics.fields.excludedReason',
     ]
+  )
+})
+
+test('timed subscription value records render per-currency values when singular amounts are null', () => {
+  const item = {
+    subscription_id: 4,
+    user_id: 2,
+    username: 'multi-currency-user',
+    plan_id: 3,
+    plan_name: 'Timed Pro',
+    entitlement_type: 'timed',
+    source: 'admin',
+    grant_reason: 'after_sales',
+    plan_price: cny(40),
+    start_time: 1,
+    end_time: 2,
+    remaining_seconds: 3,
+    token_limit: 100,
+    token_used: 50,
+    next_reset_time: 6,
+    token_based_value: null,
+    time_based_value: null,
+    recognized_remaining_value: null,
+    token_based_value_by_currency: [cny(12), { amount: 6, currency: 'USD' }],
+    time_based_value_by_currency: [cny(20), { amount: 10, currency: 'USD' }],
+    recognized_remaining_value_by_currency: [
+      cny(10),
+      { amount: 5, currency: 'USD' },
+    ],
+    valuation_basis: 'minimum_of_token_time',
+    valuation_confidence: 'exact',
+    valuation_warnings: ['overlapping_grants'],
+    source_attribution: 'mixed_grants',
+    excluded: false,
+    excluded_reason: '',
+  } as unknown as PaidSubscriptionValueSubscription
+
+  const values = Object.fromEntries(
+    paidSubscriptionValueSubscriptionCardValues(item).map((value) => [
+      value.labelKey,
+      value.value ?? value.valueKey,
+    ])
+  )
+
+  assert.equal(
+    values['adminAnalytics.fields.recognizedRemainingValue'],
+    '¥10.00, $5.00'
+  )
+  assert.equal(
+    values['adminAnalytics.metrics.tokenBasedValue'],
+    '¥12.00, $6.00'
+  )
+  assert.equal(
+    values['adminAnalytics.metrics.timeBasedValue'],
+    '¥20.00, $10.00'
+  )
+  assert.equal(
+    values['adminAnalytics.fields.valuationConfidence'],
+    'adminAnalytics.valuationConfidence.exact'
+  )
+  assert.equal(
+    values['adminAnalytics.fields.valuationWarnings'],
+    'overlapping_grants'
   )
 })
 

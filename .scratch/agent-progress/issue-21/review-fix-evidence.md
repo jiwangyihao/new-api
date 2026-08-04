@@ -1,0 +1,91 @@
+# Issue #21 Standards 修复证据
+
+## 冻结输入
+
+- Standards 评审：`C:/Users/34404/AppData/Local/Temp/new-api-issue21-standards-final-review.md`，结论为 Findings 1–4 阻塞。
+- 冻结实现 HEAD：`547512242578ec198034d322875c5485735b247a`，初始工作树 staged/unstaged/untracked 均为 0。
+- 父集成 HEAD：`2260cd2f6369d9cd9e1bea2ac93349b45c7b0ccc`，父集成工作树 staged/unstaged/untracked 均为 0。
+- #22 集成提交说明：Issue #22 记录 `ac830971a32e24f5b88c42b312d62fffd4229e21`；当前父集成 HEAD 已在其后继续前进。
+
+## 父集成合并恢复安全点
+
+- 合并提交：`9cee335ddb0638af7b5bb9229d5d2a03db5a0712`，父集成 HEAD `2260cd2f6369d9cd9e1bea2ac93349b45c7b0ccc`。
+- 冲突：23 个冲突块按冻结所有权解决；保留 #22 的通用整数 `adminMoneyAccumulator`、Credit/current_only DTO/状态/排序与前端 BigInt 语义，叠加 #21 的 timed `*_by_currency`、calculator、warning/source 和现有 timed UI。
+- 后端验证：#22 权威 micros 排序与 #21 timed 五接口 tracer 同批通过；nullable recognized singular 在跨币种时从 by-currency 读取权威 micros。
+- 前端验证：`panel-fields` 11/11 PASS；`bun run typecheck` PASS；Credit 不适用与 timed 跨币种展示语义均保留。
+- 清洁度：冲突 0，staged 0、unstaged 0、untracked 0；cached diff check 通过。
+
+## 已读取合同
+
+- Issue #19、#21、#22。
+- `docs/agents/credit-operational-value-execution.md`。
+- Wave 1 contract/acceptance、Issue #21 instruction/acceptance。
+- `.scratch/agent-progress/issue-21/{status,evidence,contract}.md`。
+- `CONTEXT.md`、ADR 0002、2026-08-02 spec/plan 的金额、timed、锁/幂等、错误与测试章节。
+- `skill://diagnosing-bugs`、`skill://tdd`、`skill://codebase-design`、Orca orchestration/CLI 实时指南。
+- 父集成 #22 的 `model/admin_analytics_paid_subscription.go`、`dto/admin_analytics.go`、权威 micros 排序与 current_only 相关测试接缝。
+
+## RED / GREEN 证据
+
+### Finding 1：并发同源重放合法串行化
+
+- RED seam：新增 `TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes`，使用 `t.TempDir()` 文件型 SQLite、WAL、`busy_timeout(5000)`、`SetMaxOpenConns(4)` 与两个独立事务；测试侧 GORM query callback/barrier 强制旧实现的两个事务均在计划锁前完成“无 grant” replay read，再同时放行，不使用 `sleep` 或生产 test hook。
+- RED 命令：`gofmt -w model/timed_subscription_valuation_concurrency_test.go && go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1 -v`。
+- RED 精确症状：一个事务在 `model/subscription.go:880` 插入 `user_subscriptions` 时返回 `database is locked (5) (SQLITE_BUSY)`；测试在并发 outcome 的 `require.NoError` 失败，成功结果数为 1、错误结果数为 1。旧实现因此没有给调用者两个成功的同源重放结果。
+- 根因：`GrantTimedSubscriptionTx` 在权威计划行锁之前读取 grant 身份。两个连接都可观察“来源不存在”，再并发创建/续期；SQLite 在写升级处泄漏方言锁错误，其他方言还可能在唯一约束处失败。
+- 最小 GREEN：复用 `SubscriptionPlan.conversion_guard_version` 既有数据库 guard；入口先对目标计划行执行原子自增写，成功后再读取 replay identity，随后读取数据库计划资格并创建权益/grant。锁序现在为 `SubscriptionPlan guard -> existing grant identity -> target UserSubscription -> new grant`。未新增进程内 mutex、retry wrapper、savepoint 或泛化框架。
+- GREEN 单次：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1 -v` → PASS。
+- GREEN 重复：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=10` → PASS。
+- 领域回归：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` → PASS，覆盖参数 mismatch、disabled 已提交来源重放/新来源拒绝、事务回滚、续期与不可变性既有合同。
+- 竞态：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1` → PASS。
+- SQLite 结论：两个调用均成功，返回同一 subscription/window；最终 `user_subscriptions=1`、`timed_subscription_valuation_grants=1`，只续期一次，未泄漏 `UNIQUE constraint` 或 `SQLITE_BUSY`。
+- MySQL 5.7/PostgreSQL 9.6：未运行；三库零 SKIP 仍归 Issue #27。
+- Finding 1 安全提交：`b10855df4 fix(subscription): 串行化计时授予同源重放`。
+
+### Finding 2：权威整数 micros 聚合与排序
+
+- 保留 #22 已验收的 users/subscriptions/plans/sources 四列表 `amount_micros` 解析、升降序与业务主键 tie-breaker；未修改 sorter、DTO 或 invitation analytics。
+- RED：`TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros` 直接构造一条 non-timed/Credit row，其权威 recognized/time/token 为 `9,007,199,254,740,993` micros，但兼容 float 只能表达 `9,007,199,254,740,992`；再组合一条 7 micros timed row，同时检查 summary/users/subscriptions/plans/sources。
+- RED 命令：`gofmt -w model/admin_analytics_paid_subscription_test.go && go test ./model -run '^TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros$' -count=1`。
+- RED 精确症状：summary 期望 `9007199254741000`，实际 `9007199254740999`，证明 `TimedValue == nil` 分支经 `float64` 丢失 1 micros 后再与 timed 整数相加。
+- 最小 GREEN：`adminPaidRowAccumulateValues` 与 `adminPaidRowAccumulateRecognized` 的 non-timed 分支改为按 `adminPaidSubscriptionRowCurrency(row)` 调用 `addMicros`，分别读取 `RecognizedRemainingValueMicros`、`TimeBasedValueMicros`、`TokenBasedValueMicros`。timed 分支保持整数接线，通用 accumulator/sorter/DTO 不变。
+- GREEN 单测：`go test ./model -run '^TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros$' -count=1` → PASS。
+- 组合验证：`go test ./model -run '^(TestPaidSubscriptionValue(RowAggregationUsesAuthoritativeMicros|RecognizedRemainingSortUsesAuthoritativeMicros|UsesTimedGrantTimelineAcrossFiveViews)|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)$' -count=1` → PASS。
+- 组合结果：Credit frozen tracer 仍为 `32,000,000` CNY micros、available 800、active count 1；timed CNY/USD 五接口与 nullable singular 合同保持；precision boundary 五接口聚合精确。
+- Finding 2 安全提交：`543b8297f fix(analytics): 使用权威 micros 聚合剩余价值`。
+
+### Finding 3：timed micros 加法溢出关闭
+
+- RED：`TestTimedSubscriptionValueChecksMicrosAggregationOverflow` 由同币种连续 segment 构造 `MaxInt64` 后再累加 1 micros；旧实现返回 `nil` error，证明 `tokenMicros += futureMicros` 与 currency/source accumulator 的原生 `int64 +=` 会静默回绕。
+- RED 命令：`go test ./model -run '^TestTimedSubscriptionValueChecksMicrosAggregationOverflow$' -count=1`；精确失败为 `Expected error with "credit_valuation_overflow" in chain but got nil`。
+- 最小 GREEN：只在 `adminCalculateTimedSubscriptionValue` 将 current+future token、currency time/token、source time/token 六处累加改为现有 `checkedAddInt64`；失败统一返回空 `adminTimedSubscriptionValue` 与既有 `ErrCreditValuationOverflow`，未修改 DTO/API 或非 timed 路径。
+- 边界：同币种多 segment 正好累加至 `math.MaxInt64` 成功且 currency/source recognized 精确；下一 micros 稳定失败，不返回负数、截断或 unknown。
+- 五接口：`TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow` 使用一条 timed 权益、两条首尾相接 grant 形成 CNY `MaxInt64 + 1`，summary/users/subscriptions/plans/sources 均 `errors.Is(ErrCreditValuationOverflow)` 且响应为零值，无部分 totals。
+- GREEN/重复命令：`go test ./model -run '^(TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow)$' -count=10` → PASS。
+- 差异检查：`git diff --check` → 无输出。
+- Finding 3 实现提交：`a9752f218 fix(analytics): 关闭计时金额累加溢出`；其后仅收敛同等行为的五接口夹具并回填本证据。
+
+### Finding 4：不可变 hook 稳定 sentinel/code
+
+- RED：扩展 `TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete`，要求真实 SQLite update/delete 均 `errors.Is(ErrTimedSubscriptionGrantImmutable)`，重复调用 `BeforeUpdate` 返回相同 error identity，`BeforeDelete` 返回同一 sentinel；旧实现因该包级 sentinel 不存在而编译失败。
+- RED 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=1`；精确失败为四处 `undefined: ErrTimedSubscriptionGrantImmutable`。
+- 最小 GREEN：定义包级 `ErrTimedSubscriptionGrantImmutable = errors.New("timed_subscription_grant_immutable")`；`BeforeUpdate` 与 `BeforeDelete` 均直接返回该 sentinel。无普通 HTTP update/delete 入口，因此无需新增 controller 文本分支或额外 API 映射；sentinel 文本本身是稳定 code。
+- GREEN：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=1` → PASS。
+- 重复验证：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=10` → PASS；真实数据库失败后原 grant 的 `valuation_amount_micros` 保持 `40,000,000`。
+- LSP：`model/timed_subscription_valuation.go` diagnostics → `OK`；`git diff --check` → 无输出。
+- Finding 4 安全提交：`572c15a78 fix(subscription): 稳定计时授予不可变错误`。
+
+## 最终窄门禁（2026-08-04）
+
+- 并发重复：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=10` → PASS（`go test: 1 packages ok`）。
+- 窄 race：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1` → PASS（`go test: 1 packages ok`）。
+- 四项 model + Credit/current_only + timed 组合：`go test ./model -run '^(TestTimedSubscriptionValuationGrant|TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow|TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros|TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros|TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning)$' -count=1` → PASS。
+- Controller 五接口/timed grant：`go test ./controller -run '^(TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestPaidSubscriptionValueEndpointsReturnPanelEnvelope|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$' -count=1` → PASS。
+- model/service/controller 组合窄门禁：`go test ./model ./service ./controller -run '^(TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning|TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews|TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros|TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros|TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow|TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance|TestSubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure|TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|TestCreditValuationRequestFinalizesSameTargetIdempotently|TestSubscriptionBillingPreConsumesEstimatedTokens|TestSubscriptionBillingSettleAvoidsHotSubscriptionRead|TestSettleBillingWithInputDoesNotUsePreConsumeQuotaWhenEstimateMissing|TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve|TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$' -count=1` → PASS（`go test: 3 packages ok`）。
+- 组合事实保持：Credit recognized=`32,000,000` micros CNY、available=800、active count=1；timed CNY/USD 五接口逐币种对账，跨币种 singular 为 null；current_only 结构化 warning 保持。
+- 最终业务 HEAD：`572c15a78ebf5a1c2872568ebf2c70d8cfb138c9`；实现提交链未 amend 或改写。
+## 数据库范围
+
+- SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。
+- MySQL 5.7：未运行，三库零 SKIP 归 Issue #27。
+- PostgreSQL 9.6：未运行，三库零 SKIP 归 Issue #27。

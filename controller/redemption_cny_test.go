@@ -18,7 +18,7 @@ import (
 func setupRedemptionCNYTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Redemption{}, &model.Log{}, &model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationRewardEvent{}))
+	require.NoError(t, db.AutoMigrate(&model.Redemption{}, &model.Log{}, &model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}, &model.InvitationRewardEvent{}))
 
 	originalQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 500000
@@ -178,6 +178,29 @@ func TestUpdateSubscriptionRedemptionPreservesSnapshotWhenPlanUnchanged(t *testi
 	assert.Equal(t, "CNY", saved.Currency)
 }
 
+func TestUpdateRedemptionStatusOnlyDoesNotBackfillMissingSnapshot(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	redemption := model.Redemption{
+		Id: 9582, UserId: 1, Name: "legacy status only", Key: "legacy-status-only",
+		Type: model.RedemptionTypeSubscription, PlanId: 999999,
+		Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, model.DB.Create(&redemption).Error)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/redemption/?status_only=true", map[string]any{
+		"id": redemption.Id, "status": common.RedemptionCodeStatusDisabled,
+	}, 1)
+
+	UpdateRedemption(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var saved model.Redemption
+	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusDisabled, saved.Status)
+	assert.Empty(t, saved.FulfillmentSnapshot)
+	assert.Zero(t, saved.FulfillmentSubscriptionId)
+}
+
 func TestUpdateUsedSubscriptionRedemptionRejectsSnapshotMutation(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 	oldCode := "used-snapshot-old-plan"
@@ -200,8 +223,10 @@ func TestRedeemSubscriptionCodeCreatesUserSubscription(t *testing.T) {
 	userID := 9604
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_plan", Quota: 1000, Status: common.UserStatusEnabled}).Error)
 	code := "redeem-subscription"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9605, Title: "Redeem Subscription", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &code}).Error)
-	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "sub", Key: "sub-key", Type: model.RedemptionTypeSubscription, PlanId: 9605, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9605, Title: "Redeem Subscription", EntitlementType: model.SubscriptionEntitlementTimed, PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, QuotaResetPeriod: model.SubscriptionResetNever, BusinessCode: &code}).Error)
+	redemption := &model.Redemption{UserId: 1, Name: "sub", Key: "sub-key", Type: model.RedemptionTypeSubscription, PlanId: 9605, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
+	require.NoError(t, redemption.Insert())
 
 	result, err := model.Redeem("sub-key", userID, model.RedemptionModeTimed)
 
@@ -285,8 +310,10 @@ func TestRedeemSubscriptionCodeResponseIncludesPlanResult(t *testing.T) {
 	userID := 9609
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_plan_response", Status: common.UserStatusEnabled}).Error)
 	code := "redeem-response"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9610, Title: "Response Plan", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, BusinessCode: &code}).Error)
-	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "sub-response", Key: "sub-response-key", Type: model.RedemptionTypeSubscription, PlanId: 9610, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9610, Title: "Response Plan", EntitlementType: model.SubscriptionEntitlementTimed, PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetNever, BusinessCode: &code}).Error)
+	redemption := &model.Redemption{UserId: 1, Name: "sub-response", Key: "sub-response-key", Type: model.RedemptionTypeSubscription, PlanId: 9610, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
+	require.NoError(t, redemption.Insert())
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"sub-response-key","redemption_mode":"timed"}`))
@@ -309,8 +336,10 @@ func TestRedeemSubscriptionRedemptionInvokesInvitationRewardHandlerAfterCommit(t
 	invitee := model.User{Id: inviteeID, Username: "redeem-handler-invitee", Status: common.UserStatusEnabled, AffCode: "redeem-handler-invitee", InviterId: inviterID}
 	require.NoError(t, model.DB.Create(&inviter).Error)
 	require.NoError(t, model.DB.Create(&invitee).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9633, Title: "Redeem Handler Plan", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, RewardEligible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &redeemerCode}).Error)
-	require.NoError(t, model.DB.Create(&model.Redemption{Id: 9634, UserId: 1, Name: "sub-handler", Key: "sub-handler-key", Type: model.RedemptionTypeSubscription, PlanId: 9633, AmountCents: 4000, Currency: "CNY", Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9633, Title: "Redeem Handler Plan", PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true, PublicVisible: true, RewardEligible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &redeemerCode}).Error)
+	redemption := model.Redemption{Id: 9634, UserId: 1, Name: "sub-handler", Key: "sub-handler-key", Type: model.RedemptionTypeSubscription, PlanId: 9633, AmountCents: 4000, Currency: "CNY", Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
+	require.NoError(t, redemption.Insert())
 
 	calledRedemptionIDs := make([]int, 0, 1)
 	SetInvitationRewardRedemptionHandlerForTest(t, func(redemptionId int) error {
@@ -379,11 +408,13 @@ func TestRedeemSubscriptionCodeAllowsRenewalWhenHistoricalPurchaseLimitReached(t
 	userID := 9607
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "redeem_limit", Status: common.UserStatusEnabled}).Error)
 	code := "redeem-limit"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9608, Title: "Limit", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MaxPurchasePerUser: 1, BusinessCode: &code}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9608, Title: "Limit", EntitlementType: model.SubscriptionEntitlementTimed, PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, QuotaResetPeriod: model.SubscriptionResetNever, MaxPurchasePerUser: 1, BusinessCode: &code}).Error)
 	initialEnd := common.GetTimestamp() + 3600
 	existing := &model.UserSubscription{UserId: userID, PlanId: 9608, Status: "active", StartTime: common.GetTimestamp() - 10, EndTime: initialEnd, TokenLimit: 3000, TokenUsed: 250, GrantReason: "order", Source: "order"}
 	require.NoError(t, model.DB.Create(existing).Error)
-	require.NoError(t, model.DB.Create(&model.Redemption{UserId: 1, Name: "limit", Key: "limit-key", Type: model.RedemptionTypeSubscription, PlanId: 9608, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
+	redemption := &model.Redemption{UserId: 1, Name: "limit", Key: "limit-key", Type: model.RedemptionTypeSubscription, PlanId: 9608, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
+	require.NoError(t, redemption.Insert())
 
 	result, err := model.Redeem("limit-key", userID, model.RedemptionModeTimed)
 

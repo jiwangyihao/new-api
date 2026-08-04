@@ -310,12 +310,14 @@ func TestCreditFulfillmentPathsDoNotCreateInvitationBenefits(t *testing.T) {
 			now := common.GetTimestamp()
 			optionCode := "credit-invitation-option"
 			creditCode := "credit-invitation-balance"
+			optionPriceMicros := int64(30_000_000)
 			optionPlan := model.SubscriptionPlan{
 				Id: optionPlanID, Title: "Credit invitation option", EntitlementType: model.SubscriptionEntitlementTimed,
 				Enabled: true, RewardEligible: true, BusinessCode: &optionCode,
 				DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
 				QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 500,
 				UnlimitedPurchaseEnabled: true,
+				PriceAmount:              30, PriceAmountMicros: &optionPriceMicros, Currency: "CNY",
 			}
 			creditPlan := model.SubscriptionPlan{
 				Id: creditPlanID, Title: "Credit invitation balance", EntitlementType: model.SubscriptionEntitlementCreditBalance,
@@ -370,7 +372,8 @@ func TestCreditFulfillmentPathsDoNotCreateInvitationBenefits(t *testing.T) {
 					PlanId: optionPlanID, Status: common.RedemptionCodeStatusEnabled,
 					AmountCents: 3000, Currency: "CNY", CreatedTime: now,
 				}
-				require.NoError(t, model.DB.Create(&redemption).Error)
+				require.NoError(t, redemption.Insert())
+				require.NotEmpty(t, strings.TrimSpace(redemption.FulfillmentSnapshot))
 				result, err := model.Redeem(redemption.Key, creditInviteeID, model.RedemptionModeCreditBalance)
 				require.NoError(t, err)
 				require.NotNil(t, result)

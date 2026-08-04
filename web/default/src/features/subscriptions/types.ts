@@ -595,6 +595,10 @@ export interface SubscriptionPayResponse {
 
 export interface CreateUserSubscriptionRequest {
   plan_id: number
+  idempotency_key: string
+  reason: string
+  source_price_micros: string
+  source_currency: string
 }
 
 // ============================================================================

@@ -2,8 +2,8 @@ import { useEffect, useMemo, type JSX, type ReactNode } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { Button } from '@/components/ui/button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -181,10 +181,7 @@ export function AdminAnalyticsPage(
               onSearchChange(switchAdminAnalyticsTab(search, tab))
             }
           />
-          <AdminAnalyticsFilterBar
-            value={search}
-            onApply={onSearchChange}
-          />
+          <AdminAnalyticsFilterBar value={search} onApply={onSearchChange} />
           {isFetching ? (
             <div
               className='text-muted-foreground text-xs'
@@ -1309,9 +1306,7 @@ function PaidSubscriptionValuePanel(props: {
   const plans = panelData(props.responses.plans)?.plans?.items ?? []
   const sources = panelData(props.responses.sources)?.sources?.items ?? []
   const hasCurrentOnly =
-    subscriptions.some(
-      (item) => item.snapshot_semantics === 'current_only'
-    ) ||
+    subscriptions.some((item) => item.snapshot_semantics === 'current_only') ||
     Object.values(props.responses).some(
       (response) =>
         hasPanelData(response) &&
@@ -1324,11 +1319,11 @@ function PaidSubscriptionValuePanel(props: {
     <div className='flex flex-col gap-4'>
       {hasCurrentOnly ? (
         <Alert>
-          <AlertTitle>{t('adminAnalytics.warnings.currentOnlyTitle')}</AlertTitle>
+          <AlertTitle>
+            {t('adminAnalytics.warnings.currentOnlyTitle')}
+          </AlertTitle>
           <AlertDescription className='flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
-            <span>
-              {t('adminAnalytics.warnings.currentOnlyDescription')}
-            </span>
+            <span>{t('adminAnalytics.warnings.currentOnlyDescription')}</span>
             <Button
               type='button'
               variant='outline'
@@ -1392,6 +1387,10 @@ function PaidSubscriptionValuePanel(props: {
         <Metric
           labelKey='adminAnalytics.metrics.tokenValueUnavailable'
           value={summary.token_value_unavailable_count}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.unknownTimedSubscriptions'
+          value={summary.unknown_timed_subscription_count ?? 0}
         />
       </MetricGrid>
       <AnalyticsCardGrid
@@ -1576,8 +1575,7 @@ function AnalyticsCardGrid(props: {
                     {t(value.labelKey)}
                   </dt>
                   <dd className='text-right'>
-                    {value.value ??
-                      (value.valueKey ? t(value.valueKey) : '—')}
+                    {value.value ?? (value.valueKey ? t(value.valueKey) : '—')}
                   </dd>
                 </div>
               ))}

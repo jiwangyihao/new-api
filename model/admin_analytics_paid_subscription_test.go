@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -89,6 +90,33 @@ func adminPaidCreatePlanUserSub(t *testing.T, plan SubscriptionPlan, user User, 
 	require.NoError(t, DB.Create(&sub).Error)
 }
 
+func adminPaidCreateTimedGrant(t *testing.T, sub UserSubscription, sourceType string, sourceID int, eventStart int64, eventEnd int64, grantCredit int64, sourcePriceMicros int64, valuationAmountMicros int64, currency string) {
+	t.Helper()
+	sourceKey := sourceType + ":" + strconv.Itoa(sourceID)
+	require.NoError(t, DB.Create(&TimedSubscriptionValuationGrant{
+		IdempotencyKey:        "fixture-a:" + sourceKey,
+		UserSubscriptionId:    sub.Id,
+		UserId:                sub.UserId,
+		PlanId:                sub.PlanId,
+		SourceType:            sourceType,
+		SourceKey:             sourceKey,
+		SourceId:              sourceID,
+		EventStartTime:        eventStart,
+		EventEndTime:          eventEnd,
+		GrantCredit:           grantCredit,
+		SourcePriceMicros:     sourcePriceMicros,
+		SourceCurrency:        currency,
+		ValuationAmountMicros: valuationAmountMicros,
+		ValuationCurrency:     currency,
+		Confidence:            TimedSubscriptionValuationConfidenceExact,
+		RuleVersion:           CreditValuationRuleVersion,
+		FxRateNumerator:       1,
+		FxRateDenominator:     1,
+		SourceSnapshot:        `{"fixture":"paid_value_analytics","source_key":"` + sourceKey + `"}`,
+		CreatedAt:             eventStart,
+	}).Error)
+}
+
 func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()
@@ -96,6 +124,9 @@ func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 	user := adminPaidTestUser(1, "paid")
 	sub := adminPaidTestSubscription(1, user.Id, plan.Id, snapshot, "order")
 	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	grantBoundary := sub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 11, sub.StartTime, grantBoundary, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 12, grantBoundary, sub.EndTime, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
 
 	value, err := adminRecognizedRemainingValue(sub, plan, snapshot)
 	require.NoError(t, err)
@@ -107,9 +138,272 @@ func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 
 	res, err := GetAdminPaidSubscriptionValueSummary(adminPaidTestQuery(snapshot))
 	require.NoError(t, err)
-	adminPaidRequireAmount(t, res.Data.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY, 44)
-	adminPaidRequireAmount(t, res.Data.Summary.TimeBasedValueByCurrency, adminPaidTestCurrencyCNY, 44)
-	adminPaidRequireAmount(t, res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY, 76)
+	recognizedMicros := moneyBreakdownMicros(res.Data.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY)
+	timeMicros := moneyBreakdownMicros(res.Data.Summary.TimeBasedValueByCurrency, adminPaidTestCurrencyCNY)
+	tokenMicros := moneyBreakdownMicros(res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY)
+	require.Equal(t, int64(44_000_000), timeMicros)
+	require.Equal(t, int64(43_466_665), tokenMicros)
+	require.Equal(t, minInt64(timeMicros, tokenMicros), recognizedMicros)
+}
+
+func TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(21, 999, "EUR")
+	plan.QuotaResetPeriod = SubscriptionResetNever
+	user := adminPaidTestUser(21, "timed-timeline")
+	sub := adminPaidTestSubscription(21, user.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	sub.StartTime = snapshot - 100
+	sub.EndTime = snapshot + 200
+	sub.TokenLimit = 1000
+	sub.TokenUsed = 500
+	sub.NextResetTime = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&[]TimedSubscriptionValuationGrant{
+		{
+			IdempotencyKey: "timeline-order", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:21", SourceId: 21,
+			EventStartTime: snapshot - 100, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 40_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 40_000_000, ValuationCurrency: "CNY",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+		},
+		{
+			IdempotencyKey: "timeline-admin", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:timeline-admin",
+			EventStartTime: snapshot + 100, EventEndTime: snapshot + 200, GrantCredit: 1000,
+			SourcePriceMicros: 10_000_000, SourceCurrency: "USD", ValuationAmountMicros: 10_000_000, ValuationCurrency: "USD",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 50,
+		},
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	summary, err := GetAdminPaidSubscriptionValueSummary(query)
+	require.NoError(t, err)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedRemainingValueByCurrency, "CNY", 10)
+	adminPaidRequireAmount(t, summary.Data.Summary.RecognizedRemainingValueByCurrency, "USD", 5)
+	adminPaidRequireNoCurrency(t, summary.Data.Summary.RecognizedRemainingValueByCurrency, "EUR")
+	require.Equal(t, 1, summary.Data.Summary.ActivePaidSubscriptionCount)
+
+	users, err := GetAdminPaidSubscriptionValueUsers(query)
+	require.NoError(t, err)
+	require.Len(t, users.Data.Users.Items, 1)
+	adminPaidRequireAmount(t, users.Data.Users.Items[0].RecognizedRemainingValueByCurrency, "CNY", 10)
+	adminPaidRequireAmount(t, users.Data.Users.Items[0].RecognizedRemainingValueByCurrency, "USD", 5)
+
+	subscriptions, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Len(t, subscriptions.Data.Subscriptions.Items, 1)
+
+	plans, err := GetAdminPaidSubscriptionValuePlanBreakdown(query)
+	require.NoError(t, err)
+	require.Len(t, plans.Data.Plans.Items, 1)
+	adminPaidRequireAmount(t, plans.Data.Plans.Items[0].RecognizedRemainingValueByCurrency, "CNY", 10)
+	adminPaidRequireAmount(t, plans.Data.Plans.Items[0].RecognizedRemainingValueByCurrency, "USD", 5)
+
+	sources, err := GetAdminPaidSubscriptionValueSourceBreakdown(query)
+	require.NoError(t, err)
+	require.Len(t, sources.Data.Sources.Items, 2)
+	combined := adminMoneyAccumulator{}
+	for _, source := range sources.Data.Sources.Items {
+		for _, amount := range source.RecognizedRemainingValueByCurrency {
+			combined.add(amount.Currency, amount.Amount)
+		}
+	}
+	adminPaidRequireAmount(t, combined.breakdown(), "CNY", 10)
+	adminPaidRequireAmount(t, combined.breakdown(), "USD", 5)
+}
+
+func TestPaidSubscriptionValueWarnsForMissingTimedGrantCoverage(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(22, 999, "EUR")
+	user := adminPaidTestUser(22, "timed-gap")
+	sub := adminPaidTestSubscription(22, user.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	sub.StartTime = snapshot - 100
+	sub.EndTime = snapshot + 100
+	sub.TokenLimit = 0
+	sub.TokenUsed = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&TimedSubscriptionValuationGrant{
+		IdempotencyKey: "timeline-gap", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+		SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:22", SourceId: 22,
+		EventStartTime: snapshot + 50, EventEndTime: snapshot + 100, GrantCredit: 1000,
+		SourcePriceMicros: 10_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 10_000_000, ValuationCurrency: "CNY",
+		Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+		FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	response, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Equal(t, 1, response.Data.Summary.UnknownTimedSubscriptionCount)
+	require.Len(t, response.Data.Subscriptions.Items, 1)
+	item := response.Data.Subscriptions.Items[0]
+	adminPaidRequireAmount(t, item.RecognizedRemainingValueByCurrency, "CNY", 10)
+	adminPaidRequireNoCurrency(t, item.RecognizedRemainingValueByCurrency, "EUR")
+	require.Contains(t, item.ValuationWarnings, adminTimedWarningMissingGrants)
+}
+
+func TestPaidSubscriptionValueDeduplicatesOverlappingTimedGrants(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(23, 999, "EUR")
+	user := adminPaidTestUser(23, "timed-overlap")
+	sub := adminPaidTestSubscription(23, user.Id, plan.Id, snapshot, SubscriptionGrantOrder)
+	sub.StartTime = snapshot
+	sub.EndTime = snapshot + 100
+	sub.TokenLimit = 0
+	sub.TokenUsed = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&[]TimedSubscriptionValuationGrant{
+		{
+			IdempotencyKey: "timeline-overlap-order", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:23", SourceId: 23,
+			EventStartTime: snapshot, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 20_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 20_000_000, ValuationCurrency: "CNY",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+		},
+		{
+			IdempotencyKey: "timeline-overlap-admin", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+			SourceType: TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:timeline-overlap-admin",
+			EventStartTime: snapshot + 50, EventEndTime: snapshot + 100, GrantCredit: 1000,
+			SourcePriceMicros: 10_000_000, SourceCurrency: "USD", ValuationAmountMicros: 10_000_000, ValuationCurrency: "USD",
+			Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+			FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 50,
+		},
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	response, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Equal(t, 1, response.Data.Summary.UnknownTimedSubscriptionCount)
+	require.Len(t, response.Data.Subscriptions.Items, 1)
+	item := response.Data.Subscriptions.Items[0]
+	adminPaidRequireAmount(t, item.RecognizedRemainingValueByCurrency, "CNY", 20)
+	adminPaidRequireNoCurrency(t, item.RecognizedRemainingValueByCurrency, "USD")
+	require.Contains(t, item.ValuationWarnings, adminTimedWarningOverlappingGrants)
+}
+
+func TestPaidSubscriptionValueClipsTimedGrantAtActualSubscriptionEnd(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(24, 999, "EUR")
+	user := adminPaidTestUser(24, "timed-clipped")
+	sub := adminPaidTestSubscription(24, user.Id, plan.Id, snapshot, SubscriptionGrantAdmin)
+	sub.StartTime = snapshot
+	sub.EndTime = snapshot + 40
+	sub.TokenLimit = 0
+	sub.TokenUsed = 0
+	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	require.NoError(t, DB.Create(&TimedSubscriptionValuationGrant{
+		IdempotencyKey: "timeline-clipped", UserSubscriptionId: sub.Id, UserId: user.Id, PlanId: plan.Id,
+		SourceType: TimedSubscriptionGrantSourceAdmin, SourceKey: "admin:timeline-clipped",
+		EventStartTime: snapshot, EventEndTime: snapshot + 100, GrantCredit: 1000,
+		SourcePriceMicros: 20_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 20_000_000, ValuationCurrency: "CNY",
+		Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion,
+		FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot - 100,
+	}).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	response, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Zero(t, response.Data.Summary.UnknownTimedSubscriptionCount)
+	require.Len(t, response.Data.Subscriptions.Items, 1)
+	item := response.Data.Subscriptions.Items[0]
+	adminPaidRequireAmount(t, item.RecognizedRemainingValueByCurrency, "CNY", 8)
+	require.NotContains(t, item.ValuationWarnings, adminTimedWarningMissingGrants)
+}
+
+func TestTimedSubscriptionValueChecksMicrosAggregationOverflow(t *testing.T) {
+	snapshot := int64(100)
+	sub := UserSubscription{EndTime: snapshot + 3, TokenLimit: 1}
+	grant := func(id int, start, amount int64) TimedSubscriptionValuationGrant {
+		return TimedSubscriptionValuationGrant{
+			Id:                    id,
+			SourceType:            TimedSubscriptionGrantSourceOrder,
+			EventStartTime:        start,
+			EventEndTime:          start + 1,
+			ValuationAmountMicros: amount,
+			ValuationCurrency:     "CNY",
+			CreatedAt:             int64(id),
+		}
+	}
+
+	atLimit, err := adminCalculateTimedSubscriptionValue(sub, []TimedSubscriptionValuationGrant{
+		grant(1, snapshot, math.MaxInt64-1),
+		grant(2, snapshot+1, 1),
+	}, snapshot)
+	require.NoError(t, err)
+	require.Equal(t, int64(math.MaxInt64), atLimit.ByCurrency["CNY"].TimeMicros)
+	require.Equal(t, int64(math.MaxInt64), atLimit.ByCurrency["CNY"].RecognizedMicros)
+	require.Equal(t, int64(math.MaxInt64), atLimit.BySourceCurrency[adminTimedSourceCurrencyKey{Source: dto.AdminAnalyticsSourceOrder, Currency: "CNY"}].TimeMicros)
+
+	overflowed, err := adminCalculateTimedSubscriptionValue(sub, []TimedSubscriptionValuationGrant{
+		grant(1, snapshot, math.MaxInt64-1),
+		grant(2, snapshot+1, 1),
+		grant(3, snapshot+2, 1),
+	}, snapshot)
+	require.ErrorIs(t, err, ErrCreditValuationOverflow)
+	require.Empty(t, overflowed.ByCurrency)
+	require.Empty(t, overflowed.BySourceCurrency)
+}
+
+func TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(25, 1, "CNY")
+	plan.EntitlementType = SubscriptionEntitlementTimed
+	user := adminPaidTestUser(251, "timed-overflow")
+	subscription := UserSubscription{
+		Id: 251, UserId: user.Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed,
+		Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 2,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+	}
+	grants := []TimedSubscriptionValuationGrant{
+		{IdempotencyKey: "timed-overflow-max", UserSubscriptionId: subscription.Id, UserId: user.Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:251", SourceId: 251, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: math.MaxInt64, SourceCurrency: "CNY", ValuationAmountMicros: math.MaxInt64, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
+		{IdempotencyKey: "timed-overflow-next", UserSubscriptionId: subscription.Id, UserId: user.Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:252", SourceId: 252, EventStartTime: snapshot + 1, EventEndTime: snapshot + 2, GrantCredit: 1, SourcePriceMicros: 1, SourceCurrency: "CNY", ValuationAmountMicros: 1, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot + 1},
+	}
+	require.NoError(t, DB.Create(&plan).Error)
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&subscription).Error)
+	require.NoError(t, DB.Create(&grants).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	endpoints := []struct {
+		name string
+		call func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error)
+	}{
+		{name: "summary", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSummary(query)
+		}},
+		{name: "users", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueUsers(query)
+		}},
+		{name: "subscriptions", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSubscriptions(query)
+		}},
+		{name: "plans", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValuePlanBreakdown(query)
+		}},
+		{name: "sources", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSourceBreakdown(query)
+		}},
+	}
+	for _, endpoint := range endpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			response, err := endpoint.call()
+			require.ErrorIs(t, err, ErrCreditValuationOverflow)
+			require.Equal(t, dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, response)
+		})
+	}
 }
 
 func TestPaidSubscriptionValueMonthlyTokenValueUsesPlanPriceAndProratesTailByTime(t *testing.T) {
@@ -355,13 +649,23 @@ func TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders(t *testing.T) {
 	snapshot := adminPaidTestSnapshot()
 	plan := adminPaidTestPlan(1, 30, adminPaidTestCurrencyCNY)
 	require.NoError(t, DB.Create(&plan).Error)
-	paidSources := []string{"order", "admin", "redemption"}
+	paidSources := []struct {
+		subscriptionSource string
+		grantSource        string
+	}{
+		{subscriptionSource: SubscriptionGrantOrder, grantSource: TimedSubscriptionGrantSourceOrder},
+		{subscriptionSource: SubscriptionGrantAdmin, grantSource: TimedSubscriptionGrantSourceAdmin},
+		{subscriptionSource: SubscriptionGrantRedemption, grantSource: TimedSubscriptionGrantSourceRedemption},
+	}
 	for i, source := range paidSources {
 		userID := i + 1
-		require.NoError(t, DB.Create(&User{Id: userID, Username: source, Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-" + source}).Error)
-		sub := adminPaidTestSubscription(i+1, userID, plan.Id, snapshot, source)
+		require.NoError(t, DB.Create(&User{Id: userID, Username: source.subscriptionSource, Status: common.UserStatusEnabled, Group: "default", AffCode: "aff-" + source.subscriptionSource}).Error)
+		sub := adminPaidTestSubscription(i+1, userID, plan.Id, snapshot, source.subscriptionSource)
 		sub.TokenLimit = 0
 		require.NoError(t, DB.Create(&sub).Error)
+		grantBoundary := sub.StartTime + 30*86400
+		adminPaidCreateTimedGrant(t, sub, source.grantSource, userID*10+1, sub.StartTime, grantBoundary, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
+		adminPaidCreateTimedGrant(t, sub, source.grantSource, userID*10+2, grantBoundary, sub.EndTime, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
 	}
 
 	res, err := GetAdminPaidSubscriptionValueSummary(adminPaidTestQuery(snapshot))
@@ -379,6 +683,9 @@ func TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers(t *testing.T) 
 	sub := adminPaidTestSubscription(1, user.Id, plan.Id, snapshot, "admin")
 	sub.TokenLimit = 0
 	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	grantBoundary := sub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceAdmin, 11, sub.StartTime, grantBoundary, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceAdmin, 12, grantBoundary, sub.EndTime, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
 	adminPaidSetExcludedUsersForTest(t, []adminPaidExcludedUserForTest{{UserID: user.Id, Reason: "ops", ExcludedAt: 100, ExcludedBy: 2}})
 
 	included, err := GetAdminPaidSubscriptionValueUsers(adminPaidTestQuery(snapshot))
@@ -409,6 +716,9 @@ func TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows(t *testing.T) {
 	sub := adminPaidTestSubscription(1, user.Id, plan.Id, snapshot, "order")
 	sub.TokenLimit = 0
 	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	grantBoundary := sub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 11, sub.StartTime, grantBoundary, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 12, grantBoundary, sub.EndTime, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
 	adminPaidSetExcludedUsersForTest(t, nil)
 
 	res, err := GetAdminPaidSubscriptionValueSummary(adminPaidTestQuery(snapshot))
@@ -488,6 +798,12 @@ func TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly(t *t
 	usdSub.TokenLimit = 0
 	require.NoError(t, DB.Create(&cnySub).Error)
 	require.NoError(t, DB.Create(&usdSub).Error)
+	cnyGrantBoundary := cnySub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, cnySub, TimedSubscriptionGrantSourceOrder, 11, cnySub.StartTime, cnyGrantBoundary, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, cnySub, TimedSubscriptionGrantSourceOrder, 12, cnyGrantBoundary, cnySub.EndTime, 1000000000, 30_000_000, 30_000_000, adminPaidTestCurrencyCNY)
+	usdGrantBoundary := usdSub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, usdSub, TimedSubscriptionGrantSourceOrder, 21, usdSub.StartTime, usdGrantBoundary, 1000000000, 1_000_000_000, 1_000_000_000, adminPaidTestCurrencyUSD)
+	adminPaidCreateTimedGrant(t, usdSub, TimedSubscriptionGrantSourceOrder, 22, usdGrantBoundary, usdSub.EndTime, 1000000000, 1_000_000_000, 1_000_000_000, adminPaidTestCurrencyUSD)
 
 	for _, sortBy := range []string{"recognized_remaining_value", "plan_price"} {
 		t.Run(sortBy, func(t *testing.T) {
@@ -527,8 +843,8 @@ func TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros(t *
 	breakdown := func(micros string) []dto.AdminAnalyticsMoneyBreakdown {
 		return []dto.AdminAnalyticsMoneyBreakdown{{Amount: compatibleAmount, AmountMicros: micros, Currency: adminPaidTestCurrencyCNY}}
 	}
-	money := func(micros string) dto.AdminAnalyticsMoneyAmount {
-		return dto.AdminAnalyticsMoneyAmount{Amount: compatibleAmount, AmountMicros: micros, Currency: adminPaidTestCurrencyCNY}
+	money := func(micros string) *dto.AdminAnalyticsMoneyAmount {
+		return &dto.AdminAnalyticsMoneyAmount{Amount: compatibleAmount, AmountMicros: micros, Currency: adminPaidTestCurrencyCNY}
 	}
 
 	tests := []struct {
@@ -607,6 +923,102 @@ func TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros(t *
 	}
 }
 
+func TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros(t *testing.T) {
+	const authoritativeMicros = int64(9_007_199_254_740_993)
+	const timedMicros = int64(7)
+	const expectedCombinedMicros = authoritativeMicros + timedMicros
+
+	snapshot := adminPaidTestSnapshot()
+	compatibleAmount := float64(9_007_199_254_740_992) / float64(amountMicrosPerUnit)
+	user := adminPaidTestUser(1, "precision")
+	creditPlan := adminPaidTestPlan(1, compatibleAmount, adminPaidTestCurrencyCNY)
+	creditPlan.EntitlementType = SubscriptionEntitlementCreditBalance
+	creditSubscription := adminPaidTestSubscription(1, user.Id, creditPlan.Id, snapshot, "credit")
+	creditSubscription.EntitlementType = SubscriptionEntitlementCreditBalance
+	timedPlan := adminPaidTestPlan(2, 0, adminPaidTestCurrencyCNY)
+	timedPlan.EntitlementType = SubscriptionEntitlementTimed
+	timedSubscription := adminPaidTestSubscription(2, user.Id, timedPlan.Id, snapshot, "admin")
+	timedSubscription.EntitlementType = SubscriptionEntitlementTimed
+
+	rows := []adminPaidSubscriptionRow{
+		{
+			Subscription:      creditSubscription,
+			Plan:              creditPlan,
+			User:              user,
+			Source:            dto.AdminAnalyticsSourceCreditBalancePool,
+			SourceAttribution: adminPaidSubscriptionSourceAttributionCreditPool,
+			Value: adminSubscriptionValue{
+				RecognizedRemainingValue:       compatibleAmount,
+				TimeBasedValue:                 compatibleAmount,
+				TokenBasedValue:                compatibleAmount,
+				RecognizedRemainingValueMicros: authoritativeMicros,
+				TimeBasedValueMicros:           authoritativeMicros,
+				TokenBasedValueMicros:          authoritativeMicros,
+				TokenBasedValueAvailable:       true,
+				TimeBasedValueAvailable:        true,
+				Currency:                       adminPaidTestCurrencyCNY,
+			},
+			Active: true,
+		},
+		{
+			Subscription:      timedSubscription,
+			Plan:              timedPlan,
+			User:              user,
+			Source:            dto.AdminAnalyticsSourceAdmin,
+			SourceAttribution: adminPaidSubscriptionSourceAttributionSnapshot,
+			Value: adminSubscriptionValue{
+				TokenBasedValueAvailable: true,
+				TimeBasedValueAvailable:  true,
+			},
+			TimedValue: &adminTimedSubscriptionValue{
+				ByCurrency: map[string]adminTimedCurrencyValue{
+					adminPaidTestCurrencyCNY: {TimeMicros: timedMicros, TokenMicros: timedMicros, RecognizedMicros: timedMicros},
+				},
+				BySourceCurrency: map[adminTimedSourceCurrencyKey]adminTimedSourceValue{
+					{Source: dto.AdminAnalyticsSourceAdmin, Currency: adminPaidTestCurrencyCNY}: {TimeMicros: timedMicros, TokenMicros: timedMicros},
+				},
+				Sources:        []dto.AdminAnalyticsSource{dto.AdminAnalyticsSourceAdmin},
+				TokenAvailable: true,
+			},
+			Active: true,
+		},
+	}
+
+	result, err := adminBuildPaidSubscriptionValueDataFromRows(adminPaidTestQuery(snapshot), rows, false)
+	require.NoError(t, err)
+	require.Equal(t, expectedCombinedMicros, moneyBreakdownMicros(result.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	require.Len(t, result.Users, 1)
+	require.Equal(t, expectedCombinedMicros, moneyBreakdownMicros(result.Users[0].RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+
+	require.Len(t, result.Subscriptions, 2)
+	for _, item := range result.Subscriptions {
+		require.NotNil(t, item.RecognizedRemainingValue)
+		if item.SubscriptionID == creditSubscription.Id {
+			require.Equal(t, "9007199254740993", item.RecognizedRemainingValue.AmountMicros)
+		} else {
+			require.Equal(t, "7", item.RecognizedRemainingValue.AmountMicros)
+		}
+	}
+
+	require.Len(t, result.Plans, 2)
+	for _, item := range result.Plans {
+		want := timedMicros
+		if item.PlanID == creditPlan.Id {
+			want = authoritativeMicros
+		}
+		require.Equal(t, want, moneyBreakdownMicros(item.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	}
+
+	require.Len(t, result.Sources, 2)
+	for _, item := range result.Sources {
+		want := timedMicros
+		if item.Source == dto.AdminAnalyticsSourceCreditBalancePool {
+			want = authoritativeMicros
+		}
+		require.Equal(t, want, moneyBreakdownMicros(item.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	}
+}
+
 func TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()
@@ -615,6 +1027,9 @@ func TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanC
 	sub := adminPaidTestSubscription(1, user.Id, plan.Id, snapshot, "order")
 	sub.TokenLimit = 0
 	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	grantBoundary := sub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 71, sub.StartTime, grantBoundary, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 72, grantBoundary, sub.EndTime, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
 	require.NoError(t, DB.Create(&SubscriptionOrder{Id: 7, UserId: user.Id, PlanId: plan.Id, Money: 9.99, TradeNo: "trade-7", PaymentProvider: "stripe", PaymentMethod: "card", Status: common.TopUpStatusSuccess, CompleteTime: snapshot - 10}).Error)
 
 	res, err := GetAdminPaidSubscriptionValueSubscriptions(adminPaidTestQuery(snapshot))
@@ -630,7 +1045,8 @@ func TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanC
 	require.Equal(t, "card", item.PaymentMethod)
 	require.Equal(t, adminPaidTestCurrencyCNY, item.OrderRecordedAmount.Currency)
 	require.InDelta(t, 9.99, item.OrderRecordedAmount.Amount, 0.0001)
-	require.InDelta(t, 44, item.RecognizedRemainingValue.Amount, 0.0001)
+	require.NotNil(t, item.RecognizedRemainingValue)
+	require.Equal(t, "44000000", item.RecognizedRemainingValue.AmountMicros)
 }
 
 func TestInvitationPaidSubscriptionsCountsAllHistoryByDefault(t *testing.T) {

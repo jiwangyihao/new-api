@@ -42,7 +42,32 @@ ec1858fec89509bdec9a90a230a8496047c5becd
 因此 #23 可在当前基线上深化 request 分支，不复制 #22 逻辑。
 
 ## RED/GREEN 记录
-尚未运行。首个循环将使用真实 SQLite、公开 request 领域入口，证明 `request_id + target_applied_credit` 的目标变化合同；精确命令和关键失败输出将在执行后追加。
+
+### 循环 1：目标累计量增加按当前池出账
+RED 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetIncreaseUsesCurrentPool$' -count=1
+```
+关键输出：
+```text
+--- FAIL: TestCreditValuationRequestTargetIncreaseUsesCurrentPool
+credit_valuation_request_test.go:19: Received unexpected error
+FAIL github.com/QuantumNous/new-api/model
+```
+根因：#22 的 `SettleCreditRequestTargetTx` 明确只允许冻结 tracer 的相同目标，`200 -> 300` 返回 `ErrCreditValuationTargetConflict`。
+
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetIncreaseUsesCurrentPool$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+行为：真实 SQLite 经购买 ingress 建立 1,000 Credit / 40 CNY 状态，预扣 200 后提交目标 300；最终 `token_used=300`、可用 700、exact `28,000,000` micros、请求活动快照 `12,000,000` micros、`settlement_version=2`。
+
+### 导出符号引用证据
+修改 `SettleCreditRequestTarget` 前使用 LSP references，找到 6 处：定义、`service/funding_source.go` 以及 `model/credit_valuation_tracer_test.go` 的 4 个调用。修改包内 `SettleCreditRequestTargetTx` 前使用 LSP references，只有定义和公开 wrapper 两处。
 
 ## 范围声明
 - 尚未运行项目级全量测试、格式化器或 lint；按 Dispatch 合同由协调器最终统一运行。

@@ -1,8 +1,8 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：已完成需求/基线核验；socket 中断后原地恢复，正在建立首个可恢复提交。
-- 当前定位：下一步直接从最小真实 SQLite `request_id + target_applied_credit` RED tracer 开始，不重做探索。
+- 阶段：请求目标结算垂直切片 1 已 GREEN，准备提交安全点。
+- 当前定位：真实 SQLite 已证明 `request_id` 的目标累计量可由 200 增至 300，并同步更新数量、估值状态和请求活动快照。
 
 ## 已完成
 - 已读取仓库与全局规则、父 PRD #19、Issue #23、执行合同、第二波次合同、`CONTEXT.md`、ADR 0001/0002、规格 5.4/6/7.3–7.5/9/11.3/13/14、计划任务 3/6、Issue #20/#22 合同。
@@ -11,12 +11,12 @@
 - 已确认起始 HEAD 和 merge-base 都是 `ec1858fec89509bdec9a90a230a8496047c5becd`，起始工作树干净。
 
 ## 下一步
-1. 读取最小必要的 #22 request tracer 实现与测试，并在修改导出符号前运行 LSP references。
-2. 写一个通过公开领域入口驱动真实 SQLite 的最小 RED：预扣后以相同 request ID 提交新目标累计量，证明当前 #22 seam 不支持目标变化。
-3. 最小实现至 GREEN，提交安全点；随后按垂直切片覆盖恢复、欠额、终态、合并器、调用链、Task 和清理。
+1. 为目标减少写真实 SQLite RED，验证退款恢复原请求成本而非当前池平均。
+2. 最小实现退款、欠额优先撤销、absorbed restore 与 restored unknown；逐个垂直循环提交。
+3. 随后迁移同步/流式调用链、合并器、Task 身份和安全清理。
 
 ## 阻塞
 - 无。socket closed 未改变 Dispatch、HEAD 或工作树语义。
 
 ## 最近安全提交
-- `ec1858fec89509bdec9a90a230a8496047c5becd`（本进度提交前）。
+- `76da1d487`（可恢复合同）；当前 GREEN 代码待本次安全提交。

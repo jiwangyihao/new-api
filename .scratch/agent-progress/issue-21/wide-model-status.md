@@ -37,10 +37,11 @@
 
 ## 当前阶段
 
-- 已完成：读取父 PRD #19、Issue #21、已关闭 #22、执行合同、宽回归合同、Issue #21 spec/acceptance、ADR 0002、`CONTEXT.md`、最终 Spec 修复恢复文件及必需 skills。
-- 进行中：保存宽回归 model 路基线安全点。
-- 下一步：运行冻结最小复现，记录本工作树实际稳定错误，再做最小 test-only GREEN。
-- 阻塞：无。
+- 已完成：必读材料核查、基线恢复合同安全提交 `d85ccc1cd`、冻结三项最小复现。
+- 本地 RED：两项订单稳定返回 `timed_subscription_grant_invalid`，兑换稳定返回 `redemption.plan_ineligible`；另有初始化前清表的缺表日志噪声。
+- 进行中：建立合法 Plan、订单授权快照与 Redemption.Insert test-only helper，并迁移九项测试。
+- 下一步：先让三项最小复现 GREEN，再覆盖其余六项及并发不变量。
+- 阻塞：无；当前证据与冻结根因一致，尚未发现生产缺陷。
 
 ## 恢复命令
 

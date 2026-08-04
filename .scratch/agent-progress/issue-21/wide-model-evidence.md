@@ -26,15 +26,19 @@
 
 ## RED 台账
 
-协调器冻结的失败列表见 `wide-model-status.md`；它尚不是本 Worker 的本地复现证据。
-
-待运行本地最小复现：
+本地最小复现已运行：
 
 ```text
 go test ./model -run '^(TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition|TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent|TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached)$' -count=1
 ```
 
-运行后必须在此记录精确错误与根因区分；不得用协调器输出替代。
+结果：稳定 FAIL（`github.com/QuantumNous/new-api/model`，7.333s）。精确业务错误：
+
+- `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`：`timed_subscription_grant_invalid`；pending order 没有 `EntitlementSnapshot`，且 Plan 不满足完整权威 timed 事实。
+- `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent`：`redemption.plan_ineligible`；测试以 `DB.Create` 绕过 `Redemption.Insert()`，没有冻结 `FulfillmentSnapshot`。
+- `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached`：`timed_subscription_grant_invalid`；guard helper 创建的 Plan 缺 explicit timed、权威 micros/reset，order 缺不可变授权快照。
+
+同次运行还观察到清理噪声：`invitation_commission_withdrawals`、`invitation_commission_ledgers`、`invitation_commission_records`、`invitation_commission_accounts`、`invitation_reward_events`、`redemptions` 与 `subscription_pre_consume_records` 在相应测试初始化前被无条件删除而不存在。该噪声不是三项业务断言失败原因；所属文件内将只补齐实际使用表的安全清理。
 
 ## GREEN 与验收台账
 

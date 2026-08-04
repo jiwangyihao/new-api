@@ -17,8 +17,9 @@
 - GREEN 命令：`go test ./model -run 'TestCreditValuationFiveAnalytics(PanelsReturnCurrentOnlyWarning|ViewsAgreeOnThirtyTwoCNY)' -count=1`。
 - GREEN 精确信号：`go test: 1 packages ok`；五个表驱动 panel 子测试均收到唯一 `credit_valuation/current_only` warning；同一构建中以布尔聚合去重，快照追平后的五个子测试均无该 warning；subscription 明细仍为 `current_only`、`state_version=2`、`valuation_updated_at=updatedAt`，既有 32 CNY 五视图同时 GREEN。
 
-## 回归与范围
-- 32 CNY/paid-value 后端定向回归：待执行。
-- 前端 format/panel/page 定向测试与 typecheck：待执行。
-- MySQL 5.7/PostgreSQL 9.6：本窄修复不实测，三数据库矩阵仍归 Issue #27。
-- Issue #23–#28：不实现。
+## 最终回归与范围
+- Finding A 既有 GREEN：`go test ./model -run 'TestPaidSubscriptionValue(RecognizedRemainingSortUsesAuthoritativeMicros|UsersDescSortUsesUserIDTieBreaker)' -count=1`，结果 `go test: 1 packages ok`；业务提交为 `04e5611bd fix(analytics): 使用权威 micros 排序`。
+- Finding B 既有 GREEN：`go test ./model -run 'TestCreditValuationFiveAnalytics(PanelsReturnCurrentOnlyWarning|ViewsAgreeOnThirtyTwoCNY)' -count=1`，结果 `go test: 1 packages ok`；业务提交为 `12d4f5fd5 fix(analytics): 传播 current-only 面板警告`，同时覆盖既有 32 CNY 五视图一致性。
+- 本次最终收敛按协调器指令未重跑后端、前端、浏览器或全仓套件；前端生产代码未修改。
+- MySQL 5.7/PostgreSQL 9.6 未实测，三数据库矩阵仍归 Issue #27。
+- Issue #23–#28 未实现；未创建或更新 migration marker，未切换 `ready`，未执行历史回填、部署或工作树回收。

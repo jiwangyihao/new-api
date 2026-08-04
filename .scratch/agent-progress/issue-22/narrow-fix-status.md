@@ -5,17 +5,16 @@
 - 工作树：`jiwangyihao/issue-22-credit-tracer`。
 - 启动时 `git status --short`：空。
 
-## 当前阶段
-- 阶段：Finding B 已 GREEN，提交安全点后运行窄回归。
-- 已完成：真实 SQLite 32 CNY tracer 通过 `updated_at > snapshot_at` 触发 current-only；summary/users/subscriptions/plans/sources 五个现有入口均返回同一条结构化 warning（`section=credit_valuation`、`reason=current_only`），聚合布尔值保证多行去重；subscription 明细继续保留 `snapshot_semantics=current_only`、state version 与 updated_at；快照追平后 warning 为空。
-- 下一步：提交 Finding B 安全点；运行既定后端 paid-value/32 CNY/controller 定向回归、前端 format/panel/page 定向测试与 typecheck、格式及 clean-tree 门禁。
+## 最终状态
+- 阶段：窄验收修复完成；业务实现 HEAD 为 `12d4f5fd5caa2c738faaccc72478f133d8aaa067`。
+- Finding A 已由 `04e5611bd fix(analytics): 使用权威 micros 排序` 完成：users/subscriptions/plans/sources 的 `recognized_remaining_value` 严格按十进制 `amount_micros` 排序，兼容 `amount` 不参与权威比较，既有确定性 tie-breaker 保持不变。
+- Finding B 已由 `12d4f5fd5 fix(analytics): 传播 current-only 面板警告` 完成：summary/users/subscriptions/plans/sources 统一传播唯一的 `section=credit_valuation`、`reason=current_only` 结构化 warning；无 current-only 行时为空，明细语义保持不变。
+- 既有定向 PASS：`go test ./model -run 'TestPaidSubscriptionValue(RecognizedRemainingSortUsesAuthoritativeMicros|UsersDescSortUsesUserIDTieBreaker)' -count=1`。
+- 既有定向 PASS：`go test ./model -run 'TestCreditValuationFiveAnalytics(PanelsReturnCurrentOnlyWarning|ViewsAgreeOnThirtyTwoCNY)' -count=1`。
+- 本次收尾不修改业务代码、不重跑测试或大套件，仅提交 `narrow-fix-status.md` 与 `narrow-fix-evidence.md`；提交后执行 `git diff --check` 与 `git status --short`。
+- 下一步：等待协调器重新验收。
 - 阻塞：无。
-- 最近安全提交：Finding B 本提交（提交后以 HEAD 为准）。
-
-## 当前实现约束
-- Finding A 只严格解析现有 `amount_micros`；禁止兼容 float 回退。
-- 无效值只复用语义匹配的既有 `ErrCreditValuationSourceInvalid` / `ErrCreditValuationOverflow`，不新增 sentinel，不做 API 重构。
-- Finding A 完成 RED→GREEN 并形成安全提交后，才处理 Finding B。
+- 最近业务安全提交：`12d4f5fd5caa2c738faaccc72478f133d8aaa067`。
 
 ## 范围边界
 - 不重做 CreditValuation、人民币余额、Kyren、BillingSession/request_id、32 CNY tracer、六语言或浏览器 smoke。

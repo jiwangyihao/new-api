@@ -287,6 +287,94 @@ func TestPaidSubscriptionValueClipsTimedGrantAtActualSubscriptionEnd(t *testing.
 	require.NotContains(t, item.ValuationWarnings, adminTimedWarningMissingGrants)
 }
 
+func TestTimedSubscriptionValueChecksMicrosAggregationOverflow(t *testing.T) {
+	snapshot := int64(100)
+	sub := UserSubscription{EndTime: snapshot + 3, TokenLimit: 1}
+	grant := func(id int, start, amount int64) TimedSubscriptionValuationGrant {
+		return TimedSubscriptionValuationGrant{
+			Id:                    id,
+			SourceType:            TimedSubscriptionGrantSourceOrder,
+			EventStartTime:        start,
+			EventEndTime:          start + 1,
+			ValuationAmountMicros: amount,
+			ValuationCurrency:     "CNY",
+			CreatedAt:             int64(id),
+		}
+	}
+
+	atLimit, err := adminCalculateTimedSubscriptionValue(sub, []TimedSubscriptionValuationGrant{
+		grant(1, snapshot, math.MaxInt64-1),
+		grant(2, snapshot+1, 1),
+	}, snapshot)
+	require.NoError(t, err)
+	require.Equal(t, int64(math.MaxInt64), atLimit.ByCurrency["CNY"].TimeMicros)
+	require.Equal(t, int64(math.MaxInt64), atLimit.ByCurrency["CNY"].RecognizedMicros)
+	require.Equal(t, int64(math.MaxInt64), atLimit.BySourceCurrency[adminTimedSourceCurrencyKey{Source: dto.AdminAnalyticsSourceOrder, Currency: "CNY"}].TimeMicros)
+
+	overflowed, err := adminCalculateTimedSubscriptionValue(sub, []TimedSubscriptionValuationGrant{
+		grant(1, snapshot, math.MaxInt64-1),
+		grant(2, snapshot+1, 1),
+		grant(3, snapshot+2, 1),
+	}, snapshot)
+	require.ErrorIs(t, err, ErrCreditValuationOverflow)
+	require.Empty(t, overflowed.ByCurrency)
+	require.Empty(t, overflowed.BySourceCurrency)
+}
+
+func TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow(t *testing.T) {
+	setupAdminAnalyticsTestDBs(t)
+	snapshot := adminPaidTestSnapshot()
+	plan := adminPaidTestPlan(25, 1, "CNY")
+	plan.EntitlementType = SubscriptionEntitlementTimed
+	require.NoError(t, DB.Create(&plan).Error)
+
+	users := []User{
+		adminPaidTestUser(251, "timed-overflow-max"),
+		adminPaidTestUser(252, "timed-overflow-next"),
+	}
+	subscriptions := []UserSubscription{
+		{Id: 251, UserId: users[0].Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 1, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder},
+		{Id: 252, UserId: users[1].Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 1, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder},
+	}
+	grants := []TimedSubscriptionValuationGrant{
+		{IdempotencyKey: "timed-overflow-max", UserSubscriptionId: subscriptions[0].Id, UserId: users[0].Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:251", SourceId: 251, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: math.MaxInt64, SourceCurrency: "CNY", ValuationAmountMicros: math.MaxInt64, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
+		{IdempotencyKey: "timed-overflow-next", UserSubscriptionId: subscriptions[1].Id, UserId: users[1].Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:252", SourceId: 252, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: 1, SourceCurrency: "CNY", ValuationAmountMicros: 1, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
+	}
+	require.NoError(t, DB.Create(&users).Error)
+	require.NoError(t, DB.Create(&subscriptions).Error)
+	require.NoError(t, DB.Create(&grants).Error)
+
+	query := adminPaidTestQuery(snapshot)
+	query.Currency = ""
+	endpoints := []struct {
+		name string
+		call func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error)
+	}{
+		{name: "summary", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSummary(query)
+		}},
+		{name: "users", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueUsers(query)
+		}},
+		{name: "subscriptions", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSubscriptions(query)
+		}},
+		{name: "plans", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValuePlanBreakdown(query)
+		}},
+		{name: "sources", call: func() (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
+			return GetAdminPaidSubscriptionValueSourceBreakdown(query)
+		}},
+	}
+	for _, endpoint := range endpoints {
+		t.Run(endpoint.name, func(t *testing.T) {
+			response, err := endpoint.call()
+			require.ErrorIs(t, err, ErrCreditValuationOverflow)
+			require.Equal(t, dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, response)
+		})
+	}
+}
+
 func TestPaidSubscriptionValueMonthlyTokenValueUsesPlanPriceAndProratesTailByTime(t *testing.T) {
 	snapshot := time.Date(2026, 6, 6, 16, 36, 1, 0, time.UTC).Unix()
 	plan := adminPaidTestPlan(1, 40, adminPaidTestCurrencyCNY)

@@ -127,20 +127,40 @@ func adminCalculateTimedSubscriptionValue(sub UserSubscription, grants []TimedSu
 					if calcErr != nil {
 						return adminTimedSubscriptionValue{}, calcErr
 					}
-					tokenMicros += futureMicros
+					combinedTokenMicros, ok := checkedAddInt64(tokenMicros, futureMicros)
+					if !ok {
+						return adminTimedSubscriptionValue{}, ErrCreditValuationOverflow
+					}
+					tokenMicros = combinedTokenMicros
 				}
 			}
 			currencyValue := result.ByCurrency[currency]
-			currencyValue.TimeMicros += timeMicros
+			currencyTimeMicros, ok := checkedAddInt64(currencyValue.TimeMicros, timeMicros)
+			if !ok {
+				return adminTimedSubscriptionValue{}, ErrCreditValuationOverflow
+			}
+			currencyValue.TimeMicros = currencyTimeMicros
 			if result.TokenAvailable {
-				currencyValue.TokenMicros += tokenMicros
+				currencyTokenMicros, addOK := checkedAddInt64(currencyValue.TokenMicros, tokenMicros)
+				if !addOK {
+					return adminTimedSubscriptionValue{}, ErrCreditValuationOverflow
+				}
+				currencyValue.TokenMicros = currencyTokenMicros
 			}
 			result.ByCurrency[currency] = currencyValue
 			sourceKey := adminTimedSourceCurrencyKey{Source: source, Currency: currency}
 			sourceValue := result.BySourceCurrency[sourceKey]
-			sourceValue.TimeMicros += timeMicros
+			sourceTimeMicros, ok := checkedAddInt64(sourceValue.TimeMicros, timeMicros)
+			if !ok {
+				return adminTimedSubscriptionValue{}, ErrCreditValuationOverflow
+			}
+			sourceValue.TimeMicros = sourceTimeMicros
 			if result.TokenAvailable {
-				sourceValue.TokenMicros += tokenMicros
+				sourceTokenMicros, addOK := checkedAddInt64(sourceValue.TokenMicros, tokenMicros)
+				if !addOK {
+					return adminTimedSubscriptionValue{}, ErrCreditValuationOverflow
+				}
+				sourceValue.TokenMicros = sourceTokenMicros
 			}
 			result.BySourceCurrency[sourceKey] = sourceValue
 		}

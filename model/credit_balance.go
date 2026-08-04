@@ -40,7 +40,13 @@ type CreditBalanceLedger struct {
 	SourceType                 string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
 	SourceId                   int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
 	SourceSnapshot             string `json:"source_snapshot,omitempty" gorm:"type:text"`
+	SourceKey                  string `json:"source_key" gorm:"type:varchar(160);not null;default:'';index"`
+	SourceStatus               string `json:"source_status" gorm:"type:varchar(32);not null;default:'';index"`
+	PlanId                     int    `json:"plan_id" gorm:"not null;default:0;index"`
 	GrossCredit                int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	NetCredit                  int64  `json:"net_credit" gorm:"type:bigint;not null;default:0"`
+	SourcePriceMicros          int64  `json:"source_price_micros,string" gorm:"type:bigint;not null;default:0"`
+	SourcePlanCredit           int64  `json:"source_plan_credit" gorm:"type:bigint;not null;default:0"`
 	DebtOffset                 int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
 	DebtFormed                 int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
 	AvailableCreditBefore      int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
@@ -87,6 +93,10 @@ type CreditBalanceGrantRequest struct {
 	SourceType              string
 	SourceId                int
 	SourceSnapshot          string
+	SourceKey               string
+	SourceStatus            string
+	SourcePlanId            int
+	ParameterFingerprint    string
 	Type                    string
 	TargetPlanId            int
 	OperatorUserId          int
@@ -98,17 +108,28 @@ type CreditBalanceGrantRequest struct {
 }
 
 type CreditBalanceGrantResult struct {
-	UserSubscriptionId int    `json:"user_subscription_id"`
-	PlanId             int    `json:"plan_id"`
-	GrossCredit        int64  `json:"gross_credit"`
-	DebtOffset         int64  `json:"debt_offset"`
-	AvailableCredit    int64  `json:"available_credit"`
-	SettlementDebt     int64  `json:"settlement_debt"`
-	BalanceBefore      int64  `json:"balance_before"`
-	BalanceAfter       int64  `json:"balance_after"`
-	Active             bool   `json:"active"`
-	LedgerId           int    `json:"ledger_id"`
-	Status             string `json:"status"`
+	UserSubscriptionId         int    `json:"user_subscription_id"`
+	PlanId                     int    `json:"plan_id"`
+	GrossCredit                int64  `json:"gross_credit"`
+	NetCredit                  int64  `json:"net_credit"`
+	GrossAmountMicros          int64  `json:"gross_amount_micros,string"`
+	NetAmountMicros            int64  `json:"net_amount_micros,string"`
+	ValuationCurrency          string `json:"valuation_currency"`
+	SourceCurrency             string `json:"source_currency"`
+	ValuationConfidence        string `json:"confidence"`
+	FxRateNumerator            int64  `json:"fx_rate_numerator,string"`
+	FxRateDenominator          int64  `json:"fx_rate_denominator,string"`
+	FxCapturedAt               int64  `json:"fx_captured_at"`
+	ValuationRuleVersion       int    `json:"rule_version"`
+	ValuationStateVersionAfter int64  `json:"state_version_after"`
+	DebtOffset                 int64  `json:"debt_offset"`
+	AvailableCredit            int64  `json:"available_credit"`
+	SettlementDebt             int64  `json:"settlement_debt"`
+	BalanceBefore              int64  `json:"balance_before"`
+	BalanceAfter               int64  `json:"balance_after"`
+	Active                     bool   `json:"active"`
+	LedgerId                   int    `json:"ledger_id"`
+	Status                     string `json:"status"`
 }
 
 func NormalizeSubscriptionPurchaseMode(value string) (string, error) {
@@ -234,6 +255,9 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	request.SourceSnapshot = strings.TrimSpace(request.SourceSnapshot)
 	request.PaymentProvider = strings.TrimSpace(request.PaymentProvider)
 	request.Reason = strings.TrimSpace(request.Reason)
+	request.SourceKey = strings.TrimSpace(request.SourceKey)
+	request.SourceStatus = strings.TrimSpace(request.SourceStatus)
+	request.ParameterFingerprint = strings.TrimSpace(request.ParameterFingerprint)
 	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.Type == "" || request.TargetPlanId <= 0 {
 		return nil, errors.New("invalid credit balance grant")
 	}
@@ -346,7 +370,11 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		SourceType:            request.SourceType,
 		SourceId:              request.SourceId,
 		SourceSnapshot:        request.SourceSnapshot,
+		SourceKey:             request.SourceKey,
+		SourceStatus:          request.SourceStatus,
+		PlanId:                request.SourcePlanId,
 		GrossCredit:           request.GrossCredit,
+		NetCredit:             request.GrossCredit - debtOffset,
 		AvailableCreditBefore: maxInt64(balanceBefore, 0),
 		SettlementDebtBefore:  settlementDebtBefore,
 		DebtOffset:            debtOffset,
@@ -356,8 +384,17 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		SettlementDebtAfter:   debtAfter,
 		OperatorUserId:        request.OperatorUserId,
 		PaymentProvider:       request.PaymentProvider,
+		ParameterFingerprint:  request.ParameterFingerprint,
 		Reason:                request.Reason,
 		CreatedAt:             getDBTimestampTx(tx),
+	}
+	if request.ValuationSource != nil {
+		ledger.SourcePriceMicros = request.ValuationSource.SourcePriceMicros
+		ledger.SourcePlanCredit = request.ValuationSource.SourcePlanCredit
+		ledger.FxSourceCurrency = strings.ToUpper(strings.TrimSpace(request.ValuationSource.SourceCurrency))
+		ledger.FxRateNumerator = 1
+		ledger.FxRateDenominator = 1
+		ledger.FxCapturedAt = ledger.CreatedAt
 	}
 	if valuationReady {
 		ledger.ValuationCurrency = valuationIngress.currency
@@ -382,8 +419,8 @@ func findCreditBalanceGrantResultTx(tx *gorm.DB, request CreditBalanceGrantReque
 	if query.RowsAffected == 0 {
 		return nil, false, nil
 	}
-	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot || ledger.PaymentProvider != strings.TrimSpace(request.PaymentProvider) {
-		return nil, false, errors.New("credit balance idempotency key mismatch")
+	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.SourceKey != request.SourceKey || ledger.SourceStatus != request.SourceStatus || ledger.PlanId != request.SourcePlanId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot || ledger.PaymentProvider != strings.TrimSpace(request.PaymentProvider) || ledger.ParameterFingerprint != request.ParameterFingerprint {
+		return nil, false, ErrCreditValuationIdempotencyMismatch
 	}
 	var balance UserSubscription
 	if err := tx.Select("id", "plan_id").Where("id = ?", ledger.UserSubscriptionId).First(&balance).Error; err != nil {
@@ -559,17 +596,28 @@ func hasUsableSubscriptionTx(tx *gorm.DB, userId int) (bool, error) {
 
 func creditBalanceGrantResult(ledger *CreditBalanceLedger, planId int, active bool) *CreditBalanceGrantResult {
 	return &CreditBalanceGrantResult{
-		UserSubscriptionId: ledger.UserSubscriptionId,
-		PlanId:             planId,
-		GrossCredit:        ledger.GrossCredit,
-		DebtOffset:         ledger.DebtOffset,
-		AvailableCredit:    ledger.AvailableCreditAfter,
-		SettlementDebt:     ledger.SettlementDebtAfter,
-		BalanceBefore:      ledger.BalanceBefore,
-		BalanceAfter:       ledger.BalanceAfter,
-		Active:             active,
-		LedgerId:           ledger.Id,
-		Status:             creditBalanceStatus(ledger.BalanceAfter),
+		UserSubscriptionId:         ledger.UserSubscriptionId,
+		PlanId:                     planId,
+		GrossCredit:                ledger.GrossCredit,
+		NetCredit:                  ledger.NetCredit,
+		GrossAmountMicros:          ledger.ValuationGrossCostMicros,
+		NetAmountMicros:            ledger.ValuationNetCostMicros,
+		ValuationCurrency:          ledger.ValuationCurrency,
+		SourceCurrency:             ledger.FxSourceCurrency,
+		ValuationConfidence:        ledger.ValuationConfidence,
+		FxRateNumerator:            ledger.FxRateNumerator,
+		FxRateDenominator:          ledger.FxRateDenominator,
+		FxCapturedAt:               ledger.FxCapturedAt,
+		ValuationRuleVersion:       ledger.ValuationRuleVersion,
+		ValuationStateVersionAfter: ledger.ValuationStateVersionAfter,
+		DebtOffset:                 ledger.DebtOffset,
+		AvailableCredit:            ledger.AvailableCreditAfter,
+		SettlementDebt:             ledger.SettlementDebtAfter,
+		BalanceBefore:              ledger.BalanceBefore,
+		BalanceAfter:               ledger.BalanceAfter,
+		Active:                     active,
+		LedgerId:                   ledger.Id,
+		Status:                     creditBalanceStatus(ledger.BalanceAfter),
 	}
 }
 

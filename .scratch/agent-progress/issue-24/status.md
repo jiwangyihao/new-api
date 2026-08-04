@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-基线与合同已核验，准备进入同币种管理员售后 increase 的首个 RED→GREEN 垂直切片。
+同币种管理员售后 increase 首个 RED→GREEN 已完成，准备补齐资格、debt、幂等与兑换纵切。
 
 ## 已完成
 
@@ -11,11 +11,12 @@
 - 已读取 `skill://tdd` 与 `skill://codebase-design`。
 - 已确认 #20 精确价格合同与 #22 `CreditValuation` ingress、状态、账本和五接口分析已集成。
 - 已确认兑换和管理员 increase 应只消费 #22 的 `newForwardCreditValuationIngress` / `ApplyCreditValuationIngressTx`，不得重写移动平均或请求结算。
+- 已完成管理员 increase 的 `plan_id`、权威档位事实、exact ingress、结构化 ledger 和精确响应首个真实 SQLite纵切。
 
 ## 下一步
 
-1. 为管理员 increase 的 `plan_id`、档位资格、精确比例估值和幂等重放写真实 SQLite RED。
-2. 实现同币种管理员 increase 的最窄领域/API 纵切。
+1. 为缺失/disabled/trial/零价/零 Credit/不允许购买档位逐项补 RED→GREEN。
+2. 证明 debt offset、完整参数指纹重放/冲突和事务回滚。
 3. 为兑换冻结快照、幂等、debt offset、事务回滚和邀请隔离逐个执行 RED→GREEN。
 4. 实现管理员 UI 服务端权威预览、幂等键生命周期与六语言。
 
@@ -27,4 +28,5 @@
 ## 最近安全提交
 
 - 起始安全提交：`ec1858fec89509bdec9a90a230a8496047c5becd`。
-- 本进度文件提交后更新此处。
+- 恢复合同安全提交：`4e0640e2f`。
+- 当前首个 GREEN 待提交。

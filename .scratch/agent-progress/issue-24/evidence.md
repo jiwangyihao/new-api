@@ -17,11 +17,15 @@
 
 ## RED / GREEN 记录
 
-尚未执行生产行为测试。后续每个垂直切片在此记录精确命令、失败原因、实现提交和 GREEN 输出。
+### 管理员同币种 exact ingress
 
+- RED：`go test ./model -run TestAdminCreditBalanceIncreaseUsesSelectedPlanExactIngress -count=1`。
+- RED 结果：编译失败，确认 `CreditBalanceAdjustmentRequest.PlanId`、结构化 ledger 字段和精确响应字段均缺失；代表公开领域合同尚不存在。
+- GREEN：同一命令通过，`go test: 1 packages ok`，耗时约 13.91 秒。
+- 行为：真实 SQLite ready marker 下，选择 `40 CNY / 1,000 Credit` 档位售后授予 800 Credit，得到 exact `32,000,000` micros CNY、state version 1，并结构化写入 plan、毛/净 Credit、源价格/分母、来源 key/status、指纹与 1:1 FX。
 ## 实际数据库/API/浏览器范围
 
-- SQLite：尚未执行。
+- SQLite：已执行首个管理员领域纵切，真实内存 SQLite + GORM migration + ready marker。
 - MySQL/PostgreSQL：本切片只做静态兼容审查；真实矩阵归 #27。
-- API：尚未执行。
+- API：尚未执行；当前仅 model 公开领域入口。
 - 浏览器：尚未执行。

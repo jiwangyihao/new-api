@@ -326,22 +326,19 @@ func TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow(t *testin
 	snapshot := adminPaidTestSnapshot()
 	plan := adminPaidTestPlan(25, 1, "CNY")
 	plan.EntitlementType = SubscriptionEntitlementTimed
-	require.NoError(t, DB.Create(&plan).Error)
-
-	users := []User{
-		adminPaidTestUser(251, "timed-overflow-max"),
-		adminPaidTestUser(252, "timed-overflow-next"),
-	}
-	subscriptions := []UserSubscription{
-		{Id: 251, UserId: users[0].Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 1, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder},
-		{Id: 252, UserId: users[1].Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed, Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 1, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder},
+	user := adminPaidTestUser(251, "timed-overflow")
+	subscription := UserSubscription{
+		Id: 251, UserId: user.Id, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed,
+		Status: SubscriptionStatusActive, StartTime: snapshot, EndTime: snapshot + 2,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
 	}
 	grants := []TimedSubscriptionValuationGrant{
-		{IdempotencyKey: "timed-overflow-max", UserSubscriptionId: subscriptions[0].Id, UserId: users[0].Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:251", SourceId: 251, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: math.MaxInt64, SourceCurrency: "CNY", ValuationAmountMicros: math.MaxInt64, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
-		{IdempotencyKey: "timed-overflow-next", UserSubscriptionId: subscriptions[1].Id, UserId: users[1].Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:252", SourceId: 252, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: 1, SourceCurrency: "CNY", ValuationAmountMicros: 1, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
+		{IdempotencyKey: "timed-overflow-max", UserSubscriptionId: subscription.Id, UserId: user.Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:251", SourceId: 251, EventStartTime: snapshot, EventEndTime: snapshot + 1, GrantCredit: 1, SourcePriceMicros: math.MaxInt64, SourceCurrency: "CNY", ValuationAmountMicros: math.MaxInt64, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot},
+		{IdempotencyKey: "timed-overflow-next", UserSubscriptionId: subscription.Id, UserId: user.Id, PlanId: plan.Id, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:252", SourceId: 252, EventStartTime: snapshot + 1, EventEndTime: snapshot + 2, GrantCredit: 1, SourcePriceMicros: 1, SourceCurrency: "CNY", ValuationAmountMicros: 1, ValuationCurrency: "CNY", Confidence: TimedSubscriptionValuationConfidenceExact, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, CreatedAt: snapshot + 1},
 	}
-	require.NoError(t, DB.Create(&users).Error)
-	require.NoError(t, DB.Create(&subscriptions).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	require.NoError(t, DB.Create(&user).Error)
+	require.NoError(t, DB.Create(&subscription).Error)
 	require.NoError(t, DB.Create(&grants).Error)
 
 	query := adminPaidTestQuery(snapshot)

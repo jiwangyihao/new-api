@@ -16,12 +16,12 @@
 
 1. 并发同源重放串行化：`COMPLETE`。真实文件型 SQLite、4 连接、callback/barrier RED 已证明旧锁前 replay read 导致 `SQLITE_BUSY`；计划行现先通过现有 `conversion_guard_version` 写 guard 串行化，再权威查重。定向、`-count=10` 与窄 `-race` 均通过。
 2. 权威整数 micros 聚合与排序：`COMPLETE`。#22 的四列表 `amount_micros` sorter 保持不变；两个 non-timed row 累加分支改用 `Value.*Micros`，precision-boundary 与 Credit 32 CNY + timed CNY/USD 组合验证通过。
-3. timed micros 加法溢出关闭：`PENDING`，待补 MaxInt64 与多 segment/source/五接口 RED。
-4. 不可变 hook 稳定 sentinel：`PENDING`，待补 update/delete `errors.Is` RED。
+3. timed micros 加法溢出关闭：`COMPLETE`。`adminCalculateTimedSubscriptionValue` 的 token/current+future、currency time/token、source time/token 累加均改用现有 `checkedAddInt64`；`MaxInt64` 成功，下一 micros 通过五接口稳定返回 `ErrCreditValuationOverflow` 与空响应。
+4. 不可变 hook 稳定 sentinel：`PENDING`，下一步只补 update/delete `errors.Is` RED 与最小 GREEN。
 
 ## 恢复信息
 
-- 最近安全提交：`543b8297f760fece706746002de99b42355192f5`（Finding 2 权威 micros 聚合修复）。
-- 未提交文件：Finding 3 最小 timed overflow RED/GREEN 现场，仅 `model/timed_subscription_analytics.go` 与 `model/admin_analytics_paid_subscription_test.go`；不与 Finding 2 证据提交混合。
-- 下一条精确命令：`go test ./model -run '^(TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow)$' -count=1`。
+- 最近安全提交：`a9752f218`（Finding 3 timed micros 溢出关闭；最终证据提交后更新）。
+- 未提交文件：Finding 3 最小五接口夹具收敛及本 status/evidence，待独立提交；不含 Finding 4 改动。
+- 下一条精确命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsMutationWithStableSentinel$' -count=1`（先写 Finding 4 RED 后运行）。
 - 阻塞：无。

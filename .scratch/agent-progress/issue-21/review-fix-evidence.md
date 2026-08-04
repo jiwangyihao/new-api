@@ -53,6 +53,17 @@
 - 组合验证：`go test ./model -run '^(TestPaidSubscriptionValue(RowAggregationUsesAuthoritativeMicros|RecognizedRemainingSortUsesAuthoritativeMicros|UsesTimedGrantTimelineAcrossFiveViews)|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)$' -count=1` → PASS。
 - 组合结果：Credit frozen tracer 仍为 `32,000,000` CNY micros、available 800、active count 1；timed CNY/USD 五接口与 nullable singular 合同保持；precision boundary 五接口聚合精确。
 - Finding 2 安全提交：`543b8297f fix(analytics): 使用权威 micros 聚合剩余价值`。
+
+### Finding 3：timed micros 加法溢出关闭
+
+- RED：`TestTimedSubscriptionValueChecksMicrosAggregationOverflow` 由同币种连续 segment 构造 `MaxInt64` 后再累加 1 micros；旧实现返回 `nil` error，证明 `tokenMicros += futureMicros` 与 currency/source accumulator 的原生 `int64 +=` 会静默回绕。
+- RED 命令：`go test ./model -run '^TestTimedSubscriptionValueChecksMicrosAggregationOverflow$' -count=1`；精确失败为 `Expected error with "credit_valuation_overflow" in chain but got nil`。
+- 最小 GREEN：只在 `adminCalculateTimedSubscriptionValue` 将 current+future token、currency time/token、source time/token 六处累加改为现有 `checkedAddInt64`；失败统一返回空 `adminTimedSubscriptionValue` 与既有 `ErrCreditValuationOverflow`，未修改 DTO/API 或非 timed 路径。
+- 边界：同币种多 segment 正好累加至 `math.MaxInt64` 成功且 currency/source recognized 精确；下一 micros 稳定失败，不返回负数、截断或 unknown。
+- 五接口：`TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow` 使用一条 timed 权益、两条首尾相接 grant 形成 CNY `MaxInt64 + 1`，summary/users/subscriptions/plans/sources 均 `errors.Is(ErrCreditValuationOverflow)` 且响应为零值，无部分 totals。
+- GREEN/重复命令：`go test ./model -run '^(TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow)$' -count=10` → PASS。
+- 差异检查：`git diff --check` → 无输出。
+- Finding 3 实现提交：`a9752f218 fix(analytics): 关闭计时金额累加溢出`；其后仅收敛同等行为的五接口夹具并回填本证据。
 ## 数据库范围
 
 - SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。

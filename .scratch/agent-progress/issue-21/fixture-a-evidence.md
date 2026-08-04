@@ -1,0 +1,53 @@
+# Issue #21 Fixture A 证据
+
+状态：RED_CAPTURED
+
+## 基线与必读材料
+
+- `git rev-parse HEAD`：`774b35740c1879b285537031410731317d0142fc`
+- `git merge-base --is-ancestor 774b35740c1879b285537031410731317d0142fc HEAD`：成功。
+- 起始 `git status --short`：无输出。
+- 已按要求读取父 PRD #19、Issue #21、已关闭 #22、共享夹具迁移合同、执行上下文、Issue #21 acceptance、ADR 0001/0002、2026-08-02 spec/plan、冻结 `status/evidence/contract` 与 `final-spec-fix-*`。
+- 已读取 `skill://diagnosing-bugs`、`skill://tdd`、`skill://codebase-design`。
+
+## 包级 RED
+
+命令：
+
+```text
+go test ./model -count=1
+```
+
+结果：FAIL，退出码 1，`github.com/QuantumNous/new-api/model` 在约 6.6 秒测试时间失败。完整工具输出保存在本次会话 artifact `artifact://5`。
+
+在包因 panic 终止前，观察到 6 个 paid-value fixture 相关失败：
+
+1. `TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue`
+   - `admin_analytics_paid_subscription_test.go:110`
+   - `Max difference between 44 and 0 allowed is 0.0001, but difference was 44`
+2. `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders`
+   - `admin_analytics_paid_subscription_test.go:631`
+   - `Max difference between 99 and 0 allowed is 0.0001, but difference was 99`
+3. `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers`
+   - `admin_analytics_paid_subscription_test.go:647`
+   - `Max difference between 33 and 0 allowed is 0.0001, but difference was 33`
+4. `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows`
+   - `admin_analytics_paid_subscription_test.go:677`
+   - `Max difference between 33 and 0 allowed is 0.0001, but difference was 33`
+5. `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly/recognized_remaining_value`
+   - `admin_analytics_paid_subscription_test.go:762`
+   - expected subscription ID `1`, actual `2`
+6. `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency`
+   - panic at `admin_analytics_paid_subscription_test.go:989`
+   - `runtime error: invalid memory address or nil pointer dereference`
+   - stack reaches `testing.tRunner`; package aborts before later tests can report.
+
+这些失败均发生在 timed analytics 已改为只读 `TimedSubscriptionValuationGrant` 后：旧夹具仍只插入 `SubscriptionPlan + UserSubscription`，因此 recognized 金额为 0、排序事实改变，或 nullable singular 被测试直接解引用。修复信号必须是合法 immutable grant fixture，不是生产 current Plan fallback。
+
+## 非主失败信号
+
+同一包级运行较早出现后台 gopool panic 日志：`common.RedisHSetObj` 对 Redis client 调用 `TxPipeline` 时 nil dereference，并有 `redis: client is closed` 日志。它没有终止包；本轮真正退出发生在上述 paid-value 测试 nil dereference。待 paid-value 夹具迁移后重新运行包级命令，才能判断该全局 Redis 夹具日志是否形成独立测试失败。
+
+## GREEN
+
+尚未开始。每组夹具迁移后追加具体命令、结果与保持的业务断言。

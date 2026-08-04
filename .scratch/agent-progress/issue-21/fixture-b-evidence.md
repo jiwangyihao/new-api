@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 B 证据
 
-状态：VERIFYING
+状态：COMPLETE
 
 冻结 HEAD：`774b35740c1879b285537031410731317d0142fc`。
 
@@ -63,3 +63,20 @@ go test ./service -count=1
 ## 断言保留
 
 测试继续断言：只产生一份 Credit 余额权益；邀请奖励事件、佣金记录和佣金账户均为零；两名直接邀请中仅 timed 对照用户符合活动资格；邀请人不获得月度权益。
+
+## 最终实跑复核
+
+命令：
+
+```text
+go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1 -v && go test ./service -count=1
+```
+
+实际结果：两条命令均输出 `go test: 1 packages ok`，组合命令退出码 0。
+
+## 提交与范围
+
+- `52cc9b193`：建立兑换夹具迁移检查点。
+- `1866aa042`：持久化最小 RED。
+- `df6531cf6`：通过 `Redemption.Insert` 构造合法 Credit 兑换夹具并记录 GREEN。
+- 修改范围仅为 `service/invitation_commission_test.go` 与 `.scratch/agent-progress/issue-21/fixture-b-{status,evidence,contract}.md`；未修改生产代码、model/controller、CreditValuation、ledger 或 request settlement。

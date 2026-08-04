@@ -1,14 +1,14 @@
 # Issue #21 夹具迁移 B 状态
 
-状态：VERIFYING
+状态：COMPLETE
 
 ## 冻结现场
 
 - 工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-21-fixture-b-service`
 - 冻结基线：`774b35740c1879b285537031410731317d0142fc`
 - 起始工作树：clean
-- 最近安全提交：`1866aa042`（持久化最小 RED）
-- 当前未提交文件：`service/invitation_commission_test.go` 与本次 GREEN 证据更新
+- 最近安全提交：`df6531cf6`（通过授权入口构造兑换夹具）
+- 当前未提交文件：仅本次完成状态与最终实跑证据；提交后为 0
 ## 已完成
 
 - 已读取调试、TDD、Orca、父 PRD #19、Issue #21/#22、共享迁移合同、执行协议、Issue #21 验收、ADR/spec 相关合同与冻结 `final-spec-fix-*`。
@@ -17,11 +17,12 @@
 - 已将 Credit redemption 夹具从 `model.DB.Create` 迁移到 `Redemption.Insert`，并显式断言 `FulfillmentSnapshot` 非空。
 - 已保留真实 `Redeem`、邀请处理和原有 Credit 邀请隔离断言。
 
-## 当前阶段
+## 完成结果
 
-- GREEN：最小 Credit redemption 子测试通过。
-- GREEN：`go test ./service -count=1` 包级通过。
-- 下一步：提交实现与证据，执行 diff/clean 检查并发送 `worker_done`。
+- RED 已持久化于 `1866aa042`；Credit redemption 测试旁路 `Redemption.Insert`，缺少 `FulfillmentSnapshot` 后被生产路径稳定 fail-closed。
+- GREEN 已持久化于 `df6531cf6`；合法 option Plan 使用权威整数 micros，Redemption 经 `Insert` 冻结快照，再走真实 Redeem/邀请处理调用链。
+- 迁移后最小子测试与 `go test ./service -count=1` 已再次实际运行并通过；原邀请隔离断言完整保留。
+- 下一步：提交最终实跑证据，完成 diff/clean 检查并发送 `worker_done`。
 ## 阻塞
 
 无。

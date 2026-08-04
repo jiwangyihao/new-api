@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 B 合同
 
-状态：VERIFYING
+状态：COMPLETE
 
 ## 冻结输入
 

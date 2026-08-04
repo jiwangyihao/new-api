@@ -39,12 +39,18 @@
 - 旧实现稳定 FAIL：`timed_subscription_valuation_test.go:123` 期望 `40000000`，实际 grant 为 `25000000`；证明 guard 后虽重读 Plan，但 normalize 仍采用调用方价币。
 - 同一测试还将锁定权威 Credit、duration、reset 与 source snapshot；修复必须使实际窗口为 3,600 秒并冻结数据库 Plan 全部事实。
 
-## GREEN
+## GREEN：权威 Plan 快照
 
-- 尚未实现。
+- 最小实现：`TimedSubscriptionGrantRequest` 删除 `Plan`、`SourcePriceMicros`、`SourceCurrency`，调用方仅传 `UserId`、`PlanId` 与 source identity/reason/key；订单、兑换、管理员生产调用均已迁移。
+- 事务路径：`SubscriptionPlan` guard → 已提交 source/idempotency identity 重放 → 同事务重新读取当前 Plan → 新 allocation 校验 timed/enabled/非 trial/权威 micros/币种/Credit → 创建 entitlement/window/grant。
+- Controller/API RED：`go test ./controller -run '^TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot$' -count=1 -v` 在旧实现中 FAIL，权威 `40,000,000 CNY` 被伪造 payload 写成 `25,000,000 USD`。
+- Controller/API GREEN：`go test ./controller -run '^TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot$' -count=1`；PASS（1 package）。旧估值字段不再进入管理员业务 DTO，数据库 grant 严格为 Plan 的 `40,000,000 CNY`。
+- Model RED：`go test ./model -run '^TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot$' -count=1 -v` 在旧实现中 FAIL，调用侧旧 Plan/价币覆盖数据库事实。
+- Model GREEN：`go test ./model -run '^TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot$' -count=1`；PASS（1 package）。数据库 Plan 的 40 CNY、1,000 Credit、3,600 秒、never reset 决定 grant 和 source snapshot。
+- 调用迁移：其余 `TimedSubscriptionGrantRequest` 生产与测试 struct literal 已切换为 `PlanId`，不再传递 Plan 对象或价币估值事实；两条 GREEN 命令均完整编译对应测试包。
 
 ## 数据库范围
 
-- SQLite：待运行真实事务/API 测试。
+- SQLite：权威快照真实事务/API 定向测试 PASS。
 - MySQL 5.7：未运行；三库零 SKIP 归 Issue #27。
 - PostgreSQL 9.6：未运行；三库零 SKIP 归 Issue #27。

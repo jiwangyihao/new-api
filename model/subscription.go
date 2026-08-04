@@ -1085,13 +1085,11 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 			return nil, ErrTimedSubscriptionGrantInvalid
 		}
 		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
-			UserId:            order.UserId,
-			Plan:              plan,
-			IdempotencyKey:    TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id),
-			SourceType:        TimedSubscriptionGrantSourceOrder,
-			SourceId:          order.Id,
-			SourcePriceMicros: *snapshot.ListPriceMicros,
-			SourceCurrency:    snapshot.ListPriceCurrency,
+			UserId:         order.UserId,
+			PlanId:         plan.Id,
+			IdempotencyKey: TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id),
+			SourceType:     TimedSubscriptionGrantSourceOrder,
+			SourceId:       order.Id,
 		})
 	} else {
 		creation, err = CreateUserSubscriptionFromPlanWithResultTx(tx, order.UserId, plan, SubscriptionGrantOrder)
@@ -1461,35 +1459,24 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 }
 
 type AdminTimedSubscriptionGrantRequest struct {
-	UserId            int
-	PlanId            int
-	IdempotencyKey    string
-	Reason            string
-	SourcePriceMicros int64
-	SourceCurrency    string
+	UserId         int
+	PlanId         int
+	IdempotencyKey string
+	Reason         string
 }
 
-// AdminBindSubscription grants a paid timed entitlement from explicit audited valuation facts.
+// AdminBindSubscription grants a paid timed entitlement from the authoritative plan.
 func AdminBindSubscription(request AdminTimedSubscriptionGrantRequest) (string, error) {
-	if request.UserId <= 0 || request.PlanId <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" || request.SourcePriceMicros <= 0 || strings.TrimSpace(request.SourceCurrency) == "" {
+	if request.UserId <= 0 || request.PlanId <= 0 || strings.TrimSpace(request.IdempotencyKey) == "" || strings.TrimSpace(request.Reason) == "" {
 		return "", ErrTimedSubscriptionGrantInvalid
 	}
-	plan, err := GetSubscriptionPlanById(request.PlanId)
-	if err != nil {
-		return "", err
-	}
-	if plan.EntitlementType != SubscriptionEntitlementTimed || !plan.Enabled || plan.IsTrial || plan.InviteTrial {
-		return "", ErrTimedSubscriptionGrantInvalid
-	}
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.Transaction(func(tx *gorm.DB) error {
 		_, grantErr := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
-			UserId:            request.UserId,
-			Plan:              plan,
-			IdempotencyKey:    request.IdempotencyKey,
-			SourceType:        TimedSubscriptionGrantSourceAdmin,
-			SourcePriceMicros: request.SourcePriceMicros,
-			SourceCurrency:    request.SourceCurrency,
-			Reason:            request.Reason,
+			UserId:         request.UserId,
+			PlanId:         request.PlanId,
+			IdempotencyKey: request.IdempotencyKey,
+			SourceType:     TimedSubscriptionGrantSourceAdmin,
+			Reason:         request.Reason,
 		})
 		return grantErr
 	})

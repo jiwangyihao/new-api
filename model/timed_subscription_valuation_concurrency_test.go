@@ -15,13 +15,11 @@ import (
 func TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes(t *testing.T) {
 	db, userID, plan := setupTimedSubscriptionValuationConcurrencyTestDB(t)
 	request := TimedSubscriptionGrantRequest{
-		UserId:            userID,
-		Plan:              &plan,
-		IdempotencyKey:    "subscription_order:21903",
-		SourceType:        TimedSubscriptionGrantSourceOrder,
-		SourceId:          21_903,
-		SourcePriceMicros: 40_000_000,
-		SourceCurrency:    "CNY",
+		UserId:         userID,
+		PlanId:         plan.Id,
+		IdempotencyKey: "subscription_order:21903",
+		SourceType:     TimedSubscriptionGrantSourceOrder,
+		SourceId:       21_903,
 	}
 
 	type barrierEvent uint8
@@ -137,11 +135,15 @@ func setupTimedSubscriptionValuationConcurrencyTestDB(t *testing.T) (*gorm.DB, i
 	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &UserSubscription{}, &TimedSubscriptionValuationGrant{}))
 
 	const userID = 21_901
+	priceMicros := int64(40_000_000)
 	plan := SubscriptionPlan{
 		Id:                21_902,
 		Title:             "Concurrent Timed Grant",
 		Enabled:           true,
 		EntitlementType:   SubscriptionEntitlementTimed,
+		PriceAmount:       40,
+		PriceAmountMicros: &priceMicros,
+		Currency:          "CNY",
 		DurationUnit:      SubscriptionDurationHour,
 		DurationValue:     1,
 		MonthlyTokenLimit: 1000,

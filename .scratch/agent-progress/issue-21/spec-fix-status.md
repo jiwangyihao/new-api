@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`MODEL_RED_CONFIRMED`。
-- Standards 四项 finding：保持 `COMPLETE`，不得回退。
-- AC2 / Gate B：Controller/API 与 model 权威 Plan 快照 RED 均已确认；下一步仅做最小领域 GREEN。
+- 状态：`AUTHORITATIVE_PLAN_SNAPSHOT_GREEN`。
+- Standards 四项 finding：保持 `COMPLETE`，未改动。
+- AC2 / Gate B：调用接口已收窄到 `UserId + PlanId + source identity/reason/key`；controller/API 与 model 权威 Plan 快照定向测试均已 GREEN，等待本安全点提交。
 
 ## 权威事实
 
@@ -20,26 +20,28 @@
 ## 固定锁序
 
 ```text
-SubscriptionPlan guard -> authoritative SubscriptionPlan reread -> existing timed grant identity -> target UserSubscription -> new TimedSubscriptionValuationGrant
+SubscriptionPlan guard -> committed grant identity replay -> authoritative SubscriptionPlan reread -> target UserSubscription -> new TimedSubscriptionValuationGrant
 ```
 
-重放判断必须使用数据库权威 Plan 事实。已成功来源在 Plan 后续 disabled 时仍返回原 grant；disabled Plan 的新 identity 必须拒绝且零写入。
+Plan guard 先线性化同一计划；已成功来源重放只校验冻结的 request identity/reason，因此 Plan 后续 disabled 时仍返回原 grant。只有新 allocation 进入权威 Plan 重读与 timed/enabled/精确估值事实校验；disabled Plan 的新 identity 稳定拒绝且零写入。
 
 ## 下一步
 
-1. 提交 model 权威 Plan RED 与本进度证据。
-2. 最小 GREEN：请求仅保留 Plan identity/source intent；guard 内重读数据库 Plan 后再构造重放指纹与 grant。
-3. 补非法权威 Plan 零写入、disabled 重放/新 key、边界秒与零额度回归。
+1. 提交权威 Plan 快照最小 GREEN 安全点。
+2. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
+3. 运行重复定向及 #22 Credit + #21 timed 组合回归。
 
 ## 最近安全提交
 
 - `4212d2218`：复现管理员伪造计时估值（Controller/API RED）。
 - `0c7ef4aec`：建立 AC2 / Gate B 修复恢复现场。
+- `014e4e5aa`：提交 model 权威 Plan 快照 RED。
 
 ## 未提交文件
 
-- `model/timed_subscription_valuation_test.go`：权威 Plan 价币/Credit/duration/reset RED。
-- 本目录 `spec-fix-status.md`、`spec-fix-evidence.md`：model RED 证据更新。
+- 生产：`controller/subscription.go`、`model/subscription.go`、`model/redemption.go`、`model/timed_subscription_valuation.go`。
+- 测试：`model/timed_subscription_valuation_test.go`、`model/timed_subscription_valuation_concurrency_test.go`。
+- 证据：本文件与 `spec-fix-evidence.md`。
 
 ## 阻塞
 

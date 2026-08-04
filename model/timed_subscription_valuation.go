@@ -58,14 +58,12 @@ var (
 )
 
 type TimedSubscriptionGrantRequest struct {
-	UserId            int
-	Plan              *SubscriptionPlan
-	IdempotencyKey    string
-	SourceType        string
-	SourceId          int
-	SourcePriceMicros int64
-	SourceCurrency    string
-	Reason            string
+	UserId         int
+	PlanId         int
+	IdempotencyKey string
+	SourceType     string
+	SourceId       int
+	Reason         string
 }
 
 type timedSubscriptionGrantSourceSnapshot struct {
@@ -88,7 +86,14 @@ type timedSubscriptionGrantSourceSnapshot struct {
 }
 
 type normalizedTimedSubscriptionGrantRequest struct {
+	request     TimedSubscriptionGrantRequest
+	sourceKey   string
+	grantSource string
+}
+
+type authoritativeTimedSubscriptionGrant struct {
 	request        TimedSubscriptionGrantRequest
+	plan           *SubscriptionPlan
 	sourceKey      string
 	grantSource    string
 	sourceCurrency string
@@ -105,7 +110,7 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 		return nil, err
 	}
 	planGuard := tx.Model(&SubscriptionPlan{}).
-		Where("id = ?", normalized.request.Plan.Id).
+		Where("id = ?", normalized.request.PlanId).
 		UpdateColumn("conversion_guard_version", gorm.Expr("conversion_guard_version + ?", 1))
 	if planGuard.Error != nil {
 		return nil, planGuard.Error
@@ -118,20 +123,17 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 	} else if found {
 		return existing, nil
 	}
-	var eligibility SubscriptionPlan
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", request.Plan.Id).First(&eligibility).Error; err != nil {
-		return nil, err
-	}
-	if !eligibility.Enabled || eligibility.EntitlementType != SubscriptionEntitlementTimed || eligibility.IsTrial || eligibility.InviteTrial {
+
+	var plan SubscriptionPlan
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.PlanId).First(&plan).Error; err != nil {
 		return nil, ErrTimedSubscriptionGrantInvalid
 	}
-	request.Plan = &eligibility
-	normalized, err = normalizeTimedSubscriptionGrantRequest(request)
+	authoritative, err := freezeAuthoritativeTimedSubscriptionGrant(normalized, &plan)
 	if err != nil {
 		return nil, err
 	}
 
-	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, request.UserId, request.Plan, normalized.grantSource)
+	creation, err := CreateUserSubscriptionFromPlanWithResultTx(tx, authoritative.request.UserId, authoritative.plan, authoritative.grantSource)
 	if err != nil {
 		return nil, err
 	}
@@ -143,26 +145,26 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 		return nil, err
 	}
 	grant := &TimedSubscriptionValuationGrant{
-		IdempotencyKey:        normalized.request.IdempotencyKey,
+		IdempotencyKey:        authoritative.request.IdempotencyKey,
 		UserSubscriptionId:    creation.Subscription.Id,
-		UserId:                normalized.request.UserId,
-		PlanId:                normalized.request.Plan.Id,
-		SourceType:            normalized.request.SourceType,
-		SourceKey:             normalized.sourceKey,
-		SourceId:              normalized.request.SourceId,
+		UserId:                authoritative.request.UserId,
+		PlanId:                authoritative.plan.Id,
+		SourceType:            authoritative.request.SourceType,
+		SourceKey:             authoritative.sourceKey,
+		SourceId:              authoritative.request.SourceId,
 		EventStartTime:        creation.EventStartTime,
 		EventEndTime:          creation.EventEndTime,
-		GrantCredit:           normalized.request.Plan.MonthlyTokenLimit,
-		SourcePriceMicros:     normalized.priceMicros,
-		SourceCurrency:        normalized.sourceCurrency,
-		ValuationAmountMicros: normalized.priceMicros,
-		ValuationCurrency:     normalized.sourceCurrency,
+		GrantCredit:           authoritative.plan.MonthlyTokenLimit,
+		SourcePriceMicros:     authoritative.priceMicros,
+		SourceCurrency:        authoritative.sourceCurrency,
+		ValuationAmountMicros: authoritative.priceMicros,
+		ValuationCurrency:     authoritative.sourceCurrency,
 		Confidence:            TimedSubscriptionValuationConfidenceExact,
 		RuleVersion:           CreditValuationRuleVersion,
 		FxRateNumerator:       1,
 		FxRateDenominator:     1,
 		FxCapturedAt:          createdAt,
-		SourceSnapshot:        normalized.snapshot,
+		SourceSnapshot:        authoritative.snapshot,
 		CreatedAt:             createdAt,
 	}
 	if err := tx.Create(grant).Error; err != nil {
@@ -173,9 +175,8 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantRequest) (normalizedTimedSubscriptionGrantRequest, error) {
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.SourceType = strings.TrimSpace(request.SourceType)
-	request.SourceCurrency = strings.ToUpper(strings.TrimSpace(request.SourceCurrency))
 	request.Reason = strings.TrimSpace(request.Reason)
-	if request.UserId <= 0 || request.Plan == nil || request.Plan.Id <= 0 || request.Plan.EntitlementType != SubscriptionEntitlementTimed || request.SourcePriceMicros <= 0 || request.SourceCurrency == "" || request.Plan.MonthlyTokenLimit <= 0 || request.IdempotencyKey == "" {
+	if request.UserId <= 0 || request.PlanId <= 0 || request.IdempotencyKey == "" {
 		return normalizedTimedSubscriptionGrantRequest{}, ErrTimedSubscriptionGrantInvalid
 	}
 
@@ -204,21 +205,35 @@ func normalizeTimedSubscriptionGrantRequest(request TimedSubscriptionGrantReques
 		return normalizedTimedSubscriptionGrantRequest{}, ErrTimedSubscriptionGrantInvalid
 	}
 
+	return normalizedTimedSubscriptionGrantRequest{
+		request: request, sourceKey: sourceKey, grantSource: grantSource,
+	}, nil
+}
+
+func freezeAuthoritativeTimedSubscriptionGrant(normalized normalizedTimedSubscriptionGrantRequest, plan *SubscriptionPlan) (authoritativeTimedSubscriptionGrant, error) {
+	if plan == nil || plan.Id != normalized.request.PlanId || !plan.Enabled || plan.EntitlementType != SubscriptionEntitlementTimed || plan.IsTrial || plan.InviteTrial || plan.PriceAmountMicros == nil || *plan.PriceAmountMicros <= 0 || plan.MonthlyTokenLimit <= 0 {
+		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
+	}
+	currency := strings.ToUpper(strings.TrimSpace(plan.Currency))
+	if currency != "CNY" && currency != "USD" {
+		return authoritativeTimedSubscriptionGrant{}, ErrTimedSubscriptionGrantInvalid
+	}
+
 	snapshot := timedSubscriptionGrantSourceSnapshot{
-		IdempotencyKey: request.IdempotencyKey, SourceType: request.SourceType, SourceKey: sourceKey, SourceId: request.SourceId,
-		UserId: request.UserId, PlanId: request.Plan.Id, SourcePriceMicros: request.SourcePriceMicros,
-		SourceCurrency: request.SourceCurrency, Reason: request.Reason, GrantCredit: request.Plan.MonthlyTokenLimit,
-		DurationUnit: request.Plan.DurationUnit, DurationValue: request.Plan.DurationValue, CustomSeconds: request.Plan.CustomSeconds,
-		QuotaResetPeriod: NormalizeResetPeriod(request.Plan.QuotaResetPeriod), QuotaResetCustomSeconds: request.Plan.QuotaResetCustomSeconds,
+		IdempotencyKey: normalized.request.IdempotencyKey, SourceType: normalized.request.SourceType, SourceKey: normalized.sourceKey, SourceId: normalized.request.SourceId,
+		UserId: normalized.request.UserId, PlanId: plan.Id, SourcePriceMicros: *plan.PriceAmountMicros,
+		SourceCurrency: currency, Reason: normalized.request.Reason, GrantCredit: plan.MonthlyTokenLimit,
+		DurationUnit: plan.DurationUnit, DurationValue: plan.DurationValue, CustomSeconds: plan.CustomSeconds,
+		QuotaResetPeriod: NormalizeResetPeriod(plan.QuotaResetPeriod), QuotaResetCustomSeconds: plan.QuotaResetCustomSeconds,
 		ValuationRuleVersion: CreditValuationRuleVersion,
 	}
 	payload, err := common.Marshal(snapshot)
 	if err != nil {
-		return normalizedTimedSubscriptionGrantRequest{}, err
+		return authoritativeTimedSubscriptionGrant{}, err
 	}
-	return normalizedTimedSubscriptionGrantRequest{
-		request: request, sourceKey: sourceKey, grantSource: grantSource,
-		sourceCurrency: request.SourceCurrency, priceMicros: request.SourcePriceMicros, snapshot: string(payload),
+	return authoritativeTimedSubscriptionGrant{
+		request: normalized.request, plan: plan, sourceKey: normalized.sourceKey, grantSource: normalized.grantSource,
+		sourceCurrency: currency, priceMicros: *plan.PriceAmountMicros, snapshot: string(payload),
 	}, nil
 }
 
@@ -245,12 +260,15 @@ func findTimedSubscriptionGrantReplayTx(tx *gorm.DB, normalized normalizedTimedS
 
 func timedSubscriptionGrantMatchesRequest(grant TimedSubscriptionValuationGrant, normalized normalizedTimedSubscriptionGrantRequest) bool {
 	request := normalized.request
-	return grant.IdempotencyKey == request.IdempotencyKey &&
-		grant.UserId == request.UserId && grant.PlanId == request.Plan.Id &&
-		grant.SourceType == request.SourceType && grant.SourceKey == normalized.sourceKey && grant.SourceId == request.SourceId &&
-		grant.GrantCredit == request.Plan.MonthlyTokenLimit && grant.SourcePriceMicros == normalized.priceMicros &&
-		grant.SourceCurrency == normalized.sourceCurrency && grant.ValuationAmountMicros == normalized.priceMicros &&
-		grant.ValuationCurrency == normalized.sourceCurrency && grant.Confidence == TimedSubscriptionValuationConfidenceExact &&
-		grant.RuleVersion == CreditValuationRuleVersion && grant.FxRateNumerator == 1 && grant.FxRateDenominator == 1 &&
-		grant.SourceSnapshot == normalized.snapshot
+	if grant.IdempotencyKey != request.IdempotencyKey || grant.UserId != request.UserId || grant.PlanId != request.PlanId ||
+		grant.SourceType != request.SourceType || grant.SourceKey != normalized.sourceKey || grant.SourceId != request.SourceId {
+		return false
+	}
+	var snapshot timedSubscriptionGrantSourceSnapshot
+	if err := common.UnmarshalJsonStr(grant.SourceSnapshot, &snapshot); err != nil {
+		return false
+	}
+	return snapshot.IdempotencyKey == request.IdempotencyKey && snapshot.SourceType == request.SourceType &&
+		snapshot.SourceKey == normalized.sourceKey && snapshot.SourceId == request.SourceId &&
+		snapshot.UserId == request.UserId && snapshot.PlanId == request.PlanId && snapshot.Reason == request.Reason
 }

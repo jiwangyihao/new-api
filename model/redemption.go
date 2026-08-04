@@ -516,23 +516,44 @@ func isPublicRedemptionError(err error) bool {
 		errors.Is(err, ErrRedemptionAlreadyUsed)
 }
 
+func ensureRedemptionSourceSnapshotTx(tx *gorm.DB, redemption *Redemption, replace bool) error {
+	if tx == nil || redemption == nil {
+		return errors.New("invalid redemption")
+	}
+	if normalizeRedemptionType(redemption.Type) != RedemptionTypeSubscription {
+		redemption.FulfillmentSnapshot = ""
+		return nil
+	}
+	if !replace && strings.TrimSpace(redemption.FulfillmentSnapshot) != "" {
+		var fulfillment RedemptionFulfillmentSnapshot
+		if err := common.UnmarshalJsonStr(redemption.FulfillmentSnapshot, &fulfillment); err != nil {
+			return err
+		}
+		if fulfillment.Entitlement.PlanID == redemption.PlanId {
+			return nil
+		}
+	}
+	plan, err := getRedemptionPlanTx(tx, redemption.PlanId)
+	if err != nil {
+		return err
+	}
+	snapshotPayload, err := common.Marshal(RedemptionFulfillmentSnapshot{
+		Entitlement: NewSubscriptionEntitlementSnapshot(plan, "", 0),
+	})
+	if err != nil {
+		return err
+	}
+	redemption.FulfillmentSnapshot = string(snapshotPayload)
+	return nil
+}
+
 func (redemption *Redemption) Insert() error {
 	if redemption == nil {
 		return errors.New("invalid redemption")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		if normalizeRedemptionType(redemption.Type) == RedemptionTypeSubscription {
-			plan, err := getRedemptionPlanTx(tx, redemption.PlanId)
-			if err != nil {
-				return err
-			}
-			snapshotPayload, err := common.Marshal(RedemptionFulfillmentSnapshot{
-				Entitlement: NewSubscriptionEntitlementSnapshot(plan, "", 0),
-			})
-			if err != nil {
-				return err
-			}
-			redemption.FulfillmentSnapshot = string(snapshotPayload)
+		if err := ensureRedemptionSourceSnapshotTx(tx, redemption, true); err != nil {
+			return err
 		}
 		return tx.Create(redemption).Error
 	})
@@ -545,9 +566,15 @@ func (redemption *Redemption) SelectUpdate() error {
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
 func (redemption *Redemption) Update() error {
-	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "amount_cents", "currency", "redeemed_time", "expired_time", "batch_id").Updates(redemption).Error
-	return err
+	if redemption == nil {
+		return errors.New("invalid redemption")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if err := ensureRedemptionSourceSnapshotTx(tx, redemption, false); err != nil {
+			return err
+		}
+		return tx.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "amount_cents", "currency", "redeemed_time", "expired_time", "batch_id", "fulfillment_snapshot").Updates(redemption).Error
+	})
 }
 
 func (redemption *Redemption) Delete() error {

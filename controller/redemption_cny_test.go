@@ -18,7 +18,7 @@ import (
 func setupRedemptionCNYTestDB(t *testing.T) {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.Redemption{}, &model.Log{}, &model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.InvitationRewardEvent{}))
+	require.NoError(t, db.AutoMigrate(&model.Redemption{}, &model.Log{}, &model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}, &model.InvitationRewardEvent{}))
 
 	originalQuotaPerUnit := common.QuotaPerUnit
 	common.QuotaPerUnit = 500000
@@ -309,8 +309,10 @@ func TestRedeemSubscriptionRedemptionInvokesInvitationRewardHandlerAfterCommit(t
 	invitee := model.User{Id: inviteeID, Username: "redeem-handler-invitee", Status: common.UserStatusEnabled, AffCode: "redeem-handler-invitee", InviterId: inviterID}
 	require.NoError(t, model.DB.Create(&inviter).Error)
 	require.NoError(t, model.DB.Create(&invitee).Error)
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9633, Title: "Redeem Handler Plan", PriceAmount: 40, Currency: "CNY", Enabled: true, PublicVisible: true, RewardEligible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &redeemerCode}).Error)
-	require.NoError(t, model.DB.Create(&model.Redemption{Id: 9634, UserId: 1, Name: "sub-handler", Key: "sub-handler-key", Type: model.RedemptionTypeSubscription, PlanId: 9633, AmountCents: 4000, Currency: "CNY", Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9633, Title: "Redeem Handler Plan", PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true, PublicVisible: true, RewardEligible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 3000, ConcurrencyLimit: 4, BusinessCode: &redeemerCode}).Error)
+	redemption := model.Redemption{Id: 9634, UserId: 1, Name: "sub-handler", Key: "sub-handler-key", Type: model.RedemptionTypeSubscription, PlanId: 9633, AmountCents: 4000, Currency: "CNY", Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
+	require.NoError(t, redemption.Insert())
 
 	calledRedemptionIDs := make([]int, 0, 1)
 	SetInvitationRewardRedemptionHandlerForTest(t, func(redemptionId int) error {

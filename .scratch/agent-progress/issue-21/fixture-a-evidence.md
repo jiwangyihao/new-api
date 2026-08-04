@@ -1,0 +1,93 @@
+# Issue #21 Fixture A 证据
+
+状态：HANDOFF_READY_PRODUCTION_FIX_COMPLETE
+
+## 基线与必读材料
+
+- `git rev-parse HEAD`：`774b35740c1879b285537031410731317d0142fc`
+- `git merge-base --is-ancestor 774b35740c1879b285537031410731317d0142fc HEAD`：成功。
+- 起始 `git status --short`：无输出。
+- 已按要求读取父 PRD #19、Issue #21、已关闭 #22、共享夹具迁移合同、执行上下文、Issue #21 acceptance、ADR 0001/0002、2026-08-02 spec/plan、冻结 `status/evidence/contract` 与 `final-spec-fix-*`。
+- 已读取 `skill://diagnosing-bugs`、`skill://tdd`、`skill://codebase-design`。
+
+## 包级 RED
+
+命令：
+
+```text
+go test ./model -count=1
+```
+
+结果：FAIL，退出码 1，`github.com/QuantumNous/new-api/model` 在约 6.6 秒测试时间失败。完整工具输出保存在本次会话 artifact `artifact://5`。
+
+在包因 panic 终止前，观察到 6 个 paid-value fixture 相关失败：
+
+1. `TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue`
+   - `admin_analytics_paid_subscription_test.go:110`
+   - `Max difference between 44 and 0 allowed is 0.0001, but difference was 44`
+2. `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders`
+   - `admin_analytics_paid_subscription_test.go:631`
+   - `Max difference between 99 and 0 allowed is 0.0001, but difference was 99`
+3. `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers`
+   - `admin_analytics_paid_subscription_test.go:647`
+   - `Max difference between 33 and 0 allowed is 0.0001, but difference was 33`
+4. `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows`
+   - `admin_analytics_paid_subscription_test.go:677`
+   - `Max difference between 33 and 0 allowed is 0.0001, but difference was 33`
+5. `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly/recognized_remaining_value`
+   - `admin_analytics_paid_subscription_test.go:762`
+   - expected subscription ID `1`, actual `2`
+6. `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency`
+   - panic at `admin_analytics_paid_subscription_test.go:989`
+   - `runtime error: invalid memory address or nil pointer dereference`
+   - stack reaches `testing.tRunner`; package aborts before later tests can report.
+
+这些失败均发生在 timed analytics 已改为只读 `TimedSubscriptionValuationGrant` 后：旧夹具仍只插入 `SubscriptionPlan + UserSubscription`，因此 recognized 金额为 0、排序事实改变，或 nullable singular 被测试直接解引用。修复信号必须是合法 immutable grant fixture，不是生产 current Plan fallback。
+
+## 非主失败信号
+
+同一包级运行较早出现后台 gopool panic 日志：`common.RedisHSetObj` 对 Redis client 调用 `TxPipeline` 时 nil dereference，并有 `redis: client is closed` 日志。它没有终止包；本轮真正退出发生在上述 paid-value 测试 nil dereference。待 paid-value 夹具迁移后重新运行包级命令，才能判断该全局 Redis 夹具日志是否形成独立测试失败。
+
+## GREEN 1：最小 min(time, token) 夹具
+
+- 新增窄测试 helper `adminPaidCreateTimedGrant`，调用方显式提供 subscription、稳定 source identity、服务窗口、`GrantCredit`、`SourcePriceMicros`、独立 `ValuationAmountMicros` 与 currency；helper 只补 exact confidence、rule version、1/1 FX 和可审计 snapshot，不读取 `PriceAmount float64`。
+- 首测冻结两条首尾相接的 30 天、`40,000,000` micros CNY grant，完整覆盖原 subscription 服务窗口。
+- RED：合法 grant 下端到端 summary 实际为 time `44,000,000`、token `43,466,665`、recognized `43,466,665` micros。Issue #21 的 grant 时间线合同逐段按当前周期剩余 Credit 折减 token，因此端到端 `token <= time`；旧 summary 的 token=76/recognized=44 属于被替代的 current Plan 算法，不能由合法 grant 表达。
+- 已经 Orca question 获协调器批准：保留测试前半段 `adminRecognizedRemainingValue` 的旧 44/76 单元断言，summary 改断言权威 `amount_micros` 且明确 `recognized=min(token,time)`，不硬编码兼容 float。
+- GREEN 命令：`go test ./model -run '^TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue$' -count=1`。
+- GREEN 结果：PASS，`go test: 1 packages ok`，约 5.7 秒测试时间。
+
+## GREEN 2：其余已知 paid-value 夹具
+
+- `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders`：为 order/admin/redemption 三种来源分别写入两条首尾相接 grant；保留 3 条活动权益、3 个用户与 99 CNY 断言。
+- `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows`：写入完整 order grant 时间线；保留 1 条活动权益与 33 CNY 断言。
+- `TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly`：CNY/USD 权益各自写入原币种 grant；保留按所选 CNY 排序，USD 无 CNY 金额的断言。
+- `TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency`：写入完整 order grant 时间线；保留 Plan CNY、订单 9.99 CNY、provider/method/order identity，并以权威 `amount_micros=44000000` 断言 recognized。
+- GREEN 命令：`go test ./model -run '^(TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders|TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows|TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly|TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency)$' -count=1`。
+- GREEN 结果：PASS，`go test: 1 packages ok`。
+
+## 生产 blocker：excluded timed summary（已修复）
+
+- `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` 已迁移为两条首尾相接、30 天、`30,000,000` micros CNY 的 admin immutable grants，完整覆盖 subscription 服务窗口；原 expected=33 断言保持不变。
+- 修复前定向与包级实际结果均为 expected 33 / actual 0；paid row 的 `TimedValue.ByCurrency` 已有 33 CNY，但 summary 顶层 excluded 分支直接累加空的 `row.Value.RecognizedRemainingValueMicros`。
+- 生产修复仅将 `adminBuildPaidSubscriptionValueDataFromRows` 的 excluded 顶层汇总改为复用现有 `adminPaidRowAccumulateRecognized`。该 helper 对 timed row 逐币种累加 `TimedValue.ByCurrency[*].RecognizedMicros`，对 Credit/non-timed row 继续读取 `row.Value.RecognizedRemainingValueMicros`，并复用 `adminMoneyAccumulator` 的整数 micros 与 overflow fail-closed 行为。
+- 未修改测试文件、DTO、模式筛选、主 recognized 聚合、active count 或其他领域路径。
+
+## GREEN 与包级回归
+
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers$' -count=10`。
+- 结果：PASS，`go test: 1 packages ok`，约 14.1 秒；完整输出为本次会话 `artifact://3`。
+- 命令：`go test ./model -count=1`。
+- 结果：FAIL，退出码 1，约 28.7 秒；完整输出为本次会话 `artifact://5`。此前 excluded summary 测试不再失败，剩余精确失败仅为其他冻结分支拥有的九个旧授权快照夹具：
+  - `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`
+  - `TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta`
+  - `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent`
+  - `TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan`
+  - `TestCompleteSubscriptionOrderReturnsResultForSuccessRetry`
+  - `TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan`
+  - `TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEvent`
+  - `TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAndEvent`
+  - `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached`
+- 这九项位于 `invitation_commission_test.go` / `payment_method_guard_test.go`，属于 B/C 或协调器冻结的夹具迁移范围；本路未越界修改。
+- `git diff --check` 在生产提交前通过。
+- 生产提交：`5b4eab4b7 fix(analytics): 修复计时排除金额汇总`。

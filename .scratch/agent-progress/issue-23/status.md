@@ -1,8 +1,8 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：目标增加与少结算原快照恢复均已通过真实 SQLite；准备提交第二个安全点。
-- 当前定位：请求深模块已支持目标增加与减少，少结算不会被期间其他入账改变退款价值。
+- 阶段：请求目标增加、原快照恢复和欠额优先退款已通过；领域入口已 clean cutover。
+- 当前定位：公开入口现名 `SettleUserSubscriptionRequestTarget`，下一步补齐 original subscription 身份、absorbed/unknown 与稳定终态错误。
 
 ## 已完成
 - 已读取仓库与全局规则、父 PRD #19、Issue #23、执行合同、第二波次合同、`CONTEXT.md`、ADR 0001/0002、规格 5.4/6/7.3–7.5/9/11.3/13/14、计划任务 3/6、Issue #20/#22 合同。
@@ -19,4 +19,4 @@
 - 无。socket closed 未改变 Dispatch、HEAD 或工作树语义。
 
 ## 最近安全提交
-- `a8b3bc65a`（请求目标累计增加）；当前少结算 GREEN 待本次安全提交。
+- `bfefe5c27`（少结算按原请求快照恢复）；当前入口 clean cutover 与欠额回归待提交。

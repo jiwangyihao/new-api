@@ -92,6 +92,24 @@ go test: 1 packages ok
 ```
 行为：少结算恢复原预扣快照的 4 CNY，而非使用交错入账后的新池平均；最终 `token_limit=2,000`、`token_used=100`、可用 1,900、exact `56,000,000` micros，请求活动快照降为 100 Credit / `4,000,000` micros，并终态 settled。
 
+### 回归：退款先撤销本请求欠额
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetDecreaseRefundsDebtBeforeSnapshot$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+行为：预扣 900，追加到 1,100 形成 100 请求欠额，再将目标降至 950；先撤销 100 欠额，仅从活动快照恢复 50，最终可用 50、exact 2,000,000 micros，absorbed/unknown 均为 0。
+
+### 请求领域入口 clean cutover
+使用 LSP rename 将 `SettleCreditRequestTarget` clean cutover 为 `SettleUserSubscriptionRequestTarget`，原子迁移 model tests 与 `service/funding_source.go` 的全部引用；未保留旧别名。验证命令：
+```text
+go test ./model -run '^TestCreditValuationRequest(Target|PreConsume)|^TestCreditValuationRequestFinalizesSameTargetIdempotently$' -count=1
+```
+关键输出：`go test: 1 packages ok`。
+
 ## 范围声明
 - 尚未运行项目级全量测试、格式化器或 lint；按 Dispatch 合同由协调器最终统一运行。
 - 本切片不新增 UI 或可见文案，因此当前不需要浏览器或 i18n 技能。

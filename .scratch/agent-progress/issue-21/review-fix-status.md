@@ -6,7 +6,7 @@
 - 父集成分支：`jiwangyihao/credit-operational-value-integration`。
 - 父集成 HEAD：`2260cd2f6369d9cd9e1bea2ac93349b45c7b0ccc`。
 - 当前修复分支：`jiwangyihao/issue-21-timed-grants`。
-- 合并状态：尚未合并父集成分支。
+- 合并状态：父集成 `2260cd2f6369d9cd9e1bea2ac93349b45c7b0ccc` 已合并，merge commit 为 `9cee335ddb0638af7b5bb9229d5d2a03db5a0712`；冲突已全部解决，工作树 clean。
 
 ## 冲突决策
 
@@ -21,7 +21,7 @@
 
 ## 恢复信息
 
-- 最近安全提交：`547512242578ec198034d322875c5485735b247a`（冻结 HEAD；本文件提交后更新）。
-- 未提交文件：本次首个实际变更仅包含 `review-fix-status.md`、`review-fix-evidence.md`、`review-fix-contract.md`，待立即提交。
-- 下一条精确命令：`git add .scratch/agent-progress/issue-21/review-fix-status.md .scratch/agent-progress/issue-21/review-fix-evidence.md .scratch/agent-progress/issue-21/review-fix-contract.md && git commit -m "docs(issue-21): 建立 Standards 修复恢复记录"`。
+- 最近安全提交：`9cee335ddb0638af7b5bb9229d5d2a03db5a0712`（父集成基线合并与 23 个冲突块收敛）。
+- 未提交文件：仅本次 `review-fix-status.md` 与 `review-fix-evidence.md` 合并恢复记录，待立即提交。
+- 下一条精确命令：`git add .scratch/agent-progress/issue-21/review-fix-status.md .scratch/agent-progress/issue-21/review-fix-evidence.md && git commit -m "docs(issue-21): 记录父集成合并恢复状态"`。
 - 阻塞：无。

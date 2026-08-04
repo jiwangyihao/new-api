@@ -73,6 +73,17 @@
 - GREEN：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=1` → PASS。
 - 重复验证：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=10` → PASS；真实数据库失败后原 grant 的 `valuation_amount_micros` 保持 `40,000,000`。
 - LSP：`model/timed_subscription_valuation.go` diagnostics → `OK`；`git diff --check` → 无输出。
+- Finding 4 安全提交：`572c15a78 fix(subscription): 稳定计时授予不可变错误`。
+
+## 最终窄门禁（2026-08-04）
+
+- 并发重复：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=10` → PASS（`go test: 1 packages ok`）。
+- 窄 race：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1` → PASS（`go test: 1 packages ok`）。
+- 四项 model + Credit/current_only + timed 组合：`go test ./model -run '^(TestTimedSubscriptionValuationGrant|TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow|TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros|TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros|TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning)$' -count=1` → PASS。
+- Controller 五接口/timed grant：`go test ./controller -run '^(TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestPaidSubscriptionValueEndpointsReturnPanelEnvelope|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$' -count=1` → PASS。
+- model/service/controller 组合窄门禁：`go test ./model ./service ./controller -run '^(TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY|TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning|TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews|TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros|TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros|TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow|TestSubscriptionBalancePayCreditModeAtomicallyCreditsUniqueBalance|TestSubscriptionBalancePayCreditModeRollsBackEveryWriteOnLedgerFailure|TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|TestCreditValuationRequestFinalizesSameTargetIdempotently|TestSubscriptionBillingPreConsumesEstimatedTokens|TestSubscriptionBillingSettleAvoidsHotSubscriptionRead|TestSettleBillingWithInputDoesNotUsePreConsumeQuotaWhenEstimateMissing|TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve|TestPaidSubscriptionValueEndpointsReturnTimedGrantAmountsAcrossFiveViews|TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays)$' -count=1` → PASS（`go test: 3 packages ok`）。
+- 组合事实保持：Credit recognized=`32,000,000` micros CNY、available=800、active count=1；timed CNY/USD 五接口逐币种对账，跨币种 singular 为 null；current_only 结构化 warning 保持。
+- 最终业务 HEAD：`572c15a78ebf5a1c2872568ebf2c70d8cfb138c9`；实现提交链未 amend 或改写。
 ## 数据库范围
 
 - SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。

@@ -19,9 +19,12 @@
 3. timed micros 加法溢出关闭：`COMPLETE`。`adminCalculateTimedSubscriptionValue` 的 token/current+future、currency time/token、source time/token 累加均改用现有 `checkedAddInt64`；`MaxInt64` 成功，下一 micros 通过五接口稳定返回 `ErrCreditValuationOverflow` 与空响应。
 4. 不可变 hook 稳定 sentinel：`COMPLETE`。update/delete 及重复 hook 调用均命中同一包级 `ErrTimedSubscriptionGrantImmutable`；真实 SQLite 证明失败后原 grant 未变化，无普通 mutation API 需要额外 code 映射。
 
-## 恢复信息
+## 最终状态
 
-- 最近安全提交：`e6ffde16b`（Finding 3 独立测试/证据 follow-up；Finding 4 提交后更新）。
-- 未提交文件：Finding 4 sentinel、`errors.Is` 行为测试与本 status/evidence，待独立提交。
-- 下一条精确命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1 && git diff --check`。
+- 状态：`COMPLETE`。四项 Standards blocker 均已完成 RED→最小 GREEN 并独立提交。
+- 最终业务 HEAD：`572c15a78ebf5a1c2872568ebf2c70d8cfb138c9`。
+- 安全提交：Finding 1 `b10855df4`；Finding 2 `543b8297f`；Finding 3 实现 `a9752f218`、测试/证据 follow-up `e6ffde16b`；Finding 4 `572c15a78`。
+- 最终窄门禁：SQLite 并发 `-count=10`、窄 `-race`、model/controller/service 的 Credit 32 CNY + timed CNY/USD 组合回归全部 PASS。
+- MySQL 5.7/PostgreSQL 9.6：未运行；三库零 SKIP 仍归 Issue #27。
+- 最终证据提交：本文件所在提交；完整最终 HEAD 由本 Dispatch 的 `worker_done` 报告。
 - 阻塞：无。

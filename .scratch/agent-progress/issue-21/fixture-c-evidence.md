@@ -31,3 +31,12 @@
 - Redis：仅观察到 `redis: client is closed` 的缓存失效日志，无 panic、无对应失败堆栈；后续迁移相关 setup 后再以完整包级回归确认本路未污染全局状态。
 
 后续为每组记录最小 RED→GREEN 命令、关键 provider/重放 `-count=10`、聚焦正则回归和完整 controller 包级结果。
+
+## 余额与 Kyren 夹具 GREEN
+
+- 新增 controller 测试共享 helper：权威 timed Plan 固定显式 `entitlement_type=timed`、enabled、非 trial/invite-trial、正 `price_amount_micros`、CNY、正 Credit、合法 duration/reset、稳定 business code；订单快照 helper 断言 identity、micros/币种、Credit、duration/reset 与 Plan 一致。
+- 余额真实购买测试继续通过 `SubscriptionRequestBalance` / `CreateBalanceSubscriptionOrderTx` 自然冻结 `EntitlementSnapshot`，不手写成功订单快照；额外断言订单授权快照完整。
+- Kyren 已授权 webhook 使用现有 pending-order helper，从权威 Plan 生成完整 entitlement snapshot；Kyren payment snapshot 继续独立承载 provider product/金额/币种，保留 unsupported currency 场景。
+- setup 最小迁移 `TimedSubscriptionValuationGrant` 表；未修改生产代码。
+- GREEN：`go test ./controller -run 'TestSubscription(Balance|PurchaseDoesNotUpdateUserGroup)|TestCreditBalance|TestKyren|TestSubscriptionKyren' -count=1` → PASS。
+- Redis 仍仅有 `client is closed` 缓存通知日志，无 panic、无失败；未发现本路 setup 污染。

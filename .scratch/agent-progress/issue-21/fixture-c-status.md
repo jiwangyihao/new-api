@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 C 状态
 
-状态：RED_CAPTURED
+状态：BALANCE_KYREN_GREEN
 
 ## 冻结现场
 
@@ -8,8 +8,8 @@
 - 冻结基线：`774b35740c1879b285537031410731317d0142fc`
 - 初始工作树：clean
 - 所有权：仅迁移 `controller` 中余额、Kyren、Stripe、Epay/通用支付 webhook、邀请订单及其共享测试 helper。
-- 最近安全提交：`173bea6b6`（建立 controller 夹具迁移恢复现场）。
-- 当前未提交文件：`fixture-c-status.md`、`fixture-c-evidence.md`（包级冻结 RED 证据）。
+- 最近安全提交：`4529dfb93`（记录 controller 夹具冻结失败）；余额/Kyren GREEN 提交完成后更新。
+- 当前未提交文件：共享 controller 测试 helper、余额/Kyren 测试调用点及本状态/证据更新。
 
 ## 已完成
 
@@ -19,9 +19,9 @@
 
 ## 当前阶段
 
-- 已运行 `go test ./controller -count=1`：27 个失败测试，29 次 `timed_subscription_grant_invalid`，无 panic；已按余额/共享购买、Kyren、Stripe、Epay、邀请订单分组。
-- 下一步：审阅现有 controller 测试 helper 与合法订单快照构造入口，先迁移余额/共享购买夹具并执行最小 RED→GREEN，再迁移已授权 provider order 与邀请订单。
-- 缺表日志当前均来自无关局部 setup 或显式故障注入；Redis 仅有 client closed 日志，无 panic。
+- 已完成共享权威 timed Plan/订单快照测试 helper；余额真实购买入口与 Kyren 已授权 webhook 定向 GREEN。
+- 下一步：提交余额/Kyren 安全点，再复用同一 helper 迁移 Stripe、Epay 与邀请订单。
+- Redis 仅有 client closed 日志，无 panic；缺表均为显式故障注入测试。
 
 ## 阻塞
 

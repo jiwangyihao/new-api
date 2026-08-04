@@ -31,4 +31,4 @@
 4. 恢复测试修改前的全局值，不把测试状态泄漏给后续测试；
 5. 不依赖执行顺序、sleep、随机身份或降低重复次数。
 
-当前没有批准新增生产接口；若最小复现证明只能修改生产代码，必须先向协调器升级。
+协调器已批准导出 `ClearDBTimestampCacheForTest`：它是只调用既有 `resetDBTimestampCacheForTest` 的薄包装，供隔离测试数据库复用；生产代码不得调用。目标 controller 测试在新 DB setup 后清理一次，并通过 cleanup 再清理一次，保留真实 `StartTime` 路径与全部业务断言。

@@ -49,3 +49,50 @@ go test ./controller -count=1
 git diff --check
 git status --short
 ```
+
+## 本地 RED
+
+```text
+go test ./controller -run '^TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation$' -count=10 -v
+```
+
+结果：FAIL。第 1–3 轮 PASS；第 4–10 轮在 `subscription_payment_kyren_test.go:387` 失败，均为：
+
+```text
+active subscription is required: no active subscription
+code=subscription_required
+```
+
+失败与测试进程从 `05:38:26` 跨到 `05:38:27` 同时发生。失败前 immutable Kyren snapshot 履约、disabled-plan 新购拒绝、单份 ledger/state 等断言均已通过。
+
+## 根因与单变量验证
+
+- `getOrCreateCreditBalanceSubscriptionTx` 通过新测试 DB 的 `getDBTimestampTx` 设置 Credit 权益 `StartTime`。
+- 预扣选择通过进程级 `GetDBTimestamp` 读取最多保留 900 ms 的 DB timestamp cache。
+- `go test -count` 每轮替换 `model.DB`，目标测试原 setup/cleanup 没有清理该缓存。秒边界后，旧缓存时间小于新权益 `StartTime`，活动权益查询的 `start_time <= now` 暂时不成立，于是返回 `subscription_required`。
+- `model/credit_valuation_tracer_test.go` 已用同一个私有 reset 关闭同类跨 DB 时间污染，形成可复用先例。
+- 单变量修复只新增 `ClearDBTimestampCacheForTest` 薄包装，并在目标测试 setup 后及 cleanup 中调用。未清理其他缓存，未改 DSN、user ID、真实 StartTime、并发、断言或生产行为，也未引入 sleep。
+
+## GREEN
+
+```text
+go test ./controller -run '^TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation$' -count=25
+```
+
+结果：PASS。
+
+```text
+go test ./controller -run 'TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|TestKyrenWebhookCompletesSubscriptionOrder|TestSubscriptionBalancePayIdempotent' -count=10
+```
+
+结果：PASS。
+
+```text
+go test ./controller -count=1
+```
+
+结果：PASS。
+
+## 无生产调用证明
+
+LSP references 与 `ClearDBTimestampCacheForTest\(` 仓库搜索结果一致：共 3 个引用位置——`model/db_time.go` 的定义，以及 `controller/subscription_payment_kyren_test.go` 的 setup 调用和 cleanup 注册；生产代码调用为 0。

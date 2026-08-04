@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`AUTHORITATIVE_PLAN_SNAPSHOT_GREEN`。
+- 状态：`AUTHORITATIVE_PLAN_SNAPSHOT_GREEN_COMMITTED`。
 - Standards 四项 finding：保持 `COMPLETE`，未改动。
-- AC2 / Gate B：调用接口已收窄到 `UserId + PlanId + source identity/reason/key`；controller/API 与 model 权威 Plan 快照定向测试均已 GREEN，等待本安全点提交。
+- AC2 / Gate B：调用接口已收窄到 `UserId + PlanId + source identity/reason/key`；controller/API、model 权威 Plan 快照及全部 `TestTimedSubscriptionValuationGrant*` 窄回归均已 GREEN。
 
 ## 权威事实
 
@@ -27,8 +27,8 @@ Plan guard 先线性化同一计划；已成功来源重放只校验冻结的 re
 
 ## 下一步
 
-1. 提交权威 Plan 快照最小 GREEN 安全点。
-2. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
+1. 补非法权威 Plan 零写入、`[start,end)` 边界秒、零额度拒绝、成功重放与 disabled 新 key 四类窄回归。
+2. 每个 GREEN 后更新本状态与证据并提交安全点。
 3. 运行重复定向及 #22 Credit + #21 timed 组合回归。
 
 ## 最近安全提交
@@ -36,12 +36,12 @@ Plan guard 先线性化同一计划；已成功来源重放只校验冻结的 re
 - `4212d2218`：复现管理员伪造计时估值（Controller/API RED）。
 - `0c7ef4aec`：建立 AC2 / Gate B 修复恢复现场。
 - `014e4e5aa`：提交 model 权威 Plan 快照 RED。
+- `57aab92c5`：从权威计划冻结计时授予事实；完成生产/测试调用的 `PlanId` 干净迁移。
 
 ## 未提交文件
 
-- 生产：`controller/subscription.go`、`model/subscription.go`、`model/redemption.go`、`model/timed_subscription_valuation.go`。
-- 测试：`model/timed_subscription_valuation_test.go`、`model/timed_subscription_valuation_concurrency_test.go`。
-- 证据：本文件与 `spec-fix-evidence.md`。
+- `model/timed_subscription_valuation_test.go`：兑换测试改为断言授予时的当前权威 Plan 价币；`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` 已 PASS。
+- 本文件与 `spec-fix-evidence.md`：记录安全提交及窄回归证据。
 
 ## 阻塞
 

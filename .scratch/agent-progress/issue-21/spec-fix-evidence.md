@@ -49,6 +49,12 @@
 - Model GREEN：`go test ./model -run '^TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot$' -count=1`；PASS（1 package）。数据库 Plan 的 40 CNY、1,000 Credit、3,600 秒、never reset 决定 grant 和 source snapshot。
 - 调用迁移：其余 `TimedSubscriptionGrantRequest` 生产与测试 struct literal 已切换为 `PlanId`，不再传递 Plan 对象或价币估值事实；两条 GREEN 命令均完整编译对应测试包。
 
+## GREEN：现有 timed grant 窄回归
+
+- 首次运行 `go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` 暴露一个旧测试断言：兑换码在 Plan 改价后仍期待兑换码历史价 `80,000,000 CNY`；新固定合同要求所有新 allocation 从 guard 内当前权威 Plan 冻结事实，因此实际正确值为 `50,000,000 USD`。
+- 仅迁移该旧断言后，同一命令 PASS（1 package）；覆盖创建/重放、权威快照、身份冲突、续期、订单、trial、兑换、disabled Plan 与不可变 grant 现有回归。
+- 该调整未改变生产语义；兑换码只提供 source identity，不能再控制 grant 估值事实。
+
 ## 数据库范围
 
 - SQLite：权威快照真实事务/API 定向测试 PASS。

@@ -381,8 +381,8 @@ func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *test
 	var grant TimedSubscriptionValuationGrant
 	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceRedemption, "redemption:21503").First(&grant).Error)
 	require.Equal(t, first.FulfillmentSubscriptionId, grant.UserSubscriptionId)
-	require.Equal(t, redemptionPriceMicros, grant.SourcePriceMicros)
-	require.Equal(t, "CNY", grant.SourceCurrency)
+	require.Equal(t, currentPlanPriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, "USD", grant.SourceCurrency)
 	firstEnd := grant.EventEndTime
 
 	replay, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)

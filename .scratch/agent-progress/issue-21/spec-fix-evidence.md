@@ -51,9 +51,9 @@
 
 ## GREEN：现有 timed grant 窄回归
 
-- 首次运行 `go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` 暴露一个旧测试断言：兑换码在 Plan 改价后仍期待兑换码历史价 `80,000,000 CNY`；新固定合同要求所有新 allocation 从 guard 内当前权威 Plan 冻结事实，因此实际正确值为 `50,000,000 USD`。
-- 仅迁移该旧断言后，同一命令 PASS（1 package）；覆盖创建/重放、权威快照、身份冲突、续期、订单、trial、兑换、disabled Plan 与不可变 grant 现有回归。
-- 该调整未改变生产语义；兑换码只提供 source identity，不能再控制 grant 估值事实。
+- `go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1`：PASS（1 package）；覆盖创建/重放、管理员权威快照、身份冲突、续期、订单快照、trial、兑换快照、disabled Plan 与不可变 grant。
+- 直接调用领域入口的非订单测试已改用 admin source，以免伪造不存在的订单 source；真实 order source 仅由 `CompleteSubscriptionOrderTx` 使用持久化订单快照进入。
+- 订单和兑换都是已授权来源：前者从持久化 `SubscriptionOrder.EntitlementSnapshot`，后者从兑换创建时持久化的 `Redemption.FulfillmentSnapshot` 冻结事实；只有管理员新 allocation 使用 guard 内当前 enabled Plan。
 
 ## RED→GREEN：订单不可变履约快照
 
@@ -61,6 +61,12 @@
 - RED：`go test ./model -run '^TestTimedSubscriptionValuationGrantOrderCompletionUsesImmutableSnapshotAfterPlanChanges$' -count=1`；订单快照为 `40,000,000 CNY`、1,000 Credit、3,600 秒、never reset，创建订单后 Plan 改为 `25,000,000 USD`、250 Credit、7,200 秒、daily reset 并 disabled；57aab92c5 返回 `ErrTimedSubscriptionGrantInvalid`，无法履约。
 - GREEN：同一命令 PASS（1 package）。`GrantTimedSubscriptionTx` 仍先执行 Plan 行 guard；order source 随后在同一事务锁定已成功订单，验证 user/plan/source identity 与持久化快照，再从快照构造 plan 并冻结 40 CNY、1,000 Credit、3,600 秒、never reset；Plan 后续 disabled 不撤销已授权订单。
 - 管理员路径没有接受快照参数，仍从 guard 内当前数据库 Plan 重读并要求 enabled，因此客户端无法借用订单快照通道。
+
+## RED→GREEN：兑换创建快照
+
+- RED：`go test ./model -run '^TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant$' -count=1`。兑换创建时 Plan 为 `80,000,000 CNY`，随后改为 `50,000,000 USD`；旧路径在兑换时从后来 Plan 重建履约快照，grant 实际为 50 USD，违反兑换创建授权事实。
+- GREEN：`Redemption.Insert` 在同一事务锁定 Plan 并持久化 entitlement source snapshot；兑换时锁定兑换记录和当前 Plan 资格，但从已持久化 snapshot 构造 timed grant 事实。相同命令 PASS（1 package），grant 为原 `80,000,000 CNY`，重放不续期。
+- 兑换 `FulfillmentSnapshot` 仍在首次履约事务补齐事件时间与 fulfillment subscription，源 entitlement 部分不再被后来 Plan 改价重写。
 
 ## 数据库范围
 

@@ -313,12 +313,21 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			return nil
 		}
 
-		plan, err := getRedemptionPlanTx(tx, redemption.PlanId)
+		currentPlan, err := getRedemptionPlanTx(tx, redemption.PlanId)
 		if err != nil {
 			return err
 		}
-		fulfillment := RedemptionFulfillmentSnapshot{
-			Entitlement: NewSubscriptionEntitlementSnapshot(plan, mode, 0),
+		fulfillment, plan, err := redemptionFulfillmentFromSourceSnapshot(&redemption, currentPlan, mode)
+		if err != nil {
+			return err
+		}
+		sourceSnapshotPayload, err := common.Marshal(fulfillment)
+		if err != nil {
+			return err
+		}
+		redemption.FulfillmentSnapshot = string(sourceSnapshotPayload)
+		if err := tx.Model(&Redemption{}).Where("id = ?", redemption.Id).Update("fulfillment_snapshot", redemption.FulfillmentSnapshot).Error; err != nil {
+			return err
 		}
 		if mode == RedemptionModeCreditBalance {
 			creditPlan, err := GetCreditBalancePlanTx(tx)
@@ -355,7 +364,7 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			if plan.IsTrial || plan.InviteTrial {
 				creation, err = CreateUserSubscriptionFromPlanWithResultTx(tx, userId, plan, SubscriptionGrantRedemption)
 			} else {
-				if !plan.Enabled {
+				if !currentPlan.Enabled {
 					return ErrRedemptionPlanIneligible
 				}
 				creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
@@ -439,6 +448,33 @@ func getRedemptionPlanTx(tx *gorm.DB, planId int) (*SubscriptionPlan, error) {
 	return &plan, nil
 }
 
+func redemptionFulfillmentFromSourceSnapshot(redemption *Redemption, currentPlan *SubscriptionPlan, mode string) (RedemptionFulfillmentSnapshot, *SubscriptionPlan, error) {
+	if redemption == nil || currentPlan == nil || redemption.PlanId <= 0 || currentPlan.Id != redemption.PlanId {
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+	}
+	fulfillment := RedemptionFulfillmentSnapshot{}
+	if payload := strings.TrimSpace(redemption.FulfillmentSnapshot); payload != "" {
+		if err := common.UnmarshalJsonStr(payload, &fulfillment); err != nil {
+			return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+		}
+	}
+	if fulfillment.Entitlement.PlanID == 0 {
+		fulfillment.Entitlement = NewSubscriptionEntitlementSnapshot(currentPlan, mode, 0)
+	}
+	if fulfillment.Entitlement.PlanID != redemption.PlanId {
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+	}
+	fulfillment.Entitlement.PurchaseMode = mode
+	fulfillment.CreditBalance = nil
+	fulfillment.EventStartTime = 0
+	fulfillment.EventEndTime = 0
+	plan, err := SubscriptionPlanFromEntitlementSnapshot(fulfillment.Entitlement)
+	if err != nil {
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+	}
+	return fulfillment, plan, nil
+}
+
 func redemptionResultFromFulfillment(redemption *Redemption, userId int) (*RedemptionResult, error) {
 	if redemption == nil || redemption.Status != common.RedemptionCodeStatusUsed {
 		return nil, ErrRedemptionAlreadyUsed
@@ -481,9 +517,25 @@ func isPublicRedemptionError(err error) bool {
 }
 
 func (redemption *Redemption) Insert() error {
-	var err error
-	err = DB.Create(redemption).Error
-	return err
+	if redemption == nil {
+		return errors.New("invalid redemption")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		if normalizeRedemptionType(redemption.Type) == RedemptionTypeSubscription {
+			plan, err := getRedemptionPlanTx(tx, redemption.PlanId)
+			if err != nil {
+				return err
+			}
+			snapshotPayload, err := common.Marshal(RedemptionFulfillmentSnapshot{
+				Entitlement: NewSubscriptionEntitlementSnapshot(plan, "", 0),
+			})
+			if err != nil {
+				return err
+			}
+			redemption.FulfillmentSnapshot = string(snapshotPayload)
+		}
+		return tx.Create(redemption).Error
+	})
 }
 
 func (redemption *Redemption) SelectUpdate() error {

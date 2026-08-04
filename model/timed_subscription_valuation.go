@@ -236,6 +236,24 @@ func authoritativeTimedSubscriptionGrantPlanTx(tx *gorm.DB, normalized normalize
 		}
 		return plan, false, nil
 	}
+	if normalized.request.SourceType == TimedSubscriptionGrantSourceRedemption {
+		var redemption Redemption
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.SourceId).First(&redemption).Error; err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		if redemption.UsedUserId != normalized.request.UserId || redemption.PlanId != normalized.request.PlanId || redemption.Status != common.RedemptionCodeStatusUsed || redemption.FulfillmentMode != RedemptionModeTimed || strings.TrimSpace(redemption.FulfillmentSnapshot) == "" {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		var fulfillment RedemptionFulfillmentSnapshot
+		if err := common.UnmarshalJsonStr(redemption.FulfillmentSnapshot, &fulfillment); err != nil {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		plan, err := SubscriptionPlanFromEntitlementSnapshot(fulfillment.Entitlement)
+		if err != nil || plan.Id != redemption.PlanId {
+			return nil, false, ErrTimedSubscriptionGrantInvalid
+		}
+		return plan, false, nil
+	}
 
 	var plan SubscriptionPlan
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", normalized.request.PlanId).First(&plan).Error; err != nil {

@@ -27,9 +27,9 @@ func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testi
 	request := TimedSubscriptionGrantRequest{
 		UserId:         user.Id,
 		PlanId:         plan.Id,
-		IdempotencyKey: "subscription-order:21003",
-		SourceType:     TimedSubscriptionGrantSourceOrder,
-		SourceId:       21_003,
+		IdempotencyKey: "timed-grant-21003",
+		SourceType:     TimedSubscriptionGrantSourceAdmin,
+		Reason:         "创建计时授予测试",
 	}
 	var first *UserSubscriptionCreationResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -42,7 +42,7 @@ func TestTimedSubscriptionValuationGrantCreatesTimelineAndReplaysSource(t *testi
 	require.Equal(t, int64(3600), first.EventEndTime-first.EventStartTime)
 
 	var grant TimedSubscriptionValuationGrant
-	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", "subscription_order", "subscription_order:21003").First(&grant).Error)
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceAdmin, "admin:timed-grant-21003").First(&grant).Error)
 	require.Equal(t, first.Subscription.Id, grant.UserSubscriptionId)
 	require.Equal(t, user.Id, grant.UserId)
 	require.Equal(t, plan.Id, grant.PlanId)
@@ -99,8 +99,8 @@ func TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot(t *testing
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		var err error
 		creation, err = GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
-			UserId: user.Id, PlanId: plan.Id, IdempotencyKey: "subscription_order:21023",
-			SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_023,
+			UserId: user.Id, PlanId: plan.Id, IdempotencyKey: "timed-authoritative-21023",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "权威计划快照测试",
 		})
 		return err
 	}))
@@ -108,7 +108,7 @@ func TestTimedSubscriptionValuationGrantUsesAuthoritativePlanSnapshot(t *testing
 	require.Equal(t, int64(3600), creation.EventEndTime-creation.EventStartTime)
 
 	var grant TimedSubscriptionValuationGrant
-	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceOrder, "subscription_order:21023").First(&grant).Error)
+	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceAdmin, "admin:timed-authoritative-21023").First(&grant).Error)
 	require.Equal(t, authoritativePriceMicros, grant.SourcePriceMicros)
 	require.Equal(t, authoritativePriceMicros, grant.ValuationAmountMicros)
 	require.Equal(t, "CNY", grant.SourceCurrency)
@@ -138,8 +138,8 @@ func TestTimedSubscriptionValuationGrantNormalizesIdentityBeforePersistAndReplay
 	require.NoError(t, DB.Create(&User{Id: 21_051, Username: "timed-normalized", Status: common.UserStatusEnabled, AffCode: "timed-normalized-aff"}).Error)
 	require.NoError(t, DB.Create(&plan).Error)
 	request := TimedSubscriptionGrantRequest{
-		UserId: 21_051, PlanId: plan.Id, IdempotencyKey: "  subscription_order:21053  ",
-		SourceType: "  subscription_order  ", SourceId: 21_053,
+		UserId: 21_051, PlanId: plan.Id, IdempotencyKey: "  timed-normalized-21053  ",
+		SourceType: "  admin  ", Reason: "  规范化测试  ",
 	}
 	var first *UserSubscriptionCreationResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -149,12 +149,12 @@ func TestTimedSubscriptionValuationGrantNormalizesIdentityBeforePersistAndReplay
 	}))
 	var grant TimedSubscriptionValuationGrant
 	require.NoError(t, DB.First(&grant).Error)
-	require.Equal(t, "subscription_order:21053", grant.IdempotencyKey)
-	require.Equal(t, TimedSubscriptionGrantSourceOrder, grant.SourceType)
+	require.Equal(t, "timed-normalized-21053", grant.IdempotencyKey)
+	require.Equal(t, TimedSubscriptionGrantSourceAdmin, grant.SourceType)
 	require.Equal(t, "CNY", grant.SourceCurrency)
 
-	request.IdempotencyKey = "subscription_order:21053"
-	request.SourceType = TimedSubscriptionGrantSourceOrder
+	request.IdempotencyKey = "timed-normalized-21053"
+	request.SourceType = TimedSubscriptionGrantSourceAdmin
 	var replay *UserSubscriptionCreationResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		var err error
@@ -181,8 +181,8 @@ func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *test
 	require.NoError(t, DB.Create(&plan).Error)
 
 	firstRequest := TimedSubscriptionGrantRequest{
-		UserId: 21_101, PlanId: plan.Id, IdempotencyKey: "subscription-order:21103",
-		SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_103,
+		UserId: 21_101, PlanId: plan.Id, IdempotencyKey: "timed-renew-21103",
+		SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "首次管理员授予",
 	}
 	var first *UserSubscriptionCreationResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -192,7 +192,7 @@ func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *test
 	}))
 
 	conflict := firstRequest
-	conflict.SourceId = 21_109
+	conflict.Reason = "冲突管理员授予"
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		_, grantErr := GrantTimedSubscriptionTx(tx, conflict)
 		return grantErr
@@ -203,8 +203,8 @@ func TestTimedSubscriptionValuationGrantRejectsConflictAndAppendsRenewal(t *test
 	require.Equal(t, first.EventEndTime, afterConflict.EndTime)
 
 	renewalRequest := firstRequest
-	renewalRequest.IdempotencyKey = "subscription-order:21104"
-	renewalRequest.SourceId = 21_104
+	renewalRequest.IdempotencyKey = "timed-renew-21104"
+	renewalRequest.Reason = "续期管理员授予"
 	renewalPriceMicros := int64(50_000_000)
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
 		"price_amount_micros": renewalPriceMicros,
@@ -385,7 +385,8 @@ func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *test
 		Id: 21_503, Key: "timed-redemption-21503", Name: "timed-redemption", Type: RedemptionTypeSubscription,
 		PlanId: plan.Id, Status: common.RedemptionCodeStatusEnabled, AmountCents: 8000, Currency: "CNY", CreatedTime: common.GetTimestamp(),
 	}
-	require.NoError(t, DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
+	require.False(t, strings.TrimSpace(redemption.FulfillmentSnapshot) == "")
 	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
 		"price_amount": 50, "price_amount_micros": currentPlanPriceMicros, "currency": "USD",
 	}).Error)
@@ -400,8 +401,8 @@ func TestTimedSubscriptionValuationGrantRedemptionCreatesAndReplaysGrant(t *test
 	var grant TimedSubscriptionValuationGrant
 	require.NoError(t, DB.Where("source_type = ? AND source_key = ?", TimedSubscriptionGrantSourceRedemption, "redemption:21503").First(&grant).Error)
 	require.Equal(t, first.FulfillmentSubscriptionId, grant.UserSubscriptionId)
-	require.Equal(t, currentPlanPriceMicros, grant.SourcePriceMicros)
-	require.Equal(t, "USD", grant.SourceCurrency)
+	require.Equal(t, redemptionPriceMicros, grant.SourcePriceMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
 	firstEnd := grant.EventEndTime
 
 	replay, err := Redeem(redemption.Key, 21_501, RedemptionModeTimed)
@@ -429,8 +430,8 @@ func TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRej
 	require.NoError(t, DB.Create(&User{Id: 21_701, Username: "timed-disabled", Status: common.UserStatusEnabled, AffCode: "timed-disabled-aff"}).Error)
 	require.NoError(t, DB.Create(&plan).Error)
 	request := TimedSubscriptionGrantRequest{
-		UserId: 21_701, PlanId: plan.Id, IdempotencyKey: "subscription_order:21703",
-		SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_703,
+		UserId: 21_701, PlanId: plan.Id, IdempotencyKey: "timed-disabled-21703",
+		SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "禁用计划重放测试",
 	}
 	var first *UserSubscriptionCreationResult
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
@@ -452,8 +453,8 @@ func TestTimedSubscriptionValuationGrantDisabledPlanReplaysCommittedSourceButRej
 	require.Equal(t, originalEnd, replay.EventEndTime)
 
 	newSource := request
-	newSource.IdempotencyKey = "subscription_order:21704"
-	newSource.SourceId = 21_704
+	newSource.IdempotencyKey = "timed-disabled-21704"
+	newSource.Reason = "禁用计划新授予"
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		_, grantErr := GrantTimedSubscriptionTx(tx, newSource)
 		return grantErr
@@ -481,8 +482,8 @@ func TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete(t *testing.T) {
 	require.NoError(t, DB.Create(&plan).Error)
 	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
 		_, err := GrantTimedSubscriptionTx(tx, TimedSubscriptionGrantRequest{
-			UserId: 21_801, PlanId: plan.Id, IdempotencyKey: "subscription_order:21803",
-			SourceType: TimedSubscriptionGrantSourceOrder, SourceId: 21_803,
+			UserId: 21_801, PlanId: plan.Id, IdempotencyKey: "timed-immutable-21803",
+			SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "不可变授予测试",
 		})
 		return err
 	}))

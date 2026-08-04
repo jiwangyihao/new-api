@@ -17,9 +17,9 @@ func TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes(t *testing.T)
 	request := TimedSubscriptionGrantRequest{
 		UserId:         userID,
 		PlanId:         plan.Id,
-		IdempotencyKey: "subscription_order:21903",
-		SourceType:     TimedSubscriptionGrantSourceOrder,
-		SourceId:       21_903,
+		IdempotencyKey: "timed-concurrent-21903",
+		SourceType:     TimedSubscriptionGrantSourceAdmin,
+		Reason:         "并发管理员授予测试",
 	}
 
 	type barrierEvent uint8

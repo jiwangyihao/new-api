@@ -288,6 +288,8 @@ func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testin
 
 func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
+	model.ClearDBTimestampCacheForTest()
+	t.Cleanup(model.ClearDBTimestampCacheForTest)
 	enableCreditValuationRuntimeForControllerTest(t)
 	setupSubscriptionControllerRedis(t)
 	userID := 6096

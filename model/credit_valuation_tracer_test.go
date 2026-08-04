@@ -27,6 +27,7 @@ func setupCreditValuationTracerTestDB(t *testing.T) *gorm.DB {
 	common.UsingPostgreSQL = false
 	common.RedisEnabled = false
 	initCol()
+	resetDBTimestampCacheForTest()
 
 	name := strings.ReplaceAll(t.Name(), "/", "_")
 	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -51,6 +52,7 @@ func setupCreditValuationTracerTestDB(t *testing.T) *gorm.DB {
 		common.UsingMySQL = oldMySQL
 		common.UsingPostgreSQL = oldPostgres
 		common.RedisEnabled = oldRedis
+		resetDBTimestampCacheForTest()
 		initCol()
 		ClearSubscriptionPlanCacheForTest()
 		ClearPrimaryBillableSubscriptionCacheForTest()

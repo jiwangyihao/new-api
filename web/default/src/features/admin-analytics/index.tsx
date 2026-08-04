@@ -210,6 +210,9 @@ export function AdminAnalyticsPage(
             queryErrorStates={queryErrorStates}
             filters={search}
             onDrilldown={props.onDrilldown}
+            onRefreshCurrentSnapshot={() =>
+              onSearchChange({ ...search, snapshot_at: undefined })
+            }
           />
         </div>
       </SectionPageLayout.Content>
@@ -758,6 +761,7 @@ function ActivePanel(props: {
   queryErrorStates: boolean[]
   filters: AdminAnalyticsCanonicalFilters
   onDrilldown: (target: FrontendAdminAnalyticsDrilldownTarget) => void
+  onRefreshCurrentSnapshot: () => void
 }): JSX.Element {
   const handleDrilldown: DrilldownHandler = (target) => {
     const frontendTarget = buildAdminAnalyticsDrilldown(props.filters, target)
@@ -840,6 +844,7 @@ function ActivePanel(props: {
         <PaidSubscriptionValuePanel
           responses={responses}
           onDrilldown={handleDrilldown}
+          onRefreshCurrentSnapshot={props.onRefreshCurrentSnapshot}
         />
       </PanelCard>
     )
@@ -1294,6 +1299,7 @@ function InvitationsPanel(props: {
 function PaidSubscriptionValuePanel(props: {
   responses: PaidSubscriptionValuePanelResponses
   onDrilldown: DrilldownHandler
+  onRefreshCurrentSnapshot: () => void
 }): JSX.Element {
   const { t } = useTranslation()
   const summary = panelData(props.responses.summary)?.summary
@@ -1302,15 +1308,60 @@ function PaidSubscriptionValuePanel(props: {
     panelData(props.responses.subscriptions)?.subscriptions?.items ?? []
   const plans = panelData(props.responses.plans)?.plans?.items ?? []
   const sources = panelData(props.responses.sources)?.sources?.items ?? []
+  const hasCurrentOnly =
+    subscriptions.some(
+      (item) => item.snapshot_semantics === 'current_only'
+    ) ||
+    Object.values(props.responses).some(
+      (response) =>
+        hasPanelData(response) &&
+        response.data.warnings?.some(
+          (warning) => warning.reason === 'current_only'
+        )
+    )
   if (!summary) return <EmptyAnalyticsPanel />
   return (
-    <div className='space-y-4'>
+    <div className='flex flex-col gap-4'>
+      {hasCurrentOnly ? (
+        <Alert>
+          <AlertTitle>{t('adminAnalytics.warnings.currentOnlyTitle')}</AlertTitle>
+          <AlertDescription className='flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between'>
+            <span>
+              {t('adminAnalytics.warnings.currentOnlyDescription')}
+            </span>
+            <Button
+              type='button'
+              variant='outline'
+              size='sm'
+              onClick={props.onRefreshCurrentSnapshot}
+            >
+              {t('adminAnalytics.actions.refreshCurrentSnapshot')}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <MetricGrid>
         <Metric
           labelKey='adminAnalytics.metrics.remainingValue'
           value={formatAdminMoneyBreakdown(
             summary.recognized_remaining_value_by_currency
           )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.exactRemainingValue'
+          value={formatAdminMoneyBreakdown(
+            summary.exact_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.estimatedRemainingValue'
+          value={formatAdminMoneyBreakdown(
+            summary.estimated_remaining_value_by_currency
+          )}
+        />
+        <Metric
+          labelKey='adminAnalytics.metrics.unknownCostCredit'
+          value={summary.unknown_cost_credit ?? 0}
         />
         <Metric
           labelKey='adminAnalytics.metrics.tokenBasedValue'
@@ -1489,7 +1540,7 @@ function AnalyticsCardGrid(props: {
     key: string
     title: string
     description?: string
-    values: Array<{ labelKey: string; value: string }>
+    values: Array<{ labelKey: string; value?: string; valueKey?: string }>
     drilldown?: AdminAnalyticsDrilldownTarget | null
   }>
   onDrilldown?: DrilldownHandler
@@ -1524,7 +1575,10 @@ function AnalyticsCardGrid(props: {
                   <dt className='text-muted-foreground truncate'>
                     {t(value.labelKey)}
                   </dt>
-                  <dd className='text-right'>{value.value || '—'}</dd>
+                  <dd className='text-right'>
+                    {value.value ??
+                      (value.valueKey ? t(value.valueKey) : '—')}
+                  </dd>
                 </div>
               ))}
             </dl>

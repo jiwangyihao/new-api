@@ -28,3 +28,25 @@ test('missing money amount displays dash', () => {
   assert.equal(formatAdminMoneyAmount(null), '—')
   assert.equal(formatAdminMoneyAmount(undefined), '—')
 })
+
+test('money amount prefers exact micros over legacy float', () => {
+  assert.equal(
+    formatAdminMoneyAmount({
+      amount: 999,
+      amount_micros: '32000000',
+      currency: 'CNY',
+    }),
+    '¥32.00'
+  )
+})
+
+test('money amount formats micros beyond the safe integer range with BigInt', () => {
+  assert.equal(
+    formatAdminMoneyAmount({
+      amount: 0,
+      amount_micros: '9007199254740993000000',
+      currency: 'USD',
+    }),
+    '$9007199254740993.00'
+  )
+})

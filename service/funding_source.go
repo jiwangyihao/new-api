@@ -63,13 +63,14 @@ func (w *WalletFunding) Refund() error {
 // ---------------------------------------------------------------------------
 
 type SubscriptionFunding struct {
-	requestId         string
-	userId            int
-	modelName         string
-	amount            int64 // 预扣的订阅 token 或 legacy quota 数
-	distributorAmount int64
-	subscriptionId    int
-	preConsumed       int64
+	requestId              string
+	userId                 int
+	modelName              string
+	amount                 int64 // 预扣的订阅 token 或 legacy quota 数
+	distributorAmount      int64
+	creditValuationTracked bool
+	subscriptionId         int
+	preConsumed            int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal                int64
 	AmountUsedAfter            int64
@@ -123,6 +124,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.TokenLimit = res.TokenLimit
 	s.TokenUsedAfter = res.TokenUsedAfter
 	s.DistributorTokenBilling = res.DistributorTokenBilling
+	s.creditValuationTracked = res.CreditValuationTracked
 	s.concurrencyLimit = res.ConcurrencyLimit
 	s.queueCapacity = res.QueueCapacity
 	s.TokenRemaining = res.TokenRemaining
@@ -138,6 +140,13 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.SubscriptionEndTime = res.SubscriptionEndTime
 	s.SubscriptionTokenRemaining = res.SubscriptionTokenRemaining
 	return nil
+}
+
+func (s *SubscriptionFunding) settleCreditRequestTarget(targetCredit int64) (bool, error) {
+	if s == nil || !s.creditValuationTracked || s.EntitlementType != model.SubscriptionEntitlementCreditBalance {
+		return false, nil
+	}
+	return true, model.SettleCreditRequestTarget(s.requestId, targetCredit, true)
 }
 
 func (s *SubscriptionFunding) Settle(delta int) error {

@@ -26,6 +26,7 @@ const (
 	AdminAnalyticsSourceAdmin                    AdminAnalyticsSource = "admin"
 	AdminAnalyticsSourceRedemption               AdminAnalyticsSource = "redemption"
 	AdminAnalyticsSourceSystem                   AdminAnalyticsSource = "system"
+	AdminAnalyticsSourceCreditBalancePool        AdminAnalyticsSource = "credit_balance_pool"
 	AdminAnalyticsSourceUnknown                  AdminAnalyticsSource = "unknown"
 )
 
@@ -38,13 +39,15 @@ const (
 )
 
 type AdminAnalyticsMoneyAmount struct {
-	Amount   float64 `json:"amount"`
-	Currency string  `json:"currency"`
+	Amount       float64 `json:"amount"`
+	AmountMicros string  `json:"amount_micros,omitempty"`
+	Currency     string  `json:"currency"`
 }
 
 type AdminAnalyticsMoneyBreakdown struct {
-	Amount   float64 `json:"amount"`
-	Currency string  `json:"currency"`
+	Amount       float64 `json:"amount"`
+	AmountMicros string  `json:"amount_micros,omitempty"`
+	Currency     string  `json:"currency"`
 }
 
 type AdminUsageGroupBy string
@@ -439,10 +442,15 @@ type AdminPaidSubscriptionValueSummary struct {
 	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
 	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
 	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	ExactRemainingValueByCurrency      []AdminAnalyticsMoneyBreakdown `json:"exact_remaining_value_by_currency"`
+	EstimatedRemainingValueByCurrency  []AdminAnalyticsMoneyBreakdown `json:"estimated_remaining_value_by_currency"`
 	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
 	ActivePaidSubscriptionCount        int                            `json:"active_paid_subscription_count"`
 	ActivePaidUserCount                int                            `json:"active_paid_user_count"`
 	TokenValueUnavailableCount         int                            `json:"token_value_unavailable_count"`
+	UnknownCostCredit                  int64                          `json:"unknown_cost_credit"`
+	UnknownTimedSubscriptionCount      int                            `json:"unknown_timed_subscription_count"`
+	CreditValuationStateMissingCount   int                            `json:"credit_valuation_state_missing_count"`
 }
 
 type AdminPaidSubscriptionValuePlanGroup struct {
@@ -454,6 +462,9 @@ type AdminPaidSubscriptionValuePlanGroup struct {
 	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
 	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
 	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	ExactRemainingValueByCurrency      []AdminAnalyticsMoneyBreakdown `json:"exact_remaining_value_by_currency"`
+	EstimatedRemainingValueByCurrency  []AdminAnalyticsMoneyBreakdown `json:"estimated_remaining_value_by_currency"`
+	UnknownCostCredit                  int64                          `json:"unknown_cost_credit"`
 	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
 	AverageTokenUsageRatio             *float64                       `json:"average_token_usage_ratio"`
 }
@@ -464,6 +475,9 @@ type AdminPaidSubscriptionValueSourceGroup struct {
 	UserCount                          int                            `json:"user_count"`
 	SubscriptionCount                  int                            `json:"subscription_count"`
 	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
+	ExactRemainingValueByCurrency      []AdminAnalyticsMoneyBreakdown `json:"exact_remaining_value_by_currency"`
+	EstimatedRemainingValueByCurrency  []AdminAnalyticsMoneyBreakdown `json:"estimated_remaining_value_by_currency"`
+	UnknownCostCredit                  int64                          `json:"unknown_cost_credit"`
 	ExcludedRemainingValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"excluded_remaining_value_by_currency"`
 	SourceAttribution                  string                         `json:"source_attribution"`
 }
@@ -476,6 +490,9 @@ type AdminPaidSubscriptionValueUser struct {
 	RecognizedRemainingValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"recognized_remaining_value_by_currency"`
 	TokenBasedValueByCurrency          []AdminAnalyticsMoneyBreakdown `json:"token_based_value_by_currency"`
 	TimeBasedValueByCurrency           []AdminAnalyticsMoneyBreakdown `json:"time_based_value_by_currency"`
+	ExactRemainingValueByCurrency      []AdminAnalyticsMoneyBreakdown `json:"exact_remaining_value_by_currency"`
+	EstimatedRemainingValueByCurrency  []AdminAnalyticsMoneyBreakdown `json:"estimated_remaining_value_by_currency"`
+	UnknownCostCredit                  int64                          `json:"unknown_cost_credit"`
 	EarliestEndTime                    int64                          `json:"earliest_end_time"`
 	Excluded                           bool                           `json:"excluded"`
 	ExcludedReason                     string                         `json:"excluded_reason"`
@@ -499,11 +516,20 @@ type AdminPaidSubscriptionValueSubscription struct {
 	RemainingSeconds         int64                          `json:"remaining_seconds"`
 	TokenLimit               int64                          `json:"token_limit"`
 	TokenUsed                int64                          `json:"token_used"`
+	AvailableCredit          int64                          `json:"available_credit"`
+	UnknownCostCredit        int64                          `json:"unknown_cost_credit"`
 	NextResetTime            int64                          `json:"next_reset_time"`
 	TokenBasedValue          *AdminAnalyticsMoneyAmount     `json:"token_based_value"`
-	TimeBasedValue           AdminAnalyticsMoneyAmount      `json:"time_based_value"`
+	TimeBasedValue           *AdminAnalyticsMoneyAmount     `json:"time_based_value"`
 	RecognizedRemainingValue AdminAnalyticsMoneyAmount      `json:"recognized_remaining_value"`
+	ExactRemainingValue      AdminAnalyticsMoneyAmount      `json:"exact_remaining_value"`
+	EstimatedRemainingValue  AdminAnalyticsMoneyAmount      `json:"estimated_remaining_value"`
 	ValuationBasis           string                         `json:"valuation_basis"`
+	ValuationConfidence      string                         `json:"valuation_confidence"`
+	ValuationStateVersion    int64                          `json:"valuation_state_version"`
+	ValuationUpdatedAt       int64                          `json:"valuation_updated_at"`
+	SnapshotSemantics        string                         `json:"snapshot_semantics"`
+	EntitlementType          string                         `json:"entitlement_type"`
 	SourceAttribution        string                         `json:"source_attribution"`
 	Excluded                 bool                           `json:"excluded"`
 	ExcludedReason           string                         `json:"excluded_reason"`

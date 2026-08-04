@@ -20,7 +20,11 @@ import {
   formatAdminTokens,
 } from './format'
 
-export type AdminAnalyticsCardValue = { labelKey: string; value: string }
+export type AdminAnalyticsCardValue = {
+  labelKey: string
+  value?: string
+  valueKey?: string
+}
 
 export function formatAdminAnalyticsTimestamp(
   value: number | null | undefined
@@ -48,10 +52,42 @@ export const adminAnalyticsLifecycleLabelKeys: Record<
   converted: 'adminAnalytics.lifecycle.converted',
 }
 
+const adminAnalyticsValuationBasisLabelKeys: Record<string, string> = {
+  credit_moving_weighted_average:
+    'adminAnalytics.valuationBasis.creditMovingWeightedAverage',
+}
+
+const adminAnalyticsValuationConfidenceLabelKeys: Record<string, string> = {
+  exact: 'adminAnalytics.valuationConfidence.exact',
+  estimated: 'adminAnalytics.valuationConfidence.estimated',
+  mixed: 'adminAnalytics.valuationConfidence.mixed',
+  unknown: 'adminAnalytics.valuationConfidence.unknown',
+}
+
+const adminAnalyticsSnapshotSemanticsLabelKeys: Record<string, string> = {
+  snapshot: 'adminAnalytics.snapshotSemantics.snapshot',
+  current_only: 'adminAnalytics.snapshotSemantics.currentOnly',
+}
+
+const adminAnalyticsSourceAttributionLabelKeys: Record<string, string> = {
+  moving_weighted_pool:
+    'adminAnalytics.sourceAttribution.movingWeightedPool',
+}
+
+function localizedAdminAnalyticsValue(
+  value: string | null | undefined,
+  labelKeys: Record<string, string>
+): Pick<AdminAnalyticsCardValue, 'value' | 'valueKey'> {
+  const valueKey = value ? labelKeys[value] : undefined
+  return valueKey
+    ? { valueKey }
+    : { value: formatAdminAnalyticsOptionalValue(value) }
+}
+
 export function adminAnalyticsCreditOverviewValues(
   quota: AdminAnalyticsOverviewQuota,
   subscriptions: AdminAnalyticsOverviewSubscriptions
-): AdminAnalyticsCardValue[] {
+): Array<AdminAnalyticsCardValue & { value: string }> {
   return [
     {
       labelKey: 'adminAnalytics.metrics.availableCredit',
@@ -86,7 +122,7 @@ export function adminAnalyticsCreditOverviewValues(
 
 export function adminAnalyticsCreditRankingValue(
   item: AdminAnalyticsSubscriptionRankingItem
-): AdminAnalyticsCardValue {
+): AdminAnalyticsCardValue & { value: string } {
   const labelKey = adminAnalyticsLifecycleLabelKeys[item.lifecycle_state]
   const amount =
     item.lifecycle_state === 'credit_debt'
@@ -266,14 +302,35 @@ export function paidSubscriptionValueSubscriptionCardValues(
       labelKey: 'adminAnalytics.fields.recognizedRemainingValue',
       value: formatAdminMoneyAmount(item.recognized_remaining_value),
     },
+    ...(item.exact_remaining_value === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.exactRemainingValue',
+            value: formatAdminMoneyAmount(item.exact_remaining_value),
+          },
+        ]),
+    ...(item.estimated_remaining_value === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.estimatedRemainingValue',
+            value: formatAdminMoneyAmount(item.estimated_remaining_value),
+          },
+        ]),
     {
       labelKey: 'adminAnalytics.metrics.tokenBasedValue',
       value: formatAdminMoneyAmount(item.token_based_value),
     },
-    {
-      labelKey: 'adminAnalytics.metrics.timeBasedValue',
-      value: formatAdminMoneyAmount(item.time_based_value),
-    },
+    item.time_based_value === null
+      ? {
+          labelKey: 'adminAnalytics.metrics.timeBasedValue',
+          valueKey: 'adminAnalytics.values.notApplicable',
+        }
+      : {
+          labelKey: 'adminAnalytics.metrics.timeBasedValue',
+          value: formatAdminMoneyAmount(item.time_based_value),
+        },
     {
       labelKey: 'adminAnalytics.fields.startTime',
       value: formatAdminAnalyticsTimestamp(item.start_time),
@@ -294,17 +351,85 @@ export function paidSubscriptionValueSubscriptionCardValues(
       labelKey: 'adminAnalytics.fields.tokenUsed',
       value: formatAdminTokens(item.token_used),
     },
+    ...(item.available_credit === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.availableCredit',
+            value: formatAdminTokens(item.available_credit),
+          },
+        ]),
+    ...(item.unknown_cost_credit === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.unknownCostCredit',
+            value: formatAdminTokens(item.unknown_cost_credit),
+          },
+        ]),
     {
       labelKey: 'adminAnalytics.fields.nextResetTime',
       value: formatAdminAnalyticsTimestamp(item.next_reset_time),
     },
     {
       labelKey: 'adminAnalytics.fields.valuationBasis',
-      value: formatAdminAnalyticsOptionalValue(item.valuation_basis),
+      ...localizedAdminAnalyticsValue(
+        item.valuation_basis,
+        adminAnalyticsValuationBasisLabelKeys
+      ),
     },
+    ...(item.valuation_confidence === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.valuationConfidence',
+            ...localizedAdminAnalyticsValue(
+              item.valuation_confidence,
+              adminAnalyticsValuationConfidenceLabelKeys
+            ),
+          },
+        ]),
+    ...(item.valuation_state_version === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.valuationStateVersion',
+            value: formatAdminTokens(item.valuation_state_version),
+          },
+        ]),
+    ...(item.valuation_updated_at === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.valuationUpdatedAt',
+            value: formatAdminAnalyticsTimestamp(item.valuation_updated_at),
+          },
+        ]),
+    ...(item.snapshot_semantics === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.snapshotSemantics',
+            ...localizedAdminAnalyticsValue(
+              item.snapshot_semantics,
+              adminAnalyticsSnapshotSemanticsLabelKeys
+            ),
+          },
+        ]),
+    ...(item.entitlement_type === undefined
+      ? []
+      : [
+          {
+            labelKey: 'adminAnalytics.fields.entitlementType',
+            value: formatAdminAnalyticsOptionalValue(item.entitlement_type),
+          },
+        ]),
     {
       labelKey: 'adminAnalytics.fields.sourceAttribution',
-      value: formatAdminAnalyticsOptionalValue(item.source_attribution),
+      ...localizedAdminAnalyticsValue(
+        item.source_attribution,
+        adminAnalyticsSourceAttributionLabelKeys
+      ),
     },
     {
       labelKey: 'adminAnalytics.fields.possibleOrderId',

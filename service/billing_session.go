@@ -66,6 +66,16 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 		}
 		fundingDelta = int(fundingDelta64)
 	}
+	if subscriptionFunding, ok := s.funding.(*SubscriptionFunding); ok {
+		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens)
+		if err != nil {
+			return err
+		}
+		if handled {
+			s.settled = true
+			return nil
+		}
+	}
 	if fundingDelta == 0 {
 		s.settled = true
 		return nil

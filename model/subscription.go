@@ -1028,15 +1028,29 @@ func CompleteSubscriptionOrderTx(tx *gorm.DB, order *SubscriptionOrder, provider
 		if order.PaymentProvider == PaymentProviderBalance {
 			reason = "人民币账户余额购买 Credit 余额"
 		}
+		var valuationSource *CreditValuationSourceSnapshot
+		valuationCurrency := strings.TrimSpace(snapshot.TargetCreditBalanceValuationCurrency)
+		if snapshot.ListPriceMicros != nil && *snapshot.ListPriceMicros > 0 && snapshot.MonthlyTokenLimit > 0 && valuationCurrency != "" {
+			valuationSource = &CreditValuationSourceSnapshot{
+				SourcePriceMicros: *snapshot.ListPriceMicros,
+				SourcePlanCredit:  snapshot.MonthlyTokenLimit,
+				GrossCredit:       order.CreditGrantAmount,
+				SourceCurrency:    snapshot.ListPriceCurrency,
+				ValuationCurrency: valuationCurrency,
+				RuleVersion:       snapshot.ValuationRuleVersion,
+			}
+		}
 		grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
 			UserId:             order.UserId,
 			GrossCredit:        order.CreditGrantAmount,
 			IdempotencyKey:     order.TradeNo,
 			SourceType:         CreditBalanceLedgerSourceSubscriptionOrder,
 			SourceId:           order.Id,
+			SourceSnapshot:     order.EntitlementSnapshot,
 			Type:               CreditBalanceLedgerTypePurchase,
 			TargetPlanId:       order.CreditTargetPlanID,
 			TargetPlanSnapshot: targetPlan,
+			ValuationSource:    valuationSource,
 			PaymentProvider:    order.PaymentProvider,
 			Reason:             reason,
 		})
@@ -1822,6 +1836,7 @@ type SubscriptionPreConsumeResult struct {
 	TokenUsedAfter             int64
 	TokenRemaining             int64
 	DistributorTokenBilling    bool
+	CreditValuationTracked     bool
 	ConcurrencyLimit           int
 	QueueCapacity              int
 	PlanId                     int
@@ -2870,6 +2885,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 				return err
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
+			returnValue.CreditValuationTracked = existing.ValuationSubscriptionId > 0
 			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
 			return nil
 		}
@@ -2901,34 +2917,48 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			PreConsumed:        consumeAmount,
 			Status:             "consumed",
 		}
-		if err := tx.Create(record).Error; err != nil {
-			var dup SubscriptionPreConsumeRecord
-			if err2 := tx.Where("request_id = ?", requestId).First(&dup).Error; err2 == nil {
-				if dup.Status == "refunded" {
-					return errors.New("subscription pre-consume already refunded")
-				}
-				fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, dup.PreConsumed, sub.AmountUsed, sub.TokenUsed, distributor)
-				cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
-				return nil
-			}
-			return err
-		}
-		rows, err := applySubscriptionPreConsumeUpdateTx(tx, sub.Id, distributor, consumeAmount)
+		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
 		if err != nil {
 			return err
 		}
-		if rows == 0 {
-			if distributor {
-				return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+		if valuationReady && sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+			if !distributor {
+				return ErrCreditValuationStateMismatch
 			}
-			return fmt.Errorf("subscription quota insufficient, need=%d", consumeAmount)
-		}
-		if distributor {
-			sub.TokenUsed += consumeAmount
+			mutation, err := ApplyCreditValuationOutflowTx(tx, &sub, consumeAmount, CreditValuationMutationConsume)
+			if err != nil {
+				return err
+			}
+			record.AppliedCredit = consumeAmount
+			record.DeductedAvailableCredit = consumeAmount
+			record.ValuationSubscriptionId = sub.Id
+			record.DeductedExactCostMicros = mutation.RemovedExactCostMicros
+			record.DeductedEstimatedCostMicros = mutation.RemovedEstimatedCostMicros
+			record.DeductedUnknownCredit = mutation.RemovedUnknownCredit
+			record.ValuationRuleVersion = CreditValuationRuleVersion
+			record.SettlementVersion = 1
 		} else {
-			sub.AmountUsed += consumeAmount
+			rows, err := applySubscriptionPreConsumeUpdateTx(tx, sub.Id, distributor, consumeAmount)
+			if err != nil {
+				return err
+			}
+			if rows == 0 {
+				if distributor {
+					return fmt.Errorf("subscription token quota insufficient, need=%d", distributorAmount)
+				}
+				return fmt.Errorf("subscription quota insufficient, need=%d", consumeAmount)
+			}
+			if distributor {
+				sub.TokenUsed += consumeAmount
+			} else {
+				sub.AmountUsed += consumeAmount
+			}
+		}
+		if err := tx.Create(record).Error; err != nil {
+			return err
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
+		returnValue.CreditValuationTracked = record.ValuationSubscriptionId > 0
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
 	}

@@ -22,12 +22,25 @@ export function formatAdminMoneyAmount(
   value: MoneyAmount | null | undefined
 ): string {
   if (value === null || value === undefined) return '—'
-  const amount = Number(value.amount)
-  if (!Number.isFinite(amount)) return '—'
   const currency = value.currency.trim().toUpperCase()
-  if (currency === '') return amount.toFixed(2)
+  let decimal: string
+  if (value.amount_micros !== undefined) {
+    if (!/^-?\d+$/.test(value.amount_micros)) return '—'
+    const micros = BigInt(value.amount_micros)
+    const negative = micros < 0n
+    const absoluteMicros = negative ? -micros : micros
+    const roundedCents = (absoluteMicros + 5_000n) / 10_000n
+    const whole = roundedCents / 100n
+    const fraction = (roundedCents % 100n).toString().padStart(2, '0')
+    decimal = `${negative ? '-' : ''}${whole}.${fraction}`
+  } else {
+    const amount = Number(value.amount)
+    if (!Number.isFinite(amount)) return '—'
+    decimal = amount.toFixed(2)
+  }
+  if (currency === '') return decimal
   const symbol = currency === 'CNY' ? '¥' : currency === 'USD' ? '$' : `${currency} `
-  return `${symbol}${amount.toFixed(2)}`
+  return `${symbol}${decimal}`
 }
 
 export function formatAdminMoneyBreakdown(

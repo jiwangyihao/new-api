@@ -16,7 +16,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -291,6 +295,7 @@ func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testin
 
 func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t *testing.T) {
 	setupKyrenPaymentControllerTestDB(t)
+	enableCreditValuationRuntimeForControllerTest(t)
 	setupSubscriptionControllerRedis(t)
 	userID := 6096
 	seedKyrenPaymentUser(t, userID)
@@ -298,6 +303,15 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	require.NoError(t, model.DB.First(&buyer, userID).Error)
 	seedUserCacheForSubscriptionControllerTest(t, buyer)
 	seedExternalCreditPurchasePlans(t, 6097, 6098)
+	priceMicros := int64(40_000_000)
+	valuationCurrency := "CNY"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Updates(map[string]any{
+		"price_amount_micros": priceMicros,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6098).Updates(map[string]any{
+		"currency":           "CNY",
+		"valuation_currency": valuationCurrency,
+	}).Error)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Update("kyren_product_id", "prod_credit_webhook").Error)
 	fake := &kyrenCheckoutFakeAPI{}
 	withKyrenCheckoutFakeControllerClient(t, fake)
@@ -305,16 +319,56 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	require.Contains(t, create.Body.String(), `"success":true`)
 	var order model.SubscriptionOrder
 	require.NoError(t, model.DB.Where("user_id = ? AND plan_id = ?", userID, 6097).First(&order).Error)
+	snapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(order.EntitlementSnapshot)
+	require.NoError(t, err)
+	require.NotNil(t, snapshot.ListPriceMicros)
+	assert.Equal(t, int64(40_000_000), *snapshot.ListPriceMicros)
+	assert.Equal(t, int64(1000), snapshot.MonthlyTokenLimit)
+	assert.Equal(t, "CNY", snapshot.ListPriceCurrency)
+	assert.Equal(t, "CNY", snapshot.TargetCreditBalanceValuationCurrency)
+	assert.Equal(t, model.CreditValuationRuleVersion, snapshot.ValuationRuleVersion)
+
+	changedMicros := int64(99_000_000)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 6097).Updates(map[string]any{
+		"price_amount":        99,
+		"price_amount_micros": changedMicros,
+		"enabled":             false,
+	}).Error)
+	model.InvalidateSubscriptionPlanCache(6097)
 	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", order.TradeNo, "prod_credit_webhook", "40.00", kyrenCurrencyCNY)
 
 	recorder := performSignedKyrenWebhook(t, payload)
+	replay := performSignedKyrenWebhook(t, payload)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
 	require.NoError(t, model.DB.First(&order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
 	var ledger model.CreditBalanceLedger
 	require.NoError(t, model.DB.Where("source_id = ?", order.Id).First(&ledger).Error)
 	assert.Equal(t, int64(1000), ledger.GrossCredit)
+	assert.Equal(t, int64(40_000_000), ledger.ValuationGrossCostMicros)
+	assert.Equal(t, int64(40_000_000), ledger.ValuationNetCostMicros)
+	assert.Equal(t, model.CreditValuationConfidenceExact, ledger.ValuationConfidence)
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(1000), state.AvailableCredit)
+	assert.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	assert.Zero(t, state.EstimatedCostMicros)
+	assert.Zero(t, state.UnknownCredit)
+	assert.Equal(t, int64(1), state.StateVersion)
+	var ledgerCount, stateCount int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_id = ?", order.Id).Count(&ledgerCount).Error)
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_id = ?", userID).Count(&stateCount).Error)
+	assert.Equal(t, int64(1), ledgerCount)
+	assert.Equal(t, int64(1), stateCount)
+
+	newPurchase := performKyrenSubscriptionPayRequest(t, userID, `{"plan_id":6097,"purchase_mode":"credit_balance"}`)
+	assert.Contains(t, newPurchase.Body.String(), "套餐未启用")
+	var orderCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, 6097).Count(&orderCount).Error)
+	assert.Equal(t, int64(1), orderCount)
+
 	cachedBuyer, err := model.GetUserCache(userID)
 	require.NoError(t, err)
 	assert.Equal(t, model.SubscriptionPurchaseModeCreditBalance, cachedBuyer.GetSetting().LastSubscriptionPurchaseMode)
@@ -324,6 +378,66 @@ func TestSubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation(t 
 	assert.Zero(t, timedCount)
 	var eventCount int64
 	require.NoError(t, model.DB.Model(&model.InvitationRewardEvent{}).Where("source_order_id = ?", order.Id).Count(&eventCount).Error)
+
+	const requestID = "kyren-credit-billing-session-200"
+	billingRecorder := httptest.NewRecorder()
+	billingContext, _ := gin.CreateTestContext(billingRecorder)
+	billingContext.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:          userID,
+		OriginModelName: "gpt-4o",
+		RequestId:       requestID,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_only"},
+	}
+	relayInfo.SetEstimatePromptTokens(200)
+	require.Nil(t, service.PreConsumeBilling(billingContext, 200, relayInfo))
+	require.IsType(t, &service.BillingSession{}, relayInfo.Billing)
+	assert.Equal(t, ledger.UserSubscriptionId, relayInfo.SubscriptionId)
+	assert.Equal(t, int64(200), relayInfo.SubscriptionPreConsumed)
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(800), state.AvailableCredit)
+	assert.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	assert.Zero(t, state.EstimatedCostMicros)
+	assert.Zero(t, state.UnknownCredit)
+	assert.Equal(t, int64(2), state.StateVersion)
+	var preConsume model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, int64(200), preConsume.AppliedCredit)
+	assert.Equal(t, int64(8_000_000), preConsume.DeductedExactCostMicros)
+	assert.Equal(t, requestID, preConsume.RequestId)
+	assert.Equal(t, ledger.UserSubscriptionId, preConsume.ValuationSubscriptionId)
+	assert.Equal(t, int64(1), preConsume.SettlementVersion)
+
+	require.NoError(t, service.SettleBillingWithInput(billingContext, relayInfo, service.BillingSettleInput{
+		WalletQuota:        200,
+		SubscriptionTokens: 200,
+	}))
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, "settled", preConsume.Status)
+	assert.NotZero(t, preConsume.FinalizedAt)
+	finalizedAt := preConsume.FinalizedAt
+	settlementReplayInfo := &relaycommon.RelayInfo{
+		UserId:          userID,
+		OriginModelName: "gpt-4o",
+		RequestId:       requestID,
+		RelayMode:       relayconstant.RelayModeChatCompletions,
+		UserSetting:     dto.UserSetting{BillingPreference: "subscription_only"},
+	}
+	settlementReplayInfo.SetEstimatePromptTokens(200)
+	require.Nil(t, service.PreConsumeBilling(billingContext, 200, settlementReplayInfo))
+	require.IsType(t, &service.BillingSession{}, settlementReplayInfo.Billing)
+	require.NoError(t, service.SettleBillingWithInput(billingContext, settlementReplayInfo, service.BillingSettleInput{
+		WalletQuota:        200,
+		SubscriptionTokens: 200,
+	}))
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&preConsume).Error)
+	assert.Equal(t, finalizedAt, preConsume.FinalizedAt)
+	assert.Equal(t, int64(1), preConsume.SettlementVersion)
+	require.NoError(t, model.DB.First(&state, ledger.UserSubscriptionId).Error)
+	assert.Equal(t, int64(800), state.AvailableCredit)
+	assert.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	assert.Equal(t, int64(2), state.StateVersion)
 	assert.Zero(t, eventCount)
 }
 

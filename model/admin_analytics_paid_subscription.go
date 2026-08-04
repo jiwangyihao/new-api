@@ -822,10 +822,18 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 	users := adminPaidUserItems(userGroups, query)
 	plans := adminPaidPlanItems(planGroups, query)
 	sources := adminPaidSourceItems(sourceGroups, query)
-	adminSortPaidSubscriptionUsers(users, query)
-	adminSortPaidSubscriptionPlans(plans, query)
-	adminSortPaidSubscriptionSources(sources, query)
-	adminSortPaidSubscriptionItems(subscriptionItems, query)
+	if err := adminSortPaidSubscriptionUsers(users, query); err != nil {
+		return adminPaidSubscriptionValueBuild{}, err
+	}
+	if err := adminSortPaidSubscriptionPlans(plans, query); err != nil {
+		return adminPaidSubscriptionValueBuild{}, err
+	}
+	if err := adminSortPaidSubscriptionSources(sources, query); err != nil {
+		return adminPaidSubscriptionValueBuild{}, err
+	}
+	if err := adminSortPaidSubscriptionItems(subscriptionItems, query); err != nil {
+		return adminPaidSubscriptionValueBuild{}, err
+	}
 
 	return adminPaidSubscriptionValueBuild{
 		Summary: dto.AdminPaidSubscriptionValueSummary{
@@ -1226,6 +1234,34 @@ func GetAdminPaidSubscriptionValueSourceBreakdown(query AdminAnalyticsQuery) (dt
 	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Sources: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSourceGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
 }
 
+func adminParseAmountMicros(amountMicros string) (int64, error) {
+	parsed, err := strconv.ParseUint(amountMicros, 10, 63)
+	if errors.Is(err, strconv.ErrRange) {
+		return 0, ErrCreditValuationOverflow
+	}
+	if err != nil {
+		return 0, ErrCreditValuationSourceInvalid
+	}
+	return int64(parsed), nil
+}
+
+func adminAmountMicrosInBreakdown(amounts []dto.AdminAnalyticsMoneyBreakdown, currency string) (int64, error) {
+	currency = strings.TrimSpace(currency)
+	for _, amount := range amounts {
+		if strings.TrimSpace(amount.Currency) == currency {
+			return adminParseAmountMicros(amount.AmountMicros)
+		}
+	}
+	return 0, nil
+}
+
+func adminMoneyAmountMicrosForCurrency(amount dto.AdminAnalyticsMoneyAmount, currency string) (int64, error) {
+	if strings.TrimSpace(amount.Currency) != strings.TrimSpace(currency) {
+		return 0, nil
+	}
+	return adminParseAmountMicros(amount.AmountMicros)
+}
+
 func adminAmountInBreakdown(amounts []dto.AdminAnalyticsMoneyBreakdown, currency string) float64 {
 	currency = strings.TrimSpace(currency)
 	for _, amount := range amounts {
@@ -1250,7 +1286,17 @@ func adminOptionalMoneyAmountForCurrency(amount *dto.AdminAnalyticsMoneyAmount, 
 	return adminMoneyAmountForCurrency(*amount, currency)
 }
 
-func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, query AdminAnalyticsQuery) {
+func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, query AdminAnalyticsQuery) error {
+	recognizedMicros := make(map[int]int64, len(items))
+	if query.SortBy == "recognized_remaining_value" {
+		for i := range items {
+			amount, err := adminAmountMicrosInBreakdown(items[i].RecognizedRemainingValueByCurrency, query.Currency)
+			if err != nil {
+				return err
+			}
+			recognizedMicros[items[i].UserID] = amount
+		}
+	}
 	desc := adminSortDesc(query.SortOrder)
 	sort.SliceStable(items, func(i, j int) bool {
 		left := items[i]
@@ -1258,7 +1304,7 @@ func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, 
 		cmp := 0
 		switch query.SortBy {
 		case "recognized_remaining_value":
-			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+			cmp = adminCompareInt64(recognizedMicros[left.UserID], recognizedMicros[right.UserID])
 		case "active_paid_plan_count":
 			cmp = left.ActivePaidPlanCount - right.ActivePaidPlanCount
 		case "earliest_end_time":
@@ -1275,14 +1321,25 @@ func adminSortPaidSubscriptionUsers(items []dto.AdminPaidSubscriptionValueUser, 
 		}
 		return cmp < 0
 	})
+	return nil
 }
 
-func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) {
+func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) error {
+	recognizedMicros := make(map[int]int64, len(items))
+	if query.SortBy == "recognized_remaining_value" {
+		for i := range items {
+			amount, err := adminMoneyAmountMicrosForCurrency(items[i].RecognizedRemainingValue, query.Currency)
+			if err != nil {
+				return err
+			}
+			recognizedMicros[items[i].SubscriptionID] = amount
+		}
+	}
 	desc := adminSortDesc(query.SortOrder)
 	sort.SliceStable(items, func(i, j int) bool {
 		left := items[i]
 		right := items[j]
-		cmp := adminComparePaidSubscriptionItem(left, right, query)
+		cmp := adminComparePaidSubscriptionItem(left, right, query, recognizedMicros)
 		if cmp == 0 {
 			cmp = left.SubscriptionID - right.SubscriptionID
 		}
@@ -1291,12 +1348,13 @@ func adminSortPaidSubscriptionItems(items []dto.AdminPaidSubscriptionValueSubscr
 		}
 		return cmp < 0
 	})
+	return nil
 }
 
-func adminComparePaidSubscriptionItem(left dto.AdminPaidSubscriptionValueSubscription, right dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery) int {
+func adminComparePaidSubscriptionItem(left dto.AdminPaidSubscriptionValueSubscription, right dto.AdminPaidSubscriptionValueSubscription, query AdminAnalyticsQuery, recognizedMicros map[int]int64) int {
 	switch query.SortBy {
 	case "recognized_remaining_value":
-		return adminCompareFloat(adminMoneyAmountForCurrency(left.RecognizedRemainingValue, query.Currency), adminMoneyAmountForCurrency(right.RecognizedRemainingValue, query.Currency))
+		return adminCompareInt64(recognizedMicros[left.SubscriptionID], recognizedMicros[right.SubscriptionID])
 	case "end_time":
 		return adminCompareInt64(left.EndTime, right.EndTime)
 	case "start_time":
@@ -1308,7 +1366,17 @@ func adminComparePaidSubscriptionItem(left dto.AdminPaidSubscriptionValueSubscri
 	}
 }
 
-func adminSortPaidSubscriptionPlans(items []dto.AdminPaidSubscriptionValuePlanGroup, query AdminAnalyticsQuery) {
+func adminSortPaidSubscriptionPlans(items []dto.AdminPaidSubscriptionValuePlanGroup, query AdminAnalyticsQuery) error {
+	recognizedMicros := make(map[int]int64, len(items))
+	if query.SortBy == "recognized_remaining_value" {
+		for i := range items {
+			amount, err := adminAmountMicrosInBreakdown(items[i].RecognizedRemainingValueByCurrency, query.Currency)
+			if err != nil {
+				return err
+			}
+			recognizedMicros[items[i].PlanID] = amount
+		}
+	}
 	desc := adminSortDesc(query.SortOrder)
 	sort.SliceStable(items, func(i, j int) bool {
 		left := items[i]
@@ -1316,7 +1384,7 @@ func adminSortPaidSubscriptionPlans(items []dto.AdminPaidSubscriptionValuePlanGr
 		cmp := 0
 		switch query.SortBy {
 		case "recognized_remaining_value":
-			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+			cmp = adminCompareInt64(recognizedMicros[left.PlanID], recognizedMicros[right.PlanID])
 		case "subscription_count":
 			cmp = left.ActiveSubscriptionCount - right.ActiveSubscriptionCount
 		case "user_count":
@@ -1332,9 +1400,21 @@ func adminSortPaidSubscriptionPlans(items []dto.AdminPaidSubscriptionValuePlanGr
 		}
 		return cmp < 0
 	})
+	return nil
 }
 
-func adminSortPaidSubscriptionSources(items []dto.AdminPaidSubscriptionValueSourceGroup, query AdminAnalyticsQuery) {
+func adminSortPaidSubscriptionSources(items []dto.AdminPaidSubscriptionValueSourceGroup, query AdminAnalyticsQuery) error {
+	recognizedMicros := make(map[adminPaidSourceKey]int64, len(items))
+	if query.SortBy == "recognized_remaining_value" {
+		for i := range items {
+			amount, err := adminAmountMicrosInBreakdown(items[i].RecognizedRemainingValueByCurrency, query.Currency)
+			if err != nil {
+				return err
+			}
+			key := adminPaidSourceKey{Source: items[i].Source, GrantReason: items[i].GrantReason}
+			recognizedMicros[key] = amount
+		}
+	}
 	desc := adminSortDesc(query.SortOrder)
 	sort.SliceStable(items, func(i, j int) bool {
 		left := items[i]
@@ -1342,7 +1422,9 @@ func adminSortPaidSubscriptionSources(items []dto.AdminPaidSubscriptionValueSour
 		cmp := 0
 		switch query.SortBy {
 		case "recognized_remaining_value":
-			cmp = adminCompareFloat(adminAmountInBreakdown(left.RecognizedRemainingValueByCurrency, query.Currency), adminAmountInBreakdown(right.RecognizedRemainingValueByCurrency, query.Currency))
+			leftKey := adminPaidSourceKey{Source: left.Source, GrantReason: left.GrantReason}
+			rightKey := adminPaidSourceKey{Source: right.Source, GrantReason: right.GrantReason}
+			cmp = adminCompareInt64(recognizedMicros[leftKey], recognizedMicros[rightKey])
 		case "subscription_count":
 			cmp = left.SubscriptionCount - right.SubscriptionCount
 		case "user_count":
@@ -1360,6 +1442,7 @@ func adminSortPaidSubscriptionSources(items []dto.AdminPaidSubscriptionValueSour
 		}
 		return cmp < 0
 	})
+	return nil
 }
 
 func adminCompareFloat(left float64, right float64) int {

@@ -178,6 +178,29 @@ func TestUpdateSubscriptionRedemptionPreservesSnapshotWhenPlanUnchanged(t *testi
 	assert.Equal(t, "CNY", saved.Currency)
 }
 
+func TestUpdateRedemptionStatusOnlyDoesNotBackfillMissingSnapshot(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	redemption := model.Redemption{
+		Id: 9582, UserId: 1, Name: "legacy status only", Key: "legacy-status-only",
+		Type: model.RedemptionTypeSubscription, PlanId: 999999,
+		Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(),
+	}
+	require.NoError(t, model.DB.Create(&redemption).Error)
+	ctx, recorder := newAuthenticatedContext(t, http.MethodPut, "/api/redemption/?status_only=true", map[string]any{
+		"id": redemption.Id, "status": common.RedemptionCodeStatusDisabled,
+	}, 1)
+
+	UpdateRedemption(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	var saved model.Redemption
+	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusDisabled, saved.Status)
+	assert.Empty(t, saved.FulfillmentSnapshot)
+	assert.Zero(t, saved.FulfillmentSubscriptionId)
+}
+
 func TestUpdateUsedSubscriptionRedemptionRejectsSnapshotMutation(t *testing.T) {
 	setupRedemptionCNYTestDB(t)
 	oldCode := "used-snapshot-old-plan"

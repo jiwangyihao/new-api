@@ -7,17 +7,17 @@
 - 分支：`jiwangyihao/issue-21-timed-grants`
 - 冻结 HEAD：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`
 - 起始工作树：clean
-- 最近安全提交：`2d9f200e2`（最终 Spec 修复检查点）。
-- 当前未提交文件：Finding 1 的模型实现、模型/controller 回归测试与本状态/证据更新。
+- 最近安全提交：`9235f6887`（Finding 1：严格校验计时权益周期）。
+- 当前未提交文件：Redemption Findings 2–6 的 model/controller 实现、回归测试与本状态/证据更新。
 
 ## 七项 Finding
 
 1. `COMPLETE`：权威 timed Plan 的 duration/reset 严格资格校验；模型矩阵 `-count=10` 与真实 controller API 已 GREEN。
-2. `IN_PROGRESS`：缺失 Redemption 授权快照时禁止热路径补造 exact。
-3. `PENDING`：Credit redemption 当前资格与冻结事实分离。
-4. `PENDING`：已使用 Redemption 重放比较规范化 mode。
-5. `PENDING`：disabled trial / invite-trial 禁止新兑换。
-6. `PENDING`：`Redemption.Update` 事务内锁定重读并统一 `Redemption → SubscriptionPlan` 锁序。
+2. `COMPLETE`：无 snapshot Redemption 在热路径稳定拒绝且事务零写入。
+3. `COMPLETE`：Credit current Plan 仅判当前资格，持久化 snapshot 提供冻结事实；并发 claim 恢复一次 grant 与一次 replay。
+4. `COMPLETE`：used Redemption 成功重放比较规范化 mode，双向冲突均稳定拒绝且零写入。
+5. `COMPLETE`：disabled trial / invite-trial 在任何新兑换副作用前稳定拒绝。
+6. `COMPLETE`：`Redemption.Update` 事务内锁定重读，统一 `Redemption → SubscriptionPlan` 锁序；status-only 不读取 Plan 或补 snapshot。
 7. `PENDING`：普通 paid timed 订单成功回调重放恢复原结果。
 
 ## 当前事务与锁序合同
@@ -34,7 +34,7 @@
 
 ## 下一步
 
-只读 `model/redemption.go` 及已提交失败测试，复现 Finding 2 后完成最小 GREEN。
+完成 Redemption Findings 2–6 的 `-count=10`、`git diff --check` 与 clean 安全提交后，开始 Finding 7 的最小订单 replay RED。
 
 ## 阻塞
 

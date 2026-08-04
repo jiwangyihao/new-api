@@ -13,37 +13,43 @@
 - 稳定错误：所有非法资格均为 `errors.Is(err, ErrTimedSubscriptionGrantInvalid)`；外层事务回滚 subscription、grant 与 guard version。
 - GREEN（模型）：`go test ./model -run TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomically -count=10` → PASS。
 - GREEN（controller）：`go test ./controller -run TestAdminCreateTimedSubscriptionRejectsInvalidResetPlanAtomically -count=1` → PASS。
-- 提交：待本次 Finding 1 安全提交补记 SHA。
+- 提交：`9235f6887`。
 
 ## Finding 2：缺失 Redemption 快照
 
-- 状态：IN_PROGRESS
-- RED：待运行真实 SQLite 无 snapshot、Plan 后续改价/改币后的兑换测试。
-- 最小 GREEN：兑换热路径不再从 current Plan 补造 exact；缺失或 identity 不完整时稳定拒绝并零写入。
+- 状态：COMPLETE
+- RED：`go test ./model -run 'TestRedeemLegacySubscriptionWithoutSnapshotRejectsWithoutWrites|TestRedeemUsedSubscriptionRejectsConflictingModeWithoutWrites|TestRedeemDisabledTrialPlansRejectWithoutWrites|TestRedemptionUpdatePreservesCommittedFulfillmentAfterStaleRead|TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay' -count=1`；无 snapshot 的旁路历史 Redemption 在 current Plan 改价/改币后仍成功兑换、生成 subscription/grant 并写回 current exact snapshot。
+- 最小 GREEN：`redemptionFulfillmentFromSourceSnapshot` 要求已有可解析且 entitlement identity 完整的持久化 snapshot；缺失/不完整时返回 `ErrRedemptionPlanIneligible`，claim 与全部 fulfillment 写入随事务回滚。
+- GREEN：上述组合命令 `-count=1` 与 `-count=10` 均 PASS；十次重复覆盖无 snapshot 零写入、双向 mode 冲突、disabled trial/invite-trial、stale Update 串行化及 Credit 并发一次 grant/一次 replay。
 
 ## Finding 3：Credit 当前资格与冻结事实
 
-- 状态：PENDING
-- RED：并发 Credit claim 当前会稳定失败 `redemption.plan_ineligible`。
-- 最小 GREEN：current Plan 仅判当前资格；持久化 `FulfillmentSnapshot` 提供冻结授权事实。
+- 状态：COMPLETE
+- RED：`go test ./model -run TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay -count=1` 稳定失败；snapshot 重建 plan 的 `Enabled=false` 被误用于当前资格，返回 `redemption.plan_ineligible`。
+- 最小 GREEN：新 Redemption 通过 `Insert` 冻结授权 snapshot；`currentPlan` 仅用于 enabled/identity/type 与 Credit option 当前资格，snapshot 重建的 plan 仅提供冻结 Credit、价格、币种、duration/reset 与规则事实。
+- GREEN：组合定向命令 `-count=1` → PASS；并发结果为一次 grant、一次相同 fulfillment replay、单一 ledger。
 
 ## Finding 4：成功重放 mode 冲突
 
-- 状态：PENDING
-- RED：待运行 timed→credit_balance 与 credit_balance→timed 双向冲突测试。
-- 最小 GREEN：相同 mode 才恢复原 fulfillment；冲突返回既有稳定错误且零写入。
+- 状态：COMPLETE
+- RED：组合定向命令 `-count=1` 中 timed→credit_balance 旧逻辑无错误返回 timed fulfillment；反向冲突亦未按请求 mode 建立稳定冲突合同。
+- 最小 GREEN：`redemptionResultFromFulfillment` 接受规范化 requested mode，仅当其等于持久化 `FulfillmentMode` 时恢复原结果；双向冲突返回 `ErrRedemptionAlreadyUsed`，不新增 subscription、timed grant 或 Credit ledger。
+- GREEN：`TestRedeemUsedSubscriptionRejectsConflictingModeWithoutWrites` → PASS。
 
 ## Finding 5：disabled trial / invite-trial
 
-- 状态：PENDING
-- RED：待运行真实 SQLite disabled trial 与 invite-trial 新兑换测试。
-- 最小 GREEN：所有新兑换分支前统一检查 `currentPlan.Enabled`；既有相同 mode 成功重放不受影响。
+- 状态：COMPLETE
+- RED：组合定向命令 `-count=1` 中 disabled trial 与 invite-trial 均成功创建 subscription；invite 路径具备产生 invitation side effect 的风险。
+- 最小 GREEN：锁定 current Plan 后，在 claim 与 trial/invite/paid/Credit 分支之前统一校验 enabled 与 timed entitlement identity；失败返回 `ErrRedemptionPlanIneligible` 并零写入。
+- GREEN：`TestRedeemDisabledTrialPlansRejectWithoutWrites` → PASS，subscription/grant/invitation event 均为 0。
 
 ## Finding 6：Redemption.Update 锁序
 
-- 状态：PENDING
-- RED：待运行真实文件 SQLite 多连接的 status-only 与 Update/Redeem 并发测试。
-- 最小 GREEN：事务内锁定重读 Redemption，仅应用允许变更意图；按需依 `Redemption → SubscriptionPlan` 锁序读取 Plan。
+- 状态：COMPLETE
+- RED：组合定向命令 `-count=1` 的确定性 stale-read 交错中，事务外 DTO 的 `Update` 将已兑换状态从 used 覆盖回 enabled，并可丢失 fulfillment。
+- 最小 GREEN：model `Update` 在事务内先 `FOR UPDATE` 重读 Redemption，只应用允许的 name/expired/plan-mode 意图；真实 Plan 变化时才按 `Redemption → SubscriptionPlan` 锁序冻结新 snapshot。`UpdateStatus` 只锁 Redemption，不读取 Plan、不补 snapshot，且不得恢复 used code。
+- GREEN（model）：`TestRedemptionUpdatePreservesCommittedFulfillmentAfterStaleRead` → PASS，既有 fulfillment 与单一 grant 保持不变。
+- GREEN（controller）：`go test ./controller -run 'TestUpdateRedemptionStatusOnlyDoesNotBackfillMissingSnapshot|TestUpdateSubscriptionRedemptionPreservesSnapshotWhenPlanUnchanged|TestUpdateUsedSubscriptionRedemptionRejectsSnapshotMutation' -count=10` → PASS。
 
 ## Finding 7：paid timed 订单重放
 
@@ -53,7 +59,7 @@
 
 ## 验证台账
 
-Finding 1 的精确 RED/GREEN 已记录；下一步进入 Finding 2 的独立 RED→GREEN。
+Findings 2–6：model 组合 `-count=1` 与 `-count=10` 均 PASS；controller status-only/更新组合 `-count=1` 与 `-count=10` 均 PASS；`gofmt` 已运行，待 `git diff --check` 与安全提交。
 
 ## 非目标
 

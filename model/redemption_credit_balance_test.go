@@ -80,14 +80,15 @@ func TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay(t *testi
 		QuotaResetPeriod:         SubscriptionResetMonthly,
 		UnlimitedPurchaseEnabled: true,
 	}).Error)
-	require.NoError(t, DB.Create(&Redemption{
+	redemption := &Redemption{
 		Id:          redemptionID,
 		Key:         "model-credit-race-redemption",
 		Type:        RedemptionTypeSubscription,
 		PlanId:      optionPlanID,
 		Status:      common.RedemptionCodeStatusEnabled,
 		CreatedTime: common.GetTimestamp(),
-	}).Error)
+	}
+	require.NoError(t, redemption.Insert())
 
 	start := make(chan struct{})
 	results := make(chan *RedemptionResult, 2)

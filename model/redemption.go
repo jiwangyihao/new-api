@@ -256,7 +256,7 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			}
 		}
 		if redemption.Status != common.RedemptionCodeStatusEnabled {
-			replay, err := redemptionResultFromFulfillment(&redemption, userId)
+			replay, err := redemptionResultFromFulfillment(&redemption, userId, mode)
 			result = replay
 			if err != nil {
 				return err
@@ -267,7 +267,18 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 		if redemption.ExpiredTime != 0 && redemption.ExpiredTime < common.GetTimestamp() {
 			return errors.New("该兑换码已过期")
 		}
-
+		var currentPlan *SubscriptionPlan
+		if redemptionType == RedemptionTypeSubscription {
+			var err error
+			currentPlan, err = getRedemptionPlanTx(tx, redemption.PlanId)
+			if err != nil {
+				return err
+			}
+			entitlementType := strings.TrimSpace(currentPlan.EntitlementType)
+			if !currentPlan.Enabled || (entitlementType != "" && entitlementType != SubscriptionEntitlementTimed) {
+				return ErrRedemptionPlanIneligible
+			}
+		}
 		redeemedTime := getDBTimestampTx(tx)
 		claim := tx.Model(&Redemption{}).
 			Where("id = ? AND status = ?", redemption.Id, common.RedemptionCodeStatusEnabled).
@@ -285,7 +296,7 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			if err := tx.Where("id = ?", redemption.Id).First(&claimed).Error; err != nil {
 				return err
 			}
-			replay, err := redemptionResultFromFulfillment(&claimed, userId)
+			replay, err := redemptionResultFromFulfillment(&claimed, userId, mode)
 			result = replay
 			if err != nil {
 				return err
@@ -313,10 +324,6 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			return nil
 		}
 
-		currentPlan, err := getRedemptionPlanTx(tx, redemption.PlanId)
-		if err != nil {
-			return err
-		}
 		fulfillment, plan, err := redemptionFulfillmentFromSourceSnapshot(&redemption, currentPlan, mode)
 		if err != nil {
 			return err
@@ -334,7 +341,7 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			if err != nil {
 				return ErrCreditBalanceRedemptionUnavailable
 			}
-			if err := ValidateCreditBalanceRedemptionOption(plan, creditPlan); err != nil {
+			if err := ValidateCreditBalanceRedemptionOption(currentPlan, creditPlan); err != nil {
 				return err
 			}
 			fulfillment.Entitlement.TargetCreditBalancePlanID = creditPlan.Id
@@ -452,16 +459,15 @@ func redemptionFulfillmentFromSourceSnapshot(redemption *Redemption, currentPlan
 	if redemption == nil || currentPlan == nil || redemption.PlanId <= 0 || currentPlan.Id != redemption.PlanId {
 		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
 	}
-	fulfillment := RedemptionFulfillmentSnapshot{}
-	if payload := strings.TrimSpace(redemption.FulfillmentSnapshot); payload != "" {
-		if err := common.UnmarshalJsonStr(payload, &fulfillment); err != nil {
-			return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
-		}
+	payload := strings.TrimSpace(redemption.FulfillmentSnapshot)
+	if payload == "" {
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
 	}
-	if fulfillment.Entitlement.PlanID == 0 {
-		fulfillment.Entitlement = NewSubscriptionEntitlementSnapshot(currentPlan, mode, 0)
+	var fulfillment RedemptionFulfillmentSnapshot
+	if err := common.UnmarshalJsonStr(payload, &fulfillment); err != nil {
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
 	}
-	if fulfillment.Entitlement.PlanID != redemption.PlanId {
+	if fulfillment.Entitlement.PlanID != redemption.PlanId || strings.TrimSpace(fulfillment.Entitlement.PlanEntitlementType) == "" {
 		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
 	}
 	fulfillment.Entitlement.PurchaseMode = mode
@@ -475,7 +481,7 @@ func redemptionFulfillmentFromSourceSnapshot(redemption *Redemption, currentPlan
 	return fulfillment, plan, nil
 }
 
-func redemptionResultFromFulfillment(redemption *Redemption, userId int) (*RedemptionResult, error) {
+func redemptionResultFromFulfillment(redemption *Redemption, userId int, requestedMode string) (*RedemptionResult, error) {
 	if redemption == nil || redemption.Status != common.RedemptionCodeStatusUsed {
 		return nil, ErrRedemptionAlreadyUsed
 	}
@@ -491,7 +497,7 @@ func redemptionResultFromFulfillment(redemption *Redemption, userId int) (*Redem
 	if result.Type == RedemptionTypeWallet {
 		return nil, ErrRedeemFailed
 	}
-	if result.RedemptionMode == "" || strings.TrimSpace(redemption.FulfillmentSnapshot) == "" {
+	if result.RedemptionMode == "" || result.RedemptionMode != requestedMode || strings.TrimSpace(redemption.FulfillmentSnapshot) == "" {
 		return result, ErrRedemptionAlreadyUsed
 	}
 	var fulfillment RedemptionFulfillmentSnapshot
@@ -516,35 +522,26 @@ func isPublicRedemptionError(err error) bool {
 		errors.Is(err, ErrRedemptionAlreadyUsed)
 }
 
-func ensureRedemptionSourceSnapshotTx(tx *gorm.DB, redemption *Redemption, replace bool) error {
+func freezeRedemptionSourceSnapshotTx(tx *gorm.DB, redemption *Redemption) (*SubscriptionPlan, error) {
 	if tx == nil || redemption == nil {
-		return errors.New("invalid redemption")
+		return nil, errors.New("invalid redemption")
 	}
 	if normalizeRedemptionType(redemption.Type) != RedemptionTypeSubscription {
 		redemption.FulfillmentSnapshot = ""
-		return nil
-	}
-	if !replace && strings.TrimSpace(redemption.FulfillmentSnapshot) != "" {
-		var fulfillment RedemptionFulfillmentSnapshot
-		if err := common.UnmarshalJsonStr(redemption.FulfillmentSnapshot, &fulfillment); err != nil {
-			return err
-		}
-		if fulfillment.Entitlement.PlanID == redemption.PlanId {
-			return nil
-		}
+		return nil, nil
 	}
 	plan, err := getRedemptionPlanTx(tx, redemption.PlanId)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	snapshotPayload, err := common.Marshal(RedemptionFulfillmentSnapshot{
 		Entitlement: NewSubscriptionEntitlementSnapshot(plan, "", 0),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	redemption.FulfillmentSnapshot = string(snapshotPayload)
-	return nil
+	return plan, nil
 }
 
 func (redemption *Redemption) Insert() error {
@@ -552,7 +549,7 @@ func (redemption *Redemption) Insert() error {
 		return errors.New("invalid redemption")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := ensureRedemptionSourceSnapshotTx(tx, redemption, true); err != nil {
+		if _, err := freezeRedemptionSourceSnapshotTx(tx, redemption); err != nil {
 			return err
 		}
 		return tx.Create(redemption).Error
@@ -564,16 +561,85 @@ func (redemption *Redemption) SelectUpdate() error {
 	return DB.Model(redemption).Select("redeemed_time", "status").Updates(redemption).Error
 }
 
-// Update Make sure your token's fields is completed, because this will update non-zero values
-func (redemption *Redemption) Update() error {
-	if redemption == nil {
+func (redemption *Redemption) UpdateStatus(status int) error {
+	if redemption == nil || redemption.Id <= 0 {
 		return errors.New("invalid redemption")
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
-		if err := ensureRedemptionSourceSnapshotTx(tx, redemption, false); err != nil {
+		var current Redemption
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", redemption.Id).First(&current).Error; err != nil {
 			return err
 		}
-		return tx.Model(redemption).Select("name", "status", "quota", "type", "plan_id", "amount_cents", "currency", "redeemed_time", "expired_time", "batch_id", "fulfillment_snapshot").Updates(redemption).Error
+		if current.Status == common.RedemptionCodeStatusUsed && status != common.RedemptionCodeStatusUsed {
+			return ErrRedemptionAlreadyUsed
+		}
+		if err := tx.Model(&Redemption{}).Where("id = ?", current.Id).Update("status", status).Error; err != nil {
+			return err
+		}
+		current.Status = status
+		*redemption = current
+		return nil
+	})
+}
+
+func (redemption *Redemption) Update() error {
+	if redemption == nil || redemption.Id <= 0 {
+		return errors.New("invalid redemption")
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var current Redemption
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", redemption.Id).First(&current).Error; err != nil {
+			return err
+		}
+		requestedType := normalizeRedemptionType(redemption.Type)
+		requestedPlanID := redemption.PlanId
+		if requestedType != RedemptionTypeSubscription {
+			requestedPlanID = 0
+		}
+		planChanged := normalizeRedemptionType(current.Type) != requestedType || current.PlanId != requestedPlanID
+		if current.Status == common.RedemptionCodeStatusUsed && planChanged {
+			return ErrRedemptionAlreadyUsed
+		}
+		current.Name = redemption.Name
+		current.ExpiredTime = redemption.ExpiredTime
+		if requestedType == RedemptionTypeSubscription {
+			current.Quota = 0
+			if planChanged {
+				current.Type = RedemptionTypeSubscription
+				current.PlanId = requestedPlanID
+				plan, err := freezeRedemptionSourceSnapshotTx(tx, &current)
+				if err != nil {
+					return err
+				}
+				amountCents, currency, ok := SubscriptionPlanAmountSnapshot(plan)
+				if !ok {
+					return errors.New("invalid subscription plan amount")
+				}
+				current.AmountCents = amountCents
+				current.Currency = currency
+			}
+		} else {
+			if redemption.Quota <= 0 {
+				return errors.New("invalid redemption quota")
+			}
+			current.Quota = redemption.Quota
+			if planChanged {
+				current.Type = RedemptionTypeWallet
+				current.PlanId = 0
+				current.AmountCents = 0
+				current.Currency = ""
+				current.FulfillmentSnapshot = ""
+			}
+		}
+		if err := tx.Model(&Redemption{}).Where("id = ?", current.Id).Updates(map[string]any{
+			"name": current.Name, "quota": current.Quota, "type": current.Type, "plan_id": current.PlanId,
+			"amount_cents": current.AmountCents, "currency": current.Currency, "expired_time": current.ExpiredTime,
+			"fulfillment_snapshot": current.FulfillmentSnapshot,
+		}).Error; err != nil {
+			return err
+		}
+		*redemption = current
+		return nil
 	})
 }
 

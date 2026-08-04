@@ -1186,14 +1186,29 @@ func subscriptionOrderCompletionResultFromTimedGrantTx(tx *gorm.DB, order *Subsc
 	if subscription.UserId != order.UserId || subscription.PlanId != order.PlanId {
 		return nil, ErrTimedSubscriptionGrantInvalid
 	}
-	return &SubscriptionOrderCompletionResult{
+	result := &SubscriptionOrderCompletionResult{
 		Subscription:         &subscription,
 		PurchaseMode:         SubscriptionPurchaseModeTimed,
 		Transitioned:         transitioned,
 		SourceSubscriptionId: subscription.Id,
 		EventStartTime:       grant.EventStartTime,
 		EventEndTime:         grant.EventEndTime,
-	}, nil
+	}
+	var events []InvitationRewardEvent
+	if err := tx.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, order.Id).Limit(2).Find(&events).Error; err != nil {
+		return nil, err
+	}
+	if len(events) > 1 {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	if len(events) == 1 {
+		event := events[0]
+		if event.SourceOrderId != order.Id || event.SourceSubscriptionId != subscription.Id || event.InviteeId != order.UserId || event.InviterId <= 0 {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		result.InviterId = event.InviterId
+	}
+	return result, nil
 }
 func subscriptionOrderCompletionResultFromExistingEventTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {

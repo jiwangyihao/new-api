@@ -21,7 +21,7 @@
 
 ## 恢复信息
 
-- 最近安全提交：`bc3b499fc`（Finding 1 证据回填；Finding 2 提交后更新）。
-- 未提交文件：Finding 2 最小实现、直接 precision-boundary 测试与本状态/evidence，待立即提交。
-- 下一条精确命令：`git add model/admin_analytics_paid_subscription.go model/admin_analytics_paid_subscription_test.go .scratch/agent-progress/issue-21/review-fix-status.md .scratch/agent-progress/issue-21/review-fix-evidence.md && git commit -m "fix(analytics): 使用权威 micros 聚合剩余价值"`。
+- 最近安全提交：`543b8297f760fece706746002de99b42355192f5`（Finding 2 权威 micros 聚合修复）。
+- 未提交文件：Finding 3 最小 timed overflow RED/GREEN 现场，仅 `model/timed_subscription_analytics.go` 与 `model/admin_analytics_paid_subscription_test.go`；不与 Finding 2 证据提交混合。
+- 下一条精确命令：`go test ./model -run '^(TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow)$' -count=1`。
 - 阻塞：无。

@@ -52,6 +52,7 @@
 - GREEN 单测：`go test ./model -run '^TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros$' -count=1` → PASS。
 - 组合验证：`go test ./model -run '^(TestPaidSubscriptionValue(RowAggregationUsesAuthoritativeMicros|RecognizedRemainingSortUsesAuthoritativeMicros|UsesTimedGrantTimelineAcrossFiveViews)|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)$' -count=1` → PASS。
 - 组合结果：Credit frozen tracer 仍为 `32,000,000` CNY micros、available 800、active count 1；timed CNY/USD 五接口与 nullable singular 合同保持；precision boundary 五接口聚合精确。
+- Finding 2 安全提交：`543b8297f fix(analytics): 使用权威 micros 聚合剩余价值`。
 ## 数据库范围
 
 - SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。

@@ -1,6 +1,6 @@
 # Issue #21 最终 Spec 修复证据
 
-状态：IN_PROGRESS
+状态：COMPLETE
 
 冻结基线：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`（分支 `jiwangyihao/issue-21-timed-grants`，起始工作树 clean）。
 
@@ -57,12 +57,28 @@
 - RED：`go test ./model -run TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult -count=1`；首次完成成功，但无 invitation event 的普通 paid timed 成功重放只返回空 `Transitioned=false`，`Subscription=nil` 且窗口/identity 丢失。
 - 最小 GREEN：成功 replay 在 immutable entitlement 判定为普通 paid timed 后，按订单 source identity 查询唯一 timed grant，校验 `FulfilledSubscriptionID`、user、plan、source、半开窗口，并读取同一 subscription；任一 identity 不一致返回 `ErrTimedSubscriptionGrantInvalid`，不读取 current Plan 推断历史。
 - GREEN：`go test ./model -run TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult -count=10` → PASS；首次与 replay 返回相同 subscription/window，`Transitioned=false`，subscription/grant 计数保持 1。
-- 提交：待 Finding 7 安全提交补记 SHA。
+- 提交：`4564ca949`。
 
 ## 验证台账
 
-Findings 1–7 的独立 RED 与最小 GREEN 均已记录；Finding 7 `-count=10` PASS，待提交后执行最终组合门禁。
+- Finding 1 model 资格矩阵：`go test ./model -run TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomically -count=10` → PASS。
+- Finding 1 controller 非法 reset：`go test ./controller -run TestAdminCreateTimedSubscriptionRejectsInvalidResetPlanAtomically -count=1` → PASS。
+- Findings 2–6 model 组合：`go test ./model -run 'TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay|TestRedeemLegacySubscriptionWithoutSnapshotRejectsWithoutWrites|TestRedeemUsedSubscriptionRejectsConflictingModeWithoutWrites|TestRedeemDisabledTrialPlansRejectWithoutWrites|TestRedemptionUpdatePreservesCommittedFulfillmentAfterStaleRead' -count=10` → PASS（141.31s）。
+- Finding 6 controller 更新组合：`go test ./controller -run 'TestUpdateRedemptionStatusOnlyDoesNotBackfillMissingSnapshot|TestUpdateSubscriptionRedemptionPreservesSnapshotWhenPlanUnchanged|TestUpdateUsedSubscriptionRedemptionRejectsSnapshotMutation' -count=10` → PASS。
+- Finding 7 普通 paid timed replay：`go test ./model -run TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult -count=10` → PASS。
+- 并发窄 race：`go test -race ./model -run 'TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay|TestRedemptionUpdatePreservesCommittedFulfillmentAfterStaleRead' -count=1` → PASS。
+- controller 最终窄集合：`go test ./controller -run 'TimedSubscription|Redeem|Redemption' -count=1` → PASS；合法历史测试夹具已改为通过 `Redemption.Insert` 冻结 snapshot，提交 `b87474bb3`。
+- `go test ./model -run 'TimedSubscription|Redeem|Redemption|SubscriptionOrder' -count=1` 未通过：命中 `invitation_commission_test.go`、`payment_method_guard_test.go` 中未持久化 `EntitlementSnapshot` 的旧订单/兑换夹具，以及测试清理阶段缺表日志；这些旧夹具与本任务“paid timed 无 snapshot 稳定拒绝”合同冲突，按最终收敛指令未扩展邀请/订单测试范围。
+- 完整项目测试、前端套件、MySQL/PostgreSQL 实机、#22 全组合门禁未运行；由协调器按冻结分工执行。
+
+## 提交
+
+- `2d9f200e2`：建立最终 Spec 修复检查点。
+- `9235f6887`：严格校验计时权益周期。
+- `ffdfd46ba`：固化兑换授权与并发更新。
+- `4564ca949`：恢复计时订单重放结果。
+- `b87474bb3`：通过冻结入口构造合法 controller 兑换测试夹具。
 
 ## 非目标
 
-不新增 schema，不修改前端/i18n，不实现 #23–#28，不改变 Issue #22 合同，不运行项目全量测试或部署。
+不新增 schema，不修改前端/i18n，不实现 #23–#28，不改变 Issue #22 合同，不关闭 Issue、不部署、不回收工作树。

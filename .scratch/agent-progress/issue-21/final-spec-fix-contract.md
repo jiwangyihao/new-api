@@ -1,6 +1,6 @@
 # Issue #21 最终 Spec 修复合同
 
-状态：IN_PROGRESS
+状态：COMPLETE
 
 ## 冻结输入
 
@@ -35,4 +35,4 @@
 
 ## 可恢复点
 
-最近安全提交：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`。下一步：提交本检查点，然后 Finding 1 RED→GREEN。
+七项固定合同均已实现并独立验证。最近安全提交：`b87474bb3`；最终证据收口提交后工作树必须 clean。

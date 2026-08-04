@@ -1,14 +1,14 @@
 # Issue #21 最终 Spec 修复状态
 
-状态：IN_PROGRESS
+状态：COMPLETE
 
 ## 冻结现场
 
 - 分支：`jiwangyihao/issue-21-timed-grants`
 - 冻结 HEAD：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`
 - 起始工作树：clean
-- 最近安全提交：`ffdfd46ba`（Findings 2–6：固化兑换授权与并发更新）。
-- 当前未提交文件：Finding 7 的 model 实现、回归测试与本状态/证据更新。
+- 最近安全提交：`b87474bb3`（合法 controller 兑换测试经冻结入口构造）。
+- 当前未提交文件：仅本次 `final-spec-fix-*` 最终收口更新；提交后为 0。
 
 ## 七项 Finding
 
@@ -34,8 +34,8 @@
 
 ## 下一步
 
-提交 Finding 7 安全点，然后运行最终 model/controller 窄集合、race、Issue #21/#22 组合回归与 clean-tree 检查。
+无；七项 Finding、定向回归、窄 race、证据与安全提交均已完成。
 
 ## 阻塞
 
-无。
+无。MySQL/PostgreSQL 实机与 #23–#28 仍按冻结范围留给后续 Issue。

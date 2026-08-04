@@ -64,6 +64,15 @@
 - GREEN/重复命令：`go test ./model -run '^(TestTimedSubscriptionValueChecksMicrosAggregationOverflow|TestPaidSubscriptionValueFiveViewsFailClosedOnTimedTotalsOverflow)$' -count=10` → PASS。
 - 差异检查：`git diff --check` → 无输出。
 - Finding 3 实现提交：`a9752f218 fix(analytics): 关闭计时金额累加溢出`；其后仅收敛同等行为的五接口夹具并回填本证据。
+
+### Finding 4：不可变 hook 稳定 sentinel/code
+
+- RED：扩展 `TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete`，要求真实 SQLite update/delete 均 `errors.Is(ErrTimedSubscriptionGrantImmutable)`，重复调用 `BeforeUpdate` 返回相同 error identity，`BeforeDelete` 返回同一 sentinel；旧实现因该包级 sentinel 不存在而编译失败。
+- RED 命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=1`；精确失败为四处 `undefined: ErrTimedSubscriptionGrantImmutable`。
+- 最小 GREEN：定义包级 `ErrTimedSubscriptionGrantImmutable = errors.New("timed_subscription_grant_immutable")`；`BeforeUpdate` 与 `BeforeDelete` 均直接返回该 sentinel。无普通 HTTP update/delete 入口，因此无需新增 controller 文本分支或额外 API 映射；sentinel 文本本身是稳定 code。
+- GREEN：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=1` → PASS。
+- 重复验证：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete$' -count=10` → PASS；真实数据库失败后原 grant 的 `valuation_amount_micros` 保持 `40,000,000`。
+- LSP：`model/timed_subscription_valuation.go` diagnostics → `OK`；`git diff --check` → 无输出。
 ## 数据库范围
 
 - SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。

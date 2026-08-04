@@ -17,11 +17,11 @@
 1. 并发同源重放串行化：`COMPLETE`。真实文件型 SQLite、4 连接、callback/barrier RED 已证明旧锁前 replay read 导致 `SQLITE_BUSY`；计划行现先通过现有 `conversion_guard_version` 写 guard 串行化，再权威查重。定向、`-count=10` 与窄 `-race` 均通过。
 2. 权威整数 micros 聚合与排序：`COMPLETE`。#22 的四列表 `amount_micros` sorter 保持不变；两个 non-timed row 累加分支改用 `Value.*Micros`，precision-boundary 与 Credit 32 CNY + timed CNY/USD 组合验证通过。
 3. timed micros 加法溢出关闭：`COMPLETE`。`adminCalculateTimedSubscriptionValue` 的 token/current+future、currency time/token、source time/token 累加均改用现有 `checkedAddInt64`；`MaxInt64` 成功，下一 micros 通过五接口稳定返回 `ErrCreditValuationOverflow` 与空响应。
-4. 不可变 hook 稳定 sentinel：`PENDING`，下一步只补 update/delete `errors.Is` RED 与最小 GREEN。
+4. 不可变 hook 稳定 sentinel：`COMPLETE`。update/delete 及重复 hook 调用均命中同一包级 `ErrTimedSubscriptionGrantImmutable`；真实 SQLite 证明失败后原 grant 未变化，无普通 mutation API 需要额外 code 映射。
 
 ## 恢复信息
 
-- 最近安全提交：`a9752f218`（Finding 3 timed micros 溢出关闭；最终证据提交后更新）。
-- 未提交文件：Finding 3 最小五接口夹具收敛及本 status/evidence，待独立提交；不含 Finding 4 改动。
-- 下一条精确命令：`go test ./model -run '^TestTimedSubscriptionValuationGrantRejectsMutationWithStableSentinel$' -count=1`（先写 Finding 4 RED 后运行）。
+- 最近安全提交：`e6ffde16b`（Finding 3 独立测试/证据 follow-up；Finding 4 提交后更新）。
+- 未提交文件：Finding 4 sentinel、`errors.Is` 行为测试与本 status/evidence，待独立提交。
+- 下一条精确命令：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1 && git diff --check`。
 - 阻塞：无。

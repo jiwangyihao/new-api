@@ -425,8 +425,15 @@ func TestTimedSubscriptionValuationGrantRejectsUpdateAndDelete(t *testing.T) {
 	}))
 	var grant TimedSubscriptionValuationGrant
 	require.NoError(t, DB.First(&grant).Error)
-	require.Error(t, DB.Model(&grant).Update("valuation_amount_micros", int64(1)).Error)
-	require.Error(t, DB.Delete(&grant).Error)
+	updateErr := DB.Model(&grant).Update("valuation_amount_micros", int64(1)).Error
+	deleteErr := DB.Delete(&grant).Error
+	require.ErrorIs(t, updateErr, ErrTimedSubscriptionGrantImmutable)
+	require.ErrorIs(t, deleteErr, ErrTimedSubscriptionGrantImmutable)
+	firstHookErr := grant.BeforeUpdate(DB)
+	secondHookErr := grant.BeforeUpdate(DB)
+	require.True(t, firstHookErr == secondHookErr, "repeated immutable hook calls must return the same error identity")
+	require.True(t, firstHookErr == ErrTimedSubscriptionGrantImmutable)
+	require.True(t, grant.BeforeDelete(DB) == ErrTimedSubscriptionGrantImmutable)
 	var persisted TimedSubscriptionValuationGrant
 	require.NoError(t, DB.First(&persisted, grant.Id).Error)
 	require.Equal(t, priceMicros, persisted.ValuationAmountMicros)

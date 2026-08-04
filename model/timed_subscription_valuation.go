@@ -36,11 +36,11 @@ type TimedSubscriptionValuationGrant struct {
 }
 
 func (*TimedSubscriptionValuationGrant) BeforeUpdate(*gorm.DB) error {
-	return errors.New("timed subscription valuation grant is immutable")
+	return ErrTimedSubscriptionGrantImmutable
 }
 
 func (*TimedSubscriptionValuationGrant) BeforeDelete(*gorm.DB) error {
-	return errors.New("timed subscription valuation grant is immutable")
+	return ErrTimedSubscriptionGrantImmutable
 }
 
 const (
@@ -54,6 +54,7 @@ const (
 var (
 	ErrTimedSubscriptionGrantInvalid             = errors.New("timed_subscription_grant_invalid")
 	ErrTimedSubscriptionGrantIdempotencyMismatch = errors.New("timed_subscription_grant_idempotency_mismatch")
+	ErrTimedSubscriptionGrantImmutable           = errors.New("timed_subscription_grant_immutable")
 )
 
 type TimedSubscriptionGrantRequest struct {

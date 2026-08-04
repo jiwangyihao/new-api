@@ -420,10 +420,11 @@ type adminPaidSubscriptionRow struct {
 
 func adminPaidRowAccumulateValues(row adminPaidSubscriptionRow, recognized *adminMoneyAccumulator, token *adminMoneyAccumulator, timeBased *adminMoneyAccumulator) {
 	if row.TimedValue == nil {
-		recognized.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
-		timeBased.add(row.Plan.Currency, row.Value.TimeBasedValue)
+		currency := adminPaidSubscriptionRowCurrency(row)
+		recognized.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
+		timeBased.addMicros(currency, row.Value.TimeBasedValueMicros)
 		if row.Value.TokenBasedValueAvailable {
-			token.add(row.Plan.Currency, row.Value.TokenBasedValue)
+			token.addMicros(currency, row.Value.TokenBasedValueMicros)
 		}
 		return
 	}
@@ -438,7 +439,7 @@ func adminPaidRowAccumulateValues(row adminPaidSubscriptionRow, recognized *admi
 
 func adminPaidRowAccumulateRecognized(row adminPaidSubscriptionRow, accumulator *adminMoneyAccumulator) {
 	if row.TimedValue == nil {
-		accumulator.add(row.Plan.Currency, row.Value.RecognizedRemainingValue)
+		accumulator.addMicros(adminPaidSubscriptionRowCurrency(row), row.Value.RecognizedRemainingValueMicros)
 		return
 	}
 	for currency, value := range row.TimedValue.ByCurrency {

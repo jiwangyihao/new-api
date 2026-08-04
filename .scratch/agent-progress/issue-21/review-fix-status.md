@@ -15,13 +15,13 @@
 ## Findings
 
 1. 并发同源重放串行化：`COMPLETE`。真实文件型 SQLite、4 连接、callback/barrier RED 已证明旧锁前 replay read 导致 `SQLITE_BUSY`；计划行现先通过现有 `conversion_guard_version` 写 guard 串行化，再权威查重。定向、`-count=10` 与窄 `-race` 均通过。
-2. 权威整数 micros 聚合与排序：`PENDING`，待合并 #22 后补 precision-boundary 与 Credit+timed 组合 RED。
+2. 权威整数 micros 聚合与排序：`COMPLETE`。#22 的四列表 `amount_micros` sorter 保持不变；两个 non-timed row 累加分支改用 `Value.*Micros`，precision-boundary 与 Credit 32 CNY + timed CNY/USD 组合验证通过。
 3. timed micros 加法溢出关闭：`PENDING`，待补 MaxInt64 与多 segment/source/五接口 RED。
 4. 不可变 hook 稳定 sentinel：`PENDING`，待补 update/delete `errors.Is` RED。
 
 ## 恢复信息
 
-- 最近安全提交：`b10855df4`（Finding 1：串行化计时授予同源重放）。
-- 未提交文件：仅本状态与 evidence 的安全提交回填；Finding 2 尚未修改代码。
-- 下一条精确命令：`go test ./model -run '^TestPaidSubscriptionValue.*AuthoritativeMicros' -count=1`，先落 timed precision-boundary RED。
+- 最近安全提交：`bc3b499fc`（Finding 1 证据回填；Finding 2 提交后更新）。
+- 未提交文件：Finding 2 最小实现、直接 precision-boundary 测试与本状态/evidence，待立即提交。
+- 下一条精确命令：`git add model/admin_analytics_paid_subscription.go model/admin_analytics_paid_subscription_test.go .scratch/agent-progress/issue-21/review-fix-status.md .scratch/agent-progress/issue-21/review-fix-evidence.md && git commit -m "fix(analytics): 使用权威 micros 聚合剩余价值"`。
 - 阻塞：无。

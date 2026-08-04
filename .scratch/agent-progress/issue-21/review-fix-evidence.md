@@ -41,6 +41,17 @@
 - SQLite 结论：两个调用均成功，返回同一 subscription/window；最终 `user_subscriptions=1`、`timed_subscription_valuation_grants=1`，只续期一次，未泄漏 `UNIQUE constraint` 或 `SQLITE_BUSY`。
 - MySQL 5.7/PostgreSQL 9.6：未运行；三库零 SKIP 仍归 Issue #27。
 - Finding 1 安全提交：`b10855df4 fix(subscription): 串行化计时授予同源重放`。
+
+### Finding 2：权威整数 micros 聚合与排序
+
+- 保留 #22 已验收的 users/subscriptions/plans/sources 四列表 `amount_micros` 解析、升降序与业务主键 tie-breaker；未修改 sorter、DTO 或 invitation analytics。
+- RED：`TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros` 直接构造一条 non-timed/Credit row，其权威 recognized/time/token 为 `9,007,199,254,740,993` micros，但兼容 float 只能表达 `9,007,199,254,740,992`；再组合一条 7 micros timed row，同时检查 summary/users/subscriptions/plans/sources。
+- RED 命令：`gofmt -w model/admin_analytics_paid_subscription_test.go && go test ./model -run '^TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros$' -count=1`。
+- RED 精确症状：summary 期望 `9007199254741000`，实际 `9007199254740999`，证明 `TimedValue == nil` 分支经 `float64` 丢失 1 micros 后再与 timed 整数相加。
+- 最小 GREEN：`adminPaidRowAccumulateValues` 与 `adminPaidRowAccumulateRecognized` 的 non-timed 分支改为按 `adminPaidSubscriptionRowCurrency(row)` 调用 `addMicros`，分别读取 `RecognizedRemainingValueMicros`、`TimeBasedValueMicros`、`TokenBasedValueMicros`。timed 分支保持整数接线，通用 accumulator/sorter/DTO 不变。
+- GREEN 单测：`go test ./model -run '^TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros$' -count=1` → PASS。
+- 组合验证：`go test ./model -run '^(TestPaidSubscriptionValue(RowAggregationUsesAuthoritativeMicros|RecognizedRemainingSortUsesAuthoritativeMicros|UsesTimedGrantTimelineAcrossFiveViews)|TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY)$' -count=1` → PASS。
+- 组合结果：Credit frozen tracer 仍为 `32,000,000` CNY micros、available 800、active count 1；timed CNY/USD 五接口与 nullable singular 合同保持；precision boundary 五接口聚合精确。
 ## 数据库范围
 
 - SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。

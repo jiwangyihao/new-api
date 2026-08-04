@@ -782,6 +782,102 @@ func TestPaidSubscriptionValueRecognizedRemainingSortUsesAuthoritativeMicros(t *
 	}
 }
 
+func TestPaidSubscriptionValueRowAggregationUsesAuthoritativeMicros(t *testing.T) {
+	const authoritativeMicros = int64(9_007_199_254_740_993)
+	const timedMicros = int64(7)
+	const expectedCombinedMicros = authoritativeMicros + timedMicros
+
+	snapshot := adminPaidTestSnapshot()
+	compatibleAmount := float64(9_007_199_254_740_992) / float64(amountMicrosPerUnit)
+	user := adminPaidTestUser(1, "precision")
+	creditPlan := adminPaidTestPlan(1, compatibleAmount, adminPaidTestCurrencyCNY)
+	creditPlan.EntitlementType = SubscriptionEntitlementCreditBalance
+	creditSubscription := adminPaidTestSubscription(1, user.Id, creditPlan.Id, snapshot, "credit")
+	creditSubscription.EntitlementType = SubscriptionEntitlementCreditBalance
+	timedPlan := adminPaidTestPlan(2, 0, adminPaidTestCurrencyCNY)
+	timedPlan.EntitlementType = SubscriptionEntitlementTimed
+	timedSubscription := adminPaidTestSubscription(2, user.Id, timedPlan.Id, snapshot, "admin")
+	timedSubscription.EntitlementType = SubscriptionEntitlementTimed
+
+	rows := []adminPaidSubscriptionRow{
+		{
+			Subscription:      creditSubscription,
+			Plan:              creditPlan,
+			User:              user,
+			Source:            dto.AdminAnalyticsSourceCreditBalancePool,
+			SourceAttribution: adminPaidSubscriptionSourceAttributionCreditPool,
+			Value: adminSubscriptionValue{
+				RecognizedRemainingValue:       compatibleAmount,
+				TimeBasedValue:                 compatibleAmount,
+				TokenBasedValue:                compatibleAmount,
+				RecognizedRemainingValueMicros: authoritativeMicros,
+				TimeBasedValueMicros:           authoritativeMicros,
+				TokenBasedValueMicros:          authoritativeMicros,
+				TokenBasedValueAvailable:       true,
+				TimeBasedValueAvailable:        true,
+				Currency:                       adminPaidTestCurrencyCNY,
+			},
+			Active: true,
+		},
+		{
+			Subscription:      timedSubscription,
+			Plan:              timedPlan,
+			User:              user,
+			Source:            dto.AdminAnalyticsSourceAdmin,
+			SourceAttribution: adminPaidSubscriptionSourceAttributionSnapshot,
+			Value: adminSubscriptionValue{
+				TokenBasedValueAvailable: true,
+				TimeBasedValueAvailable:  true,
+			},
+			TimedValue: &adminTimedSubscriptionValue{
+				ByCurrency: map[string]adminTimedCurrencyValue{
+					adminPaidTestCurrencyCNY: {TimeMicros: timedMicros, TokenMicros: timedMicros, RecognizedMicros: timedMicros},
+				},
+				BySourceCurrency: map[adminTimedSourceCurrencyKey]adminTimedSourceValue{
+					{Source: dto.AdminAnalyticsSourceAdmin, Currency: adminPaidTestCurrencyCNY}: {TimeMicros: timedMicros, TokenMicros: timedMicros},
+				},
+				Sources:        []dto.AdminAnalyticsSource{dto.AdminAnalyticsSourceAdmin},
+				TokenAvailable: true,
+			},
+			Active: true,
+		},
+	}
+
+	result, err := adminBuildPaidSubscriptionValueDataFromRows(adminPaidTestQuery(snapshot), rows, false)
+	require.NoError(t, err)
+	require.Equal(t, expectedCombinedMicros, moneyBreakdownMicros(result.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	require.Len(t, result.Users, 1)
+	require.Equal(t, expectedCombinedMicros, moneyBreakdownMicros(result.Users[0].RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+
+	require.Len(t, result.Subscriptions, 2)
+	for _, item := range result.Subscriptions {
+		require.NotNil(t, item.RecognizedRemainingValue)
+		if item.SubscriptionID == creditSubscription.Id {
+			require.Equal(t, "9007199254740993", item.RecognizedRemainingValue.AmountMicros)
+		} else {
+			require.Equal(t, "7", item.RecognizedRemainingValue.AmountMicros)
+		}
+	}
+
+	require.Len(t, result.Plans, 2)
+	for _, item := range result.Plans {
+		want := timedMicros
+		if item.PlanID == creditPlan.Id {
+			want = authoritativeMicros
+		}
+		require.Equal(t, want, moneyBreakdownMicros(item.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	}
+
+	require.Len(t, result.Sources, 2)
+	for _, item := range result.Sources {
+		want := timedMicros
+		if item.Source == dto.AdminAnalyticsSourceCreditBalancePool {
+			want = authoritativeMicros
+		}
+		require.Equal(t, want, moneyBreakdownMicros(item.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY))
+	}
+}
+
 func TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()

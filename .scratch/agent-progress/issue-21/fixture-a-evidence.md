@@ -1,6 +1,6 @@
 # Issue #21 Fixture A 证据
 
-状态：HANDOFF_READY_WITH_PRODUCTION_BLOCKER
+状态：HANDOFF_READY_PRODUCTION_FIX_COMPLETE
 
 ## 基线与必读材料
 
@@ -66,30 +66,28 @@ go test ./model -count=1
 - GREEN 命令：`go test ./model -run '^(TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders|TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows|TestPaidSubscriptionValueSubscriptionsSortsMoneyBySelectedCurrencyOnly|TestPaidSubscriptionValueSubscriptionsIncludesOrderAuxiliaryAmountWithPlanCurrency)$' -count=1`。
 - GREEN 结果：PASS，`go test: 1 packages ok`。
 
-## 生产 blocker：excluded timed summary
+## 生产 blocker：excluded timed summary（已修复）
 
 - `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` 已迁移为两条首尾相接、30 天、`30,000,000` micros CNY 的 admin immutable grants，完整覆盖 subscription 服务窗口；原 expected=33 断言保持不变。
-- 定向与包级实际结果均为 expected 33 / actual 0。
-- 根因：paid row 的 `TimedValue.ByCurrency` 已有 33 CNY，但 summary 顶层 excluded 分支直接累加空的 `row.Value.RecognizedRemainingValueMicros`；同文件其他聚合通过 timed-aware helper 累加。该缺口不能由合法夹具修复。
-- 经 Orca question，协调器裁定：不得把 expected 改为 0，不得由 Fixture A 越界修改生产代码；保留真实失败并交由协调器另派生产修复。
+- 修复前定向与包级实际结果均为 expected 33 / actual 0；paid row 的 `TimedValue.ByCurrency` 已有 33 CNY，但 summary 顶层 excluded 分支直接累加空的 `row.Value.RecognizedRemainingValueMicros`。
+- 生产修复仅将 `adminBuildPaidSubscriptionValueDataFromRows` 的 excluded 顶层汇总改为复用现有 `adminPaidRowAccumulateRecognized`。该 helper 对 timed row 逐币种累加 `TimedValue.ByCurrency[*].RecognizedMicros`，对 Credit/non-timed row 继续读取 `row.Value.RecognizedRemainingValueMicros`，并复用 `adminMoneyAccumulator` 的整数 micros 与 overflow fail-closed 行为。
+- 未修改测试文件、DTO、模式筛选、主 recognized 聚合、active count 或其他领域路径。
 
-## 最终包级回归
+## GREEN 与包级回归
 
-命令：`go test ./model -count=1`。
-
-结果：FAIL，退出码 1。Fixture A 所有旧夹具金额/排序/nil 问题除上述生产 blocker 外均已消失。精确剩余失败：
-
-- `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers`：expected 33 / actual 0（本路生产 blocker）。
-- `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`：`timed_subscription_grant_invalid`。
-- `TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta`：`timed_subscription_grant_invalid`。
-- `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent`：`redemption.plan_ineligible`。
-- `TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan`：`redemption.plan_ineligible`。
-- `TestCompleteSubscriptionOrderReturnsResultForSuccessRetry`：`timed_subscription_grant_invalid`。
-- `TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan`：`timed_subscription_grant_invalid`。
-- `TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEvent`：未创建 subscription/event，订单仍 pending。
-- `TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAndEvent`：0 个 fulfillment。
-- `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached`：`timed_subscription_grant_invalid`。
-
-后九项位于 `invitation_commission_test.go` / `payment_method_guard_test.go`，属于冻结基线已知的其他旧授权快照夹具，不在 Fixture A paid-value analytics 所有权内。包级日志另有 Redis client closed 与缺表 teardown 告警，但本次没有形成额外 `--- FAIL` 测试。
-
-按协调器收敛指令，未运行 `-count=10` 或更宽定向集合；最终证据仅声明实际运行的单次定向与包级回归。
+- 命令：`go test ./model -run '^TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers$' -count=10`。
+- 结果：PASS，`go test: 1 packages ok`，约 14.1 秒；完整输出为本次会话 `artifact://3`。
+- 命令：`go test ./model -count=1`。
+- 结果：FAIL，退出码 1，约 28.7 秒；完整输出为本次会话 `artifact://5`。此前 excluded summary 测试不再失败，剩余精确失败仅为其他冻结分支拥有的九个旧授权快照夹具：
+  - `TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition`
+  - `TestCompleteSubscriptionOrderTxEventIntervalUsesOnlyRenewalDelta`
+  - `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent`
+  - `TestRedeemSubscriptionRedemptionRecordsEventForRewardIneligiblePlan`
+  - `TestCompleteSubscriptionOrderReturnsResultForSuccessRetry`
+  - `TestCompleteSubscriptionOrderRecordsEventForRewardIneligiblePlan`
+  - `TestCompleteSubscriptionOrderConcurrentClaimCreatesSingleSubscriptionAndEvent`
+  - `TestRedeemSubscriptionRedemptionConcurrentClaimCreatesSingleSubscriptionAndEvent`
+  - `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached`
+- 这九项位于 `invitation_commission_test.go` / `payment_method_guard_test.go`，属于 B/C 或协调器冻结的夹具迁移范围；本路未越界修改。
+- `git diff --check` 在生产提交前通过。
+- 生产提交：`5b4eab4b7 fix(analytics): 修复计时排除金额汇总`。

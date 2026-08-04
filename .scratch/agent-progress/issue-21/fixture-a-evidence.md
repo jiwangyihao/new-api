@@ -1,6 +1,6 @@
 # Issue #21 Fixture A 证据
 
-状态：RED_CAPTURED
+状态：FIRST_GROUP_GREEN
 
 ## 基线与必读材料
 
@@ -48,6 +48,11 @@ go test ./model -count=1
 
 同一包级运行较早出现后台 gopool panic 日志：`common.RedisHSetObj` 对 Redis client 调用 `TxPipeline` 时 nil dereference，并有 `redis: client is closed` 日志。它没有终止包；本轮真正退出发生在上述 paid-value 测试 nil dereference。待 paid-value 夹具迁移后重新运行包级命令，才能判断该全局 Redis 夹具日志是否形成独立测试失败。
 
-## GREEN
+## GREEN 1：最小 min(time, token) 夹具
 
-尚未开始。每组夹具迁移后追加具体命令、结果与保持的业务断言。
+- 新增窄测试 helper `adminPaidCreateTimedGrant`，调用方显式提供 subscription、稳定 source identity、服务窗口、`GrantCredit`、`SourcePriceMicros`、独立 `ValuationAmountMicros` 与 currency；helper 只补 exact confidence、rule version、1/1 FX 和可审计 snapshot，不读取 `PriceAmount float64`。
+- 首测冻结两条首尾相接的 30 天、`40,000,000` micros CNY grant，完整覆盖原 subscription 服务窗口。
+- RED：合法 grant 下端到端 summary 实际为 time `44,000,000`、token `43,466,665`、recognized `43,466,665` micros。Issue #21 的 grant 时间线合同逐段按当前周期剩余 Credit 折减 token，因此端到端 `token <= time`；旧 summary 的 token=76/recognized=44 属于被替代的 current Plan 算法，不能由合法 grant 表达。
+- 已经 Orca question 获协调器批准：保留测试前半段 `adminRecognizedRemainingValue` 的旧 44/76 单元断言，summary 改断言权威 `amount_micros` 且明确 `recognized=min(token,time)`，不硬编码兼容 float。
+- GREEN 命令：`go test ./model -run '^TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue$' -count=1`。
+- GREEN 结果：PASS，`go test: 1 packages ok`，约 5.7 秒测试时间。

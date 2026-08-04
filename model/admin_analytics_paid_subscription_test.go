@@ -3,6 +3,7 @@ package model
 import (
 	"math"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -89,6 +90,33 @@ func adminPaidCreatePlanUserSub(t *testing.T, plan SubscriptionPlan, user User, 
 	require.NoError(t, DB.Create(&sub).Error)
 }
 
+func adminPaidCreateTimedGrant(t *testing.T, sub UserSubscription, sourceType string, sourceID int, eventStart int64, eventEnd int64, grantCredit int64, sourcePriceMicros int64, valuationAmountMicros int64, currency string) {
+	t.Helper()
+	sourceKey := sourceType + ":" + strconv.Itoa(sourceID)
+	require.NoError(t, DB.Create(&TimedSubscriptionValuationGrant{
+		IdempotencyKey:        "fixture-a:" + sourceKey,
+		UserSubscriptionId:    sub.Id,
+		UserId:                sub.UserId,
+		PlanId:                sub.PlanId,
+		SourceType:            sourceType,
+		SourceKey:             sourceKey,
+		SourceId:              sourceID,
+		EventStartTime:        eventStart,
+		EventEndTime:          eventEnd,
+		GrantCredit:           grantCredit,
+		SourcePriceMicros:     sourcePriceMicros,
+		SourceCurrency:        currency,
+		ValuationAmountMicros: valuationAmountMicros,
+		ValuationCurrency:     currency,
+		Confidence:            TimedSubscriptionValuationConfidenceExact,
+		RuleVersion:           CreditValuationRuleVersion,
+		FxRateNumerator:       1,
+		FxRateDenominator:     1,
+		SourceSnapshot:        `{"fixture":"paid_value_analytics","source_key":"` + sourceKey + `"}`,
+		CreatedAt:             eventStart,
+	}).Error)
+}
+
 func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 	setupAdminAnalyticsTestDBs(t)
 	snapshot := adminPaidTestSnapshot()
@@ -96,6 +124,9 @@ func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 	user := adminPaidTestUser(1, "paid")
 	sub := adminPaidTestSubscription(1, user.Id, plan.Id, snapshot, "order")
 	adminPaidCreatePlanUserSub(t, plan, user, sub)
+	grantBoundary := sub.StartTime + 30*86400
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 11, sub.StartTime, grantBoundary, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
+	adminPaidCreateTimedGrant(t, sub, TimedSubscriptionGrantSourceOrder, 12, grantBoundary, sub.EndTime, 1000000000, 40_000_000, 40_000_000, adminPaidTestCurrencyCNY)
 
 	value, err := adminRecognizedRemainingValue(sub, plan, snapshot)
 	require.NoError(t, err)
@@ -107,9 +138,12 @@ func TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue(t *testing.T) {
 
 	res, err := GetAdminPaidSubscriptionValueSummary(adminPaidTestQuery(snapshot))
 	require.NoError(t, err)
-	adminPaidRequireAmount(t, res.Data.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY, 44)
-	adminPaidRequireAmount(t, res.Data.Summary.TimeBasedValueByCurrency, adminPaidTestCurrencyCNY, 44)
-	adminPaidRequireAmount(t, res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY, 76)
+	recognizedMicros := moneyBreakdownMicros(res.Data.Summary.RecognizedRemainingValueByCurrency, adminPaidTestCurrencyCNY)
+	timeMicros := moneyBreakdownMicros(res.Data.Summary.TimeBasedValueByCurrency, adminPaidTestCurrencyCNY)
+	tokenMicros := moneyBreakdownMicros(res.Data.Summary.TokenBasedValueByCurrency, adminPaidTestCurrencyCNY)
+	require.Equal(t, int64(44_000_000), timeMicros)
+	require.Equal(t, int64(43_466_665), tokenMicros)
+	require.Equal(t, minInt64(timeMicros, tokenMicros), recognizedMicros)
 }
 
 func TestPaidSubscriptionValueUsesTimedGrantTimelineAcrossFiveViews(t *testing.T) {

@@ -1,6 +1,6 @@
 # Issue #21 Fixture A 状态
 
-状态：RED_CAPTURED
+状态：FIRST_GROUP_GREEN
 
 ## 冻结现场
 
@@ -13,13 +13,13 @@
 
 ## 当前阶段
 
-已在未修改任何夹具前运行 `go test ./model -count=1`。包级运行稳定进入 paid-value 旧夹具失败，并在第六个失败测试的空指针处终止。
+第一组已 GREEN 并准备提交：`TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue` 使用两条首尾相接 immutable grant，summary 断言权威 micros 与 `recognized=min(token,time)`；其余五个已知失败留给第二组。
 
 ## 失败迁移矩阵
 
 | 测试 | 初始症状 | 迁移状态 |
 |---|---|---|
-| `TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue` | 期望 44 CNY，实际 0 | 待迁移 |
+| `TestPaidSubscriptionValueCalculatesMinTokenAndTimeValue` | 期望 44 CNY，实际 0 | GREEN：合法 grant + 权威 micros/min 不变量 |
 | `TestPaidSubscriptionValueIncludesPaidSourcesWithoutOrders` | 期望 99 CNY，实际 0 | 待迁移 |
 | `TestPaidSubscriptionValueExcludedModeAuditsPaidExcludedUsers` | 期望 33 CNY，实际 0 | 待迁移 |
 | `TestPaidSubscriptionValueEmptyExcludedListDoesNotFilterRows` | 期望 33 CNY，实际 0 | 待迁移 |
@@ -28,18 +28,18 @@
 
 ## 下一步
 
-1. 逐个运行尚未被 panic 执行到的 paid-value 测试，补全失败矩阵。
-2. 复用或增加一个窄测试 helper，显式接收整数 micros、服务窗口和来源身份后插入 immutable timed grant。
-3. 以最小失败集合逐组 RED→GREEN，保持原业务断言。
-4. 运行定向单次、十次和 `go test ./model -count=1`。
+1. 提交第一组安全点。
+2. 迁移其余五个已知失败，不再枚举其他测试。
+3. 运行六测试组合与 `go test ./model -count=1`。
 
 ## 最近安全提交
 
 - 冻结基线：`774b35740c1879b285537031410731317d0142fc`
+- RED 证据提交：`c9225c603`
 
 ## 未提交文件
 
-- 首个证据提交前：本次新增的 `fixture-a-{status,evidence,contract}.md`。
+- 第一组提交前：`model/admin_analytics_paid_subscription_test.go` 与更新后的 fixture-a evidence/status。
 
 ## 阻塞
 

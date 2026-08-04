@@ -7,8 +7,8 @@
 - 分支：`jiwangyihao/issue-21-timed-grants`
 - 冻结 HEAD：`af1f76f6ed006870aa20c4ef5f0b6467016fca6f`
 - 起始工作树：clean
-- 最近安全提交：`9235f6887`（Finding 1：严格校验计时权益周期）。
-- 当前未提交文件：Redemption Findings 2–6 的 model/controller 实现、回归测试与本状态/证据更新。
+- 最近安全提交：`ffdfd46ba`（Findings 2–6：固化兑换授权与并发更新）。
+- 当前未提交文件：Finding 7 的 model 实现、回归测试与本状态/证据更新。
 
 ## 七项 Finding
 
@@ -18,7 +18,7 @@
 4. `COMPLETE`：used Redemption 成功重放比较规范化 mode，双向冲突均稳定拒绝且零写入。
 5. `COMPLETE`：disabled trial / invite-trial 在任何新兑换副作用前稳定拒绝。
 6. `COMPLETE`：`Redemption.Update` 事务内锁定重读，统一 `Redemption → SubscriptionPlan` 锁序；status-only 不读取 Plan 或补 snapshot。
-7. `PENDING`：普通 paid timed 订单成功回调重放恢复原结果。
+7. `COMPLETE`：普通 paid timed 订单成功重放从持久化 subscription identity 与 immutable grant 恢复同一窗口，不重复续期或新增 grant。
 
 ## 当前事务与锁序合同
 
@@ -34,7 +34,7 @@
 
 ## 下一步
 
-完成 Redemption Findings 2–6 的 `-count=10`、`git diff --check` 与 clean 安全提交后，开始 Finding 7 的最小订单 replay RED。
+提交 Finding 7 安全点，然后运行最终 model/controller 窄集合、race、Issue #21/#22 组合回归与 clean-tree 检查。
 
 ## 阻塞
 

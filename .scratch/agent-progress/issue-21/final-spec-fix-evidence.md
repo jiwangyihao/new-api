@@ -53,13 +53,15 @@
 
 ## Finding 7：paid timed 订单重放
 
-- 状态：PENDING
-- RED：待运行无 invitation event 的首次完成/成功 replay 测试。
-- 最小 GREEN：用持久化 subscription identity 与 immutable grant/source 恢复同一窗口，计数不变。
+- 状态：COMPLETE
+- RED：`go test ./model -run TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult -count=1`；首次完成成功，但无 invitation event 的普通 paid timed 成功重放只返回空 `Transitioned=false`，`Subscription=nil` 且窗口/identity 丢失。
+- 最小 GREEN：成功 replay 在 immutable entitlement 判定为普通 paid timed 后，按订单 source identity 查询唯一 timed grant，校验 `FulfilledSubscriptionID`、user、plan、source、半开窗口，并读取同一 subscription；任一 identity 不一致返回 `ErrTimedSubscriptionGrantInvalid`，不读取 current Plan 推断历史。
+- GREEN：`go test ./model -run TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult -count=10` → PASS；首次与 replay 返回相同 subscription/window，`Transitioned=false`，subscription/grant 计数保持 1。
+- 提交：待 Finding 7 安全提交补记 SHA。
 
 ## 验证台账
 
-Findings 2–6：model 组合 `-count=1` 与 `-count=10` 均 PASS；controller status-only/更新组合 `-count=1` 与 `-count=10` 均 PASS；`gofmt` 已运行，待 `git diff --check` 与安全提交。
+Findings 1–7 的独立 RED 与最小 GREEN 均已记录；Finding 7 `-count=10` PASS，待提交后执行最终组合门禁。
 
 ## 非目标
 

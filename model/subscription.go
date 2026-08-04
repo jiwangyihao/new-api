@@ -1150,12 +1150,50 @@ func subscriptionOrderCompletionResultFromExistingFulfillmentTx(tx *gorm.DB, ord
 			}
 			return &SubscriptionOrderCompletionResult{CreditBalance: grant, PurchaseMode: SubscriptionPurchaseModeCreditBalance, Transitioned: transitioned}, nil
 		}
+		if !snapshot.IsTrial && !snapshot.InviteTrial {
+			return subscriptionOrderCompletionResultFromTimedGrantTx(tx, order, transitioned)
+		}
 	}
 	result, err := subscriptionOrderCompletionResultFromExistingEventTx(tx, order, transitioned)
 	if result != nil {
 		result.PurchaseMode = SubscriptionPurchaseModeTimed
 	}
 	return result, err
+}
+
+func subscriptionOrderCompletionResultFromTimedGrantTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
+	if order.FulfilledSubscriptionID <= 0 {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	sourceKey := TimedSubscriptionGrantSourceOrder + ":" + strconv.Itoa(order.Id)
+	var grant TimedSubscriptionValuationGrant
+	if err := tx.Where("source_type = ? AND source_key = ? AND source_id = ?", TimedSubscriptionGrantSourceOrder, sourceKey, order.Id).First(&grant).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		return nil, err
+	}
+	if grant.UserSubscriptionId != order.FulfilledSubscriptionID || grant.UserId != order.UserId || grant.PlanId != order.PlanId || grant.EventEndTime <= grant.EventStartTime {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	var subscription UserSubscription
+	if err := tx.Where("id = ?", order.FulfilledSubscriptionID).First(&subscription).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTimedSubscriptionGrantInvalid
+		}
+		return nil, err
+	}
+	if subscription.UserId != order.UserId || subscription.PlanId != order.PlanId {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
+	return &SubscriptionOrderCompletionResult{
+		Subscription:         &subscription,
+		PurchaseMode:         SubscriptionPurchaseModeTimed,
+		Transitioned:         transitioned,
+		SourceSubscriptionId: subscription.Id,
+		EventStartTime:       grant.EventStartTime,
+		EventEndTime:         grant.EventEndTime,
+	}, nil
 }
 func subscriptionOrderCompletionResultFromExistingEventTx(tx *gorm.DB, order *SubscriptionOrder, transitioned bool) (*SubscriptionOrderCompletionResult, error) {
 	if tx == nil || order == nil {

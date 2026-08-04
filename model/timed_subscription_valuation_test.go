@@ -292,6 +292,89 @@ func TestTimedSubscriptionValuationGrantOrderCompletionUsesImmutableSnapshotAfte
 	require.Equal(t, result.EventEndTime, grant.EventEndTime)
 }
 
+func TestTimedSubscriptionValuationGrantPaidOrderReplayRestoresImmutableResult(t *testing.T) {
+	setupTimedSubscriptionValuationTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&InvitationRewardEvent{}))
+	priceMicros := int64(40_000_000)
+	plan := SubscriptionPlan{
+		Id: 21_252, Title: "Timed Order Replay", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed,
+		PriceAmount:     40, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: SubscriptionDurationCustom, CustomSeconds: 3600,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: SubscriptionResetNever,
+	}
+	require.NoError(t, DB.Create(&User{Id: 21_251, Username: "timed-order-replay", Status: common.UserStatusEnabled, AffCode: "timed-order-replay-aff"}).Error)
+	require.NoError(t, DB.Create(&plan).Error)
+	snapshot := NewSubscriptionEntitlementSnapshot(&plan, SubscriptionPurchaseModeTimed, 0)
+	snapshot.SetPaymentSnapshot(PaymentProviderBalance, "balance", PaymentMethodAccountBalance, 4000, "CNY")
+	snapshotJSON, err := MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := SubscriptionOrder{
+		Id: 21_253, UserId: 21_251, PlanId: plan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		TradeNo: "timed-order-replay-21253", PaymentProvider: PaymentProviderBalance, PaymentMethod: PaymentMethodAccountBalance,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, DB.Create(&order).Error)
+
+	var first *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		first, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+	require.NotNil(t, first)
+	require.NotNil(t, first.Subscription)
+	require.True(t, first.Transitioned)
+	require.Positive(t, first.EventStartTime)
+	require.Greater(t, first.EventEndTime, first.EventStartTime)
+	var persistedOrder SubscriptionOrder
+	require.NoError(t, DB.First(&persistedOrder, order.Id).Error)
+	require.Equal(t, first.Subscription.Id, persistedOrder.FulfilledSubscriptionID)
+	var subscriptionCountBefore int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCountBefore).Error)
+	var grantCountBefore int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCountBefore).Error)
+	require.Equal(t, int64(1), subscriptionCountBefore)
+	require.Equal(t, int64(1), grantCountBefore)
+	var eventCount int64
+	require.NoError(t, DB.Model(&InvitationRewardEvent{}).Count(&eventCount).Error)
+	require.Zero(t, eventCount)
+
+	currentPriceMicros := int64(80_000_000)
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("id = ?", plan.Id).Updates(map[string]any{
+		"price_amount": 80, "price_amount_micros": currentPriceMicros, "currency": "USD", "custom_seconds": int64(7200),
+	}).Error)
+	var replay *SubscriptionOrderCompletionResult
+	require.NoError(t, DB.Transaction(func(tx *gorm.DB) error {
+		var locked SubscriptionOrder
+		if err := tx.Where("id = ?", order.Id).First(&locked).Error; err != nil {
+			return err
+		}
+		var completeErr error
+		replay, completeErr = CompleteSubscriptionOrderTx(tx, &locked, "", PaymentMethodAccountBalance)
+		return completeErr
+	}))
+
+	require.NotNil(t, replay)
+	require.False(t, replay.Transitioned)
+	require.NotNil(t, replay.Subscription)
+	require.Equal(t, first.Subscription.Id, replay.Subscription.Id)
+	require.Equal(t, first.SourceSubscriptionId, replay.SourceSubscriptionId)
+	require.Equal(t, first.EventStartTime, replay.EventStartTime)
+	require.Equal(t, first.EventEndTime, replay.EventEndTime)
+	require.Equal(t, SubscriptionPurchaseModeTimed, replay.PurchaseMode)
+	var subscriptionCountAfter int64
+	require.NoError(t, DB.Model(&UserSubscription{}).Count(&subscriptionCountAfter).Error)
+	require.Equal(t, subscriptionCountBefore, subscriptionCountAfter)
+	var grantCountAfter int64
+	require.NoError(t, DB.Model(&TimedSubscriptionValuationGrant{}).Count(&grantCountAfter).Error)
+	require.Equal(t, grantCountBefore, grantCountAfter)
+}
+
 func TestTimedSubscriptionValuationGrantPaidOrderWithoutSnapshotRejectsAtomically(t *testing.T) {
 	setupTimedSubscriptionValuationTestDB(t)
 	priceMicros := int64(40_000_000)
@@ -432,7 +515,10 @@ func TestTimedSubscriptionValuationGrantRejectsInvalidAuthoritativePlanAtomicall
 		{name: "non-positive duration value", mutate: func(plan *SubscriptionPlan) { plan.DurationUnit = SubscriptionDurationMonth; plan.DurationValue = 0 }},
 		{name: "non-positive custom duration", mutate: func(plan *SubscriptionPlan) { plan.CustomSeconds = 0 }},
 		{name: "unknown reset", mutate: func(plan *SubscriptionPlan) { plan.QuotaResetPeriod = "sometimes" }},
-		{name: "non-positive custom reset", mutate: func(plan *SubscriptionPlan) { plan.QuotaResetPeriod = SubscriptionResetCustom; plan.QuotaResetCustomSeconds = 0 }},
+		{name: "non-positive custom reset", mutate: func(plan *SubscriptionPlan) {
+			plan.QuotaResetPeriod = SubscriptionResetCustom
+			plan.QuotaResetCustomSeconds = 0
+		}},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

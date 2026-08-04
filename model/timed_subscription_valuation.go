@@ -103,6 +103,15 @@ func GrantTimedSubscriptionTx(tx *gorm.DB, request TimedSubscriptionGrantRequest
 	if err != nil {
 		return nil, err
 	}
+	planGuard := tx.Model(&SubscriptionPlan{}).
+		Where("id = ?", normalized.request.Plan.Id).
+		UpdateColumn("conversion_guard_version", gorm.Expr("conversion_guard_version + ?", 1))
+	if planGuard.Error != nil {
+		return nil, planGuard.Error
+	}
+	if planGuard.RowsAffected != 1 {
+		return nil, ErrTimedSubscriptionGrantInvalid
+	}
 	if existing, found, err := findTimedSubscriptionGrantReplayTx(tx, normalized); err != nil {
 		return nil, err
 	} else if found {

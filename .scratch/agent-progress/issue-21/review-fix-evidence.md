@@ -27,8 +27,19 @@
 
 ## RED / GREEN 证据
 
-尚未开始。每个 finding 完成有效 RED、最小 GREEN、定向验证后立即追加：精确命令、失败症状、根因、通过结果与提交 SHA。
+### Finding 1：并发同源重放合法串行化
 
+- RED seam：新增 `TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes`，使用 `t.TempDir()` 文件型 SQLite、WAL、`busy_timeout(5000)`、`SetMaxOpenConns(4)` 与两个独立事务；测试侧 GORM query callback/barrier 强制旧实现的两个事务均在计划锁前完成“无 grant” replay read，再同时放行，不使用 `sleep` 或生产 test hook。
+- RED 命令：`gofmt -w model/timed_subscription_valuation_concurrency_test.go && go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1 -v`。
+- RED 精确症状：一个事务在 `model/subscription.go:880` 插入 `user_subscriptions` 时返回 `database is locked (5) (SQLITE_BUSY)`；测试在并发 outcome 的 `require.NoError` 失败，成功结果数为 1、错误结果数为 1。旧实现因此没有给调用者两个成功的同源重放结果。
+- 根因：`GrantTimedSubscriptionTx` 在权威计划行锁之前读取 grant 身份。两个连接都可观察“来源不存在”，再并发创建/续期；SQLite 在写升级处泄漏方言锁错误，其他方言还可能在唯一约束处失败。
+- 最小 GREEN：复用 `SubscriptionPlan.conversion_guard_version` 既有数据库 guard；入口先对目标计划行执行原子自增写，成功后再读取 replay identity，随后读取数据库计划资格并创建权益/grant。锁序现在为 `SubscriptionPlan guard -> existing grant identity -> target UserSubscription -> new grant`。未新增进程内 mutex、retry wrapper、savepoint 或泛化框架。
+- GREEN 单次：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1 -v` → PASS。
+- GREEN 重复：`go test ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=10` → PASS。
+- 领域回归：`go test ./model -run '^TestTimedSubscriptionValuationGrant' -count=1` → PASS，覆盖参数 mismatch、disabled 已提交来源重放/新来源拒绝、事务回滚、续期与不可变性既有合同。
+- 竞态：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1` → PASS。
+- SQLite 结论：两个调用均成功，返回同一 subscription/window；最终 `user_subscriptions=1`、`timed_subscription_valuation_grants=1`，只续期一次，未泄漏 `UNIQUE constraint` 或 `SQLITE_BUSY`。
+- MySQL 5.7/PostgreSQL 9.6：未运行；三库零 SKIP 仍归 Issue #27。
 ## 数据库范围
 
 - SQLite：待运行真实文件型或共享多连接并发证明。

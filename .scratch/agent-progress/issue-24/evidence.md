@@ -28,6 +28,13 @@
 
 - GREEN：`go test ./model -run TestAdminCreditBalanceIncreaseRejectsIneligiblePlansAtomically -count=1` → `go test: 1 packages ok`，约 18.51 秒。
 - 行为：缺少 plan、disabled、trial、invite trial、零/缺失精确价格、零 Credit 分母、未开放不限时购买、非 timed、EUR 均返回稳定 sentinel；真实 SQLite 中 adjustment、ledger、state、subscription、邀请事件全部保持 0，证明原子拒绝。
+
+### 管理员 debt、幂等与事务回滚
+
+- GREEN：`go test ./model -run 'TestAdminCreditBalanceIncrease(OffsetsDebtBeforeExactValue|IdempotencyBindsCompleteSnapshot|LedgerFailureRollsBackEverything)' -count=1` → `go test: 1 packages ok`，约 13.58 秒。
+- debt：300 欠额 + 800 Credit 只形成净 500 / `20,000,000` micros；900 欠额 + 800 Credit 净 Credit/净成本均为 0，毛成本仍为 `32,000,000` micros。
+- 幂等：同 key/完整同参数重放原 ledger/state version；amount、plan、operation、reason、operator 或冻结价格变化均返回 `credit_valuation_idempotency_mismatch`，余额与 state version 不再增加。
+- 回滚：SQLite trigger 注入 admin ledger 创建失败后，adjustment、ledger、state、subscription 均为 0。
 ## 实际数据库/API/浏览器范围
 
 - SQLite：已执行首个管理员领域纵切，真实内存 SQLite + GORM migration + ready marker。

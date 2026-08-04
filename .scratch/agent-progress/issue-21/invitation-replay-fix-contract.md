@@ -1,26 +1,29 @@
 # Issue #21 邀请身份重放修复合同
 
-状态：INVESTIGATING
+状态：HANDOFF_READY
 
 ## 缺陷合同
 
-普通 paid timed 订单首次履约成功时，`InvitationRewardEvent` 已持久化邀请来源身份。后续成功重放必须恢复首次已提交的可观察结果；当前 `subscriptionOrderCompletionResultFromExistingFulfillmentTx` → `subscriptionOrderCompletionResultFromTimedGrantTx` 只恢复 subscription/window，丢失 `InviterId`。
+普通 paid timed 订单首次履约成功时，`InvitationRewardEvent` 已持久化邀请来源身份。后续成功重放必须恢复首次已提交的可观察结果；此前 `subscriptionOrderCompletionResultFromExistingFulfillmentTx` → `subscriptionOrderCompletionResultFromTimedGrantTx` 只恢复 subscription/window，丢失 `InviterId`。
 
 ## 领域接缝
 
-“恢复既有成功结果”属于现有 fulfillment-result 恢复模块的实现责任。保持其调用接口不变，在同一数据库事务、已锁定订单和 immutable fulfillment identity 下读取既有 `InvitationRewardEvent`，只把已持久化的 `InviterId` 合入返回结果；不新增跨层接口或第二套邀请计算。
+“恢复既有成功结果”属于 existing fulfillment result 恢复模块的实现责任。接口保持不变：在 `subscriptionOrderCompletionResultFromTimedGrantTx` 已验证 immutable timed grant、order fulfillment 与 subscription identity 后，以订单唯一来源 `(source_type=subscription_order, source_id=order.Id)` 读取既有 `InvitationRewardEvent`，只合并持久化 `InviterId`。
 
-## 不变量
+## 最终不变量
 
-1. 邀请身份只能来自已经持久化的 `InvitationRewardEvent`，不得从当前用户关系、当前 Plan、当前邀请设置或请求参数重新推导。
-2. event 的 `SourceSubscriptionId` 必须对应本订单的 immutable `FulfilledSubscriptionID`；匹配时恢复原 `InviterId`。
-3. event 不存在时返回 `InviterId=0` 且不报错。
-4. 多个不合法或不匹配 event 时不得猜测最近一条；遵守现有唯一来源身份/稳定查询合同并 fail closed 或返回既有稳定错误。
-5. 重放只读：不得新建或更新 event、subscription、timed grant、ledger 或订单授权快照。
-6. 重放前后 event/subscription/timed grant/order 数量与 `FulfilledSubscriptionID` 不变。
-7. 首次履约、event 创建与佣金计算语义不变；不读取 current Plan 重算 window、price、currency、duration、reset 或 rule。
-8. #21 既有 duration/reset、Redemption、并发、overflow、stable sentinel 以及 #22 Credit/current_only/权威 micros/BigInt 合同保持不变。
+1. 邀请身份只来自已持久化 `InvitationRewardEvent`；不从当前用户邀请关系、当前 Plan、当前邀请设置或请求参数重新推导。
+2. 查询只使用订单稳定来源身份；最多加载两行以发现违反唯一来源合同的异常数据。
+3. 唯一 event 必须匹配 `SourceOrderId`、`FulfilledSubscriptionID`、`InviteeId`，且 `InviterId > 0`。
+4. event 匹配时只设置返回值 `InviterId`；subscription/window 仍只来自已验证的 immutable timed grant 与 fulfillment subscription。
+5. event 不存在时返回成功且 `InviterId=0`。
+6. 多行 event 或 identity 不匹配时不猜测最近一条，返回既有稳定 `ErrTimedSubscriptionGrantInvalid`。
+7. 重放只读；不创建或更新任何实体，不读取 current Plan，不重算履约参数。
+8. 首次履约、event 创建、佣金计算及 #21/#22 既有合同不变。
 
-## TDD 验收
+## 测试合同
 
-保留既有两个稳定 RED 作为公开领域入口回归；最小 GREEN 后补/保留无 invitation event 的 paid timed 成功重放，断言 `InviterId=0` 且无副作用。
+- 两个稳定 RED 修复前分别观察 `9201→0` 与 `9231→0`，修复后首次/重放 inviter identity 一致。
+- 原测试继续验证 immutable fulfillment identity 与 event count 保持 1。
+- 既有无 event paid timed 重放覆盖 event count 0、`InviterId=0`、subscription/grant count 与 source/window 不变。
+- 九项 invitation fixture、完整 model 包与窄范围 race 均通过。

@@ -33,6 +33,7 @@ func setupSubscriptionTrialPurchaseTest(t *testing.T) {
 		&model.SubscriptionOrder{},
 		&model.User{},
 		&model.UserSubscription{},
+		&model.TimedSubscriptionValuationGrant{},
 		&model.CreditBalanceLedger{},
 		&model.TopUp{},
 		&model.Log{},
@@ -60,6 +61,27 @@ func seedSubscriptionPurchasePlan(t *testing.T, id int, trial bool, visible bool
 	plan := &model.SubscriptionPlan{Id: id, Title: "Purchase Plan", Enabled: true, PublicVisible: visible, IsTrial: trial, PriceAmount: price, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code, StripePriceId: "price_test", CreemProductId: "prod_test"}
 	require.NoError(t, model.DB.Create(plan).Error)
 	require.NoError(t, model.DB.Model(plan).Updates(map[string]interface{}{"is_trial": trial, "public_visible": visible}).Error)
+}
+
+func seedAuthoritativeSubscriptionPurchasePlan(t *testing.T, id int, visible bool, priceMicros int64) model.SubscriptionPlan {
+	t.Helper()
+	code := "plan_purchase_" + string(rune('a'+id%26))
+	plan := seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{
+		Id:                id,
+		Title:             "Purchase Plan",
+		PublicVisible:     visible,
+		DurationUnit:      model.SubscriptionDurationMonth,
+		DurationValue:     1,
+		MonthlyTokenLimit: 1000,
+		ConcurrencyLimit:  1,
+		QuotaResetPeriod:  model.SubscriptionResetNever,
+		RewardEligible:    true,
+		BusinessCode:      &code,
+		StripePriceId:     "price_test",
+		CreemProductId:    "prod_test",
+	}, priceMicros)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Update("public_visible", visible).Error)
+	return plan
 }
 
 func seedExternalCreditPurchasePlans(t *testing.T, optionPlanID int, creditPlanID int) {

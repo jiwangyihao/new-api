@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays(t *testing.T) {
+func TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}))
@@ -42,8 +42,8 @@ func TestAdminCreateTimedSubscriptionRequiresRetryableAuditAndReplays(t *testing
 
 	var grant model.TimedSubscriptionValuationGrant
 	require.NoError(t, model.DB.Where("source_type = ? AND source_key = ?", model.TimedSubscriptionGrantSourceAdmin, "admin:admin-timed-21603").First(&grant).Error)
-	require.Equal(t, int64(25_000_000), grant.SourcePriceMicros)
-	require.Equal(t, "USD", grant.SourceCurrency)
+	require.Equal(t, priceMicros, grant.SourcePriceMicros)
+	require.Equal(t, "CNY", grant.SourceCurrency)
 	require.Contains(t, grant.SourceSnapshot, "售后履约纠偏")
 	firstEnd := grant.EventEndTime
 

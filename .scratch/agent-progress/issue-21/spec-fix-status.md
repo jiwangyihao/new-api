@@ -9,9 +9,9 @@
 
 ## 当前阶段
 
-- 状态：`INVESTIGATING`。
+- 状态：`RED_CONFIRMED`。
 - Standards 四项 finding：保持 `COMPLETE`，不得回退。
-- AC2 / Gate B：`OPEN`。
+- AC2 / Gate B：Controller/API 权限攻击 RED 已确认；model 权威快照/原子性 RED 待补。
 
 ## 权威事实
 
@@ -27,17 +27,18 @@ SubscriptionPlan guard -> authoritative SubscriptionPlan reread -> existing time
 
 ## 下一步
 
-1. 提交本次 `spec-fix-*` 可恢复现场。
-2. 读取 exported request 符号的 LSP references、管理员 API 测试与所有调用点。
-3. 将 `40 CNY` Plan + 伪造 `25 USD` payload 固化为真实 SQLite/API RED，并保存旧实现精确失败。
+1. 提交 Controller/API RED 与本进度证据。
+2. 补最小 model 权威 Plan 快照与非法 Plan 零写入 RED。
+3. 最小 GREEN：领域入口只在 Plan guard 内重读并冻结权威事实，controller 不再向领域层传估值字段。
 
 ## 最近安全提交
 
-- `763b0f40bdc8fb7d5c11bc69f46749fd40a8763b`（冻结 HEAD）。
+- `0c7ef4aec`：建立 AC2 / Gate B 修复恢复现场。
 
 ## 未提交文件
 
-- 首个恢复提交前：本目录三份 `spec-fix-*` 文件。
+- `controller/timed_subscription_grant_test.go`：40 CNY Plan 对 25 USD 攻击 RED。
+- 本目录 `spec-fix-status.md`、`spec-fix-evidence.md`：RED 证据更新。
 
 ## 阻塞
 

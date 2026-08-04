@@ -25,7 +25,12 @@
 
 ## RED
 
-- 尚未运行；下一安全步先提交恢复现场，再新增一个真实 API/SQLite tracer。
+### Controller/API：伪造估值事实覆盖权威 Plan
+
+- 命令：`go test ./controller -run '^TestAdminCreateTimedSubscriptionUsesAuthoritativePlanSnapshot$' -count=1 -v`。
+- 真实 SQLite/API 夹具：数据库 Plan 为 `40,000,000` micros CNY；请求额外携带伪造 `25,000,000` micros USD。
+- 旧实现稳定 FAIL：`timed_subscription_grant_test.go:45` 期望 `40000000`，实际写入 `25000000`；测试因此 FAIL，证明 controller 提交的攻击值进入 exact grant。
+- 该 RED 同时证明兼容 payload 中的旧估值字段当前未被忽略，权限边界漏洞可由管理员 API 真实触发。
 
 ## GREEN
 

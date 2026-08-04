@@ -48,5 +48,5 @@ go test ./model -run '^(TestCompleteSubscriptionOrderTxCreatesInvitationRewardEv
 - 精确生产接缝：`model/subscription.go:1137-1161` 的 `subscriptionOrderCompletionResultFromExistingFulfillmentTx` 对普通 paid timed 直接转到 `subscriptionOrderCompletionResultFromTimedGrantTx`；`model/subscription.go:1164-1196` 只从 grant/subscription 恢复窗口和 subscription identity，未合入已持久化的 `InvitationRewardEvent.InviterId`。禁止在本夹具切片修改生产代码或弱化身份断言。
 - 其余七项独立组合（续期 delta、两项兑换、reward-ineligible order、两项并发、历史购买限制续期）`-count=1`：PASS；证明合法 timed Plan、订单 `EntitlementSnapshot`、`Redemption.Insert()`/`FulfillmentSnapshot` 与并发恰好一次夹具已经 GREEN。
 - 原三项中 `TestRedeemSubscriptionRedemptionCreatesInvitationRewardEvent` 与 `TestCompleteSubscriptionOrderAllowsRenewalWhenHistoricalPurchaseLimitReached` 已 GREEN；`TestCompleteSubscriptionOrderTxCreatesInvitationRewardEventAtTransition` 仅剩上述独立生产重放身份 blocker。
-- 未运行 `go test ./model -count=1` 和十次重放门禁：已知生产 RED 会确定失败；现场以 HANDOFF_READY 提交交由专门生产修复 Agent。
-- `gofmt`、`git diff --check` 与 clean-tree 结果在最终安全提交后记录。
+- `go test ./model -count=1` 和十次重放门禁被已确认的生产 RED 阻断，未伪报 PASS；现场以 HANDOFF_READY 交由专门生产修复 Agent。
+- 两个测试文件已 `gofmt`；`git diff --check` PASS；夹具与 HANDOFF_READY 证据提交 `7b9e0038e` 后 `git status --short && git diff --check HEAD^ HEAD` 无输出，工作树 clean。

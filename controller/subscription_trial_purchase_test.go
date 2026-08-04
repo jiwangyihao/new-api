@@ -646,7 +646,7 @@ func TestSubscriptionEpayCreditCallbackIsIdempotentAndOffsetsDebt(t *testing.T) 
 
 func TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior(t *testing.T) {
 	setupSubscriptionTrialPurchaseTest(t)
-	seedSubscriptionPurchasePlan(t, 9604, false, true, 40)
+	plan := seedAuthoritativeSubscriptionPurchasePlan(t, 9604, true, 40_000_000)
 	configureEpaySubscriptionTest()
 	inviter := model.User{Id: 9605, Username: "epay-inviter", Status: common.UserStatusEnabled, AffCode: "epay-inviter"}
 	require.NoError(t, model.DB.Create(&inviter).Error)
@@ -655,6 +655,7 @@ func TestSubscriptionEpayTimedCallbackPreservesInvitationBehavior(t *testing.T) 
 	require.Contains(t, create.Body.String(), `"message":"success"`)
 	var order model.SubscriptionOrder
 	require.NoError(t, model.DB.Where("plan_id = ?", 9604).First(&order).Error)
+	assertAuthorizedTimedOrderSnapshotFixture(t, &order, &plan)
 
 	recorder := performEpaySubscriptionCallbackForSnapshotTest(t, signedEpaySubscriptionCallbackForSnapshotTest(t, order.TradeNo, "40.00"))
 

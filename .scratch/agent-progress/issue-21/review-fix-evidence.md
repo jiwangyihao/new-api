@@ -40,8 +40,9 @@
 - 竞态：`go test -race ./model -run '^TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes$' -count=1` → PASS。
 - SQLite 结论：两个调用均成功，返回同一 subscription/window；最终 `user_subscriptions=1`、`timed_subscription_valuation_grants=1`，只续期一次，未泄漏 `UNIQUE constraint` 或 `SQLITE_BUSY`。
 - MySQL 5.7/PostgreSQL 9.6：未运行；三库零 SKIP 仍归 Issue #27。
+- Finding 1 安全提交：`b10855df4 fix(subscription): 串行化计时授予同源重放`。
 ## 数据库范围
 
-- SQLite：待运行真实文件型或共享多连接并发证明。
+- SQLite：真实文件型、多连接并发同源重放单次、`-count=10` 与窄 `-race` 均通过。
 - MySQL 5.7：未运行，三库零 SKIP 归 Issue #27。
 - PostgreSQL 9.6：未运行，三库零 SKIP 归 Issue #27。

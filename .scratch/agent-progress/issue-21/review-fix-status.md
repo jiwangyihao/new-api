@@ -21,7 +21,7 @@
 
 ## 恢复信息
 
-- 最近安全提交：`dc0fa4e45`（父集成合并恢复记录）；Finding 1 代码与证据待本次立即提交。
-- 未提交文件：`model/timed_subscription_valuation.go`、`model/timed_subscription_valuation_concurrency_test.go`、本状态与 evidence。
-- 下一条精确命令：`git diff --check && git add model/timed_subscription_valuation.go model/timed_subscription_valuation_concurrency_test.go .scratch/agent-progress/issue-21/review-fix-status.md .scratch/agent-progress/issue-21/review-fix-evidence.md && git commit -m "fix(subscription): 串行化计时授予同源重放"`。
+- 最近安全提交：`b10855df4`（Finding 1：串行化计时授予同源重放）。
+- 未提交文件：仅本状态与 evidence 的安全提交回填；Finding 2 尚未修改代码。
+- 下一条精确命令：`go test ./model -run '^TestPaidSubscriptionValue.*AuthoritativeMicros' -count=1`，先落 timed precision-boundary RED。
 - 阻塞：无。

@@ -743,6 +743,7 @@ type adminPaidSubscriptionValueBuild struct {
 	Subscriptions []dto.AdminPaidSubscriptionValueSubscription
 	Plans         []dto.AdminPaidSubscriptionValuePlanGroup
 	Sources       []dto.AdminPaidSubscriptionValueSourceGroup
+	Warnings      []dto.AdminAnalyticsAvailabilityWarning
 }
 
 func buildAdminPaidSubscriptionValueData(query AdminAnalyticsQuery) (adminPaidSubscriptionValueBuild, error) {
@@ -766,6 +767,7 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 	tokenUnavailableCount := 0
 	unknownCostCredit := int64(0)
 	stateMissingCount := 0
+	currentOnly := false
 
 	userGroups := map[int]*adminPaidUserGroup{}
 	planGroups := map[int]*adminPaidPlanGroup{}
@@ -774,6 +776,9 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 
 	for i := range rows {
 		row := rows[i]
+		if row.Value.SnapshotSemantics == adminPaidSubscriptionSnapshotSemanticsCurrentOnly {
+			currentOnly = true
+		}
 		currency := adminPaidSubscriptionRowCurrency(row)
 		if row.Excluded {
 			excluded.addMicros(currency, row.Value.RecognizedRemainingValueMicros)
@@ -835,6 +840,15 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 		return adminPaidSubscriptionValueBuild{}, err
 	}
 
+	warnings := make([]dto.AdminAnalyticsAvailabilityWarning, 0, 1)
+	if currentOnly {
+		warnings = append(warnings, dto.AdminAnalyticsAvailabilityWarning{
+			Section: "credit_valuation",
+			Reason:  adminPaidSubscriptionSnapshotSemanticsCurrentOnly,
+			Message: "credit valuation state is newer than snapshot",
+		})
+	}
+
 	return adminPaidSubscriptionValueBuild{
 		Summary: dto.AdminPaidSubscriptionValueSummary{
 			RecognizedRemainingValueByCurrency: recognized.breakdownWithPreferredCurrency(query.Currency),
@@ -853,6 +867,7 @@ func adminBuildPaidSubscriptionValueDataFromRows(query AdminAnalyticsQuery, rows
 		Subscriptions: subscriptionItems,
 		Plans:         plans,
 		Sources:       sources,
+		Warnings:      warnings,
 	}, nil
 }
 
@@ -1187,7 +1202,7 @@ func GetAdminPaidSubscriptionValueSummary(query AdminAnalyticsQuery) (dto.AdminA
 	if err != nil {
 		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
 	}
-	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary}}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary}, Warnings: data.Warnings}, nil
 }
 
 func GetAdminPaidSubscriptionValueUsers(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
@@ -1197,7 +1212,7 @@ func GetAdminPaidSubscriptionValueUsers(query AdminAnalyticsQuery) (dto.AdminAna
 		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
 	}
 	paged, page := paginateAdminAnalyticsList(data.Users, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Users: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueUser]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Users: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueUser]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}, Warnings: data.Warnings}, nil
 }
 
 func GetAdminPaidSubscriptionValueSubscriptions(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
@@ -1211,7 +1226,7 @@ func GetAdminPaidSubscriptionValueSubscriptions(query AdminAnalyticsQuery) (dto.
 		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
 	}
 	paged, page := paginateAdminAnalyticsList(data.Subscriptions, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Subscriptions: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSubscription]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Subscriptions: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSubscription]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}, Warnings: data.Warnings}, nil
 }
 
 func GetAdminPaidSubscriptionValuePlanBreakdown(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
@@ -1221,7 +1236,7 @@ func GetAdminPaidSubscriptionValuePlanBreakdown(query AdminAnalyticsQuery) (dto.
 		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
 	}
 	paged, page := paginateAdminAnalyticsList(data.Plans, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Plans: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValuePlanGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Plans: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValuePlanGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}, Warnings: data.Warnings}, nil
 }
 
 func GetAdminPaidSubscriptionValueSourceBreakdown(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error) {
@@ -1231,7 +1246,7 @@ func GetAdminPaidSubscriptionValueSourceBreakdown(query AdminAnalyticsQuery) (dt
 		return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{}, err
 	}
 	paged, page := paginateAdminAnalyticsList(data.Sources, query.Limit, query.Offset)
-	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Sources: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSourceGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}}, nil
+	return dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse]{Range: adminAnalyticsRangeMeta(query), Data: dto.AdminPaidSubscriptionValueResponse{Summary: data.Summary, Sources: dto.AdminAnalyticsList[dto.AdminPaidSubscriptionValueSourceGroup]{Items: paged, Page: page, SortBy: query.SortBy, SortOrder: query.SortOrder}}, Warnings: data.Warnings}, nil
 }
 
 func adminParseAmountMicros(amountMicros string) (int64, error) {

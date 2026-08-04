@@ -323,6 +323,57 @@ func TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY(t *testing.T) {
 	require.Equal(t, int64(32_000_000), moneyBreakdownMicros(sources.Data.Sources.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
 }
 
+func TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	result := completeCreditValuationOrder(t, db, &order)
+	const requestID = "credit-valuation-current-only-warning"
+	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, SettleCreditRequestTarget(requestID, 200, true))
+
+	snapshotAt := GetDBTimestamp()
+	updatedAt := snapshotAt + 10
+	require.NoError(t, db.Model(&CreditValuationState{}).Where("user_subscription_id = ?", result.CreditBalance.UserSubscriptionId).Update("updated_at", updatedAt).Error)
+	query := AdminAnalyticsQuery{SnapshotAt: snapshotAt, EndTimestamp: snapshotAt, RangeMode: AdminAnalyticsRangeModeSnapshot, Currency: "CNY", Limit: 20}
+	expected := []dto.AdminAnalyticsAvailabilityWarning{{Section: "credit_valuation", Reason: "current_only", Message: "credit valuation state is newer than snapshot"}}
+	panels := []struct {
+		name string
+		load func(AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminPaidSubscriptionValueResponse], error)
+	}{
+		{name: "summary", load: GetAdminPaidSubscriptionValueSummary},
+		{name: "users", load: GetAdminPaidSubscriptionValueUsers},
+		{name: "subscriptions", load: GetAdminPaidSubscriptionValueSubscriptions},
+		{name: "plans", load: GetAdminPaidSubscriptionValuePlanBreakdown},
+		{name: "sources", load: GetAdminPaidSubscriptionValueSourceBreakdown},
+	}
+	for _, panel := range panels {
+		t.Run(panel.name, func(t *testing.T) {
+			response, err := panel.load(query)
+			require.NoError(t, err)
+			require.Equal(t, expected, response.Warnings)
+		})
+	}
+
+	subscriptions, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	require.Len(t, subscriptions.Data.Subscriptions.Items, 1)
+	item := subscriptions.Data.Subscriptions.Items[0]
+	require.Equal(t, adminPaidSubscriptionSnapshotSemanticsCurrentOnly, item.SnapshotSemantics)
+	require.Equal(t, int64(2), item.ValuationStateVersion)
+	require.Equal(t, updatedAt, item.ValuationUpdatedAt)
+
+	query.SnapshotAt = updatedAt
+	query.EndTimestamp = updatedAt
+	for _, panel := range panels {
+		t.Run(panel.name+"_without_current_only", func(t *testing.T) {
+			response, err := panel.load(query)
+			require.NoError(t, err)
+			require.Empty(t, response.Warnings)
+		})
+	}
+}
+
 func moneyBreakdownMicros(items []dto.AdminAnalyticsMoneyBreakdown, currency string) int64 {
 	for _, item := range items {
 		if item.Currency == currency {

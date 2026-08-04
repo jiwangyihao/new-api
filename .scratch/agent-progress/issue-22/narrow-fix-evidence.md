@@ -12,10 +12,10 @@
 - GREEN 精确信号：`go test: 1 packages ok`；共用测试的 `users/subscriptions/plans/sources` 四个子测试均验证 precision-boundary micros 的升/降序及既有确定性 tie-breaker，兼容 float 相同不再影响排序。严格解析不回退 float；格式错误返回 `ErrCreditValuationSourceInvalid`，范围溢出返回 `ErrCreditValuationOverflow`，共同 builder 传播错误。
 
 ## Finding B：五面板 current-only warning
-- RED 命令：待执行。
-- RED 精确信号：待记录。
-- GREEN 命令：待执行。
-- GREEN 精确信号：待记录。
+- RED 命令：`go test ./model -run TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning -count=1`。
+- RED 精确信号：表驱动子测试 `summary/users/subscriptions/plans/sources` 五路全部 FAIL；真实 SQLite 32 CNY tracer 已返回明细 `snapshot_semantics=current_only`，但每个 `AdminAnalyticsPanelResponse.Warnings` 实际均为 `nil`，期望稳定 `section=credit_valuation, reason=current_only` warning。
+- GREEN 命令：`go test ./model -run 'TestCreditValuationFiveAnalytics(PanelsReturnCurrentOnlyWarning|ViewsAgreeOnThirtyTwoCNY)' -count=1`。
+- GREEN 精确信号：`go test: 1 packages ok`；五个表驱动 panel 子测试均收到唯一 `credit_valuation/current_only` warning；同一构建中以布尔聚合去重，快照追平后的五个子测试均无该 warning；subscription 明细仍为 `current_only`、`state_version=2`、`valuation_updated_at=updatedAt`，既有 32 CNY 五视图同时 GREEN。
 
 ## 回归与范围
 - 32 CNY/paid-value 后端定向回归：待执行。

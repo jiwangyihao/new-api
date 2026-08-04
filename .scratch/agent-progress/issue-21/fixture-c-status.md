@@ -1,6 +1,6 @@
 # Issue #21 夹具迁移 C 状态
 
-状态：INVESTIGATING
+状态：RED_CAPTURED
 
 ## 冻结现场
 
@@ -8,8 +8,8 @@
 - 冻结基线：`774b35740c1879b285537031410731317d0142fc`
 - 初始工作树：clean
 - 所有权：仅迁移 `controller` 中余额、Kyren、Stripe、Epay/通用支付 webhook、邀请订单及其共享测试 helper。
-- 最近安全提交：冻结基线 `774b35740c1879b285537031410731317d0142fc`；本文件首次提交后更新。
-- 当前未提交文件：本次首次创建的 `fixture-c-status.md`、`fixture-c-evidence.md`、`fixture-c-contract.md`。
+- 最近安全提交：`173bea6b6`（建立 controller 夹具迁移恢复现场）。
+- 当前未提交文件：`fixture-c-status.md`、`fixture-c-evidence.md`（包级冻结 RED 证据）。
 
 ## 已完成
 
@@ -19,8 +19,9 @@
 
 ## 当前阶段
 
-- 下一步：运行 `go test ./controller -count=1`，按余额、Kyren、Stripe、Epay/通用支付、邀请订单分组记录原始 RED、panic 与缺表日志。
-- 随后逐组以完整权威 Plan 或合法订单授权快照迁移夹具，并执行最小 RED→GREEN。
+- 已运行 `go test ./controller -count=1`：27 个失败测试，29 次 `timed_subscription_grant_invalid`，无 panic；已按余额/共享购买、Kyren、Stripe、Epay、邀请订单分组。
+- 下一步：审阅现有 controller 测试 helper 与合法订单快照构造入口，先迁移余额/共享购买夹具并执行最小 RED→GREEN，再迁移已授权 provider order 与邀请订单。
+- 缺表日志当前均来自无关局部 setup 或显式故障注入；Redis 仅有 client closed 日志，无 panic。
 
 ## 阻塞
 

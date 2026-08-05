@@ -191,3 +191,10 @@
 真实结果：`FAIL`。`ConfirmTimedSubscriptionConversion` 返回稳定 `credit_valuation_source_required`，精确表明现有 conversion 调用 `GrantCreditBalanceTx` 时未提供 `CreditValuationSourceSnapshot`；事务因此 fail-closed，未产生部分写入。
 
 结论：RED 到达真实 Confirm → Grant ingress seam；下一步最小 GREEN 只连接同币种 source plan 精确价格/currency、credit basis/gross credit 与目标 valuation currency，并冻结现有 conversion/ledger 字段。
+
+### RED 范围收敛
+
+- tracer 只断言已有 schema 可持久化的 `SubscriptionConversion`、`CreditBalanceLedger`、`CreditValuationState` 字段及 source subscription converted mapping。
+- FX 仅覆盖同币种 CNY → CNY 的冻结 `1/1`；未添加或假设新的 conversion schema。
+- `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功且无输出。
+- 当前只提交 RED 与进度证据，不实现 GREEN、跨币种、在途 request 或 API/UI。

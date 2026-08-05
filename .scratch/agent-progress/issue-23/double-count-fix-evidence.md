@@ -35,7 +35,26 @@ PASS
 
 ## 宽回归与竞态
 
-待执行。
+```text
+go test -race ./service -run '^TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields$' -count=1
+PASS
+
+go test ./model ./service ./controller -count=1
+首轮：service 与 controller 通过；model 的 TestRecordConsumeLogCoalescesConcurrentInserts 出现并发阈值波动（5 > 4）。
+
+go test ./model -run '^TestRecordConsumeLogCoalescesConcurrentInserts$' -count=10
+PASS
+
+go test ./model ./service ./controller -count=1
+PASS（3 packages）
+
+git diff --check
+PASS（无输出）
+```
+
+生产文件已执行 `gofmt -w service/billing_session.go`。首轮 model 波动不在本次修改路径，独立十次与完整复跑均通过。
+
+未实测：MySQL/PostgreSQL 实机、全项目测试与部署；均明确不属于本修复范围。
 
 ## 范围边界
 

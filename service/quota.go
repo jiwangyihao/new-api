@@ -436,7 +436,7 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			}
 			if subscription.EntitlementType == model.SubscriptionEntitlementCreditBalance {
 				var record model.SubscriptionPreConsumeRecord
-				if err = model.DB.Select("applied_credit", "user_subscription_id").Where("request_id = ?", relayInfo.RequestId).First(&record).Error; err != nil {
+				if err = model.DB.Select("pre_consumed", "user_subscription_id").Where("request_id = ?", relayInfo.RequestId).First(&record).Error; err != nil {
 					if errors.Is(err, gorm.ErrRecordNotFound) {
 						return model.ErrCreditValuationRequestNotFound
 					}
@@ -445,8 +445,8 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				if record.UserSubscriptionId != relayInfo.SubscriptionId {
 					return model.ErrCreditValuationMappingConflict
 				}
-				target := record.AppliedCredit + delta
-				if (delta > 0 && target < record.AppliedCredit) || (delta < 0 && target > record.AppliedCredit) || target < 0 {
+				target := record.PreConsumed + delta
+				if (delta > 0 && target < record.PreConsumed) || (delta < 0 && target > record.PreConsumed) || target < 0 {
 					return model.ErrCreditValuationOverflow
 				}
 				err = model.SettleUserSubscriptionRequestTarget(relayInfo.RequestId, relayInfo.SubscriptionId, target, false)

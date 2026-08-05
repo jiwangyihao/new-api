@@ -59,4 +59,15 @@ func TestPostConsumeQuotaCreditUsesStableRequestTarget(t *testing.T) {
 	var requestCount int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Count(&requestCount).Error)
 	require.Equal(t, int64(1), requestCount)
+
+	recordBeforeReplay := record
+	subscriptionBeforeReplay := subscription
+	stateBeforeReplay := state
+	require.NoError(t, PostConsumeQuota(relayInfo, 50, 100, false))
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, recordBeforeReplay, record)
+	require.NoError(t, model.DB.First(&subscription, subscriptionID).Error)
+	require.Equal(t, subscriptionBeforeReplay, subscription)
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", subscriptionID).First(&state).Error)
+	require.Equal(t, stateBeforeReplay, state)
 }

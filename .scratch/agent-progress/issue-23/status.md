@@ -1,8 +1,8 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：`HANDOFF_READY`；已完成异步 Task 持久请求身份安全点，停止于协调器指定边界，不进入清理、conversion、quota 重构或 #24–#28。
-- 当前结果：新 Task 持久化 `subscription_request_id`；legacy Task 使用稳定 `legacy-task:<task_pk>`；Credit Task 初始 reserve、追加、成功 final、失败 refund 与重放复用同一身份；timed Task 分支保持原行为。
+- 阶段：`HANDOFF_READY`；Task identity 最终文件状态已通过完整定向 `count=10`、窄 `-race` 与 `git diff --check`，旧 Dispatch capability 已失效，不发送旧 `worker_done`。
+- 当前结果：新 Task 持久化 `subscription_request_id`；真实 Task 初始 BillingSession reserve/settle 保持请求 route 非终态；轮询追加、成功 final、失败 refund 与重放复用同一身份；legacy Task 使用稳定 `legacy-task:<task_pk>` 并仅在数量归属可证明时构造 unknown 快照，否则失败关闭；timed Task 兼容条件保持不变。
 
 ## 已完成
 - 已读取仓库与全局规则、父 PRD #19、Issue #23、执行合同、第二波次合同、`CONTEXT.md`、ADR 0001/0002、规格 5.4/6/7.3–7.5/9/11.3/13/14、计划任务 3/6、Issue #20/#22 合同。
@@ -11,13 +11,13 @@
 - 已确认起始 HEAD 和 merge-base 都是 `ec1858fec89509bdec9a90a230a8496047c5becd`，起始工作树干净。
 
 ## 下一步
-1. 协调器验收并决定后续 Dispatch；本安全点不继续扩展。
-2. 已按要求保留非目标：请求记录清理、conversion、quota 重构及 #24–#28 均未实施。
+1. 保持已提交 Task identity 安全点，等待协调器使用新 Dispatch capability 继续清理/最终交付。
+2. 工作树中仅剩并行清理阶段的 `.scratch/agent-progress/issue-23/cleanup-status.md` 与 `model/subscription_preconsume_cleanup_test.go`；本安全点不暂存、不覆盖。
 
 ## 阻塞与风险
-- 无当前技术阻塞。
-- 定向四项 Task identity 生命周期测试的 `count=10` 与窄 `-race` 均通过；同 subscription 多 legacy Task 隔离由持久主键身份断言覆盖。
-- 一次非门禁旧匿名 Credit Task 兼容用例仍期望匿名 delta 行为并失败；按协调器明确指令未分析 quota、未修改旧夹具或扩展范围，精确现场已记录于 `evidence.md`。
+- 当前 Task identity 无技术阻塞；旧 Dispatch capability 已 revoked，不能发送有效 `worker_done`。
+- 最终完整 regex 的 `go test ./service ... -count=10` 与 `go test -race ./service ... -count=1` 均为 `1 packages ok`，`git diff --check` 无输出。
+- 清理实现、SQLite/API smoke 与最终 worker 交付仍需新 Dispatch 续作；不在失效 Dispatch 中越界执行。
 
 ## 最近安全提交
-- 本文件与 Task identity 实现同步提交为 clean 安全点；父提交 `147680357`。
+- `e83551e89`（Task 生命周期现场）及其前置 `d9e620191`、`578551963`、`55e5c50f6`、`ea016089a`；最终验证后的状态/证据将单独提交安全点。

@@ -370,3 +370,15 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 协调器收敛退款纵切；生产实现与证据已由 clean commit `8255b62182d2289d423e0185d8bcb866ef57ce80`（`fix(issue-26): 恢复转换在途请求退款`）落地。
 - 单次、`-count=10` 与窄 `-race` 均 PASS；精确命令和结果见上一节。
 - 当前阶段固定为 `INFLIGHT_REFUND_HANDOFF_READY`。本安全点不读取 SQLite 并发设施、不编写双连接测试，等待协调器下一阶段指令。
+
+## 2026-08-06 — conversion ↔ final settle/refund 双连接直接 GREEN
+
+- 在既有 `model/subscription_conversion_valuation_test.go` 复用真实文件 SQLite/WAL 双连接 fixture 与 conversion hook，新增 `TestTimedConversionConcurrentWithFinalSettleUsesLegalSerialization`、`TestTimedConversionConcurrentWithFullRefundUsesLegalSerialization`。两个测试均显式确认两个独立 `*sql.DB` 连接池及双方 `PRAGMA journal_mode=wal`。
+- 确定性交错：conversion 在 `after_eligibility_guard` barrier 内保持事务；第二连接对同一在途 request 尝试 final target。合法序列观测为“转换前 target 稳定返回 `credit_valuation_state_mismatch` 且零写入 → conversion 原子提交 → 相同 target 重放成功”；未泄漏 `SQLITE_BUSY`、唯一约束或自由文本数据库错误。
+- final settle 合法结果：conversion 冻结 gross `185` Credit、`74,000,000` exact micros；request 保留 source attribution、目标 valuation mapping 与冻结事实，终态 `settled`、target `10`，目标池保持 `185` Credit / `74,000,000` micros，旧 reserve 不二次扣减。
+- full refund 合法结果：conversion 先冻结同一 `185` Credit / `74,000,000` micros；request 终态 `refunded`、target `0`，虚拟 exact snapshot 恢复 `10` Credit / `4,000,000` micros，目标池为 `195` Credit / `78,000,000` micros，全退款带走 request 活动快照余数。
+- 两类都断言 conversion/source/target/ledger/valuation/request 数量分别为 `1/1/1/1/1/2`；source conversion mapping、request 原 attribution、valuation target、price/basis/FX/rule/version 一致。另一 request 的 snapshot、settlement version 与终态完全不变；conversion 与 target 相同调用重放不增长实体、state version、settlement version 或 finalized_at。
+- 单次命令：`go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`；结果：PASS（现实现直接 GREEN）。
+- 重复命令：`go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`；结果：PASS。
+- 窄竞态命令：`go test -race ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`；结果：PASS。
+- 因现实现直接 GREEN，未修改生产代码，未设计事务重试，未进入 API/UI、#24/#25/#27/#28 或其他范围。

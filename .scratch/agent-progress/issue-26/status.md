@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`INFLIGHT_REFUND_HANDOFF_READY`；退款纵切已完成并独立提交，停止进入双连接并发，等待协调器下一阶段指令。
-- 最近 clean SHA：`8255b62182d2289d423e0185d8bcb866ef57ce80`（`fix(issue-26): 恢复转换在途请求退款`）。
+- 阶段：`INFLIGHT_CONCURRENCY_HANDOFF_READY`；真实文件 SQLite WAL 双连接 conversion ↔ final settle/full refund 两类 deterministic barrier 均由现实现直接 GREEN，无生产代码修改。
+- 最近 clean SHA：`43974d499`（退款纵切进度安全点）；本次并发测试与证据待提交。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,17 +11,19 @@
 
 ## 下一条命令
 
-等待协调器下一阶段指令；不得自行读取 SQLite 并发设施、编写双连接测试或扩展其他范围。
+格式化并差异检查后提交 `model/subscription_conversion_valuation_test.go` 与进度文件；确认 staged、unstaged、untracked 全零。
 
-退款验证：
+并发验证：
 
-- `go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`：PASS。
-- `go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=10`：PASS。
-- `go test -race ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`：PASS。
+- `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`：PASS。
+- `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`：PASS。
+- `go test -race ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`：PASS。
 
 ## 未提交文件
 
-- 无；退款 GREEN 提交 `8255b6218` 后 staged、unstaged、untracked 全零。本次仅提交进度文件。
+- `model/subscription_conversion_valuation_test.go`
+- `.scratch/agent-progress/issue-26/status.md`
+- `.scratch/agent-progress/issue-26/evidence.md`
 
 ## 上下文风险
 

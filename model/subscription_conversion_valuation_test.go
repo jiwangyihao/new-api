@@ -441,3 +441,234 @@ func TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce(t *test
 	require.Equal(t, SubscriptionStatusConverted, source.Status)
 	require.Equal(t, results[0].Conversion.Id, source.ConversionId)
 }
+
+func TestTimedConversionConcurrentWithFinalSettleUsesLegalSerialization(t *testing.T) {
+	testTimedConversionConcurrentRequestTarget(t, 10, "settled", 185, 74_000_000)
+}
+
+func TestTimedConversionConcurrentWithFullRefundUsesLegalSerialization(t *testing.T) {
+	testTimedConversionConcurrentRequestTarget(t, 0, "refunded", 195, 78_000_000)
+}
+
+func testTimedConversionConcurrentRequestTarget(t *testing.T, targetCredit int64, wantStatus string, wantTargetLimit int64, wantExactCostMicros int64) {
+	t.Helper()
+	db, settlementDB := setupSubscriptionConversionEligibilityConcurrencyTestDB(t)
+	require.NoError(t, migrateCreditValuationSchema(db))
+	primarySQL, err := db.DB()
+	require.NoError(t, err)
+	settlementSQL, err := settlementDB.DB()
+	require.NoError(t, err)
+	require.NotSame(t, primarySQL, settlementSQL)
+	var primaryJournalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode").Scan(&primaryJournalMode).Error)
+	require.Equal(t, "wal", primaryJournalMode)
+	var settlementJournalMode string
+	require.NoError(t, settlementDB.Raw("PRAGMA journal_mode").Scan(&settlementJournalMode).Error)
+	require.Equal(t, "wal", settlementJournalMode)
+
+	const (
+		userID        = 26_501
+		sourcePlanID  = 26_502
+		sourceID      = 26_503
+		creditBasis   = int64(100)
+		reserveCredit = int64(10)
+		otherCredit   = int64(5)
+		requestID     = "conversion-concurrent-request-target"
+		otherRequest  = "conversion-concurrent-other-request"
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+	user := User{Id: userID, Username: "conversion-request-concurrency", Status: common.UserStatusEnabled}
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = sourceID
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategySingleActive
+	user.SetSetting(setting)
+	require.NoError(t, db.Create(&user).Error)
+	plan := seedConversionQuoteTimedPlan(t, sourcePlanID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, db.Save(plan).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id:                      sourceID,
+		UserId:                  userID,
+		PlanId:                  sourcePlanID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              creditBasis,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+	reserved, err := PreConsumeUserSubscriptionByUnits(requestID, userID, "gpt-4o", 0, 0, reserveCredit)
+	require.NoError(t, err)
+	require.Equal(t, sourceID, reserved.UserSubscriptionId)
+	other, err := PreConsumeUserSubscriptionByUnits(otherRequest, userID, "gpt-4o", 0, 0, otherCredit)
+	require.NoError(t, err)
+	require.Equal(t, sourceID, other.UserSubscriptionId)
+
+	settleOnIndependentConnection := func(target int64) error {
+		tx := settlementDB.Begin()
+		if tx.Error != nil {
+			return tx.Error
+		}
+		var route SubscriptionPreConsumeRecord
+		if err := tx.Where("request_id = ?", requestID).First(&route).Error; err != nil {
+			_ = tx.Rollback().Error
+			return err
+		}
+		if route.UserSubscriptionId != sourceID {
+			_ = tx.Rollback().Error
+			return ErrCreditValuationMappingConflict
+		}
+		if err := SettleCreditRequestTargetTx(tx, &route, target, true); err != nil {
+			_ = tx.Rollback().Error
+			return err
+		}
+		return tx.Commit().Error
+	}
+
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	var arrivedOnce sync.Once
+	hooks := &subscriptionConversionHooks{at: func(phase subscriptionConversionHookPhase) error {
+		if phase == subscriptionConversionAfterEligibilityGuardPhase {
+			arrivedOnce.Do(func() { close(arrived) })
+			<-release
+		}
+		return nil
+	}}
+	type conversionOutcome struct {
+		result *SubscriptionConversionResult
+		err    error
+	}
+	conversionDone := make(chan conversionOutcome, 1)
+	go func() {
+		result, conversionErr := confirmTimedSubscriptionConversion(userID, sourceID, "conversion-request-concurrency", hooks)
+		conversionDone <- conversionOutcome{result: result, err: conversionErr}
+	}()
+	<-arrived
+
+	var beforeConcurrentAttempt SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", requestID).First(&beforeConcurrentAttempt).Error)
+	concurrentErr := settleOnIndependentConnection(targetCredit)
+	require.ErrorIs(t, concurrentErr, ErrCreditValuationStateMismatch)
+	require.Equal(t, ErrCreditValuationStateMismatch.Error(), concurrentErr.Error(), "SQLite lock or free-text errors must not cross the domain seam")
+	var afterConcurrentAttempt SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", requestID).First(&afterConcurrentAttempt).Error)
+	require.Equal(t, beforeConcurrentAttempt, afterConcurrentAttempt, "the pre-conversion serialization must write nothing")
+
+	close(release)
+	converted := <-conversionDone
+	require.NoError(t, converted.err)
+	require.NotNil(t, converted.result)
+	require.False(t, converted.result.Replayed)
+	targetID := converted.result.Conversion.TargetSubscriptionId
+	require.Positive(t, targetID)
+
+	var otherFrozen SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", otherRequest).First(&otherFrozen).Error)
+	require.Equal(t, sourceID, otherFrozen.UserSubscriptionId)
+	require.Equal(t, targetID, otherFrozen.ValuationSubscriptionId)
+	require.Equal(t, otherCredit, otherFrozen.AppliedCredit)
+	require.Equal(t, otherCredit, otherFrozen.DeductedAvailableCredit)
+	require.Equal(t, int64(2_000_000), otherFrozen.DeductedExactCostMicros)
+
+	require.NoError(t, settleOnIndependentConnection(targetCredit))
+	var terminal SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", requestID).First(&terminal).Error)
+	require.Equal(t, wantStatus, terminal.Status)
+	require.Equal(t, sourceID, terminal.UserSubscriptionId)
+	require.Equal(t, targetID, terminal.ValuationSubscriptionId)
+	require.Equal(t, targetCredit, terminal.AppliedCredit)
+	require.Positive(t, terminal.FinalizedAt)
+
+	type entityCounts struct {
+		conversions int64
+		sources     int64
+		targets     int64
+		ledgers     int64
+		states      int64
+		requests    int64
+	}
+	loadCounts := func() entityCounts {
+		var counts entityCounts
+		require.NoError(t, settlementDB.Model(&SubscriptionConversion{}).Where("source_subscription_id = ?", sourceID).Count(&counts.conversions).Error)
+		require.NoError(t, settlementDB.Model(&UserSubscription{}).Where("id = ?", sourceID).Count(&counts.sources).Error)
+		require.NoError(t, settlementDB.Model(&UserSubscription{}).Where("user_id = ? AND entitlement_type = ?", userID, SubscriptionEntitlementCreditBalance).Count(&counts.targets).Error)
+		require.NoError(t, settlementDB.Model(&CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionConversion, sourceID).Count(&counts.ledgers).Error)
+		require.NoError(t, settlementDB.Model(&CreditValuationState{}).Where("user_id = ?", userID).Count(&counts.states).Error)
+		require.NoError(t, settlementDB.Model(&SubscriptionPreConsumeRecord{}).Where("user_id = ?", userID).Count(&counts.requests).Error)
+		return counts
+	}
+	loadState := func() CreditValuationState {
+		var state CreditValuationState
+		require.NoError(t, settlementDB.Where("user_subscription_id = ?", targetID).First(&state).Error)
+		return state
+	}
+	countsBeforeReplay := loadCounts()
+	stateVersionBeforeReplay := loadState().StateVersion
+	settlementVersionBeforeReplay := terminal.SettlementVersion
+	require.NoError(t, settleOnIndependentConnection(targetCredit))
+	replayedConversion, err := ConfirmTimedSubscriptionConversion(userID, sourceID, "conversion-request-concurrency")
+	require.NoError(t, err)
+	require.True(t, replayedConversion.Replayed)
+	require.Equal(t, converted.result.Conversion, replayedConversion.Conversion)
+	require.Equal(t, countsBeforeReplay, loadCounts())
+	require.Equal(t, stateVersionBeforeReplay, loadState().StateVersion)
+	var replayedTerminal SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", requestID).First(&replayedTerminal).Error)
+	require.Equal(t, settlementVersionBeforeReplay, replayedTerminal.SettlementVersion)
+	require.Equal(t, terminal.FinalizedAt, replayedTerminal.FinalizedAt)
+
+	require.Equal(t, entityCounts{conversions: 1, sources: 1, targets: 1, ledgers: 1, states: 1, requests: 2}, loadCounts())
+	var source UserSubscription
+	require.NoError(t, settlementDB.First(&source, sourceID).Error)
+	require.Equal(t, SubscriptionStatusConverted, source.Status)
+	require.Equal(t, reserveCredit+otherCredit, source.TokenUsed)
+	require.Equal(t, converted.result.Conversion.Id, source.ConversionId)
+	require.Equal(t, targetID, source.ConvertedToSubscriptionId)
+	var target UserSubscription
+	require.NoError(t, settlementDB.First(&target, targetID).Error)
+	require.Equal(t, wantTargetLimit, target.TokenLimit)
+	require.Zero(t, target.TokenUsed)
+	state := loadState()
+	require.Equal(t, wantTargetLimit, state.AvailableCredit)
+	require.Equal(t, wantExactCostMicros, state.ExactCostMicros)
+	require.Equal(t, valuationCurrency, state.Currency)
+
+	var otherAfter SubscriptionPreConsumeRecord
+	require.NoError(t, settlementDB.Where("request_id = ?", otherRequest).First(&otherAfter).Error)
+	require.Equal(t, otherFrozen.UserSubscriptionId, otherAfter.UserSubscriptionId)
+	require.Equal(t, otherFrozen.ValuationSubscriptionId, otherAfter.ValuationSubscriptionId)
+	require.Equal(t, otherFrozen.AppliedCredit, otherAfter.AppliedCredit)
+	require.Equal(t, otherFrozen.DeductedAvailableCredit, otherAfter.DeductedAvailableCredit)
+	require.Equal(t, otherFrozen.DeductedExactCostMicros, otherAfter.DeductedExactCostMicros)
+	require.Equal(t, otherFrozen.SettlementVersion, otherAfter.SettlementVersion)
+	require.Equal(t, "consumed", otherAfter.Status)
+	require.Zero(t, otherAfter.FinalizedAt)
+
+	conversion := converted.result.Conversion
+	require.Equal(t, int64(185), conversion.GrossCredit)
+	require.Equal(t, int64(74_000_000), conversion.ValuationGrossCostMicros)
+	require.Equal(t, int64(40_000_000), conversion.ValuationSourcePriceMicros)
+	require.Equal(t, creditBasis, conversion.ValuationCreditBasis)
+	require.Equal(t, CreditValuationRuleVersion, conversion.ValuationRuleVersion)
+	require.Equal(t, int64(1), conversion.FxRateNumerator)
+	require.Equal(t, int64(1), conversion.FxRateDenominator)
+}

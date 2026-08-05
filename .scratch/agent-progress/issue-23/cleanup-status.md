@@ -3,7 +3,7 @@
 ## 当前状态
 - 阶段：`HANDOFF_READY`。
 - Task lifecycle 安全提交：`e83551e89`。提交后同一窄命令复跑为 `go test: 1 packages ok`；提交内 evidence 保留首次组合运行的 schema 隔离失败现场。
-- cleanup RED 提交：待本文件与 `model/subscription_preconsume_cleanup_test.go` 提交后回填为该提交 HEAD。
+- cleanup RED 提交：`c31a612ae`，仅包含本状态文件与 `model/subscription_preconsume_cleanup_test.go`。
 - 当前不实现 cleanup GREEN；后续 owner 从终态资格 RED 继续。
 
 ## Cleanup RED 证据

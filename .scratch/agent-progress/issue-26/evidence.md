@@ -122,3 +122,15 @@
 真实结果：`FAIL`。USD→CNY 子例已通过；`CNY_identity`、`USD_identity` 与 `CNY_to_USD` 子例均在 parser 返回非预期错误处失败，证明现有 seam 缺少 identity 与反向分支，而非环境或无关测试失败。
 
 结论：B 组 RED 对指定的方向比率行为敏感；下一步只增加 identity 与反向最小分支并复验确定性/冻结断言。
+
+## 2026-08-05 — B 组 identity/反向 GREEN
+
+最小实现增加 `IDENTITY` 与 `CNY_TO_USD` 方向：同币种不读取 Option rate，固定冻结 `1/1`；USD→CNY 冻结已约分 ratio；CNY→USD 严格交换分子/分母。`CreditFXRateSnapshot` 是值类型，相同 input + captured_at 产生相同值；返回后的值不随后续 Option 原始文本变量变化。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotFreezesDirectionalRatios -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+回归命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors|FreezesDirectionalRatios)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 和 `git diff --check` 同时通过；未进入 C 组或 conversion。

@@ -6,7 +6,11 @@ import (
 	"strings"
 )
 
-const CreditFXDirectionUSDtoCNY = "USD_TO_CNY"
+const (
+	CreditFXDirectionIdentity = "IDENTITY"
+	CreditFXDirectionUSDtoCNY = "USD_TO_CNY"
+	CreditFXDirectionCNYtoUSD = "CNY_TO_USD"
+)
 
 var (
 	ErrCreditFXRateInvalid         = errors.New("credit_fx_rate_invalid")
@@ -45,22 +49,26 @@ func ParseCreditFXRateSnapshot(input CreditFXRateSnapshotInput) (CreditFXRateSna
 	if err != nil {
 		return CreditFXRateSnapshot{}, ErrCreditFXUnsupportedCurrency
 	}
-	if sourceCurrency != "USD" || valuationCurrency != "CNY" {
-		return CreditFXRateSnapshot{}, ErrCreditFXRateInvalid
-	}
-	if input.Direction != "" && input.Direction != CreditFXDirectionUSDtoCNY {
-		return CreditFXRateSnapshot{}, ErrCreditFXDirectionMismatch
-	}
-	if input.RateText == nil {
-		return CreditFXRateSnapshot{}, ErrCreditFXRateMissing
-	}
 	if input.CapturedAt <= 0 {
 		return CreditFXRateSnapshot{}, ErrCreditFXRateInvalid
 	}
 
-	numerator, denominator, err := parsePositiveDecimalRatio(*input.RateText)
-	if err != nil {
-		return CreditFXRateSnapshot{}, err
+	direction := creditFXDirection(sourceCurrency, valuationCurrency)
+	if input.Direction != "" && input.Direction != direction {
+		return CreditFXRateSnapshot{}, ErrCreditFXDirectionMismatch
+	}
+	numerator, denominator := int64(1), int64(1)
+	if direction != CreditFXDirectionIdentity {
+		if input.RateText == nil {
+			return CreditFXRateSnapshot{}, ErrCreditFXRateMissing
+		}
+		numerator, denominator, err = parsePositiveDecimalRatio(*input.RateText)
+		if err != nil {
+			return CreditFXRateSnapshot{}, err
+		}
+		if direction == CreditFXDirectionCNYtoUSD {
+			numerator, denominator = denominator, numerator
+		}
 	}
 	return CreditFXRateSnapshot{
 		SourceCurrency:    sourceCurrency,
@@ -68,8 +76,18 @@ func ParseCreditFXRateSnapshot(input CreditFXRateSnapshotInput) (CreditFXRateSna
 		Numerator:         numerator,
 		Denominator:       denominator,
 		CapturedAt:        input.CapturedAt,
-		Direction:         CreditFXDirectionUSDtoCNY,
+		Direction:         direction,
 	}, nil
+}
+
+func creditFXDirection(sourceCurrency string, valuationCurrency string) string {
+	if sourceCurrency == valuationCurrency {
+		return CreditFXDirectionIdentity
+	}
+	if sourceCurrency == "USD" {
+		return CreditFXDirectionUSDtoCNY
+	}
+	return CreditFXDirectionCNYtoUSD
 }
 
 func parsePositiveDecimalRatio(text string) (int64, int64, error) {

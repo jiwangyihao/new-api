@@ -156,3 +156,14 @@ go test: 2 packages ok
 git diff --check: clean
 ```
 结论：original subscription identity clean cutover、映射冲突回滚以及既有请求目标行为通过 model/service 定向回归；差异无空白错误。
+
+### 行为证明：退款快照被其他请求欠额吸收
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetDecreaseAuditsRestoreAbsorbedByOtherDebt$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：真实 SQLite 通过公开预扣/结算入口交错两个请求；退款请求的 400 Credit 快照中仅 200 重新成为可用量并恢复 8,000,000 micros，另 8,000,000 micros 进入 `absorbed_restore_exact_cost_micros`，未增加物化价值。该合同在补测试时已由既有恢复实现满足，因此本循环为直接 GREEN 的行为固化，而非新增生产实现。

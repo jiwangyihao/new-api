@@ -1,15 +1,16 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`cleanup RED_IN_PROGRESS`。
-- legacy Task 生产兼容提交为 `78c487e96`，旧匿名夹具迁移与最终 evidence 提交为 `ea016089a`；后者是开始 cleanup 前的干净安全 HEAD。
-- 当前仅处理 `SubscriptionPreConsumeRecord` 的安全清理；停止所有 Task 身份扩展、conversion、quota 重构及 #24–#28 探索。
+- 阶段：`HANDOFF_READY`。
+- Task lifecycle 安全提交：`e83551e89`。提交后同一窄命令复跑为 `go test: 1 packages ok`；提交内 evidence 保留首次组合运行的 schema 隔离失败现场。
+- cleanup RED 提交：待本文件与 `model/subscription_preconsume_cleanup_test.go` 提交后回填为该提交 HEAD。
+- 当前不实现 cleanup GREEN；后续 owner 从终态资格 RED 继续。
 
-## 已收敛遗留项
-- 四项持久 Task identity 定向测试在 `-count=1`、`-count=10` 与窄 `-race` 下均通过。
-- `SettleLegacyCreditTaskRequestTarget` 是持久 legacy Task final/refund/replay 的必要兼容：只建立 `legacy-task:<pk>` 请求快照，历史不可证明成本归类 unknown，不恢复 Credit 匿名 delta。
-- `service/billing_session.go` 无差异；legacy 生产/测试/evidence 与 cleanup 严格分开提交。
+## Cleanup RED 证据
+- 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。
+- 结果：期望只删除 2 条过期 `settled/refunded`，实际删除 4 条；`consumed` 与未知状态也被现有 `CleanupSubscriptionPreConsumeRecords` 按 `updated_at` 删除。
+- RED 原因是现有清理入口缺少终态资格约束，而非符号未定义；测试通过公开请求预扣/结算入口构造事实。
 
-## 下一步
-1. 写入清理首个 RED：只有过期 `settled/refunded` 可删除，`consumed` 与未知状态必须保留，并固定 cutoff 边界。
-2. 逐个推进持久引用保护、稳定 batch、幂等、失败原子性、诊断、并发与审计保留。
+## 后续范围
+1. 先使终态资格 RED 转 GREEN，再逐项增加 cutoff 边界、Task/回调持久引用保护、稳定 batch、幂等、失败原子性、只读诊断、并发与审计保留。
+2. 禁止继续 Task/legacy/quota/conversion 工作；禁止实现 #24–#28。

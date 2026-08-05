@@ -59,3 +59,9 @@ M service/task_billing_test.go
 - RED：DELETE 后注入稳定错误，事务实际回滚，但 helper 错误返回已删除 2 条，违反错误时零影响合同。
 - GREEN：事务返回任何错误时稳定返回 `(0, err)`；测试确认同批两条请求记录均保留。
 - 验证：故障注入单用例 `count=1` 与 `go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+
+## 清理并发串行化安全点
+- 场景：真实文件 SQLite、两条数据库连接、无 sleep 的确定性 barrier，同时执行过期 settled/refunded cleanup、final replay 与失败退款重放。
+- 结果：活跃 `SUBMITTED`/`IN_PROGRESS` Task 投影使 cleanup 返回 0，两条请求记录均保留，两种重放均成功；结果属于合法串行化集合。
+- 验证：用例 `count=10` 与 `go test -race ./model -run '^TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays$' -count=1` 均返回 `go test: 1 packages ok`。
+- 生产改动：无；引用保护安全点已满足该并发合同。

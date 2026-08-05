@@ -3,10 +3,14 @@ package model
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -310,4 +314,114 @@ func TestCleanupSubscriptionPreConsumeRecordsRollsBackBatchOnDeleteFailure(t *te
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
 		Order("id ASC").Pluck("request_id", &remaining).Error)
 	require.Equal(t, requestIDs, remaining)
+}
+
+func TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays(t *testing.T) {
+	oldDB := DB
+	oldLogDB := LOG_DB
+	oldSQLite := common.UsingSQLite
+	oldMySQL := common.UsingMySQL
+	oldPostgres := common.UsingPostgreSQL
+	oldRedis := common.RedisEnabled
+
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+	initCol()
+	resetDBTimestampCacheForTest()
+	dsn := "file:" + filepath.ToSlash(filepath.Join(t.TempDir(), "cleanup-concurrency.db")) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	DB = db
+	LOG_DB = db
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(2)
+	require.NoError(t, db.AutoMigrate(&User{}, &SubscriptionPlan{}, &SubscriptionOrder{}, &UserSubscription{}, &Task{}))
+	require.NoError(t, migrateCreditValuationSchema(db))
+	require.NoError(t, db.Create(&CreditValuationMigration{Version: 1, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	t.Cleanup(func() {
+		DB = oldDB
+		LOG_DB = oldLogDB
+		common.UsingSQLite = oldSQLite
+		common.UsingMySQL = oldMySQL
+		common.UsingPostgreSQL = oldPostgres
+		common.RedisEnabled = oldRedis
+		resetDBTimestampCacheForTest()
+		initCol()
+		_ = sqlDB.Close()
+	})
+
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+	requests := []struct {
+		requestID string
+		target    int64
+		status    TaskStatus
+	}{
+		{requestID: "cleanup-concurrent-final-replay", target: 10, status: TaskStatusSubmitted},
+		{requestID: "cleanup-concurrent-refund-replay", target: 0, status: TaskStatusInProgress},
+	}
+	for _, request := range requests {
+		preConsumed, preConsumeErr := PreConsumeUserSubscriptionByUnits(request.requestID, user.Id, "gpt-4o", 0, 0, 10)
+		require.NoError(t, preConsumeErr)
+		require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+		require.NoError(t, SettleUserSubscriptionRequestTarget(request.requestID, subscriptionID, request.target, true))
+		task := &Task{
+			TaskID: "task-" + request.requestID,
+			UserId: user.Id,
+			Status: request.status,
+			PrivateData: TaskPrivateData{
+				SubscriptionRequestId: request.requestID,
+			},
+		}
+		require.NoError(t, task.Insert())
+	}
+	expiredAt := GetDBTimestamp() - 3_600
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id IN ?", []string{requests[0].requestID, requests[1].requestID}).
+		UpdateColumn("finalized_at", expiredAt).Error)
+
+	ready := make(chan struct{}, len(requests)+1)
+	start := make(chan struct{})
+	errs := make(chan error, len(requests)+1)
+	var deleted int64
+	var wg sync.WaitGroup
+	for _, request := range requests {
+		request := request
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ready <- struct{}{}
+			<-start
+			errs <- SettleUserSubscriptionRequestTarget(request.requestID, subscriptionID, request.target, true)
+		}()
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ready <- struct{}{}
+		<-start
+		var cleanupErr error
+		deleted, cleanupErr = CleanupSubscriptionPreConsumeRecords(60)
+		errs <- cleanupErr
+	}()
+	for range cap(ready) {
+		<-ready
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for concurrentErr := range errs {
+		require.NoError(t, concurrentErr)
+	}
+	require.Zero(t, deleted)
+
+	var remaining []string
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Order("id ASC").Pluck("request_id", &remaining).Error)
+	require.ElementsMatch(t, []string{requests[0].requestID, requests[1].requestID}, remaining)
 }

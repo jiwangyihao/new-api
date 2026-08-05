@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"math"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -347,4 +348,83 @@ func TestCreditValuationRequestTargetRejectsNegativeTargetAtomically(t *testing.
 	require.Equal(t, int64(200), record.AppliedCredit)
 	require.Equal(t, int64(1), record.SettlementVersion)
 	require.Zero(t, record.FinalizedAt)
+}
+
+func TestCreditValuationRequestTargetStateMissingRollsBackAtomically(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-state-missing"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, db.Where("user_subscription_id = ?", preConsumed.UserSubscriptionId).Delete(&CreditValuationState{}).Error)
+
+	err = SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 300, false)
+	require.ErrorIs(t, err, ErrCreditValuationStateMissing)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(200), record.DeductedAvailableCredit)
+	require.Equal(t, int64(8_000_000), record.DeductedExactCostMicros)
+	require.Equal(t, int64(1), record.SettlementVersion)
+	require.Zero(t, record.FinalizedAt)
+}
+
+func TestCreditValuationRequestTargetStateMismatchRollsBackAtomically(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-state-mismatch"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&CreditValuationState{}).Where("user_subscription_id = ?", preConsumed.UserSubscriptionId).Update("available_credit", 801).Error)
+
+	err = SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 300, false)
+	require.ErrorIs(t, err, ErrCreditValuationStateMismatch)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(801), state.AvailableCredit)
+	require.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(2), state.StateVersion)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(1), record.SettlementVersion)
+}
+
+func TestCreditValuationRequestTargetOverflowRollsBackAtomically(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-overflow"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&CreditValuationState{}).Where("user_subscription_id = ?", preConsumed.UserSubscriptionId).Update("state_version", int64(math.MaxInt64)).Error)
+
+	err = SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 300, false)
+	require.ErrorIs(t, err, ErrCreditValuationOverflow)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(800), state.AvailableCredit)
+	require.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(math.MaxInt64), state.StateVersion)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(1), record.SettlementVersion)
 }

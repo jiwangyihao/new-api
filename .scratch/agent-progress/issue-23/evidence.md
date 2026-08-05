@@ -261,3 +261,26 @@ go test ./model -run '^TestCreditValuationRequestTargetRejectsNegativeTargetAtom
 go test: 1 packages ok
 ```
 结论：负目标稳定返回 `ErrCreditValuationNegativeInput`，请求数量、成本、状态版本、结算版本和终态均保持不变。
+
+### 行为证明：状态缺失、不一致与溢出原子回滚
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTarget(StateMissing|StateMismatch|Overflow)RollsBackAtomically$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：真实 SQLite 分别移除估值状态、制造可用量不一致、把状态版本置为 `MaxInt64`；请求追加稳定返回 state missing/state mismatch/overflow sentinel，订阅数量和请求快照/结算版本均未发生部分提交。补测试时现有深模块已满足合同，因此为直接 GREEN 的故障原子性固化。
+
+### 请求领域核心定向回归
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequest(Target|PreConsume)|^TestCreditValuationRequestFinalizesSameTargetIdempotently$' -count=1 && git diff --check
+```
+关键输出：
+```text
+go test: 1 packages ok
+git diff --check: clean
+```
+结论：预扣、追加、欠额、恢复、映射、absorbed、unknown、舍入余数、重放和稳定错误/原子回滚的请求领域合同整体 GREEN。

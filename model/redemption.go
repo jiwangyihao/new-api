@@ -225,39 +225,51 @@ type creditBalanceRedemptionFingerprint struct {
 }
 
 func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnapshot, userId int, redemptionId int) (*CreditValuationSourceSnapshot, string, error) {
-	if userId <= 0 || redemptionId <= 0 || snapshot.PlanID <= 0 || snapshot.TargetCreditBalancePlanID <= 0 || snapshot.ListPriceMicros == nil || *snapshot.ListPriceMicros <= 0 || snapshot.MonthlyTokenLimit <= 0 || snapshot.ValuationRuleVersion != CreditValuationRuleVersion {
+	if userId <= 0 || redemptionId <= 0 || snapshot.PlanID <= 0 || snapshot.TargetCreditBalancePlanID <= 0 || snapshot.MonthlyTokenLimit <= 0 {
 		return nil, "", ErrRedemptionPlanIneligible
 	}
-	sourceCurrency, err := NormalizeCreditValuationCurrency(snapshot.ListPriceCurrency)
-	if err != nil {
-		return nil, "", err
+	priceMicros := int64(0)
+	if snapshot.ListPriceMicros != nil {
+		priceMicros = *snapshot.ListPriceMicros
 	}
-	valuationCurrency, err := NormalizeCreditValuationCurrency(snapshot.TargetCreditBalanceValuationCurrency)
-	if err != nil {
-		return nil, "", err
-	}
-	if sourceCurrency != valuationCurrency {
-		return nil, "", ErrCreditValuationUnsupportedCurrency
-	}
-	source := &CreditValuationSourceSnapshot{
-		SourcePriceMicros: *snapshot.ListPriceMicros,
-		SourcePlanCredit:  snapshot.MonthlyTokenLimit,
-		GrossCredit:       snapshot.MonthlyTokenLimit,
-		SourceCurrency:    sourceCurrency,
-		ValuationCurrency: valuationCurrency,
-		RuleVersion:       snapshot.ValuationRuleVersion,
-	}
+	sourceCurrency := strings.ToUpper(strings.TrimSpace(snapshot.ListPriceCurrency))
+	valuationCurrency := strings.ToUpper(strings.TrimSpace(snapshot.TargetCreditBalanceValuationCurrency))
 	fingerprintPayload, err := common.Marshal(creditBalanceRedemptionFingerprint{
 		UserId: userId, RedemptionId: redemptionId, RedemptionMode: RedemptionModeCreditBalance,
 		SourcePlanId: snapshot.PlanID, TargetPlanId: snapshot.TargetCreditBalancePlanID,
-		GrossCredit: snapshot.MonthlyTokenLimit, SourcePriceMicros: *snapshot.ListPriceMicros,
+		GrossCredit: snapshot.MonthlyTokenLimit, SourcePriceMicros: priceMicros,
 		SourcePlanCredit: snapshot.MonthlyTokenLimit, SourceCurrency: sourceCurrency,
 		ValuationCurrency: valuationCurrency, ValuationRuleVersion: snapshot.ValuationRuleVersion,
 	})
 	if err != nil {
 		return nil, "", err
 	}
-	return source, common.Sha1(fingerprintPayload), nil
+	fingerprint := common.Sha1(fingerprintPayload)
+	// Before Issue #27 moves the runtime marker to ready, legacy source
+	// snapshots may not carry exact valuation facts. Preserve that baseline;
+	// GrantCreditBalanceTx fails closed on a nil source once ready.
+	if priceMicros <= 0 || sourceCurrency == "" || valuationCurrency == "" || snapshot.ValuationRuleVersion != CreditValuationRuleVersion {
+		return nil, fingerprint, nil
+	}
+	sourceCurrency, err = NormalizeCreditValuationCurrency(sourceCurrency)
+	if err != nil {
+		return nil, "", err
+	}
+	valuationCurrency, err = NormalizeCreditValuationCurrency(valuationCurrency)
+	if err != nil {
+		return nil, "", err
+	}
+	if sourceCurrency != valuationCurrency {
+		return nil, "", ErrCreditValuationUnsupportedCurrency
+	}
+	return &CreditValuationSourceSnapshot{
+		SourcePriceMicros: priceMicros,
+		SourcePlanCredit:  snapshot.MonthlyTokenLimit,
+		GrossCredit:       snapshot.MonthlyTokenLimit,
+		SourceCurrency:    sourceCurrency,
+		ValuationCurrency: valuationCurrency,
+		RuleVersion:       snapshot.ValuationRuleVersion,
+	}, fingerprint, nil
 }
 
 func normalizeRedemptionMode(value string) (string, error) {

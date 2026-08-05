@@ -62,3 +62,11 @@
 - 部分抵债：300 debt + 1,000 Credit 得到 net 700、`28,000,000` micros exact、debt 归零。
 - 全额抵债：1,200 debt + 1,000 Credit 得到 net 0、净成本 0、剩余 debt 200；毛成本仍冻结为 `40,000,000` micros。
 - 两例均保持 estimated/unknown 为 0，ledger 的 `debt_offset`、`net_credit`、`valuation_net_cost_micros` 与状态一致。
+
+### 兑换事务回滚与邀请隔离
+
+- GREEN：`go test ./model -run TestRedemptionCreditBalanceLedgerFailureRollsBackEverything -count=1` → `go test: 1 packages ok`，约 13.78 秒。
+- 回滚：SQLite trigger 拒绝 redemption ledger 插入后，`Redeem` 返回稳定外层 `redeem.failed`；兑换记录恢复 enabled/未使用，冻结 source snapshot 未被完成态覆盖，subscription/state/ledger/invitation event/log 均为 0。
+- 初次邀请隔离 RED：`go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1` 因历史非-ready Credit 池未设置 valuation currency 而返回 `credit_valuation_currency_required`，暴露 #24 不应提前改变 #27 marker 前基线。
+- GREEN：兼容非-ready 快照后，`go test ./model -run 'TestRedemptionCreditBalance(FreezesExactTierSnapshot|ReplaysExactResultAndRejectsSourceConflict|OffsetsDebtBeforeExactValue)' -count=1 && go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1` → 两个 package 均通过，约 38.20 秒。
+- 隔离行为：Credit 兑换后 invitation reward event、commission record、commission account 均为 0；邀请月度资格只统计独立 timed paid control，不把 Credit 兑换计入 qualified paid。

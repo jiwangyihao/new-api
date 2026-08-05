@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-兑换同币种冻结快照、精确入账、完整来源幂等和 debt offset 已 GREEN，下一步证明事务回滚和邀请隔离。
+兑换同币种冻结快照、精确入账、完整来源幂等、debt offset、事务回滚和邀请隔离均已 GREEN，下一步仅保留跨币种最小 RED 与 `CreditFXRateSnapshot` 接口需求。
 
 ## 已完成
 
@@ -19,11 +19,14 @@
 - 已通过真实 `Redeem` 入口冻结兑换档位精确价格、Credit 分母、目标估值币种、规则版本与稳定来源身份；套餐后续改价不回写 ledger、fulfillment 或状态。
 - 已证明兑换相同身份重放同一 ledger/state version；篡改冻结来源价格后复用来源身份返回稳定 `credit_valuation_idempotency_mismatch`，余额与估值状态不变。
 - 已证明兑换部分/全额 settlement debt 优先抵扣：只把净新增 Credit 和同比例 floor 后净成本写入 exact 状态。
+- 已通过 SQLite ledger trigger 证明兑换来源终态、余额、估值状态、ledger 与日志整笔回滚；兑换记录恢复为未使用且保留原始冻结快照。
+- 已通过现有服务纵切证明 Credit 兑换不创建邀请奖励事件、佣金记录/账户，也不计入邀请付费资格。
+- 已保持 #27 marker 未 ready 的历史基线：缺少精确估值事实时不在 #24 创建半可信状态；marker ready 后 `GrantCreditBalanceTx` 仍对 nil source 失败关闭。
 
 ## 下一步
 
-1. 编写并证明兑换失败整笔回滚且不产生邀请奖励或邀请付费统计。
-2. 写跨币种最小 RED/`CreditFXRateSnapshot` 接口需求后 clean HANDOFF_READY。
+1. 写跨币种最小 RED/`CreditFXRateSnapshot` 接口需求。
+2. 运行本切片定向回归，更新 progress 并 clean HANDOFF_READY。
 
 ## 阻塞
 
@@ -39,4 +42,5 @@
 - 管理员 debt/幂等/回滚安全提交：`34b536821`。
 - 兑换同币种冻结快照安全提交：`32d55638e`。
 - 兑换幂等安全提交：`a41fcdcc8`。
-- 兑换 debt offset GREEN 待提交。
+- 兑换 debt offset 安全提交：`a33f6f012`。
+- 兑换回滚/邀请隔离 GREEN 待提交。

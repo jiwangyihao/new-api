@@ -435,3 +435,29 @@ func TestRedemptionCreditBalanceOffsetsDebtBeforeExactValue(t *testing.T) {
 		})
 	}
 }
+
+func TestRedemptionCreditBalanceLedgerFailureRollsBackEverything(t *testing.T) {
+	db, userID, _, redemptionID := seedRedemptionCreditPositiveIngress(t, 0)
+	var before Redemption
+	require.NoError(t, db.First(&before, redemptionID).Error)
+	require.NoError(t, db.Exec(`CREATE TRIGGER reject_redemption_positive_ledger BEFORE INSERT ON credit_balance_ledgers WHEN NEW.source_type = 'redemption' BEGIN SELECT RAISE(FAIL, 'injected redemption ledger failure'); END`).Error)
+	t.Cleanup(func() { _ = db.Exec(`DROP TRIGGER IF EXISTS reject_redemption_positive_ledger`).Error })
+
+	result, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrRedeemFailed)
+
+	var after Redemption
+	require.NoError(t, db.First(&after, redemptionID).Error)
+	require.Equal(t, common.RedemptionCodeStatusEnabled, after.Status)
+	require.Zero(t, after.UsedUserId)
+	require.Zero(t, after.RedeemedTime)
+	require.Empty(t, after.FulfillmentMode)
+	require.Equal(t, before.FulfillmentSnapshot, after.FulfillmentSnapshot)
+	require.Zero(t, after.FulfillmentSubscriptionId)
+	for _, target := range []any{&CreditBalanceLedger{}, &CreditValuationState{}, &UserSubscription{}, &InvitationRewardEvent{}, &Log{}} {
+		var count int64
+		require.NoError(t, db.Model(target).Count(&count).Error)
+		require.Zero(t, count)
+	}
+}

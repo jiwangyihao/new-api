@@ -1,7 +1,7 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`ATOMICITY_GREEN_READY`。
+- 阶段：`ATOMICITY_COMMITTED`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
@@ -17,7 +17,8 @@
 - 引用保护 GREEN：数据库侧相关 `NOT EXISTS` 精确保护非空投影；删除前用稳定主键 `FindInBatches` 完整分类活跃 NULL 投影 Task。只有可证明为 timed 且 JSON request identity 为空时放行；缺失/未知/Credit/混合版本返回稳定 `ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference`，整次删除数为 0。全部 cleanup 用例 `count=10` 为 `go test: 1 packages ok`；`git diff --check` 无输出。
 - 稳定批次 RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches$' -count=1` 行为失败，`expected: 2`、`actual: 3`；旧实现一次无界删除全部候选。
 - 稳定批次 GREEN：事务内按 `id ASC` 选取有界候选并以同一资格/引用条件删除；公开入口 batch=100。测试 batch=2 固定首轮删除前两条、次轮删除最后一条、第三轮零删除；全部 cleanup 用例 `count=10` 为 `go test: 1 packages ok`，`git diff --check` 无输出。
-- 失败原子性 RED：DELETE 后注入错误时事务回滚，但旧返回值错误报告删除 2 条。GREEN：事务任何错误均返回 `(0, err)`；用例确认两条候选均保留。单用例 `count=1` 与全部 cleanup 用例 `count=10` 均为 `go test: 1 packages ok`，`git diff --check` 无输出。
+- 失败原子性安全提交：`70625ed4f90403e755ce63cab05cb842a1967fa0`；DELETE 后故障注入整批回滚，错误时稳定返回删除数 0。
+- 下一步仅做并发串行化、只读诊断与审计事实保留；不扩展 retention 配置面。
 
 ## Cleanup RED 证据
 - 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。

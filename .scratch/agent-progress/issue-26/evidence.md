@@ -326,3 +326,21 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 格式化与差异：`gofmt -w model/subscription_conversion.go`、`git diff --check` 均成功。
 
 诚实未完成项：reserve → conversion → refund，以及双连接 conversion/final 合法串行化尚未实现或验证；本安全点不得宣称整个在途 request 合同完成。
+
+
+## 2026-08-06 — 退款与双连接并发续作启动
+
+- 冻结现场复核：分支 `jiwangyihao/issue-26-conversion-fx`，clean HEAD `85660501ca95fae1fbcc6a1bff2fc07adf0424bd`，`fd4d4683bc3b3b2cdd78c8e5c851c58263e61971` 仍为祖先，Orca `parentWorktreeId` 严格指向 `credit-operational-value-integration`。
+- 已完成边界：FX 向量、同/跨币种 conversion、权威事实冲突、同 source 并发幂等和 reserve → conversion → final settle 均已提交。
+- 未完成边界：public reserve → conversion → refund RED/GREEN，以及 conversion ↔ final/refund 真实文件 SQLite 双连接 barrier。
+- 下一条行为命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`；必须先观察真实行为 RED，不得以编译失败冒充。
+
+## 2026-08-06 — 当前 Dispatch 恢复安全点
+
+- 当前有效 task/dispatch：`task_b6c2c840cda6` / `ctx_cdf46ee2f559`。
+- `git rev-parse HEAD`：`85660501ca95fae1fbcc6a1bff2fc07adf0424bd`；`git status --short` 无输出。
+- `git merge-base --is-ancestor fd4d4683bc3b3b2cdd78c8e5c851c58263e61971 HEAD` 返回成功。
+- Orca `parentWorktreeId`：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
+- 已完成：FX parser/向量、同币种与跨币种 conversion、权威事实冲突、同 source 双连接幂等、reserve → conversion → final settle 虚拟 exact snapshot。
+- 未完成：reserve → conversion → refund，以及 conversion ↔ final/refund 真实文件 SQLite 双连接确定性 barrier。
+- 下一条命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`；先新增 public-path tracer 并取得行为 RED。

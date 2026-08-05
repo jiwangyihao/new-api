@@ -32,6 +32,8 @@ var (
 	ErrSubscriptionPlanPriceMismatch      = errors.New("subscription_plan_price_mismatch")
 )
 
+var ErrConversionIdempotencyConflict = errors.New("subscription_conversion_idempotency_conflict")
+
 // User auth errors
 var (
 	ErrInvalidCredentials   = errors.New("invalid credentials")

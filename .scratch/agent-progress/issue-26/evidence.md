@@ -256,3 +256,17 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 真实结果：`FAIL`（build failed），编译器精确报告 `ErrConversionIdempotencyConflict` 尚不存在。该 RED 明确要求可由 `errors.Is` 判断的稳定冲突，而不是自由文本或普通不存在 source 失败。
 
 结论：下一步最小 GREEN 需在重放返回前以已持久化 conversion 冻结事实核对当前权威 source plan；不修改 committed conversion，冲突路径零写入。
+
+## 2026-08-05 — Conversion 权威事实冲突 GREEN
+
+最小实现仅修改 `model/errors.go` 与 `model/subscription_conversion.go`：新增稳定 `ErrConversionIdempotencyConflict`；在两个 committed replay 分支返回前，以 conversion 已冻结的 source plan ID、source price micros、source currency、credit basis 和 valuation rule version核对当前权威 source plan。冲突不修改 committed conversion，并在事务错误 fallback 前直接保留稳定 sentinel，避免旧的 committed lookup 将冲突误转成成功重放。
+
+单次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。测试断言 `errors.Is(err, ErrConversionIdempotencyConflict)` 且 conversion/ledger/state 计数保持不变；`gofmt` 与 `git diff --check` 均成功。
+
+范围说明：本安全点未实现并发双确认，未进入在途 request、API/UI 或其他 Issue 范围。

@@ -104,7 +104,10 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			return err
 		} else if found {
 			if replay.SourceSubscriptionId != sourceSubscriptionId {
-				return errors.New("subscription conversion idempotency key mismatch")
+				return ErrConversionIdempotencyConflict
+			}
+			if err := validateSubscriptionConversionReplayFactsTx(tx, replay); err != nil {
+				return err
 			}
 			result = &SubscriptionConversionResult{Conversion: replay, Replayed: true}
 			return nil
@@ -113,6 +116,9 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			return err
 		} else if found {
 			if existing.UserId == userId && existing.IdempotencyKey == idempotencyKey {
+				if err := validateSubscriptionConversionReplayFactsTx(tx, existing); err != nil {
+					return err
+				}
 				result = &SubscriptionConversionResult{Conversion: existing, Replayed: true}
 				return nil
 			}
@@ -288,6 +294,9 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 
 	err := transactionWithUserSettingCASRetry(run)
 	if err != nil {
+		if errors.Is(err, ErrConversionIdempotencyConflict) {
+			return nil, err
+		}
 		if replay, replayErr := findCommittedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey); replayErr == nil && replay != nil {
 			return &SubscriptionConversionResult{Conversion: replay, Replayed: true}, nil
 		}
@@ -321,6 +330,30 @@ func guardSubscriptionConversionPlansTx(tx *gorm.DB, sourcePlanId int, targetPla
 	}
 	if targetGuard.RowsAffected != 1 {
 		return fmt.Errorf("subscription conversion rejected: %s", ConversionQuoteReasonGlobalDisabled)
+	}
+	return nil
+}
+
+func validateSubscriptionConversionReplayFactsTx(tx *gorm.DB, conversion *SubscriptionConversion) error {
+	if tx == nil || conversion == nil {
+		return ErrConversionIdempotencyConflict
+	}
+	if conversion.ValuationRuleVersion == 0 {
+		return nil
+	}
+	var sourcePlan SubscriptionPlan
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", conversion.SourcePlanId).First(&sourcePlan).Error; err != nil {
+		return ErrConversionIdempotencyConflict
+	}
+	if sourcePlan.PriceAmountMicros == nil || *sourcePlan.PriceAmountMicros != conversion.ValuationSourcePriceMicros {
+		return ErrConversionIdempotencyConflict
+	}
+	sourceCurrency, err := NormalizeCreditValuationCurrency(sourcePlan.Currency)
+	if err != nil || sourceCurrency != conversion.FxSourceCurrency {
+		return ErrConversionIdempotencyConflict
+	}
+	if conversion.ValuationCreditBasis != conversion.CreditBasis || conversion.GrossCredit <= 0 {
+		return ErrConversionIdempotencyConflict
 	}
 	return nil
 }

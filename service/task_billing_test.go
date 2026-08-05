@@ -629,41 +629,64 @@ func TestCreditTaskSettlementFailsClosedWhenValuationStateMissing(t *testing.T) 
 	require.Zero(t, stateCount)
 }
 
-func TestLegacyCreditTaskRefundReplaysWhileAccountHasSettlementDebt(t *testing.T) {
+func TestLegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subID, channelID = 123, 124, 125, 126, 127
-	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-legacy-credit-debt", 100, 120)
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-legacy-credit-debt", 100, 80)
 	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
 		Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
 	}).Error)
 	require.NoError(t, model.DB.Create(&model.CreditValuationState{
 		UserSubscriptionId: subID,
 		UserId:             userID,
-		AvailableCredit:    0,
-		ExactCostMicros:    0,
+		AvailableCredit:    20,
+		ExactCostMicros:    800_000,
 		Currency:           "CNY",
 		RuleVersion:        model.CreditValuationRuleVersion,
 		StateVersion:       1,
 	}).Error)
+
+	const otherRequestID = "req-credit-other-debt-owner"
+	_, err := model.PreConsumeUserSubscriptionByUnits(otherRequestID, userID, "video-model", 0, 20, 20)
+	require.NoError(t, err)
+	require.NoError(t, model.SettleUserSubscriptionRequestTarget(otherRequestID, subID, 40, false))
+	otherBefore := loadCreditTaskRequestRecord(t, otherRequestID)
+	require.Equal(t, int64(40), otherBefore.AppliedCredit)
+	require.Equal(t, int64(20), otherBefore.DeductedAvailableCredit)
+	require.Equal(t, int64(20), otherBefore.DebtFormedCredit)
+	require.Equal(t, int64(120), getSubscriptionTokenUsedForTaskTest(t, subID))
+
 	task := makeTask(userID, channelID, 40, tokenID, BillingSourceSubscription, subID)
-	task.TaskID = "task-credit-legacy-debt-refund"
+	task.TaskID = "task-credit-legacy-other-debt"
 	require.NoError(t, model.DB.Create(task).Error)
 	requestID, err := taskSubscriptionRequestID(task)
 	require.NoError(t, err)
+	require.NoError(t, model.SettleLegacyCreditTaskRequestTarget(requestID, subID, 40, 40, false))
+	active := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, int64(40), active.DeductedAvailableCredit)
+	require.Zero(t, active.DebtFormedCredit)
+	require.Equal(t, int64(40), active.DeductedUnknownCredit)
 
-	RefundTaskQuota(context.Background(), task, "legacy debt refund")
+	RefundTaskQuota(context.Background(), task, "legacy refund with other debt")
 	refunded := loadCreditTaskRequestRecord(t, requestID)
 	require.Equal(t, "refunded", refunded.Status)
 	require.Zero(t, refunded.AppliedCredit)
+	require.Zero(t, refunded.DebtFormedCredit)
+	require.Equal(t, int64(20), refunded.AbsorbedRestoreUnknownCredit)
 	require.Equal(t, int64(80), getSubscriptionTokenUsedForTaskTest(t, subID))
 	var state model.CreditValuationState
 	require.NoError(t, model.DB.First(&state, subID).Error)
 	require.Equal(t, int64(20), state.AvailableCredit)
 	require.Equal(t, int64(20), state.UnknownCredit)
 
+	otherAfter := loadCreditTaskRequestRecord(t, otherRequestID)
+	require.Equal(t, otherBefore.AppliedCredit, otherAfter.AppliedCredit)
+	require.Equal(t, otherBefore.DebtFormedCredit, otherAfter.DebtFormedCredit)
+	require.Equal(t, otherBefore.SettlementVersion, otherAfter.SettlementVersion)
+
 	var reloaded model.Task
 	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
-	RefundTaskQuota(context.Background(), &reloaded, "legacy debt refund replay")
+	RefundTaskQuota(context.Background(), &reloaded, "legacy refund replay")
 	replayed := loadCreditTaskRequestRecord(t, requestID)
 	require.Equal(t, refunded.SettlementVersion, replayed.SettlementVersion)
 	require.Equal(t, refunded.FinalizedAt, replayed.FinalizedAt)

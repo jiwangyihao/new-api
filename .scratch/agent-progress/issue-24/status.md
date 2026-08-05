@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-全部无 FX 兑换范围已 GREEN；跨币种期望已形成最小 RED，并以等待 #26 `CreditFXRateSnapshot` 的跳过合同保留，下一步只运行定向回归并 clean HANDOFF_READY。
+HANDOFF_READY：恢复指令限定的全部无 FX 兑换范围已 GREEN，跨币种最小 RED 与 #26 `CreditFXRateSnapshot` 接口需求已提交，等待协调器验收。
 
 ## 已完成
 
@@ -26,8 +26,8 @@
 
 ## 下一步
 
-1. 运行本切片定向回归与 `git diff --check`。
-2. 更新最终证据和提交列表，clean HANDOFF_READY。
+1. 协调器验收并集成本工作树提交。
+2. #26 提供唯一 `CreditFXRateSnapshot` ingress seam 后解除跨币种测试 SKIP；#24 不继续实现 FX 生命周期。
 
 ## 阻塞
 
@@ -45,4 +45,5 @@
 - 兑换幂等安全提交：`a41fcdcc8`。
 - 兑换 debt offset 安全提交：`a33f6f012`。
 - 兑换回滚/邀请隔离安全提交：`9345fd18a`。
-- 跨币种最小 RED/接口需求待提交。
+- 跨币种最小 RED/接口需求安全提交：`91b5a8384`。
+- 最终验证记录：本文件所在 HANDOFF_READY 提交。

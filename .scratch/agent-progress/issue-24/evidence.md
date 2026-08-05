@@ -37,10 +37,10 @@
 - 回滚：SQLite trigger 注入 admin ledger 创建失败后，adjustment、ledger、state、subscription 均为 0。
 ## 实际数据库/API/浏览器范围
 
-- SQLite：已执行首个管理员领域纵切，真实内存 SQLite + GORM migration + ready marker。
-- MySQL/PostgreSQL：本切片只做静态兼容审查；真实矩阵归 #27。
-- API：尚未执行；当前仅 model 公开领域入口。
-- 浏览器：尚未执行。
+- SQLite：真实内存 SQLite + GORM migration + ready marker；已通过管理员与兑换公开领域入口验证 exact ingress、幂等、debt offset 和事务回滚，并通过服务入口验证邀请隔离。
+- MySQL/PostgreSQL：未运行真实数据库；仅沿用 GORM/结构化列，无新增数据库专用 SQL，完整矩阵仍归 #27。
+- API/browser：恢复指令将本次续作限定为兑换同币种领域范围，未运行 API/browser，不能声明相关验收。
+- 跨币种：真实 RED 后显式 SKIP，等待 #26；不是 MySQL/PostgreSQL 或 FX 验收通过。
 
 ### 兑换同币种冻结快照
 
@@ -77,3 +77,10 @@
 - RED 结果：CNY 来源档位、USD Credit 估值池经真实 `Redeem` 入口命中 `credit_valuation_unsupported_currency`（外层 `redeem.failed`）；证明 #22 当前没有可消费的冻结 FX 快照接缝。
 - 期望合同：成功响应必须保留 source=`CNY`、valuation=`USD` 及正 numerator/denominator/captured_at；测试以显式 `t.Skip` 保留，待 #26 提供唯一 `CreditFXRateSnapshot` 后移除跳过并 GREEN。
 - 本切片未实现 FX parser/provider/Option、动态汇率或 conversion 生命周期，也未把该 RED 误报为通过。
+
+### 最终定向回归
+
+- `go test ./model -run 'TestRedemptionCreditBalance(FreezesExactTierSnapshot|ReplaysExactResultAndRejectsSourceConflict|OffsetsDebtBeforeExactValue|LedgerFailureRollsBackEverything|CrossCurrencyRequiresFrozenFXSnapshot)$|TestRedeemCreditBalanceConcurrentClaimPersistsOneGrantAndOneReplay$' -count=1 -v` → 5 个兑换行为/并发测试 PASS，跨币种合同 1 个 SKIP，package PASS（约 15.79 秒）。
+- `go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption$' -count=1 -v` → Credit redemption 邀请隔离 PASS。
+- `go test ./model -run '^(TestRedeem|TestRedemptionCreditBalance)' -count=1 && go test ./service -run '^TestCreditFulfillmentPathsDoNotCreateInvitationBenefits$' -count=1` → 两个 package 均 `go test: 1 packages ok`，覆盖全部现有 Redeem/Credit redemption 定向用例及 purchase/redemption 邀请隔离。
+- 未运行格式化器之外的 lint、项目级全量测试、真实 MySQL/PostgreSQL、API 或 browser；协调器与 #27 按各自所有权继续验证。

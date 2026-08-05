@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`INFLIGHT_REFUND_GREEN_VERIFIED`；public reserve → conversion → refund 已通过单次、`-count=10` 与窄 `-race`，下一步仅提交独立 GREEN 安全点并确认 clean。
-- 最近 clean SHA：`f83a9eb21`（`test(issue-26): 固化转换在途退款 RED`）。
+- 阶段：`INFLIGHT_REFUND_HANDOFF_READY`；退款纵切已完成并独立提交，停止进入双连接并发，等待协调器下一阶段指令。
+- 最近 clean SHA：`8255b62182d2289d423e0185d8bcb866ef57ce80`（`fix(issue-26): 恢复转换在途请求退款`）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,9 +11,9 @@
 
 ## 下一条命令
 
-格式化 `model/credit_valuation.go`，执行 `git diff --check`，提交 `model/credit_valuation.go` 与本目录 `status.md`、`evidence.md`，随后确认 staged、unstaged、untracked 全零。
+等待协调器下一阶段指令；不得自行读取 SQLite 并发设施、编写双连接测试或扩展其他范围。
 
-GREEN 已验证：
+退款验证：
 
 - `go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`：PASS。
 - `go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=10`：PASS。
@@ -21,9 +21,7 @@ GREEN 已验证：
 
 ## 未提交文件
 
-- `model/credit_valuation.go`
-- `.scratch/agent-progress/issue-26/status.md`
-- `.scratch/agent-progress/issue-26/evidence.md`
+- 无；退款 GREEN 提交 `8255b6218` 后 staged、unstaged、untracked 全零。本次仅提交进度文件。
 
 ## 上下文风险
 

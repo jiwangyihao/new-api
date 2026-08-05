@@ -364,3 +364,9 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 窄竞态命令：`go test -race ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
 - 结果：PASS（`go test: 1 packages ok`）。
 - 本 GREEN 未编写双连接并发测试、未新增 helper/schema，也未进入 API/UI 或其他 Issue 范围。
+
+## 2026-08-06 — 退款纵切交接就绪
+
+- 协调器收敛退款纵切；生产实现与证据已由 clean commit `8255b62182d2289d423e0185d8bcb866ef57ce80`（`fix(issue-26): 恢复转换在途请求退款`）落地。
+- 单次、`-count=10` 与窄 `-race` 均 PASS；精确命令和结果见上一节。
+- 当前阶段固定为 `INFLIGHT_REFUND_HANDOFF_READY`。本安全点不读取 SQLite 并发设施、不编写双连接测试，等待协调器下一阶段指令。

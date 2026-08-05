@@ -3129,7 +3129,7 @@ func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error)
 		olderThanSeconds = 7 * 24 * 3600
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("updated_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).Delete(&SubscriptionPreConsumeRecord{})
+	res := DB.Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).Delete(&SubscriptionPreConsumeRecord{})
 	return res.RowsAffected, res.Error
 }
 

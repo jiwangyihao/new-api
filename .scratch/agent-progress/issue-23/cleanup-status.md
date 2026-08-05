@@ -1,7 +1,7 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`GREEN_COMMITTED`。
+- 阶段：`CUTOFF_GREEN_READY`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
@@ -9,6 +9,8 @@
 - GREEN：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1` 通过，`go test: 1 packages ok`。
 - 稳定验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=10` 通过，`go test: 1 packages ok`；`git diff --check` 无输出。
 - 生产改动安全提交：`bfa31bb09`（`fix(credit): 限制预扣记录清理终态资格`）；旧实现删除 4 条，现仅删除 2 条过期 `settled/refunded`，并保留 `consumed/unknown`。
+- cutoff RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsUsesExclusiveFinalizedAtCutoff$' -count=1` 失败，`expected: 1`、`actual: 3`；旧实现依据 `updated_at`，错误删除了 `finalized_at` 等于与晚于 cutoff 的终态记录。
+- cutoff GREEN：清理改按 `finalized_at < cutoff` 判断；阈值前删除，等于与阈值后保留。单测 `count=1` 与全部 cleanup 用例 `count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。
 
 ## Cleanup RED 证据
 - 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。

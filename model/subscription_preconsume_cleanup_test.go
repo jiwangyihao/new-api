@@ -3,6 +3,7 @@ package model
 import (
 	"sort"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -52,4 +53,50 @@ func TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords(t
 		Order("id ASC").Pluck("request_id", &remaining).Error)
 	sort.Strings(remaining)
 	require.Equal(t, []string{consumedRequestID, unknownRequestID}, remaining)
+}
+
+func TestCleanupSubscriptionPreConsumeRecordsUsesExclusiveFinalizedAtCutoff(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+
+	const retentionSeconds int64 = 60
+	requestIDs := []string{
+		"cleanup-cutoff-before",
+		"cleanup-cutoff-equal",
+		"cleanup-cutoff-after",
+	}
+	for _, requestID := range requestIDs {
+		preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 10)
+		require.NoError(t, err)
+		require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+		require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, subscriptionID, 10, true))
+	}
+
+	now := GetDBTimestamp()
+	cutoff := now - retentionSeconds
+	for requestID, finalizedAt := range map[string]int64{
+		requestIDs[0]: cutoff - 1,
+		requestIDs[1]: cutoff,
+		requestIDs[2]: cutoff + 1,
+	} {
+		require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+			Where("request_id = ?", requestID).
+			UpdateColumns(map[string]any{
+				"finalized_at": finalizedAt,
+				"updated_at":   cutoff - 3_600,
+			}).Error)
+	}
+	dbTimestampCache.Store(now)
+	dbTimestampCacheUnixNano.Store(time.Now().UnixNano())
+
+	deleted, err := CleanupSubscriptionPreConsumeRecords(retentionSeconds)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+
+	var remaining []string
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Order("id ASC").Pluck("request_id", &remaining).Error)
+	require.Equal(t, requestIDs[1:], remaining)
 }

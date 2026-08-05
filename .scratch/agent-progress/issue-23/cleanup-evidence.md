@@ -30,3 +30,9 @@ M service/task_billing_test.go
 - 结果：同一场景现仅删除 2 条过期终态记录，并保留 `consumed` 与未知状态记录。
 - 稳定验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
 - 本安全点未实现 Task/回调引用保护、稳定 batch、并发、失败原子性或只读诊断。
+
+## cutoff 精确边界安全点
+- RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsUsesExclusiveFinalizedAtCutoff$' -count=1` 失败；期望删除 1 条，旧实现实际删除 3 条。
+- 根因：旧实现使用可被后续写入改变的 `updated_at`，没有以终态落定时间 `finalized_at` 判断保留期。
+- GREEN：使用排他条件 `finalized_at < cutoff`；cutoff 前删除，等于 cutoff 与 cutoff 后保留。
+- 验证：单用例 `count=1` 与 `go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。

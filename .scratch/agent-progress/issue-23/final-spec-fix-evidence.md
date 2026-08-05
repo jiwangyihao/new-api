@@ -175,7 +175,7 @@ go test ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasA
 
 - token/amount 两个匿名 helper 在任何写入或入队前读取目标权益；`credit_balance` 返回 `ErrCreditValuationAnonymousDeltaForbidden`，权益、估值状态、版本、请求记录和 ledger 快照零写入。
 - timed token/amount 匿名兼容分别成功更新 `token_used` 与 `amount_used`。
-- `PostConsumeQuota` 读取已提交 request record 的 `applied_credit`，以 `applied_credit + delta` 计算目标，并复用 `SettleUserSubscriptionRequestTarget`；100 预扣 + 50 最终增量得到 applied=150、available=850、exact=34,000,000 micros、state_version=3、单一 request record。
+- `PostConsumeQuota` 单次调用最初读取已提交 request record 并复用 `SettleUserSubscriptionRequestTarget`；100 预扣 + 50 增量得到 applied=150、available=850、exact=34,000,000 micros、state_version=3、单一 request record。后续相同调用重放缺陷及最小修复见下节。
 
 重复、race 与 converted/timed 回归命令：
 
@@ -190,9 +190,9 @@ go test ./service -run 'TestPostConsumeQuota(SubscriptionDoesNotConsumeTokenKeyQ
 
 ### F2 匿名 helper 调用点审计
 
-修改导出符号前的 LSP references 已记录：token helper 13 个引用，amount helper 8 个引用。
+修改导出符号前及最终收敛时的 LSP references 已记录：token helper 13 个引用，amount helper 10 个引用；新增差异只来自回归测试引用，生产调用边界未扩大。
 
-- `service/quota.go`：Credit 已迁移到 `request_id + applied_credit + delta` 的累计目标入口；仅非 Credit 调用匿名 helper。
+- `service/quota.go`：Credit 已迁移到 `request_id + pre_consumed + delta` 的稳定累计目标入口；仅非 Credit 调用匿名 helper。
 - `service/funding_source.go`：已跟踪 Credit 先走 `settleCreditRequestTarget`；未跟踪 Credit 落到 helper 时由稳定 sentinel 失败关闭；timed 保持兼容。
 - `service/billing_session.go`：兼容退款 helper 只用于非 Credit request-aware 分支；误入 Credit 时由 helper 失败关闭。
 - `service/task_billing.go`：Credit target 使用 request-aware/legacy task 入口；converted source 继续允许原映射路径；amount helper 保留 timed 路径。
@@ -200,3 +200,82 @@ go test ./service -run 'TestPostConsumeQuota(SubscriptionDoesNotConsumeTokenKeyQ
 - 其余引用均为 model/controller 测试；最终包门禁会捕获仍假定 Credit 匿名写入成功的旧测试，并仅按 F2 合同迁移测试夹具，不放宽生产门禁。
 
 结论：production service/controller/relay/Task 不存在可成功写入 Credit target 的匿名 helper 绕路；保留的成功匿名路径仅为 timed 与 converted source 明确兼容边界。
+
+### F2 follow-up RED/GREEN：PostConsumeQuota 相同调用重放
+
+紧急范围裁决只允许修复 `2bb68e770` 中 `applied_credit + delta` 导致的同 request 重放累加。测试保持第一次调用后的业务断言，再以同一 `RelayInfo`、同一 request_id、相同 `quota=50` 和 `preConsumedQuota=100` 调用第二次，并分别从 SQLite 重新读取 request record、权益和估值状态。
+
+旧行为 RED 命令：
+
+```text
+go test ./service -run '^TestPostConsumeQuotaCreditUsesStableRequestTarget$' -count=1
+```
+
+旧行为精确变化：
+
+- request record：`applied_credit 150 -> 200`、`deducted_available_credit 150 -> 200`、`deducted_exact_cost_micros 6,000,000 -> 8,000,000`、`settlement_version 2 -> 3`；
+- `UserSubscription.token_used 150 -> 200`；
+- `CreditValuationState`：`available_credit 850 -> 800`、`exact_cost_micros 34,000,000 -> 32,000,000`、`state_version 3 -> 4`。
+
+三份差异由同一 RED 使用三次数据库 reload 和非短路 `assert.Equal` 一次性输出；失败不是夹具或邻近噪声。
+
+最小 GREEN 仅把累计目标基准从可变 `record.AppliedCredit` 改为不可变 `record.PreConsumed`，并让既有溢出比较使用相同基准。保留 `final=false`、`delta != 0` 外层、`SubscriptionPostDelta += delta` 和所有其他生产行为。命令：
+
+```text
+go test ./service -run '^TestPostConsumeQuotaCreditUsesStableRequestTarget$' -count=1
+```
+
+结果：PASS，`go test: 1 packages ok`；第二次相同调用后 request record、权益和估值状态逐字段不变。
+
+调用点边界：`ChargeViolationFeeIfNeeded` 在 `service/violation_fee.go` 中于普通结算/退款后调用 `PostConsumeQuota`。终态 Credit 请求继续由既有 finalized conflict fail-closed；本修复不设计终态后追加费协议、不生成新 request_id、不放宽终态冲突。该后续领域设计不属于 F1/F2。
+
+### F2 clean 安全点
+
+- `2bb68e770`（`fix(issue-23): 禁止 Credit 匿名结算`）：匿名 helper 门禁与初始 request-aware `PostConsumeQuota` 迁移。
+- `45b9d64f4`（`fix(issue-23): 保持同步结算重放幂等`）：累计目标改为不可变 `pre_consumed + delta`，同调用重放零写入。
+- `dc333c928`（`test(issue-23): 迁移 Credit 结算回归夹具`）：仅迁移被新门禁揭露的旧测试夹具。
+- 每个生产安全点提交前对应反馈循环均 GREEN；未扩展违规费协议或 #24–#28。
+
+### 最终冻结门禁
+
+稳定性与 race：
+
+```text
+go test ./model -run 'Test(PreConsumeUserSubscriptionByUnits(RejectsConflictingRequestReplayWithoutWrites|ReplaysEquivalentNormalizedRequestWithoutWrites|RejectsMissingRequestFingerprintWithoutWrites|ConcurrentSameRequestHasSingleWrite)|CreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable)$' -count=10
+go test -race ./model -run 'TestPreConsumeUserSubscriptionByUnitsConcurrentSameRequestHasSingleWrite$' -count=1
+go test ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|TimedSubscriptionAnonymousDeltasRemainCompatible|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=10
+go test -race ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=1
+```
+
+结果：四条命令均 PASS，依次为 `go test: 1 packages ok`、`1 packages ok`、`2 packages ok`、`2 packages ok`。
+
+请求领域与真实 SQLite 链路：
+
+```text
+go test ./model ./service -run 'Test(CreditValuationRequest|CreditRequestTargetCoalescer|CreditTask|LegacyCreditTask|CleanupSubscriptionPreConsumeRecords|PreviewSubscriptionPreConsumeCleanup|SubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields|PostConsumeQuotaCreditUsesStableRequestTarget)' -count=1
+go test ./model ./service ./controller -run 'Test(CreditValuationRequestPreConsumeRemovesMovingAverageCost|CreditValuationRequestFinalizesSameTargetIdempotently|CreditBillingSessionRefundUsesStableRequestTarget|CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskFailureRefundReusesInitialBillingRequestIdentity|CreditValuationFiveAnalyticsPanels|SubscriptionKyrenCreditWebhookCompletesFromSnapshotWithoutInvitation|ExternalCreditPurchaseWebhookAndRefundLifecycle|PostConsumeQuotaCreditUsesStableRequestTarget)' -count=1
+```
+
+结果：分别 PASS，`go test: 2 packages ok` 与 `go test: 3 packages ok`。后者通过公开领域/Service/Controller 入口覆盖 request_id 预扣、追加、少结算/退款、Task 重放、Kyren 冻结来源、800 available / 32,000,000 micros CNY 与五接口一致性。
+
+宽回归与相关窄 race：
+
+```text
+go test ./model ./service ./controller -count=1
+go test -race ./model ./service -run 'Test(CreditRequestTargetCoalescer|CleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays|CreditValuationAnonymousSubscriptionDeltasAreForbidden|PostConsumeQuotaCreditUsesStableRequestTarget|CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskFailureRefundReusesInitialBillingRequestIdentity)' -count=1
+git diff --check
+```
+
+结果：三包宽回归 PASS（`go test: 3 packages ok`）；窄 race PASS（`go test: 2 packages ok`）；`git diff --check` 无输出。修改 Go 文件已执行 `gofmt`。
+
+三包回归前曾精确发现旧测试假定 Credit 匿名 helper 可成功、timed helper 零读取或 Credit 夹具缺 ready state；仅迁移这些测试到冻结 request-aware/entitlement-guard 合同，生产门禁未放宽。输出中允许出现测试预期的 GORM record-not-found/唯一约束诊断和 Redis closed 日志，最终包结果均为 PASS。
+
+### Issue #23 acceptance 映射
+
+- AC1：F1 指纹与预扣请求记录同事务；相同参数无写入重放，四类冲突/缺指纹稳定拒绝，双连接仅一次写。
+- AC2–6：累计目标增加/减少、原快照恢复、债务与 absorbed/unknown、逐请求 coalescer 聚焦门禁 PASS。
+- AC7：Credit 匿名 helper 统一拒绝；`PostConsumeQuota` 复用 `request_id + original subscription + pre_consumed + delta` 的稳定累计目标，相同调用重放严格无写入；timed/converted 兼容 PASS。
+- AC8–12：Task request identity、legacy Task、conversion routing seam、cleanup、稳定错误与并发/race 聚焦门禁 PASS。
+- #22 冻结 tracer：三包宽回归 PASS；未修改 ingress、移动平均、analytics DTO/current_only 或 32 CNY 合同。
+
+未运行真实 MySQL/PostgreSQL、全项目套件、部署；不冒充 #27/#28 验收。#26 继续消费既有 `valuation_subscription_id` 路由 seam，本修复未实现 conversion FX/单位价值/虚拟快照。

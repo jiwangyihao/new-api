@@ -48,3 +48,9 @@ M service/task_billing_test.go
 - GREEN：数据库侧相关 `NOT EXISTS` 精确保护非空投影；删除前按稳定主键分批完整分类活跃 NULL 投影 Task。仅可证明为 timed 且 JSON request identity 为空时放行；缺失/未知/Credit/混合版本返回稳定 `ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference`，事务内删除数为 0。
 - 验证：测试分别覆盖 ambiguous NULL fail-closed 且零删除、明确 timed NULL 不阻断，以及非空 `SUBMITTED`/`IN_PROGRESS` 精确保护；`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
 - 范围：历史 JSON-only/NULL 行不回填；真实 MySQL/PostgreSQL 零 SKIP 验收仍归 #27。
+
+## 稳定有界批次安全点
+- RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches$' -count=1` 失败，`expected: 2`、`actual: 3`；旧实现无界删除全部候选。
+- GREEN：事务内按稳定 `id ASC` 选择至多 batch 条候选，再以同一终态/cutoff/引用条件删除；公开入口固定 batch=100。
+- 幂等：测试 batch=2 时首轮删除前两条、次轮删除最后一条、第三轮返回 0；相同快照与参数产生确定删除集合。
+- 验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 	"time"
@@ -231,4 +232,42 @@ func TestCleanupSubscriptionPreConsumeRecordsAllowsProvenTimedTaskWithoutRequest
 	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), deleted)
+}
+
+func TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Task{}))
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+
+	const expectedBatchSize = 2
+	requestIDs := make([]string, 0, expectedBatchSize+1)
+	for i := 0; i <= expectedBatchSize; i++ {
+		requestID := fmt.Sprintf("cleanup-batch-%03d", i)
+		requestIDs = append(requestIDs, requestID)
+		preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 1)
+		require.NoError(t, err)
+		require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+		require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, subscriptionID, 1, true))
+	}
+	expiredAt := GetDBTimestamp() - 3_600
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id IN ?", requestIDs).
+		UpdateColumn("finalized_at", expiredAt).Error)
+
+	deleted, err := cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	require.NoError(t, err)
+	require.Equal(t, int64(expectedBatchSize), deleted)
+	var remaining []string
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Order("id ASC").Pluck("request_id", &remaining).Error)
+	require.Equal(t, requestIDs[expectedBatchSize:], remaining)
+
+	deleted, err = cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+	deleted, err = cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	require.NoError(t, err)
+	require.Zero(t, deleted)
 }

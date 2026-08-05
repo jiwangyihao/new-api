@@ -3167,10 +3167,19 @@ func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
 		}).Error
 }
 
-// CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
+const subscriptionPreConsumeCleanupBatchSize = 100
+
+// CleanupSubscriptionPreConsumeRecords removes one bounded batch of old idempotency records.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
+	return cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds, subscriptionPreConsumeCleanupBatchSize)
+}
+
+func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize int) (int64, error) {
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
+	}
+	if batchSize <= 0 {
+		batchSize = subscriptionPreConsumeCleanupBatchSize
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
 	var deleted int64
@@ -3182,7 +3191,21 @@ func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error)
 			Select("1").
 			Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
 			Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
-		res := tx.Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+		var candidateIDs []int
+		if err := tx.Model(&SubscriptionPreConsumeRecord{}).
+			Select("id").
+			Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+			Where("NOT EXISTS (?)", activeTaskReference).
+			Order("id ASC").
+			Limit(batchSize).
+			Pluck("id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		if len(candidateIDs) == 0 {
+			return nil
+		}
+		res := tx.Where("id IN ?", candidateIDs).
+			Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
 			Where("NOT EXISTS (?)", activeTaskReference).
 			Delete(&SubscriptionPreConsumeRecord{})
 		deleted = res.RowsAffected

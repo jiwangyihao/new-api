@@ -300,3 +300,15 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - 当前阶段切换为 `INFLIGHT_REQUEST_RED`：仅创建一条 public reserve → conversion → final settle 的真实 SQLite 确定性交错 RED。
 - RED 必须断言 original subscription_id/request deduction snapshot 保持、不重定向 Credit、不重复扣减，以及 conversion 后新请求才进入 Credit；本阶段不实现 GREEN、refund/并发扩展或 API/UI。
+
+## 2026-08-05 — 在途 request 虚拟快照 RED
+
+新增真实 SQLite 行为 tracer `TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot`，仅通过 public `PreConsumeUserSubscriptionByUnits` → `ConfirmTimedSubscriptionConversion` → `SettleUserSubscriptionRequestTarget` 路径构造确定性交错。合同要求原 request 始终保留 timed source `subscription_id`，conversion 事务为它固化 reserve 时的虚拟 exact deduction snapshot，final settle 不重定向或重复扣减；conversion 后的新 request 才选择 Credit。
+
+命令：`go test ./model -run TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot -count=1`
+
+真实结果：`FAIL`（行为失败，非编译失败）。conversion 成功后重新读取原 `SubscriptionPreConsumeRecord`：`UserSubscriptionId` 仍为 source、`PreConsumed=10`，但第一个虚拟快照断言 `AppliedCredit` 期望 `10`、实际 `0`（`subscription_conversion_settlement_test.go:162`）。
+
+结论：现实现正确保留原 request attribution，但 conversion 尚未在同一事务内把 timed reserve 转换为不可变的虚拟 exact request deduction snapshot。后续 final settle 与新 request 断言因该首个行为失败未执行；下一步 GREEN 必须从此源头补齐，不得用匿名 delta 或改写原 `UserSubscriptionId`。
+
+范围说明：本 RED 未修改生产代码，未扩展 refund/并发，也未进入 API/UI。

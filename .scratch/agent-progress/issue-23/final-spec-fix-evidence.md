@@ -125,3 +125,9 @@ go test -race ./model -run 'TestPreConsumeUserSubscriptionByUnitsConcurrentSameR
 结果：两条命令均 PASS，各输出 `go test: 1 packages ok`。
 
 F1 实现仅增加版本 1 的确定性 SHA-256 指纹：固定宽度大端整数编码 user/quota/amount，长度前缀编码经 `FormatMatchingModelName` 规范化的 model；不使用 map、分隔字符串、时间、随机数、浮点或进程状态。
+
+### F1 clean 安全点
+
+- 提交：`07801e667`（`fix(issue-23): 绑定预扣请求不可变指纹`）。
+- 提交后 `git status --short` 无输出。
+- F1 至此冻结；后续只处理 F2，不再扩展 F1 schema、接口、缓存或重试。

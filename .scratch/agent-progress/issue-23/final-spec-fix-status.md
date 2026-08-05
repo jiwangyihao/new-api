@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-F1 已 GREEN 并完成真实 SQLite 双连接并发、`-count=10` 与窄 `-race` 验证，待格式检查与 clean 安全提交。
+F1 已完成并提交 clean 安全点；当前进入 F2 RED。
 
 ## 已完成
 
@@ -16,8 +16,8 @@ F1 已 GREEN 并完成真实 SQLite 双连接并发、`-count=10` 与窄 `-race`
 
 ## 下一步
 
-1. 对修改 Go 文件运行 `gofmt`，执行 `git diff --check` 并提交 F1 clean 安全点。
-2. F1 提交完成后进入 F2 RED；不再扩展 F1 schema、接口、缓存或通用重试。
+1. 为 Credit 匿名 token/amount helper 与 `PostConsumeQuota` 匿名绕路写最小运行时 RED。
+2. 只实现稳定匿名拒绝 sentinel 与现有 request-aware 累计目标迁移，保留 timed/converted。
 
 ## 阻塞
 
@@ -26,4 +26,4 @@ F1 已 GREEN 并完成真实 SQLite 双连接并发、`-count=10` 与窄 `-race`
 ## 最近安全提交
 
 - `0855b96b5`：F1 断言级 RED 与稳定 sentinel/附加字段声明。
-- F1 GREEN 提交：待创建。
+- `07801e667`：F1 版本化不可变请求指纹、失败关闭、双连接并发与验证证据。

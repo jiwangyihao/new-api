@@ -99,6 +99,19 @@ func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *test
 	creditCode := "credit_balance_consume"
 	require.NoError(t, DB.Create(&SubscriptionPlan{Id: 7206, Title: "Credit 余额套餐", EntitlementType: SubscriptionEntitlementCreditBalance, Enabled: true, ModelLimits: "gpt-4o", MonthlyTokenLimit: 0, ConcurrencyLimit: 2, BusinessCode: &creditCode}).Error)
 	require.NoError(t, DB.Create(&UserSubscription{Id: 7207, UserId: 7104, PlanId: 7206, EntitlementType: SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 100, TokenUsed: 90, EndTime: 0, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder}).Error)
+	require.NoError(t, migrateCreditValuationSchema(DB))
+	require.NoError(t, DB.Where("version = ?", CreditValuationRuleVersion).Delete(&CreditValuationMigration{}).Error)
+	require.NoError(t, DB.Where("user_subscription_id = ?", 7207).Delete(&CreditValuationState{}).Error)
+	require.NoError(t, DB.Create(&CreditValuationMigration{Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, DB.Create(&CreditValuationState{
+		UserSubscriptionId: 7207,
+		UserId:             7104,
+		AvailableCredit:    10,
+		UnknownCredit:      10,
+		Currency:           "CNY",
+		RuleVersion:        CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
 
 	hasSubscription, err := HasActiveUserSubscription(7104)
 	require.NoError(t, err)
@@ -107,7 +120,7 @@ func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *test
 	otherModelPreConsume, err := PreConsumeUserSubscription("credit-balance-other-model", 7104, "claude-3-7-sonnet", 0, 1)
 	require.NoError(t, err)
 	assert.Equal(t, 7207, otherModelPreConsume.UserSubscriptionId)
-	require.NoError(t, RefundSubscriptionPreConsume("credit-balance-other-model"))
+	require.NoError(t, SettleUserSubscriptionRequestTarget("credit-balance-other-model", 7207, 0, true))
 
 	pre, err := PreConsumeUserSubscription("credit-balance-preconsume", 7104, "gpt-4o", 0, 10)
 	require.NoError(t, err)
@@ -116,17 +129,17 @@ func TestCreditBalancePreConsumeRejectsExhaustionAndAllowsSettlementDebt(t *test
 
 	_, err = PreConsumeUserSubscription("credit-balance-exhausted", 7104, "gpt-4o", 0, 1)
 	require.ErrorContains(t, err, "subscription token quota insufficient")
-	require.NoError(t, PostConsumeUserSubscriptionTokenDelta(7207, 5))
+	require.NoError(t, SettleUserSubscriptionRequestTarget("credit-balance-preconsume", 7207, 15, false))
 	var balance UserSubscription
 	require.NoError(t, DB.First(&balance, 7207).Error)
 	assert.Equal(t, int64(105), balance.TokenUsed)
 
 	_, err = PreConsumeUserSubscription("credit-balance-debt", 7104, "gpt-4o", 0, 1)
 	require.ErrorContains(t, err, "subscription token quota insufficient")
-	require.NoError(t, RefundSubscriptionPreConsume("credit-balance-preconsume"))
+	require.NoError(t, SettleUserSubscriptionRequestTarget("credit-balance-preconsume", 7207, 0, true))
 
 	require.NoError(t, DB.First(&balance, 7207).Error)
-	assert.Equal(t, int64(95), balance.TokenUsed)
+	assert.Equal(t, int64(90), balance.TokenUsed)
 	var ledgerCount int64
 	require.NoError(t, DB.Model(&CreditBalanceLedger{}).Where("user_id = ?", 7104).Count(&ledgerCount).Error)
 	assert.Zero(t, ledgerCount)
@@ -1791,15 +1804,21 @@ func TestPostConsumeUserSubscriptionDeltaDoesNotPreLockRead(t *testing.T) {
 
 	require.NoError(t, PostConsumeUserSubscriptionDelta(7643, 7))
 
+	selects := 0
+	updates := 0
 	for _, sql := range capture.statements {
 		upper := strings.ToUpper(sql)
 		if strings.Contains(upper, "SELECT") && strings.Contains(sql, "user_subscriptions") {
-			t.Fatalf("subscription delta should avoid pre-lock SELECT on hot user_subscriptions row; saw SQL: %s; all SQL: %#v", sql, capture.statements)
+			selects++
+			assert.NotContains(t, upper, "FOR UPDATE", "entitlement guard must not lock the timed hot row")
+			assert.Contains(t, sql, "entitlement_type")
+		}
+		if strings.Contains(upper, "UPDATE") && strings.Contains(sql, "user_subscriptions") {
+			updates++
 		}
 	}
-	if len(capture.statements) != 1 || !strings.Contains(strings.ToUpper(capture.statements[0]), "UPDATE") || !strings.Contains(capture.statements[0], "user_subscriptions") {
-		t.Fatalf("subscription delta should execute one hot-row UPDATE, got SQL: %#v", capture.statements)
-	}
+	assert.Equal(t, 1, selects, "anonymous timed delta performs one non-locking entitlement guard read")
+	assert.Equal(t, 1, updates, "anonymous timed delta preserves one hot-row update")
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, 7643).Error)
 	assert.Equal(t, int64(17), got.TokenUsed)

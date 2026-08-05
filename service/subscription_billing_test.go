@@ -217,7 +217,7 @@ func (l *subscriptionSettleSQLLogger) Trace(ctx context.Context, begin time.Time
 	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
 }
 
-func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
+func TestSubscriptionBillingSettleUsesSingleEntitlementGuardRead(t *testing.T) {
 	truncate(t)
 	const userID = 8051
 	const tokenID = 8052
@@ -240,7 +240,7 @@ func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
 
 	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{SubscriptionTokens: 28}))
 
-	assert.Equal(t, int64(0), readLogger.reads.Load(), "settlement should use preconsume snapshot and avoid rereading the hot subscription row")
+	assert.Equal(t, int64(1), readLogger.reads.Load(), "timed settlement performs one non-locking entitlement guard read")
 	assert.Equal(t, int64(28), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(10), relayInfo.SubscriptionTokenUsedAfterPreConsume)
 	assert.Equal(t, int64(18), relayInfo.SubscriptionPostDelta)
@@ -1840,6 +1840,7 @@ func TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve(t *testing.T) {
 		EndTime:         0,
 		GrantReason:     model.SubscriptionGrantOrder,
 	}).Error)
+	seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-task", "req-credit-task", "subscription_only")

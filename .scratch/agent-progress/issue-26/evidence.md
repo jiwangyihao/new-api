@@ -406,3 +406,12 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 行为 RED 命令：`go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`。
 - 真实结果：`FAIL`。quote 与 confirm 均成功；confirm 响应中 `source_price_micros`、`source_currency`、`target_currency`、`valuation_credit_basis`、gross/net cost micros、未舍入 unit value numerator/denominator、rule version、FX numerator/denominator/captured_at/direction 全部缺失（字符串为空、version 为 `0`）。同幂等键换 source 的失败响应 `code` 也为空。
 - 结论：RED 到达真实 router/model 路径且只对已持久化冻结事实的 API 可观察缺口与稳定错误映射敏感；analytics 路由同一 tracer 已被调用，但测试因前述 confirm 字段断言使用 `assert` 收集全部缺口后继续完成。提交前无生产或 UI 修改。
+
+## 2026-08-06 — 跨币种 conversion API 可观察性最小 GREEN
+
+- 最小生产改动仅限既有 `controller/subscription_conversion.go` 响应 adapter：从已持久化 immutable `SubscriptionConversion` 返回字符串 price/cost micros、source/target currency、valuation credit basis、rule version、FX numerator/denominator/captured_at/direction，并按 `source_price × fx numerator / (credit basis × fx denominator)` 约分返回未舍入单位价值有理数。未新增 schema、端点、FX provider 或 UI。
+- 估值快照是否存在由 `valuation_currency != "" && fx_rate_denominator > 0` 判定；存在时所有 micros 使用 `strconv.FormatInt`，明确 `0` 不被 `omitempty` 丢弃；legacy 无估值 conversion 继续省略新增字段。
+- confirm 错误响应增加稳定 `code`，已覆盖 `subscription_conversion_idempotency_conflict`、FX sentinel、ineligible 与通用 fallback；message 保留既有行为。
+- GREEN 命令：`gofmt -w controller/subscription_conversion.go && go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`；结果：PASS（`go test: 1 packages ok`）。
+- 既有 quote/confirm/history 联合回归：`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`；结果：PASS。
+- tracer 在 Option 从 `7.3` 更新到 `8.1`、source price 从 `40,000,000` 更新到 `41,000,000` 后，history 与 confirm 完整结构相等，证明返回的是原 conversion 冻结事实；同一 tracer 的管理员 conversion summary 与 converted subscription drilldown 请求均成功。

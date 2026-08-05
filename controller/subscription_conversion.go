@@ -1,6 +1,9 @@
 package controller
 
 import (
+	"errors"
+	"math/big"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -20,34 +23,47 @@ type subscriptionConversionConfirmDataResponse struct {
 }
 
 type subscriptionConversionHistoryResponse struct {
-	Id                     string `json:"id"`
-	SourceSubscriptionId   string `json:"source_subscription_id"`
-	SourcePlanId           string `json:"source_plan_id"`
-	SourcePlanTitle        string `json:"source_plan_title"`
-	TargetSubscriptionId   string `json:"target_subscription_id"`
-	TargetPlanId           string `json:"target_plan_id"`
-	LedgerId               string `json:"ledger_id"`
-	SourceStatus           string `json:"source_status"`
-	GrantSource            string `json:"grant_source"`
-	DatabaseNow            string `json:"database_now"`
-	SourceStartTime        string `json:"source_start_time"`
-	SourceEndTime          string `json:"source_end_time"`
-	RemainingSeconds       string `json:"remaining_seconds"`
-	Full31DayBlocks        string `json:"full_31_day_blocks"`
-	CreditBasis            string `json:"credit_basis"`
-	CreditBasisSource      string `json:"credit_basis_source"`
-	CurrentRemainingCredit string `json:"current_remaining_credit"`
-	GrossCredit            string `json:"gross_credit"`
-	DebtOffset             string `json:"debt_offset"`
-	NetAvailableCredit     string `json:"net_available_credit"`
-	AvailableCreditAfter   string `json:"available_credit_after"`
-	SettlementDebtAfter    string `json:"settlement_debt_after"`
-	BalanceBefore          string `json:"balance_before"`
-	BalanceAfter           string `json:"balance_after"`
-	LastGrantedAt          string `json:"last_granted_at"`
-	LastGrantTimeSource    string `json:"last_grant_time_source"`
-	LastGrantSource        string `json:"last_grant_source"`
-	ConvertedAt            string `json:"converted_at"`
+	Id                       string `json:"id"`
+	SourceSubscriptionId     string `json:"source_subscription_id"`
+	SourcePlanId             string `json:"source_plan_id"`
+	SourcePlanTitle          string `json:"source_plan_title"`
+	TargetSubscriptionId     string `json:"target_subscription_id"`
+	TargetPlanId             string `json:"target_plan_id"`
+	LedgerId                 string `json:"ledger_id"`
+	SourceStatus             string `json:"source_status"`
+	GrantSource              string `json:"grant_source"`
+	DatabaseNow              string `json:"database_now"`
+	SourceStartTime          string `json:"source_start_time"`
+	SourceEndTime            string `json:"source_end_time"`
+	RemainingSeconds         string `json:"remaining_seconds"`
+	Full31DayBlocks          string `json:"full_31_day_blocks"`
+	CreditBasis              string `json:"credit_basis"`
+	CreditBasisSource        string `json:"credit_basis_source"`
+	CurrentRemainingCredit   string `json:"current_remaining_credit"`
+	GrossCredit              string `json:"gross_credit"`
+	DebtOffset               string `json:"debt_offset"`
+	NetAvailableCredit       string `json:"net_available_credit"`
+	AvailableCreditAfter     string `json:"available_credit_after"`
+	SettlementDebtAfter      string `json:"settlement_debt_after"`
+	BalanceBefore            string `json:"balance_before"`
+	BalanceAfter             string `json:"balance_after"`
+	LastGrantedAt            string `json:"last_granted_at"`
+	LastGrantTimeSource      string `json:"last_grant_time_source"`
+	LastGrantSource          string `json:"last_grant_source"`
+	ConvertedAt              string `json:"converted_at"`
+	SourcePriceMicros        string `json:"source_price_micros,omitempty"`
+	SourceCurrency           string `json:"source_currency,omitempty"`
+	TargetCurrency           string `json:"target_currency,omitempty"`
+	ValuationCreditBasis     string `json:"valuation_credit_basis,omitempty"`
+	GrossCostMicros          string `json:"gross_cost_micros,omitempty"`
+	NetCostMicros            string `json:"net_cost_micros,omitempty"`
+	UnitValueNumeratorMicros string `json:"unit_value_numerator_micros,omitempty"`
+	UnitValueDenominator     string `json:"unit_value_denominator,omitempty"`
+	RuleVersion              int    `json:"rule_version,omitempty"`
+	FxNumerator              string `json:"fx_numerator,omitempty"`
+	FxDenominator            string `json:"fx_denominator,omitempty"`
+	FxCapturedAt             string `json:"fx_captured_at,omitempty"`
+	FxDirection              string `json:"fx_direction,omitempty"`
 }
 
 func ConfirmSubscriptionConversion(c *gin.Context) {
@@ -63,7 +79,11 @@ func ConfirmSubscriptionConversion(c *gin.Context) {
 	}
 	result, err := model.ConfirmTimedSubscriptionConversion(c.GetInt("id"), int(subscriptionId), request.IdempotencyKey)
 	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+			"code":    subscriptionConversionErrorCode(err),
+		})
 		return
 	}
 	common.ApiSuccess(c, subscriptionConversionConfirmDataResponse{
@@ -76,7 +96,7 @@ func toSubscriptionConversionHistoryResponse(conversion *model.SubscriptionConve
 	if conversion == nil {
 		return subscriptionConversionHistoryResponse{}
 	}
-	return subscriptionConversionHistoryResponse{
+	response := subscriptionConversionHistoryResponse{
 		Id:                     strconv.Itoa(conversion.Id),
 		SourceSubscriptionId:   strconv.Itoa(conversion.SourceSubscriptionId),
 		SourcePlanId:           strconv.Itoa(conversion.SourcePlanId),
@@ -105,5 +125,79 @@ func toSubscriptionConversionHistoryResponse(conversion *model.SubscriptionConve
 		LastGrantTimeSource:    conversion.LastGrantTimeSource,
 		LastGrantSource:        conversion.LastGrantSource,
 		ConvertedAt:            strconv.FormatInt(conversion.ConvertedAt, 10),
+	}
+	if conversion.ValuationCurrency != "" && conversion.FxRateDenominator > 0 {
+		response.SourcePriceMicros = strconv.FormatInt(conversion.ValuationSourcePriceMicros, 10)
+		response.SourceCurrency = conversion.FxSourceCurrency
+		response.TargetCurrency = conversion.ValuationCurrency
+		response.ValuationCreditBasis = strconv.FormatInt(conversion.ValuationCreditBasis, 10)
+		response.GrossCostMicros = strconv.FormatInt(conversion.ValuationGrossCostMicros, 10)
+		response.NetCostMicros = strconv.FormatInt(conversion.ValuationNetCostMicros, 10)
+		response.UnitValueNumeratorMicros, response.UnitValueDenominator = subscriptionConversionUnitValue(conversion)
+		response.RuleVersion = conversion.ValuationRuleVersion
+		response.FxNumerator = strconv.FormatInt(conversion.FxRateNumerator, 10)
+		response.FxDenominator = strconv.FormatInt(conversion.FxRateDenominator, 10)
+		response.FxCapturedAt = strconv.FormatInt(conversion.FxCapturedAt, 10)
+		response.FxDirection = subscriptionConversionFXDirection(conversion.FxSourceCurrency, conversion.ValuationCurrency)
+	}
+	return response
+}
+
+func subscriptionConversionUnitValue(conversion *model.SubscriptionConversion) (string, string) {
+	if conversion.ValuationSourcePriceMicros <= 0 || conversion.ValuationCreditBasis <= 0 ||
+		conversion.FxRateNumerator <= 0 || conversion.FxRateDenominator <= 0 {
+		return "", ""
+	}
+	numerator := new(big.Int).Mul(
+		big.NewInt(conversion.ValuationSourcePriceMicros),
+		big.NewInt(conversion.FxRateNumerator),
+	)
+	denominator := new(big.Int).Mul(
+		big.NewInt(conversion.ValuationCreditBasis),
+		big.NewInt(conversion.FxRateDenominator),
+	)
+	unitValue := new(big.Rat).SetFrac(numerator, denominator)
+	return unitValue.Num().String(), unitValue.Denom().String()
+}
+
+func subscriptionConversionFXDirection(sourceCurrency string, targetCurrency string) string {
+	switch {
+	case sourceCurrency == "" || targetCurrency == "":
+		return ""
+	case sourceCurrency == targetCurrency:
+		return model.CreditFXDirectionIdentity
+	case sourceCurrency == "USD" && targetCurrency == "CNY":
+		return model.CreditFXDirectionUSDtoCNY
+	case sourceCurrency == "CNY" && targetCurrency == "USD":
+		return model.CreditFXDirectionCNYtoUSD
+	default:
+		return ""
+	}
+}
+
+func subscriptionConversionErrorCode(err error) string {
+	switch {
+	case errors.Is(err, model.ErrConversionIdempotencyConflict):
+		return model.ErrConversionIdempotencyConflict.Error()
+	case errors.Is(err, model.ErrCreditFXRateMissing):
+		return model.ErrCreditFXRateMissing.Error()
+	case errors.Is(err, model.ErrCreditFXRateEmpty):
+		return model.ErrCreditFXRateEmpty.Error()
+	case errors.Is(err, model.ErrCreditFXInvalidDecimal):
+		return model.ErrCreditFXInvalidDecimal.Error()
+	case errors.Is(err, model.ErrCreditFXPrecisionExceeded):
+		return model.ErrCreditFXPrecisionExceeded.Error()
+	case errors.Is(err, model.ErrCreditFXNonPositive):
+		return model.ErrCreditFXNonPositive.Error()
+	case errors.Is(err, model.ErrCreditFXUnsupportedCurrency):
+		return model.ErrCreditFXUnsupportedCurrency.Error()
+	case errors.Is(err, model.ErrCreditFXDirectionMismatch):
+		return model.ErrCreditFXDirectionMismatch.Error()
+	case errors.Is(err, model.ErrCreditFXOverflow):
+		return model.ErrCreditFXOverflow.Error()
+	case strings.HasPrefix(err.Error(), "subscription conversion rejected:"):
+		return "subscription_conversion_ineligible"
+	default:
+		return "subscription_conversion_failed"
 	}
 }

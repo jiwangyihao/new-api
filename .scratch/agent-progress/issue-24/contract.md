@@ -12,11 +12,11 @@
 ## 兑换来源身份
 
 - `source_type = redemption`。
-- `source_key` 使用兑换记录的稳定持久化身份，不使用进程内随机值。
-- `source_id` 使用兑换记录主键，仅作追溯；幂等结果同时受来源唯一身份和 ledger 唯一约束保护。
-- `idempotency_key` 由稳定兑换身份派生，重复兑换请求不得生成新的业务身份。
-- Credit 估值来源只取兑换成功事务冻结的 `SubscriptionEntitlementSnapshot`：`plan_id`、`list_price_micros`、`list_price_currency`、`monthly_token_limit`、`valuation_rule_version`；禁止读取兼容 float、渠道实付或全局 Credit 容器价格。
-- fulfillment snapshot、ledger 与估值 ingress 保存同一份不可变事实；套餐后续改价、改币种、改 Credit 不回写。
+- `source_key = idempotency_key = redemption:<redemption_id>`，使用兑换记录的稳定持久化主键，不使用进程内随机值。
+- `source_id = redemption_id`；来源唯一身份和 ledger 唯一约束共同保护重放。
+- 同币种兑换参数指纹固定包含：`user_id`、`redemption_id`、`redemption_mode`、source/target plan ID、gross Credit、冻结 `source_price_micros`、`source_plan_credit`、source/valuation currency 与 valuation rule version。
+- Credit 估值来源只取兑换创建时冻结的 `SubscriptionEntitlementSnapshot`：`plan_id`、`list_price_micros`、`list_price_currency`、`monthly_token_limit`、`valuation_rule_version`，并在兑换事务内补齐目标 Credit plan/valuation currency；禁止读取兼容 float、渠道实付或全局 Credit 容器价格。
+- fulfillment snapshot、ledger 与估值 ingress 保存同一份不可变事实；套餐后续改价、改币种或改 Credit 不回写。
 
 ## 管理员 increase 请求与指纹
 

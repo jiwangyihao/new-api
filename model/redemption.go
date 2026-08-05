@@ -210,6 +210,55 @@ type RedemptionFulfillmentSnapshot struct {
 	EventStartTime int64                           `json:"event_start_time,omitempty"`
 	EventEndTime   int64                           `json:"event_end_time,omitempty"`
 }
+type creditBalanceRedemptionFingerprint struct {
+	UserId               int    `json:"user_id"`
+	RedemptionId         int    `json:"redemption_id"`
+	RedemptionMode       string `json:"redemption_mode"`
+	SourcePlanId         int    `json:"source_plan_id"`
+	TargetPlanId         int    `json:"target_plan_id"`
+	GrossCredit          int64  `json:"gross_credit"`
+	SourcePriceMicros    int64  `json:"source_price_micros"`
+	SourcePlanCredit     int64  `json:"source_plan_credit"`
+	SourceCurrency       string `json:"source_currency"`
+	ValuationCurrency    string `json:"valuation_currency"`
+	ValuationRuleVersion int    `json:"valuation_rule_version"`
+}
+
+func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnapshot, userId int, redemptionId int) (*CreditValuationSourceSnapshot, string, error) {
+	if userId <= 0 || redemptionId <= 0 || snapshot.PlanID <= 0 || snapshot.TargetCreditBalancePlanID <= 0 || snapshot.ListPriceMicros == nil || *snapshot.ListPriceMicros <= 0 || snapshot.MonthlyTokenLimit <= 0 || snapshot.ValuationRuleVersion != CreditValuationRuleVersion {
+		return nil, "", ErrRedemptionPlanIneligible
+	}
+	sourceCurrency, err := NormalizeCreditValuationCurrency(snapshot.ListPriceCurrency)
+	if err != nil {
+		return nil, "", err
+	}
+	valuationCurrency, err := NormalizeCreditValuationCurrency(snapshot.TargetCreditBalanceValuationCurrency)
+	if err != nil {
+		return nil, "", err
+	}
+	if sourceCurrency != valuationCurrency {
+		return nil, "", ErrCreditValuationUnsupportedCurrency
+	}
+	source := &CreditValuationSourceSnapshot{
+		SourcePriceMicros: *snapshot.ListPriceMicros,
+		SourcePlanCredit:  snapshot.MonthlyTokenLimit,
+		GrossCredit:       snapshot.MonthlyTokenLimit,
+		SourceCurrency:    sourceCurrency,
+		ValuationCurrency: valuationCurrency,
+		RuleVersion:       snapshot.ValuationRuleVersion,
+	}
+	fingerprintPayload, err := common.Marshal(creditBalanceRedemptionFingerprint{
+		UserId: userId, RedemptionId: redemptionId, RedemptionMode: RedemptionModeCreditBalance,
+		SourcePlanId: snapshot.PlanID, TargetPlanId: snapshot.TargetCreditBalancePlanID,
+		GrossCredit: snapshot.MonthlyTokenLimit, SourcePriceMicros: *snapshot.ListPriceMicros,
+		SourcePlanCredit: snapshot.MonthlyTokenLimit, SourceCurrency: sourceCurrency,
+		ValuationCurrency: valuationCurrency, ValuationRuleVersion: snapshot.ValuationRuleVersion,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return source, common.Sha1(fingerprintPayload), nil
+}
 
 func normalizeRedemptionMode(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -344,21 +393,23 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 			if err := ValidateCreditBalanceRedemptionOption(currentPlan, creditPlan); err != nil {
 				return err
 			}
-			fulfillment.Entitlement.TargetCreditBalancePlanID = creditPlan.Id
+			fulfillment.Entitlement.SetTargetCreditBalancePlanSnapshot(creditPlan)
 			sourceSnapshot, err := MarshalSubscriptionEntitlementSnapshot(fulfillment.Entitlement)
 			if err != nil {
 				return err
 			}
+			valuationSource, fingerprint, err := creditBalanceRedemptionValuationSource(fulfillment.Entitlement, userId, redemption.Id)
+			if err != nil {
+				return err
+			}
+			idempotencyKey := fmt.Sprintf("redemption:%d", redemption.Id)
 			grant, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
-				UserId:         userId,
-				GrossCredit:    plan.MonthlyTokenLimit,
-				IdempotencyKey: fmt.Sprintf("redemption:%d", redemption.Id),
-				SourceType:     CreditBalanceLedgerSourceRedemption,
-				SourceId:       redemption.Id,
-				Type:           CreditBalanceLedgerTypeRedemption,
-				SourceSnapshot: sourceSnapshot,
-				TargetPlanId:   creditPlan.Id,
-				Reason:         "兑换码兑换 Credit 余额",
+				UserId: userId, GrossCredit: plan.MonthlyTokenLimit, IdempotencyKey: idempotencyKey,
+				SourceType: CreditBalanceLedgerSourceRedemption, SourceId: redemption.Id,
+				SourceKey: idempotencyKey, SourceStatus: "completed", SourcePlanId: plan.Id,
+				ParameterFingerprint: fingerprint, Type: CreditBalanceLedgerTypeRedemption,
+				SourceSnapshot: sourceSnapshot, TargetPlanId: creditPlan.Id,
+				Reason: "兑换码兑换 Credit 余额", ValuationSource: valuationSource,
 			})
 			if err != nil {
 				return err

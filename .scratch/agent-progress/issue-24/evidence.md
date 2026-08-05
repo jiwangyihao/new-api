@@ -41,3 +41,10 @@
 - MySQL/PostgreSQL：本切片只做静态兼容审查；真实矩阵归 #27。
 - API：尚未执行；当前仅 model 公开领域入口。
 - 浏览器：尚未执行。
+
+### 兑换同币种冻结快照
+
+- RED：`go test ./model -run TestRedemptionCreditBalanceFreezesExactTierSnapshot -count=1`。
+- RED 结果：真实 `Redeem` 事务返回 `credit_valuation_source_required`（外层稳定 `redeem.failed`），证明兑换尚未把冻结来源事实交给 #22 ingress。
+- GREEN：同一命令通过，`go test: 1 packages ok`，约 14.43 秒。
+- 行为：`40 CNY / 1,000 Credit` 兑换经真实 SQLite 入口形成 1,000 gross/net Credit、`40,000,000` gross/net micros CNY、exact state version 1；ledger 结构化保存 `redemption:93004`、plan、价格、Credit 分母、1:1 FX、规则版本和参数指纹，档位改为 80 CNY 后历史 fulfillment/ledger/state 仍为 40 CNY。

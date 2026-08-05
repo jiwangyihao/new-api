@@ -265,3 +265,91 @@ func TestAdminCreditBalanceIncreaseLedgerFailureRollsBackEverything(t *testing.T
 		require.Zero(t, count)
 	}
 }
+
+func seedRedemptionCreditPositiveIngress(t *testing.T, debt int64) (*gorm.DB, int, int, int) {
+	t.Helper()
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Redemption{}, &InvitationRewardEvent{}, &Log{}))
+	const userID = 93_001
+	const optionPlanID = 93_002
+	const creditPlanID = 93_003
+	const redemptionID = 93_004
+	priceMicros := int64(40_000_000)
+	valuationCurrency := "CNY"
+	optionCode := "redemption-credit-positive-option"
+	creditCode := "redemption-credit-positive-pool"
+	require.NoError(t, db.Create(&User{
+		Id: userID, Username: "redemption-credit-positive", Status: common.UserStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: optionPlanID, Title: "40 CNY / 1,000 Credit", PriceAmount: 40,
+		PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true,
+		EntitlementType: SubscriptionEntitlementTimed, DurationUnit: SubscriptionDurationMonth,
+		DurationValue: 1, QuotaResetPeriod: SubscriptionResetMonthly,
+		MonthlyTokenLimit: 1_000, UnlimitedPurchaseEnabled: true, BusinessCode: &optionCode,
+	}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: creditPlanID, Title: "Credit balance", Currency: "CNY",
+		ValuationCurrency: &valuationCurrency, Enabled: true,
+		CreditBalanceConfigured: true, CreditBalanceRedemptionEnabled: true,
+		EntitlementType: SubscriptionEntitlementCreditBalance, BusinessCode: &creditCode,
+	}).Error)
+	redemption := &Redemption{
+		Id: redemptionID, Key: "credit-positive-redemption", Type: RedemptionTypeSubscription,
+		PlanId: optionPlanID, Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, redemption.Insert())
+	if debt > 0 {
+		balance := UserSubscription{
+			UserId: userID, PlanId: creditPlanID, EntitlementType: SubscriptionEntitlementCreditBalance,
+			Status: SubscriptionStatusActive, TokenLimit: 0, TokenUsed: debt,
+		}
+		require.NoError(t, db.Create(&balance).Error)
+		now := common.GetTimestamp()
+		require.NoError(t, db.Create(&CreditValuationState{
+			UserSubscriptionId: balance.Id, UserId: userID, Currency: "CNY",
+			RuleVersion: CreditValuationRuleVersion, CreatedAt: now, UpdatedAt: now,
+		}).Error)
+	}
+	return db, userID, optionPlanID, redemptionID
+}
+
+func TestRedemptionCreditBalanceFreezesExactTierSnapshot(t *testing.T) {
+	db, userID, optionPlanID, redemptionID := seedRedemptionCreditPositiveIngress(t, 0)
+
+	result, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Replayed)
+	require.NotNil(t, result.CreditBalance)
+	require.Equal(t, int64(1_000), result.CreditBalance.GrossCredit)
+	require.Equal(t, int64(1_000), result.CreditBalance.NetCredit)
+	require.Equal(t, int64(40_000_000), result.CreditBalance.GrossAmountMicros)
+	require.Equal(t, int64(40_000_000), result.CreditBalance.NetAmountMicros)
+	require.Equal(t, CreditValuationConfidenceExact, result.CreditBalance.ValuationConfidence)
+
+	var ledger CreditBalanceLedger
+	require.NoError(t, db.First(&ledger, result.CreditBalance.LedgerId).Error)
+	require.Equal(t, optionPlanID, ledger.PlanId)
+	require.Equal(t, int64(40_000_000), ledger.SourcePriceMicros)
+	require.Equal(t, int64(1_000), ledger.SourcePlanCredit)
+	require.Equal(t, "redemption:93004", ledger.SourceKey)
+	require.Equal(t, "completed", ledger.SourceStatus)
+	require.NotEmpty(t, ledger.ParameterFingerprint)
+
+	newPriceMicros := int64(80_000_000)
+	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", optionPlanID).Updates(map[string]any{
+		"price_amount": 80, "price_amount_micros": newPriceMicros,
+	}).Error)
+	var saved Redemption
+	require.NoError(t, db.First(&saved, redemptionID).Error)
+	var fulfillment RedemptionFulfillmentSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(saved.FulfillmentSnapshot, &fulfillment))
+	require.NotNil(t, fulfillment.Entitlement.ListPriceMicros)
+	require.Equal(t, int64(40_000_000), *fulfillment.Entitlement.ListPriceMicros)
+	require.NoError(t, db.First(&ledger, ledger.Id).Error)
+	require.Equal(t, int64(40_000_000), ledger.SourcePriceMicros)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, result.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+}

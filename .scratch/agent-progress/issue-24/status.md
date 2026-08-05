@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-管理员同币种 increase 资格、debt、完整参数指纹和事务回滚均已 GREEN，下一步只实现兑换同币种冻结快照、幂等、debt 与邀请隔离。
+兑换同币种冻结快照与 exact ingress 已 GREEN，下一步逐组证明兑换幂等冲突、debt offset、事务回滚和邀请隔离。
 
 ## 已完成
 
@@ -16,13 +16,14 @@
 - 已证明部分/全额 debt offset 只把同比例净成本纳入 exact。
 - 已证明完整指纹同 key 重放与参数/冻结价格变化冲突，重放不增加 state version。
 - 已通过 SQLite ledger 故障注入证明 adjustment、ledger、state、subscription 同事务回滚。
+- 已通过真实 `Redeem` 入口冻结兑换档位精确价格、Credit 分母、目标估值币种、规则版本与稳定来源身份；套餐后续改价不回写 ledger、fulfillment 或状态。
 
 ## 下一步
 
-1. 编写兑换同币种冻结快照 RED 并接入 #22 ingress。
-2. 证明兑换重放/冲突、部分/全额 debt offset。
-3. 证明兑换失败整笔回滚且不产生邀请奖励或邀请付费统计。
-4. 写跨币种最小 RED/接口需求后 clean HANDOFF_READY。
+1. 编写并证明兑换重放/冲突幂等 RED→GREEN。
+2. 编写并证明兑换部分/全额 debt offset RED→GREEN。
+3. 编写并证明兑换失败整笔回滚且不产生邀请奖励或邀请付费统计。
+4. 写跨币种最小 RED/`CreditFXRateSnapshot` 接口需求后 clean HANDOFF_READY。
 
 ## 阻塞
 
@@ -35,4 +36,5 @@
 - 恢复合同安全提交：`4e0640e2f`。
 - 管理员 exact ingress 安全提交：`b07addec3`。
 - 资格矩阵安全提交：`09b8775d0`。
-- 管理员 debt/幂等/回滚 GREEN 待提交。
+- 管理员 debt/幂等/回滚安全提交：`34b536821`。
+- 兑换同币种冻结快照 GREEN 待提交。

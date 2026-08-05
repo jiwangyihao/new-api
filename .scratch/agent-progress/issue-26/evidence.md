@@ -270,3 +270,10 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 真实结果：`ok github.com/QuantumNous/new-api/model`。测试断言 `errors.Is(err, ErrConversionIdempotencyConflict)` 且 conversion/ledger/state 计数保持不变；`gofmt` 与 `git diff --check` 均成功。
 
 范围说明：本安全点未实现并发双确认，未进入在途 request、API/UI 或其他 Issue 范围。
+
+## 2026-08-05 — Conversion 权威事实冲突 GREEN 安全点校准
+
+- 独立 RED：`28b77ba73`（`test(issue-26): 固化转换权威事实冲突 RED`）。
+- 独立 GREEN：`7a899945d`（`feat(issue-26): 拒绝转换权威事实冲突`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步仅验收真实文件 SQLite 下同 source/key 双连接同时 Confirm；禁止不同 source、在途 request、API/UI。

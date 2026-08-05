@@ -3,7 +3,7 @@
 ## 当前状态
 
 - 阶段：`INFLIGHT_CONCURRENCY_HANDOFF_READY`；真实文件 SQLite WAL 双连接 conversion ↔ final settle/full refund 两类 deterministic barrier 均由现实现直接 GREEN，无生产代码修改。
-- 最近 clean SHA：`43974d499`（退款纵切进度安全点）；本次并发测试与证据待提交。
+- 最近 clean SHA：`0409df31d8b6723cdcafe6b7aba7e29c289fae92`（`test(issue-26): 验证转换结算双连接串行化`）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,9 +11,9 @@
 
 ## 下一条命令
 
-格式化并差异检查后提交 `model/subscription_conversion_valuation_test.go` 与进度文件；确认 staged、unstaged、untracked 全零。
+等待协调器下一阶段指令；本阶段不进入 API/UI 或其他范围。
 
-并发验证：
+并发验证已提交：
 
 - `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`：PASS。
 - `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`：PASS。
@@ -21,9 +21,7 @@
 
 ## 未提交文件
 
-- `model/subscription_conversion_valuation_test.go`
-- `.scratch/agent-progress/issue-26/status.md`
-- `.scratch/agent-progress/issue-26/evidence.md`
+- 无；提交 `0409df31d` 后 staged、unstaged、untracked 全零。
 
 ## 上下文风险
 

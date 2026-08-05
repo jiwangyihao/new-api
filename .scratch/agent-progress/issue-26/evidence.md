@@ -382,3 +382,10 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 重复命令：`go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`；结果：PASS。
 - 窄竞态命令：`go test -race ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`；结果：PASS。
 - 因现实现直接 GREEN，未修改生产代码，未设计事务重试，未进入 API/UI、#24/#25/#27/#28 或其他范围。
+
+## 2026-08-06 — 并发纵切 clean 安全点
+
+- 测试与进度提交：`0409df31d8b6723cdcafe6b7aba7e29c289fae92`（`test(issue-26): 验证转换结算双连接串行化`）。
+- `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功。
+- 提交后 `git status --short` 无输出：staged、unstaged、untracked 均为 0。
+- 阶段保持 `INFLIGHT_CONCURRENCY_HANDOFF_READY`；未修改生产代码，未进入 API/UI、#24/#25/#27/#28、MySQL/PostgreSQL、全仓测试或部署。

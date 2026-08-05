@@ -415,3 +415,10 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - GREEN 命令：`gofmt -w controller/subscription_conversion.go && go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`；结果：PASS（`go test: 1 packages ok`）。
 - 既有 quote/confirm/history 联合回归：`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`；结果：PASS。
 - tracer 在 Option 从 `7.3` 更新到 `8.1`、source price 从 `40,000,000` 更新到 `41,000,000` 后，history 与 confirm 完整结构相等，证明返回的是原 conversion 冻结事实；同一 tracer 的管理员 conversion summary 与 converted subscription drilldown 请求均成功。
+
+## 2026-08-06 — Conversion state version API GREEN
+
+- route tracer 增加 `state_version_after` 字符串断言；初次执行返回空字符串形成真实 RED，而权威 conversion ledger 的 `valuation_state_version_after` 为 `1`。
+- 未新增持久 schema：`SubscriptionConversion.ValuationStateVersionAfter` 是只读、禁止 migration 的查询字段；Confirm 直接复用事务内已读取 ledger，replay/history 在既有 conversion 查询中联接 immutable ledger，返回同一权威版本。
+- 命令：`gofmt -w model/subscription_conversion.go model/subscription_conversion_quote.go controller/subscription_conversion.go router/subscription_conversion_route_test.go && go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。Confirm 与后续 history 返回相同 `state_version_after="1"`；既有 quote/confirm 回归同时通过。

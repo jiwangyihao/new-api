@@ -60,6 +60,7 @@ type subscriptionConversionHistoryResponse struct {
 	UnitValueNumeratorMicros string `json:"unit_value_numerator_micros,omitempty"`
 	UnitValueDenominator     string `json:"unit_value_denominator,omitempty"`
 	RuleVersion              int    `json:"rule_version,omitempty"`
+	StateVersionAfter        string `json:"state_version_after,omitempty"`
 	FxNumerator              string `json:"fx_numerator,omitempty"`
 	FxDenominator            string `json:"fx_denominator,omitempty"`
 	FxCapturedAt             string `json:"fx_captured_at,omitempty"`
@@ -135,6 +136,7 @@ func toSubscriptionConversionHistoryResponse(conversion *model.SubscriptionConve
 		response.NetCostMicros = strconv.FormatInt(conversion.ValuationNetCostMicros, 10)
 		response.UnitValueNumeratorMicros, response.UnitValueDenominator = subscriptionConversionUnitValue(conversion)
 		response.RuleVersion = conversion.ValuationRuleVersion
+		response.StateVersionAfter = strconv.FormatInt(conversion.ValuationStateVersionAfter, 10)
 		response.FxNumerator = strconv.FormatInt(conversion.FxRateNumerator, 10)
 		response.FxDenominator = strconv.FormatInt(conversion.FxRateDenominator, 10)
 		response.FxCapturedAt = strconv.FormatInt(conversion.FxCapturedAt, 10)

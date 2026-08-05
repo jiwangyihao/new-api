@@ -174,7 +174,11 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 			}
 			result.Quotes = append(result.Quotes, *quote)
 		}
-		if err := tx.Where("user_id = ?", userId).Order("id desc").Limit(100).Find(&result.Conversions).Error; err != nil {
+		if err := tx.Model(&SubscriptionConversion{}).
+			Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
+			Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
+			Where("subscription_conversions.user_id = ?", userId).
+			Order("subscription_conversions.id desc").Limit(100).Find(&result.Conversions).Error; err != nil {
 			return err
 		}
 		return nil

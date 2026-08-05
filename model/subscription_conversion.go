@@ -59,6 +59,7 @@ type SubscriptionConversion struct {
 	ValuationNetCostMicros     int64  `json:"valuation_net_cost_micros,string" gorm:"type:bigint;not null;default:0"`
 	ValuationConfidence        string `json:"valuation_confidence" gorm:"type:varchar(16);not null;default:''"`
 	ValuationRuleVersion       int    `json:"valuation_rule_version" gorm:"not null;default:0"`
+	ValuationStateVersionAfter int64  `json:"-" gorm:"->;-:migration"`
 	FxSourceCurrency           string `json:"fx_source_currency" gorm:"type:varchar(8);not null;default:''"`
 	FxRateNumerator            int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
 	FxRateDenominator          int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
@@ -253,6 +254,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			conversion.ValuationNetCostMicros = ledger.ValuationNetCostMicros
 			conversion.ValuationConfidence = ledger.ValuationConfidence
 			conversion.ValuationRuleVersion = ledger.ValuationRuleVersion
+			conversion.ValuationStateVersionAfter = ledger.ValuationStateVersionAfter
 			conversion.FxSourceCurrency = ledger.FxSourceCurrency
 			conversion.FxRateNumerator = ledger.FxRateNumerator
 			conversion.FxRateDenominator = ledger.FxRateDenominator
@@ -428,19 +430,36 @@ func subscriptionConversionRejection(quote *TimedSubscriptionConversionQuote) er
 
 func findSubscriptionConversionByIdempotencyTx(tx *gorm.DB, userId int, idempotencyKey string) (*SubscriptionConversion, bool, error) {
 	var conversion SubscriptionConversion
-	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ? AND idempotency_key = ?", userId, idempotencyKey).Limit(1).Find(&conversion)
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Model(&SubscriptionConversion{}).
+		Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
+		Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
+		Where("subscription_conversions.user_id = ? AND subscription_conversions.idempotency_key = ?", userId, idempotencyKey).
+		Limit(1).Find(&conversion)
 	return &conversion, query.RowsAffected > 0, query.Error
 }
 
 func findSubscriptionConversionBySourceTx(tx *gorm.DB, sourceSubscriptionId int) (*SubscriptionConversion, bool, error) {
 	var conversion SubscriptionConversion
-	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Model(&SubscriptionConversion{}).
+		Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
+		Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
+		Where("subscription_conversions.source_subscription_id = ?", sourceSubscriptionId).
+		Limit(1).Find(&conversion)
 	return &conversion, query.RowsAffected > 0, query.Error
 }
 
 func findCommittedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversion, error) {
+	conversionQuery := func() *gorm.DB {
+		return DB.Model(&SubscriptionConversion{}).
+			Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
+			Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id")
+	}
 	var conversion SubscriptionConversion
-	query := DB.Where("user_id = ? AND idempotency_key = ?", userId, idempotencyKey).Limit(1).Find(&conversion)
+	query := conversionQuery().
+		Where("subscription_conversions.user_id = ? AND subscription_conversions.idempotency_key = ?", userId, idempotencyKey).
+		Limit(1).Find(&conversion)
 	if query.Error != nil {
 		return nil, query.Error
 	}
@@ -450,7 +469,7 @@ func findCommittedSubscriptionConversion(userId int, sourceSubscriptionId int, i
 		}
 		return &conversion, nil
 	}
-	query = DB.Where("source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
+	query = conversionQuery().Where("subscription_conversions.source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
 	if query.Error != nil {
 		return nil, query.Error
 	}
@@ -468,7 +487,11 @@ func ListSubscriptionConversions(userId int, limit int) ([]SubscriptionConversio
 		limit = 100
 	}
 	var conversions []SubscriptionConversion
-	if err := DB.Where("user_id = ?", userId).Order("id desc").Limit(limit).Find(&conversions).Error; err != nil {
+	if err := DB.Model(&SubscriptionConversion{}).
+		Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
+		Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
+		Where("subscription_conversions.user_id = ?", userId).
+		Order("subscription_conversions.id desc").Limit(limit).Find(&conversions).Error; err != nil {
 		return nil, err
 	}
 	return conversions, nil

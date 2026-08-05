@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`API_CROSS_CURRENCY_ROUTE_GREEN`；跨币种 quote → confirm → history/analytics route tracer 与既有路由联合回归已 GREEN，最小响应 adapter 暴露冻结估值/FX 事实和稳定错误 code。
-- 最近 clean SHA：`06c2692ac`（`test(issue-26): 固化跨币种 API 可观察性 RED`）；当前 controller GREEN 与 progress 证据待提交。
+- 阶段：`API_STATE_VERSION_GREEN`；跨币种 route tracer 已同时覆盖冻结估值/FX、rule version、ledger state version 与稳定错误 code，定向路由测试 GREEN。
+- 最近 clean SHA：`cb24d5534`（`feat(issue-26): 暴露转换冻结估值事实`）；当前 state-version adapter、router tracer 与 progress 证据待独立提交。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -13,11 +13,11 @@
 
 `go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`
 
-下一步提交最小 DTO GREEN 安全点，然后执行五个运营分析 API 与聚焦门禁；禁止新 UI/schema/端点。
+下一步提交 API adapter + router tracer clean 安全点；提交前不进入 UI/browser。
 
 ## 未提交文件
 
-- `controller/subscription_conversion.go`、`.scratch/agent-progress/issue-26/status.md`、`.scratch/agent-progress/issue-26/evidence.md`；router RED tracer 已在 `06c2692ac` 提交。
+- `model/subscription_conversion.go`、`model/subscription_conversion_quote.go`、`controller/subscription_conversion.go`、`router/subscription_conversion_route_test.go`、本目录 status/evidence；无 UI、schema 或新端点。
 
 ## 上下文风险
 

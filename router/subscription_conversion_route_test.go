@@ -38,6 +38,7 @@ type subscriptionConversionObservableFacts struct {
 	UnitValueNumeratorMicros string `json:"unit_value_numerator_micros"`
 	UnitValueDenominator     string `json:"unit_value_denominator"`
 	RuleVersion              int    `json:"rule_version"`
+	StateVersionAfter        string `json:"state_version_after"`
 	FxNumerator              string `json:"fx_numerator"`
 	FxDenominator            string `json:"fx_denominator"`
 	FxCapturedAt             string `json:"fx_captured_at"`
@@ -287,6 +288,9 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	assert.Equal(t, "4000000", facts.UnitValueNumeratorMicros)
 	assert.Equal(t, "73", facts.UnitValueDenominator)
 	assert.Equal(t, model.CreditValuationRuleVersion, facts.RuleVersion)
+	var conversionLedger model.CreditBalanceLedger
+	require.NoError(t, db.Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionConversion, sourceID).First(&conversionLedger).Error)
+	assert.Equal(t, strconv.FormatInt(conversionLedger.ValuationStateVersionAfter, 10), facts.StateVersionAfter)
 	assert.Equal(t, "10", facts.FxNumerator)
 	assert.Equal(t, "73", facts.FxDenominator)
 	assert.NotEmpty(t, facts.FxCapturedAt)

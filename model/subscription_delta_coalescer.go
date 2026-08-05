@@ -1,9 +1,12 @@
 package model
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const subscriptionTokenDeltaCoalesceDelay = time.Millisecond
@@ -149,13 +152,9 @@ func (c *subscriptionTokenDeltaCoalescerState) runRequestTargets(originalSubscri
 		group.requests = nil
 		c.mu.Unlock()
 
-		for _, request := range requests {
-			request.done <- settleUserSubscriptionRequestTargetDirect(
-				request.requestId,
-				request.originalSubscriptionId,
-				request.targetCredit,
-				request.final,
-			)
+		results := flushSubscriptionRequestTargets(requests)
+		for index, request := range requests {
+			request.done <- results[index]
 		}
 
 		c.mu.Lock()
@@ -167,6 +166,47 @@ func (c *subscriptionTokenDeltaCoalescerState) runRequestTargets(originalSubscri
 		}
 		c.mu.Unlock()
 	}
+}
+
+func flushSubscriptionRequestTargets(requests []*subscriptionRequestTarget) []error {
+	results := make([]error, len(requests))
+	if len(requests) == 0 {
+		return results
+	}
+	failureIndex := -1
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		for index, request := range requests {
+			var route SubscriptionPreConsumeRecord
+			if err := tx.Where("request_id = ?", request.requestId).First(&route).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					err = ErrCreditValuationRequestNotFound
+				}
+				failureIndex = index
+				results[index] = err
+				return err
+			}
+			if route.UserSubscriptionId != request.originalSubscriptionId {
+				failureIndex = index
+				results[index] = ErrCreditValuationMappingConflict
+				return ErrCreditValuationMappingConflict
+			}
+			if err := SettleCreditRequestTargetTx(tx, &route, request.targetCredit, request.final); err != nil {
+				failureIndex = index
+				results[index] = err
+				return err
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		return results
+	}
+	for index := range results {
+		if index != failureIndex {
+			results[index] = ErrCreditValuationBatchRolledBack
+		}
+	}
+	return results
 }
 
 func flushSubscriptionTokenDeltaRequests(id int, requests []*subscriptionTokenDeltaRequest) {

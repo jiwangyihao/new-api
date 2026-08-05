@@ -338,23 +338,36 @@ FAIL github.com/QuantumNous/new-api/model
 ```
 精确症状：配置 100ms 合并窗口后，第一个请求目标调用立即返回；现有合并器只接受匿名 subscription delta，公开 Credit 请求目标没有入队身份、稳定顺序或逐请求结果。
 
-### GREEN：逐请求身份、顺序与结果
-GREEN 命令：
+### 首轮 GREEN 结果与已发现缺口
+首轮命令：
 ```text
 go test ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+go test -race ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+```
+关键输出：两条命令均 `1 packages ok`。
+
+已发现缺口：提交 `4224f3b57` 只把请求目标排队后逐项调用 `settleUserSubscriptionRequestTargetDirect`，每项仍开启独立事务。它证明了身份、顺序和逐请求返回，但没有满足“一次 flush 共享同一事务”的冻结合同；原测试也没有覆盖中间失败归属。该提交不得视为完整 GREEN，下一纠正提交必须在一个 `DB.Transaction` 内按稳定顺序加载 route 并调用 `SettleCreditRequestTargetTx`，再逐项回写实际结果。
+
+### 纠正 RED：共享事务与中间失败归属
+共享事务观察 RED：首轮实现一次 flush 使用两个事务，断言 `expected: 1, actual: 2`。中间失败归属 RED：测试引用尚不存在的 `ErrCreditValuationBatchRolledBack`，证明实现未定义“整批回滚但仅失败项保留原领域错误”的逐项结果合同。
+
+### 纠正 GREEN：单事务稳定顺序与整批回滚结果
+定向命令：
+```text
+go test ./model -run '^TestCreditRequestTargetCoalescer(RollsBackBatchAndAttributesMiddleFailure|PreservesEnqueueOrderAndResults)$' -count=1
 ```
 关键输出：`go test: 1 packages ok`。
 
-定向回归、race 与空白检查：
+稳定性、race 与空白检查：
 ```text
-go test ./model -run '^(TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults|TestPostConsumeUserSubscriptionTokenDeltaCoalescesConcurrentHotWrites|TestCreditValuationRequestTarget)' -count=1
-go test -race ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+go test ./model -run '^TestCreditRequestTargetCoalescer(RollsBackBatchAndAttributesMiddleFailure|PreservesEnqueueOrderAndResults)$' -count=10
+go test -race ./model -run '^TestCreditRequestTargetCoalescer(RollsBackBatchAndAttributesMiddleFailure|PreservesEnqueueOrderAndResults)$' -count=1
 git diff --check
 ```
 关键输出：
 ```text
-go test: 1 packages ok
+count=10: ok github.com/QuantumNous/new-api/model
 go test -race: 1 packages ok
 git diff --check: clean
 ```
-结论：Credit 请求目标在原 coalescer 内按 original subscription 分组，队列项持久携带 request ID、原订阅 ID、目标累计量与 final，按入队顺序逐条事务结算并逐请求返回错误；499/500 预扣的两个请求各追加 1 后，第一请求获得最后 1 可用 Credit 的成本，第二请求形成 1 欠额，结果等同同序逐条事务。原 timed 匿名 delta 合并测试保持通过。
+结论：一次 Credit target flush 现在使用单个 `DB.Transaction`，按稳定入队顺序加载每条 route 并调用 `SettleCreditRequestTargetTx`。任一中间项失败会回滚整批 DB 写；实际失败项收到原领域错误，所有因事务回滚未提交的其他项收到稳定 `ErrCreditValuationBatchRolledBack`，不会把已回滚项报告为成功。成功批次继续保持逐请求舍入、欠额与结果归属。

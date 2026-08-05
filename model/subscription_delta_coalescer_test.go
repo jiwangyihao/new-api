@@ -126,3 +126,67 @@ func TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults(t *testing.
 	require.Equal(t, int64(1), secondRecord.DebtFormedCredit)
 	require.Equal(t, int64(20_000_000), secondRecord.DeductedExactCostMicros)
 }
+
+func TestCreditRequestTargetCoalescerRollsBackBatchAndAttributesMiddleFailure(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const firstRequestID = "credit-coalescer-failure-first"
+	first, err := PreConsumeUserSubscriptionByUnits(firstRequestID, user.Id, "gpt-4o", 0, 0, 300)
+	require.NoError(t, err)
+	const thirdRequestID = "credit-coalescer-failure-third"
+	third, err := PreConsumeUserSubscriptionByUnits(thirdRequestID, user.Id, "gpt-4o", 0, 0, 300)
+	require.NoError(t, err)
+	_, err = PreConsumeUserSubscriptionByUnits("credit-coalescer-failure-existing", user.Id, "gpt-4o", 0, 0, 300)
+	require.NoError(t, err)
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, first.UserSubscriptionId)
+	require.Equal(t, first.UserSubscriptionId, third.UserSubscriptionId)
+
+	oldCoalescer := subscriptionTokenDeltaCoalescer
+	coalescer := newSubscriptionTokenDeltaCoalescer(250 * time.Millisecond)
+	subscriptionTokenDeltaCoalescer = coalescer
+	t.Cleanup(func() { subscriptionTokenDeltaCoalescer = oldCoalescer })
+
+	waitForQueued := func(count int) {
+		require.Eventually(t, func() bool {
+			coalescer.mu.Lock()
+			defer coalescer.mu.Unlock()
+			group := coalescer.requestTargetGroups[first.UserSubscriptionId]
+			return group != nil && len(group.requests) == count
+		}, 100*time.Millisecond, time.Millisecond)
+	}
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- SettleUserSubscriptionRequestTarget(firstRequestID, first.UserSubscriptionId, 301, false)
+	}()
+	waitForQueued(1)
+	middleDone := make(chan error, 1)
+	go func() {
+		middleDone <- SettleUserSubscriptionRequestTarget("credit-coalescer-missing-middle", first.UserSubscriptionId, 1, false)
+	}()
+	waitForQueued(2)
+	thirdDone := make(chan error, 1)
+	go func() {
+		thirdDone <- SettleUserSubscriptionRequestTarget(thirdRequestID, third.UserSubscriptionId, 301, false)
+	}()
+	waitForQueued(3)
+
+	require.ErrorIs(t, <-firstDone, ErrCreditValuationBatchRolledBack)
+	require.ErrorIs(t, <-middleDone, ErrCreditValuationRequestNotFound)
+	require.ErrorIs(t, <-thirdDone, ErrCreditValuationBatchRolledBack)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, first.UserSubscriptionId).Error)
+	require.Equal(t, int64(900), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(100), state.AvailableCredit)
+	require.Equal(t, int64(4_000_000), state.ExactCostMicros)
+	for _, requestID := range []string{firstRequestID, thirdRequestID} {
+		var record SubscriptionPreConsumeRecord
+		require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+		require.Equal(t, int64(300), record.AppliedCredit)
+		require.Equal(t, int64(1), record.SettlementVersion)
+	}
+}

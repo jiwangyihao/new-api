@@ -2,11 +2,13 @@
 
 ## 冻结开工基线
 
-本次实现必须从已经验收并集成 Issues #20、#21、#22、#23 的提交 `fd4d4683bc3b3b2cdd78c8e5c851c58263e61971` 开工。父工作树固定为：
+Issue #26 的已验收实现祖先固定为 `fd4d4683bc3b3b2cdd78c8e5c851c58263e61971`，该提交已经集成并关闭 Issues #20、#21、#22、#23。新子工作树的 `HEAD` 必须等于**创建当时**父集成分支 `jiwangyihao/credit-operational-value-integration` 的 tip；`fd4d4683...HEAD` 之间只允许包含调度协议、Agent 指令、验收清单和恢复记录等上下文提交，不要求子工作树 `HEAD` 恰好等于 `fd4d4683`。
+
+父工作树固定为：
 
 `C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`
 
-父分支固定为 `jiwangyihao/credit-operational-value-integration`。不得从 `origin/main`、仓库根工作树、生产提交、Issue #24 冻结分支或任何旧 Worker 分支派生。开工后先记录 `HEAD`、`merge-base`、完整 Orca parent id 与干净状态；任一不符必须立即停止并报告。
+Orca `parentWorktreeId` 必须严格等于该父工作树的完整 `<repo-id>::<path>` id，父分支必须为 `jiwangyihao/credit-operational-value-integration`。不得从 `origin/main`、仓库根工作树、生产提交、Issue #24 冻结分支或任何旧 Worker 分支派生。开工后必须记录：父集成 tip、子树 `HEAD`、`merge-base(fd4d4683, HEAD)`、`fd4d4683..HEAD` 提交列表、完整 Orca parent id 与干净状态。若子树 `HEAD` 不等于创建时父 tip、`fd4d4683` 不是祖先、调度区间混入运行时代码，或 lineage 不符，必须在修改任何文件前立即停止并报告。
 
 Issue #21、#22、#23 已完成并关闭。Issue #24 尚未集成，其冻结实现只完成无 FX 的正向入账；不要把 Issue #24 合入本分支，也不要复制它的管理员/兑换入口。Issue #26 的硬依赖已经满足，它负责提供唯一 FX 与转换 seam；完成并集成后，协调器才会恢复 Issue #24 消费该 seam。
 

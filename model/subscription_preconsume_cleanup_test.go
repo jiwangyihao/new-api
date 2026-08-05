@@ -489,3 +489,52 @@ func sqliteTotalChanges(t *testing.T, db *gorm.DB) int64 {
 	require.NoError(t, db.Raw("SELECT total_changes()").Scan(&total).Error)
 	return total
 }
+
+func TestCleanupSubscriptionPreConsumeRecordsPreservesAuditFacts(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Task{}))
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+
+	const requestID = "cleanup-audit-preservation"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 100)
+	require.NoError(t, err)
+	require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, subscriptionID, 0, true))
+	expiredAt := GetDBTimestamp() - 3_600
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id = ?", requestID).
+		UpdateColumn("finalized_at", expiredAt).Error)
+
+	var ledgersBefore []CreditBalanceLedger
+	require.NoError(t, db.Order("id ASC").Find(&ledgersBefore).Error)
+	var ordersBefore []SubscriptionOrder
+	require.NoError(t, db.Order("id ASC").Find(&ordersBefore).Error)
+	var stateBefore CreditValuationState
+	require.NoError(t, db.First(&stateBefore, "user_subscription_id = ?", subscriptionID).Error)
+
+	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), deleted)
+
+	var ledgersAfter []CreditBalanceLedger
+	require.NoError(t, db.Order("id ASC").Find(&ledgersAfter).Error)
+	var ordersAfter []SubscriptionOrder
+	require.NoError(t, db.Order("id ASC").Find(&ordersAfter).Error)
+	var stateAfter CreditValuationState
+	require.NoError(t, db.First(&stateAfter, "user_subscription_id = ?", subscriptionID).Error)
+	require.Equal(t, ledgersBefore, ledgersAfter)
+	require.Equal(t, ordersBefore, ordersAfter)
+	require.Equal(t, stateBefore, stateAfter)
+
+	var requestCount int64
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id = ?", requestID).
+		Count(&requestCount).Error)
+	require.Zero(t, requestCount)
+	require.NotEmpty(t, ledgersAfter)
+	for _, ledger := range ledgersAfter {
+		require.NotEmpty(t, ledger.SourceSnapshot)
+	}
+}

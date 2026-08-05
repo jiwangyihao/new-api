@@ -71,3 +71,8 @@ M service/task_billing_test.go
 - 输出：cutoff、batch、候选数、受保护数、按终态汇总和稳定原因 `active_task_reference`。
 - 只读证明：重复调用返回相同结构；SQLite `total_changes()` 与请求记录总数调用前后不变。
 - 验证：诊断与 cleanup 聚焦用例 `count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+
+## 审计事实保留安全点
+- 场景：通过公开入口完成预扣与最终退款，将请求记录置于 cutoff 前并执行 cleanup。
+- 结果：仅 `SubscriptionPreConsumeRecord` 被删除；`CreditBalanceLedger`（含低频 `SourceSnapshot`）、`CreditValuationState`、`SubscriptionOrder` 前后等价。
+- 验证：`TestCleanupSubscriptionPreConsumeRecordsPreservesAuditFacts` `count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。

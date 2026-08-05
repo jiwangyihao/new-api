@@ -1,7 +1,7 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`DIAGNOSTIC_GREEN_READY`。
+- 阶段：`AUDIT_RETENTION_GREEN_READY`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
@@ -20,6 +20,7 @@
 - 失败原子性安全提交：`70625ed4f90403e755ce63cab05cb842a1967fa0`；DELETE 后故障注入整批回滚，错误时稳定返回删除数 0。
 - 并发验证：真实文件 SQLite、两条连接与确定性 barrier 并发执行 cleanup、final replay、失败退款重放；活跃 Task 投影使 cleanup 返回 0 且保留两条记录。用例 `count=10` 与窄 `-race count=1` 均为 `go test: 1 packages ok`；现有生产实现已满足，无需生产改动。
 - 只读诊断 GREEN：`PreviewSubscriptionPreConsumeCleanup` 复用同一 cutoff/终态/Task 引用查询，报告 cutoff、batch、候选数、保护数、终态计数和稳定原因；重复调用结果相同，SQLite `total_changes()` 与记录总数不变。聚焦用例 `count=10` 为 `go test: 1 packages ok`，`git diff --check` 无输出。
+- 审计保留 GREEN：公开预扣→最终退款后清理请求记录；`CreditBalanceLedger`（含低频 `SourceSnapshot`）、`CreditValuationState`、`SubscriptionOrder` 前后等价，仅请求记录删除。用例 `count=10` 为 `go test: 1 packages ok`；`git diff --check` 无输出。
 
 ## Cleanup RED 证据
 - 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。

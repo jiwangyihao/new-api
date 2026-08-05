@@ -669,15 +669,18 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	return nil
 }
 
-func SettleUserSubscriptionRequestTarget(requestId string, targetCredit int64, final bool) error {
+func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionId int, targetCredit int64, final bool) error {
 	requestId = strings.TrimSpace(requestId)
-	if requestId == "" || targetCredit < 0 {
+	if requestId == "" || originalSubscriptionId <= 0 || targetCredit < 0 {
 		return ErrCreditValuationTargetConflict
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var route SubscriptionPreConsumeRecord
 		if err := tx.Where("request_id = ?", requestId).First(&route).Error; err != nil {
 			return err
+		}
+		if route.UserSubscriptionId != originalSubscriptionId {
+			return ErrCreditValuationMappingConflict
 		}
 		return SettleCreditRequestTargetTx(tx, &route, targetCredit, final)
 	})

@@ -146,7 +146,7 @@ func (s *SubscriptionFunding) settleCreditRequestTarget(targetCredit int64) (boo
 	if s == nil || !s.creditValuationTracked || s.EntitlementType != model.SubscriptionEntitlementCreditBalance {
 		return false, nil
 	}
-	return true, model.SettleUserSubscriptionRequestTarget(s.requestId, targetCredit, true)
+	return true, model.SettleUserSubscriptionRequestTarget(s.requestId, s.subscriptionId, targetCredit, true)
 }
 
 func (s *SubscriptionFunding) Settle(delta int) error {

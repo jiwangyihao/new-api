@@ -243,9 +243,9 @@ func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {
 	completeCreditValuationOrder(t, db, &order)
 
 	const requestID = "credit-valuation-final-200"
-	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
 	require.NoError(t, err)
-	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, 200, true))
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 200, true))
 
 	var firstRecord SubscriptionPreConsumeRecord
 	require.NoError(t, db.Where("request_id = ?", requestID).First(&firstRecord).Error)
@@ -260,7 +260,7 @@ func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {
 	require.Equal(t, int64(32_000_000), firstState.ExactCostMicros)
 	require.Equal(t, int64(2), firstState.StateVersion)
 
-	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, 200, true))
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 200, true))
 	var replayedRecord SubscriptionPreConsumeRecord
 	require.NoError(t, db.Where("request_id = ?", requestID).First(&replayedRecord).Error)
 	require.Equal(t, firstRecord.FinalizedAt, replayedRecord.FinalizedAt)
@@ -275,9 +275,9 @@ func TestCreditValuationFiveAnalyticsViewsAgreeOnThirtyTwoCNY(t *testing.T) {
 	user, _, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
 	completeCreditValuationOrder(t, db, &order)
 	const requestID = "credit-valuation-five-views"
-	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
 	require.NoError(t, err)
-	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, 200, true))
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 200, true))
 
 	query := AdminAnalyticsQuery{
 		SnapshotAt:   GetDBTimestamp(),
@@ -330,9 +330,9 @@ func TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning(t *testing.T
 	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
 	result := completeCreditValuationOrder(t, db, &order)
 	const requestID = "credit-valuation-current-only-warning"
-	_, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
 	require.NoError(t, err)
-	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, 200, true))
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 200, true))
 
 	snapshotAt := GetDBTimestamp()
 	updatedAt := snapshotAt + 10

@@ -114,3 +114,45 @@ go test ./model -run '^TestCreditValuationRequest(Target|PreConsume)|^TestCredit
 - 尚未运行项目级全量测试、格式化器或 lint；按 Dispatch 合同由协调器最终统一运行。
 - 本切片不新增 UI 或可见文案，因此当前不需要浏览器或 i18n 技能。
 - MySQL/PostgreSQL 实测矩阵属于 #27；本切片仅做跨库静态语义审查和真实 SQLite 证明。
+
+
+## 2026-08-05 恢复现场
+
+### 现场保护与核对
+命令：
+```text
+git status --short && git diff --stat && git diff
+```
+关键输出：
+```text
+staged 0, unstaged 5, untracked 0
+model/credit_valuation.go              |  7 +++++--
+model/credit_valuation_request_test.go | 32 ++++++++++++++++++++++++++++----
+model/credit_valuation_tracer_test.go  | 14 +++++++-------
+model/errors.go                        |  1 +
+service/funding_source.go              |  2 +-
+```
+结论：严格保留五个 dirty 文件；未丢弃、覆盖或清理现场。差异为公开请求结算入口增加 `original_subscription_id`、调用点 clean cutover、稳定映射冲突 sentinel 与定向测试。
+
+### 恢复 GREEN：追加目标与欠额优先退款
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTarget(IncreaseUsesCurrentPool|DecreaseRefundsDebtBeforeSnapshot)$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：追加按当前池出账/形成欠额与目标减少先撤销本请求欠额的既有 GREEN 行为在恢复后保持不变。
+
+### 恢复安全点回归
+命令：
+```text
+go test ./model ./service -run '^TestCreditValuationRequestTarget' -count=1 && git diff --check
+```
+关键输出：
+```text
+go test: 2 packages ok
+git diff --check: clean
+```
+结论：original subscription identity clean cutover、映射冲突回滚以及既有请求目标行为通过 model/service 定向回归；差异无空白错误。

@@ -34,3 +34,9 @@ F1/F2 已实现、验证并提交；最终门禁、SQLite 请求链、三包宽�
 - `45b9d64f4`：修复 `PostConsumeQuota` 相同调用重放累加。
 - `dc333c928`：迁移 Credit 结算回归夹具。
 - 最终状态与证据：本文件所在提交。
+
+## F2 post-delta 重放 blocker 收敛
+
+- 冻结候选 `3cc5608f88b395057efc7abac04b93965866c1aa` 上新增同一 `RelayInfo`、同一 `request_id`、相同 `PostConsumeQuota(relayInfo, 50, 100, false)` 第二次调用后的可观察合同；旧实现精确 RED 为 `SubscriptionPostDelta` 期望 50、实际 100，且其前面的 request record、权益、估值状态三份数据库不变断言均通过。
+- 最小修复仅调整 `PostConsumeQuota` Credit 分支：继续以 `record.PreConsumed + delta` 调用 `SettleUserSubscriptionRequestTarget(..., false)`，成功后令 `SubscriptionPostDelta = target - record.PreConsumed`；非 Credit 分支保留 `+= delta`。
+- 单次、`-count=10` 与窄 `-race` 三条指定聚焦命令均 PASS；详细 RED/GREEN 与未运行边界见 `f2-post-delta-replay-evidence.md`。

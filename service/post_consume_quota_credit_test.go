@@ -70,4 +70,5 @@ func TestPostConsumeQuotaCreditUsesStableRequestTarget(t *testing.T) {
 	require.Equal(t, subscriptionBeforeReplay, subscription)
 	require.NoError(t, model.DB.Where("user_subscription_id = ?", subscriptionID).First(&state).Error)
 	require.Equal(t, stateBeforeReplay, state)
+	require.Equal(t, int64(50), relayInfo.SubscriptionPostDelta)
 }

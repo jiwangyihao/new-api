@@ -449,7 +449,10 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 				if (delta > 0 && target < record.PreConsumed) || (delta < 0 && target > record.PreConsumed) || target < 0 {
 					return model.ErrCreditValuationOverflow
 				}
-				err = model.SettleUserSubscriptionRequestTarget(relayInfo.RequestId, relayInfo.SubscriptionId, target, false)
+				if err = model.SettleUserSubscriptionRequestTarget(relayInfo.RequestId, relayInfo.SubscriptionId, target, false); err != nil {
+					return err
+				}
+				relayInfo.SubscriptionPostDelta = target - record.PreConsumed
 			} else if relayInfo.SubscriptionDistributorTokenBilling {
 				err = model.PostConsumeUserSubscriptionTokenDelta(relayInfo.SubscriptionId, delta)
 			} else {
@@ -458,7 +461,9 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 			if err != nil {
 				return err
 			}
-			relayInfo.SubscriptionPostDelta += delta
+			if subscription.EntitlementType != model.SubscriptionEntitlementCreditBalance {
+				relayInfo.SubscriptionPostDelta += delta
+			}
 		}
 	} else {
 		return ErrLegacyWalletFundingDisabled

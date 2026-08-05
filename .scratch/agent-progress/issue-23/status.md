@@ -1,8 +1,8 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：`HANDOFF_READY`；coalescer 共享事务及证据纠正已在 clean HEAD `3c8069879` 完成，本轮停止继续实现。
-- 当前定位：下一恢复点固定为 `TaskPrivateData.subscription_request_id`；先写新 Task 传播与旧 Task 持久主键确定性身份 RED，再让 Credit 重算/失败退款走请求目标深模块。
+- 阶段：`Task identity / RED`；已从协调器冻结的 clean HEAD `128b71c442c028ae5cf33d3bee201282115346f0` 原位续作。
+- 当前定位：只实现 `TaskPrivateData.subscription_request_id` 的新 Task 持久身份、legacy Task 主键确定性身份，以及 reserve/追加/success final/failure refund/replay 复用；本安全点完成前不进入清理。
 
 ## 已完成
 - 已读取仓库与全局规则、父 PRD #19、Issue #23、执行合同、第二波次合同、`CONTEXT.md`、ADR 0001/0002、规格 5.4/6/7.3–7.5/9/11.3/13/14、计划任务 3/6、Issue #20/#22 合同。
@@ -11,12 +11,12 @@
 - 已确认起始 HEAD 和 merge-base 都是 `ec1858fec89509bdec9a90a230a8496047c5becd`，起始工作树干净。
 
 ## 下一步
-1. 从 clean 安全提交 `3c8069879` 恢复，不重做领域核心、同步链路或 coalescer 探索。
-2. 在现有 task billing 测试接缝写 `TaskPrivateData.subscription_request_id` 新旧身份重放 RED，再做最小 GREEN。
-3. Task identity 安全点完成前不进入清理，不扩展 #24–#27。
+1. 在既有异步 Task 测试接缝写新 Task JSON 持久身份与 legacy 主键确定性身份 RED。
+2. 用最小实现让 Credit Task 的 reserve、追加、成功 final、失败 refund 与重放复用同一 ID，并保持 timed Task 匿名 delta 兼容。
+3. 完成新旧 Task、同 subscription 多 Task、成功/失败重放、错误隔离的 `count=10` 与窄 `-race` 后提交 Task identity 安全点；此前不进入清理或 #24–#27。
 
 ## 阻塞
-- 无技术阻塞；因上下文收敛主动进入 `HANDOFF_READY`，等待协调器原位续作或重派。
+- 无技术阻塞；严格按冻结续作范围推进。
 
 ## 最近安全提交
-- `3c8069879`（更正合并器共享事务证据；工作树在本进度提交前 clean）。
+- `128b71c442c028ae5cf33d3bee201282115346f0`（Task identity HANDOFF_READY；接管前工作树 clean）。

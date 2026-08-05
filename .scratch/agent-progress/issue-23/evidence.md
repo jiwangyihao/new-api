@@ -458,3 +458,11 @@ go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcros
 关键输出：三条命令均为 `go test: 1 packages ok`。旧实现复现为测试包无法解析 `model.SettleLegacyCreditTaskRequestTarget`，因此裁决 A：`model/credit_valuation.go` 的 legacy 请求快照入口与 `service/task_billing.go` 的确定性路由是已持久化旧 Task 完成 final/refund/replay 的必要生产兼容，不得退回 Credit 匿名 delta。
 
 本续作保持 `service/billing_session.go` 无差异；legacy 安全点与 `SubscriptionPreConsumeRecord` 清理严格分开提交。
+
+### 旧匿名夹具迁移
+`TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections` 已迁移为真实 ready Credit 运行时与持久 Task 主键身份，不放宽生产合同。命令：
+```text
+go test ./service -run '^TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections$' -count=10
+go test -race ./service -run '^TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections$' -count=1
+```
+关键输出：两条命令均为 `go test: 1 packages ok`；成功终态与失败退款分别使用不同的 `legacy-task:<pk>` 请求记录，最终 `token_used` 恢复为 100，未恢复匿名 Credit delta。

@@ -395,22 +395,25 @@ func TestTaskBillingDoesNotAdjustBusinessCodedDistributorSubscription(t *testing
 func TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()
-	const userID, tokenID, channelID, subID = 83, 83, 83, 83
-	seedUser(t, userID, 0)
-	seedToken(t, tokenID, userID, "sk-credit-balance-task", 8_000)
-	seedChannel(t, channelID)
-	require.NoError(t, model.DB.Create(&model.UserSubscription{
-		Id:              subID,
-		UserId:          userID,
-		EntitlementType: model.SubscriptionEntitlementCreditBalance,
-		TokenLimit:      1_000,
-		TokenUsed:       100,
-		AmountUsed:      9,
-		Status:          "active",
-		EndTime:         0,
+	const userID, tokenID, planID, channelID, subID = 83, 83, 83, 83, 83
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-balance-task", 1_000, 100)
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
 	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		AvailableCredit:    900,
+		ExactCostMicros:    36_000_000,
+		Currency:           "CNY",
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", subID).Update("amount_used", 9).Error)
 
 	settleTask := makeTask(userID, channelID, 100, tokenID, BillingSourceSubscription, subID)
+	settleTask.TaskID = "task-credit-balance-settle"
+	require.NoError(t, model.DB.Create(settleTask).Error)
 	RecalculateTaskQuota(ctx, settleTask, 140, "credit task settle")
 	require.Equal(t, int64(140), getSubscriptionTokenUsedForTaskTest(t, subID))
 	var sub model.UserSubscription
@@ -418,6 +421,8 @@ func TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections(t *testing.T) {
 	require.Equal(t, int64(9), sub.AmountUsed)
 
 	refundTask := makeTask(userID, channelID, 40, tokenID, BillingSourceSubscription, subID)
+	refundTask.TaskID = "task-credit-balance-refund"
+	require.NoError(t, model.DB.Create(refundTask).Error)
 	RefundTaskQuota(ctx, refundTask, "credit task failed")
 	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, subID))
 	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)

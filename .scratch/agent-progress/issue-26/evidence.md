@@ -105,3 +105,10 @@
 命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors)" -count=1`
 
 真实结果：`ok github.com/QuantumNous/new-api/model`。随后 `gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 均成功；按 Go 1.22 规则将纯计数循环改为 `range len(part)` 后再次运行同一测试，仍为 GREEN。
+
+## 2026-08-05 — A 组 GREEN 安全点校准
+
+- A 组独立 RED：`cb398810e`（`test(issue-26): 固化 FX 非法输入 RED`）。
+- A 组独立 GREEN：`2c3685f11`（`feat(issue-26): 分类 FX 非法输入错误`）。
+- GREEN 提交命令串包含 `git diff --check`；提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步只做 B 组 identity/反向、确定性与快照冻结；B 组提交前禁止 C 组或 conversion。

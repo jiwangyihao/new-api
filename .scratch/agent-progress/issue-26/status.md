@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`FX_INVALID_INPUTS_GREEN`，A 组稳定错误测试已通过，待提交独立 GREEN 安全点。
-- 最近安全 SHA：`cb398810e`（A 组非法输入 RED）。
+- 阶段：`FX_IDENTITY_REVERSE_NEXT`，A 组非法输入 RED/GREEN 已独立提交且工作树已验证 clean。
+- 最近安全 SHA：`2c3685f11`（`feat(issue-26): 分类 FX 非法输入错误`）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,13 +11,12 @@
 
 ## 下一条命令
 
-`git add model/credit_fx_rate.go .scratch/agent-progress/issue-26/status.md .scratch/agent-progress/issue-26/evidence.md && git commit -m "feat(issue-26): 分类 FX 非法输入错误"`
+为 B 组新增单一 table-driven 公共行为测试，覆盖同币种 `1/1`、USD↔CNY 严格倒数、相同 input + captured_at 确定，以及已返回 snapshot 不受后续 Option 原始文本变化影响；运行定向测试取得真实 RED。
 
-提交并确认 clean 后进入 B 组 identity/反向 RED；不得提前实现 C 组 floor/overflow。
+B 组按独立 RED 提交 → 最小 GREEN → `count=10` → `git diff --check` → 证据与 clean GREEN 提交推进；GREEN 提交前禁止 C 组或 conversion。
 
 ## 未提交文件
 
-- `model/credit_fx_rate.go`
 - `.scratch/agent-progress/issue-26/status.md`
 - `.scratch/agent-progress/issue-26/evidence.md`
 
@@ -27,11 +26,11 @@
 - 基线后的两条提交仅为 Issue #26 调度/恢复文档；Issue #26 首个 FX parser 已在后续 `58866ae7b` RED 与 `bb399d868` GREEN 中落地。
 - 协调器已明确暂停 conversion、request、API/UI 探索，先只完成 FX A/B/C 三组。
 - parser/provider 必须是唯一运行时 FX seam，禁止触碰 `float64 USDExchangeRate`。
-- A 组 GREEN 已实现 7 类稳定 sentinel 与显式方向校验；两个 parser 定向测试和 `git diff --check` 通过，尚未实现 B/C 组。
+- A 组 GREEN 已在 `2c3685f11` clean 提交；下一步仅允许 B 组 identity/反向与快照冻结行为。
 
 ## 恢复入口
 
 1. 运行 `git status --short --branch`，确认分支与 clean/预期未提交文件。
 2. 读取本目录 `contract.md`、`status.md`、`evidence.md`。
-3. 最近 clean 安全点是 A 组 RED `cb398810e`；提交当前 GREEN 后以最新 `feat(issue-26)` 提交为恢复点。
-4. 下一步只写 B 组 identity/反向 RED；禁止提前扩展 C 组 floor/overflow 或 conversion/request/API/UI。
+3. 最近 clean 安全点是 A 组 GREEN `2c3685f11`；若只有本状态修正未提交，先提交它。
+4. 下一步只写 B 组 table-driven RED；B 组 GREEN clean 提交前禁止 C 组或 conversion。

@@ -36,3 +36,9 @@ M service/task_billing_test.go
 - 根因：旧实现使用可被后续写入改变的 `updated_at`，没有以终态落定时间 `finalized_at` 判断保留期。
 - GREEN：使用排他条件 `finalized_at < cutoff`；cutoff 前删除，等于 cutoff 与 cutoff 后保留。
 - 验证：单用例 `count=1` 与 `go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+
+## Task 请求身份投影安全点
+- RED：Task schema 缺少 `subscription_request_id` 与命名索引；公开 Insert 后投影仍为 NULL；JSON 与显式非空列不一致时 Update 未 fail-closed。
+- GREEN：新增 nullable `varchar(64)` 投影列与非唯一索引 `idx_tasks_subscription_request_id`；公开 Insert/Update 从 `TaskPrivateData.subscription_request_id` 同步，显式非空列不一致返回稳定错误；空身份与 timed Task 保持 NULL。
+- 验证：六个投影合同用例（含 Insert/Update 两种非空冲突 fail-closed）`count=1`、`count=10` 均返回 `go test: 1 packages ok`；Insert 冲突不落库；`git diff --check` 无输出。
+- 范围：未回填历史 JSON-only/NULL 行；未实现清理 `NOT EXISTS`；真实 MySQL/PostgreSQL 零 SKIP 验收仍归 #27。

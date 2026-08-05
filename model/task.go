@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -62,8 +63,9 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData           TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+	SubscriptionRequestId *string         `json:"-" gorm:"column:subscription_request_id;type:varchar(64);index:idx_tasks_subscription_request_id"`
+	Data                  json.RawMessage `json:"data" gorm:"type:json"`
 }
 
 func (t *Task) SetData(data any) {
@@ -363,10 +365,32 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	return task, nil
 }
 
-func (Task *Task) Insert() error {
-	var err error
-	err = DB.Create(Task).Error
-	return err
+var ErrTaskSubscriptionRequestProjectionMismatch = errors.New("task subscription request identity projection mismatch")
+
+func (t *Task) prepareSubscriptionRequestProjection() error {
+	if t == nil {
+		return ErrTaskSubscriptionRequestProjectionMismatch
+	}
+	requestID := strings.TrimSpace(t.PrivateData.SubscriptionRequestId)
+	if t.SubscriptionRequestId != nil {
+		projectedRequestID := strings.TrimSpace(*t.SubscriptionRequestId)
+		if projectedRequestID != "" && projectedRequestID != requestID {
+			return ErrTaskSubscriptionRequestProjectionMismatch
+		}
+	}
+	if requestID == "" {
+		t.SubscriptionRequestId = nil
+		return nil
+	}
+	t.SubscriptionRequestId = &requestID
+	return nil
+}
+
+func (t *Task) Insert() error {
+	if err := t.prepareSubscriptionRequestProjection(); err != nil {
+		return err
+	}
+	return DB.Create(t).Error
 }
 
 type taskSnapshot struct {
@@ -401,10 +425,11 @@ func (t *Task) Snapshot() taskSnapshot {
 	}
 }
 
-func (Task *Task) Update() error {
-	var err error
-	err = DB.Save(Task).Error
-	return err
+func (t *Task) Update() error {
+	if err := t.prepareSubscriptionRequestProjection(); err != nil {
+		return err
+	}
+	return DB.Save(t).Error
 }
 
 func (t *Task) UpdateQuota() error {

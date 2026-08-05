@@ -1904,6 +1904,7 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 type SubscriptionPreConsumeResult struct {
 	UserSubscriptionId         int
 	PreConsumed                int64
+	AppliedCredit              int64
 	AmountTotal                int64
 	AmountUsedBefore           int64
 	AmountUsedAfter            int64
@@ -2962,6 +2963,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
 			returnValue.CreditValuationTracked = existing.ValuationSubscriptionId > 0
+			returnValue.AppliedCredit = existing.AppliedCredit
 			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
 			return nil
 		}
@@ -3035,6 +3037,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		returnValue.CreditValuationTracked = record.ValuationSubscriptionId > 0
+		returnValue.AppliedCredit = record.AppliedCredit
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
 	}

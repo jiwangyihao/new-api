@@ -67,7 +67,7 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 		fundingDelta = int(fundingDelta64)
 	}
 	if subscriptionFunding, ok := s.funding.(*SubscriptionFunding); ok {
-		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens)
+		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens, true)
 		if err != nil {
 			return err
 		}
@@ -159,19 +159,22 @@ func (s *BillingSession) Refund(c *gin.Context) {
 	subscriptionId := s.relayInfo.SubscriptionId
 	committedSubscriptionTokens := s.committedSubscriptionTokens
 	funding := s.funding
+	creditTargetTracked := false
+	if sub, ok := funding.(*SubscriptionFunding); ok {
+		creditTargetTracked = sub.creditValuationTracked && sub.EntitlementType == model.SubscriptionEntitlementCreditBalance
+	}
 
 	gopool.Go(func() {
-		// 1) 退还资金来源
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
-		if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+		if !creditTargetTracked && committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)
 			if err != nil {
 				common.SysLog("error refunding committed subscription tokens: " + err.Error())
 			}
 		}
-		if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+		if !creditTargetTracked && extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -int64(extraReserved))
 			if err != nil {
 				common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
@@ -202,18 +205,22 @@ func (s *BillingSession) refundSync() {
 	subscriptionId := s.relayInfo.SubscriptionId
 	committedSubscriptionTokens := s.committedSubscriptionTokens
 	funding := s.funding
+	creditTargetTracked := false
+	if sub, ok := funding.(*SubscriptionFunding); ok {
+		creditTargetTracked = sub.creditValuationTracked && sub.EntitlementType == model.SubscriptionEntitlementCreditBalance
+	}
 	s.mu.Unlock()
 
 	if err := funding.Refund(); err != nil {
 		common.SysLog("error refunding billing source: " + err.Error())
 	}
-	if committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+	if !creditTargetTracked && committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 		err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)
 		if err != nil {
 			common.SysLog("error refunding committed subscription tokens: " + err.Error())
 		}
 	}
-	if extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
+	if !creditTargetTracked && extraReserved > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 		err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -int64(extraReserved))
 		if err != nil {
 			common.SysLog("error refunding subscription extra reserved quota: " + err.Error())
@@ -390,8 +397,7 @@ func (s *BillingSession) reserveFunding(delta int) error {
 		funding.consumed += delta
 		return nil
 	case *SubscriptionFunding:
-		err := postConsumeSubscriptionFundingDelta(funding, funding.subscriptionId, int64(delta))
-		if err != nil {
+		if err := funding.Settle(delta); err != nil {
 			return types.NewErrorWithStatusCode(
 				fmt.Errorf("订阅额度不足或未配置订阅: %s", err.Error()),
 				types.ErrorCodeInsufficientUserQuota,

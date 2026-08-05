@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	appLogger "github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
@@ -1866,6 +1867,62 @@ func TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve(t *testing.T) {
 	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
 	require.Equal(t, int64(7), sub.AmountUsed)
+}
+
+func TestCreditBillingSessionRefundUsesStableRequestTarget(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 82911, 82912, 82913, 82914, 82915
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-request-target", 1_000, 0)
+	require.NoError(t, model.DB.Migrator().DropTable(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	t.Cleanup(func() {
+		_ = model.DB.Migrator().DropTable(&model.CreditValuationState{}, &model.CreditValuationMigration{})
+	})
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		Currency:           "CNY",
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+
+	const requestID = "req-credit-target-refund"
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-request-target", requestID, "subscription_only")
+	freezeCreditBillingForServiceTest(t, ctx, relayInfo, channelID, creditbilling.ModeUsageTokens, 0, false)
+	relayInfo.SetEstimatePromptTokens(100)
+	preConsumeForBillingTest(t, ctx, relayInfo, 999)
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+
+	loadRecord := func() model.SubscriptionPreConsumeRecord {
+		var record model.SubscriptionPreConsumeRecord
+		require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&record).Error)
+		return record
+	}
+	require.Equal(t, int64(100), loadRecord().AppliedCredit)
+	require.NoError(t, session.Reserve(150))
+	require.Equal(t, int64(150), loadRecord().AppliedCredit)
+	require.NoError(t, session.SettleSubscriptionIncrement(25))
+	require.Equal(t, int64(175), loadRecord().AppliedCredit)
+
+	session.refundSync()
+	refunded := loadRecord()
+	require.Zero(t, refunded.AppliedCredit)
+	require.Zero(t, refunded.DeductedAvailableCredit)
+	require.Zero(t, refunded.DeductedExactCostMicros)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", subID).First(&state).Error)
+	require.Equal(t, int64(1_000), state.AvailableCredit)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	var requestCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Count(&requestCount).Error)
+	require.Equal(t, int64(1), requestCount)
 }
 
 func TestTaskBillingMapsMissingSubscriptionWithStructuredError(t *testing.T) {

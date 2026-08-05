@@ -284,3 +284,42 @@ go test: 1 packages ok
 git diff --check: clean
 ```
 结论：预扣、追加、欠额、恢复、映射、absorbed、unknown、舍入余数、重放和稳定错误/原子回滚的请求领域合同整体 GREEN。
+
+## 链路安全点 1：同步 request_id 与目标累计量
+- 范围冻结：仅覆盖现有 service 测试接缝中的 Credit `SubscriptionFunding`/`BillingSession` Reserve、实时追加、最终结算与失败退款；本安全点不改 coalescer、Task、清理或 #24–#27。
+- RED 目标：数据库中的同一 `SubscriptionPreConsumeRecord.request_id` 必须随累计目标更新；链路不得通过 `PostConsumeUserSubscriptionTokenDelta` 匿名修改 Credit。
+
+### RED：Reserve 仍绕过请求累计目标
+命令：
+```text
+go test ./service -run '^TestCreditBillingSessionRefundUsesStableRequestTarget$' -count=1
+```
+关键输出：
+```text
+expected: 150
+actual  : 100
+FAIL github.com/QuantumNous/new-api/service
+```
+精确症状：同一请求预扣 100 后 `BillingSession.Reserve(150)` 已把 `token_used` 匿名增加 50，但数据库中同一 `SubscriptionPreConsumeRecord.request_id` 的 `applied_credit` 仍为 100。旧实现因此无法让后续实时追加、最终结算或失败退款仅凭持久请求记录重放目标累计量。
+
+### GREEN：Reserve、实时追加与失败退款复用同一请求目标
+GREEN 命令：
+```text
+go test ./service -run '^TestCreditBillingSessionRefundUsesStableRequestTarget$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+行为：同一 request ID 预扣 100，`Reserve(150)` 将持久目标更新至 150，实时追加 25 更新至 175；失败退款以同一 request ID 把目标最终结算为 0/refunded，数量和 40,000,000 micros exact 状态完整恢复，数据库仅存在一条请求记录。
+
+兼容定向回归与空白检查：
+```text
+go test ./service -run '^(TestCreditBillingSessionRefundUsesStableRequestTarget|TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve|TestSubscriptionBillingSettleAvoidsHotSubscriptionRead)$' -count=1 && git diff --check
+```
+关键输出：
+```text
+go test: 1 packages ok
+git diff --check: clean
+```
+结论：最小 GREEN 仅迁移 `SubscriptionFunding`/`BillingSession` 的 request-aware 同步链路；timed 兼容与既有 task reserve 回归保持通过。本安全点未进入 coalescer、Task 身份或清理。

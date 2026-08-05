@@ -704,6 +704,36 @@ func SettleLegacyCreditTaskRequestTarget(requestId string, originalSubscriptionI
 		if err := validateCreditValuationState(&subscription, &state); err != nil {
 			return err
 		}
+		var existingRoute SubscriptionPreConsumeRecord
+		existingQuery := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).Limit(1).Find(&existingRoute)
+		if existingQuery.Error != nil {
+			return existingQuery.Error
+		}
+		if existingQuery.RowsAffected > 0 {
+			if existingRoute.UserId != subscription.UserId || existingRoute.UserSubscriptionId != originalSubscriptionId || existingRoute.ValuationSubscriptionId != originalSubscriptionId {
+				return ErrCreditValuationMappingConflict
+			}
+			if existingRoute.PreConsumed != initialAppliedCredit || existingRoute.ValuationRuleVersion != CreditValuationRuleVersion {
+				return ErrCreditValuationTargetConflict
+			}
+			return SettleCreditRequestTargetTx(tx, &existingRoute, targetCredit, final)
+		}
+
+		var activeRoutes []SubscriptionPreConsumeRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("valuation_subscription_id = ? AND applied_credit > 0", subscription.Id).Order("id asc").Find(&activeRoutes).Error; err != nil {
+			return err
+		}
+		knownAppliedCredit := int64(0)
+		for i := range activeRoutes {
+			var ok bool
+			knownAppliedCredit, ok = checkedAddInt64(knownAppliedCredit, activeRoutes[i].AppliedCredit)
+			if !ok {
+				return ErrCreditValuationOverflow
+			}
+		}
+		if knownAppliedCredit > subscription.TokenUsed || subscription.TokenUsed-knownAppliedCredit < initialAppliedCredit {
+			return ErrCreditValuationStateMismatch
+		}
 
 		now := getDBTimestampTx(tx)
 		candidate := SubscriptionPreConsumeRecord{
@@ -735,7 +765,7 @@ func SettleLegacyCreditTaskRequestTarget(requestId string, originalSubscriptionI
 		if route.UserId != subscription.UserId || route.UserSubscriptionId != originalSubscriptionId || route.ValuationSubscriptionId != originalSubscriptionId {
 			return ErrCreditValuationMappingConflict
 		}
-		if route.ValuationRuleVersion != CreditValuationRuleVersion {
+		if route.PreConsumed != initialAppliedCredit || route.ValuationRuleVersion != CreditValuationRuleVersion {
 			return ErrCreditValuationTargetConflict
 		}
 		return SettleCreditRequestTargetTx(tx, &route, targetCredit, final)

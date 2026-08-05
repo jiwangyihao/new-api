@@ -431,38 +431,30 @@ go test ./service -run '^Test(LegacyCreditTaskRequestIDUsesPersistentTaskPrimary
 ### GREEN：持久身份、legacy 隔离与生命周期重放
 - 新 Task JSON 保留提交 request ID；legacy Task 仅从持久化主键形成 `legacy-task:<id>`，反序列化后不变且同 subscription 的 Task 身份互异。
 - Credit Task 重算和失败退款使用 `request_id + target + final=true`；相同目标也进入深模块完成终态，成功/失败重放不增加版本或重复改数量。
-- 窄 `SettleLegacyCreditTaskRequestTarget` 采用固定锁序：目标 `UserSubscription` → `CreditValuationState` → request record。缺失记录以 unknown 活动快照建立兼容路由；追加按当前池出账，退款/重放继续走 request-aware 深模块。
-- legacy 首次创建使用 request ID 唯一键 `ON CONFLICT DO NOTHING`，随后锁记录并验证不可变参数；同 request 并发重放稳定幂等，参数冲突返回领域 sentinel 且原子回滚。
-- 非 ready 时保留既有匿名 Task 兼容；未伪造估值状态。
+- 窄 `SettleLegacyCreditTaskRequestTarget` 采用固定锁序：目标 `UserSubscription` → `CreditValuationState` → request record。缺失历史记录只在 `token_used - 已知活动 route 总量 >= task.Quota` 可证明该 Task 数量已存在时，以 unknown 活动快照建立兼容路由；不可证明时稳定返回 `ErrCreditValuationStateMismatch` 且整笔回滚。
+- legacy 首次创建使用 request ID 唯一键 `ON CONFLICT DO NOTHING`，随后锁记录并验证不可变参数；同 request 并发重放稳定幂等，终态冲突返回领域 sentinel 且原子回滚。
+- legacy route 不把账户总 debt 猜成本请求 debt。同 subscription 另有请求持有 20 debt 时，legacy 退款保留他方 route 的 `DebtFormedCredit` 和版本，仅依事务前后可用量差把 20 unknown 记为 absorbed、20 unknown 恢复为可用量。
+- Credit 估值 marker 非 ready 或状态缺失时失败关闭；不再存在 Credit 匿名 delta 旁路。timed Task 分支保持原兼容行为。
 
 ### Task identity 最终定向验证
 命令：
 ```text
-go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections)$' -count=10
-go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections)$' -count=1
+go test ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing)$' -count=10
+go test -race ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing)$' -count=1
 git diff --check
 ```
-关键输出：`count=10: 1 packages ok`；`-race: 1 packages ok`；`git diff --check` 无输出。覆盖新 Task JSON 重启稳定、legacy 主键确定身份、同 subscription 多 Task 隔离、成功 final/replay、失败 refund/replay、并发首次创建幂等、不可变参数冲突原子回滚与非 ready 兼容。
+关键输出：`count=10: 1 packages ok`；`-race: 1 packages ok`；`git diff --check` 无输出。覆盖新 Task JSON 重启稳定、legacy 主键确定身份、同 subscription 多 Task 隔离、成功 final/replay、失败 refund/replay、并发首次创建幂等、终态冲突原子回滚、不可证明归属失败关闭、他方欠额隔离、marker/state 失败关闭。
 
-格式化：仅运行 `gofmt` 于 `model/task.go`、`model/credit_valuation.go`、`service/task_billing.go`、`service/task_billing_test.go`；`service/billing_session.go` 的探索性改动已撤销。
+格式化：仅运行 `gofmt` 于 `model/credit_valuation.go`、`service/task_billing.go`、`service/task_billing_test.go`；`service/billing_session.go` 无未提交差异。
 
-范围：本安全点未进入预扣记录清理，未实现 #24–#28，也未改 conversion/FX/marker。
+范围：本安全点不包含预扣记录清理文件，不实现 #24–#28，不改 conversion/FX/marker 生命周期。
 
-### 遗留兼容独立续作裁决
-证据命令：
+## Task lifecycle 续作 WIP 安全点
+
+定向命令：
 ```text
-go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
-go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=10
-go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
+go test ./service -run '^Test(CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskPersistsSubscriptionRequestIDAcrossReload|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileAccountHasSettlementDebt|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable)$' -count=1
 ```
-关键输出：三条命令均为 `go test: 1 packages ok`。旧实现复现为测试包无法解析 `model.SettleLegacyCreditTaskRequestTarget`，因此裁决 A：`model/credit_valuation.go` 的 legacy 请求快照入口与 `service/task_billing.go` 的确定性路由是已持久化旧 Task 完成 final/refund/replay 的必要生产兼容，不得退回 Credit 匿名 delta。
+关键输出：`FAIL github.com/QuantumNous/new-api/service`。首个明确阻塞为多个 Task 用例在夹具创建 `CreditValuationMigration` 时返回 `SQL logic error: no such table: credit_valuation_migrations (1)`；该组合命令未进入目标生命周期断言，因此不能声称当前 WIP GREEN。
 
-本续作保持 `service/billing_session.go` 无差异；legacy 安全点与 `SubscriptionPreConsumeRecord` 清理严格分开提交。
-
-### 旧匿名夹具迁移
-`TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections` 已迁移为真实 ready Credit 运行时与持久 Task 主键身份，不放宽生产合同。命令：
-```text
-go test ./service -run '^TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections$' -count=10
-go test -race ./service -run '^TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections$' -count=1
-```
-关键输出：两条命令均为 `go test: 1 packages ok`；成功终态与失败退款分别使用不同的 `legacy-task:<pk>` 请求记录，最终 `token_used` 恢复为 100，未恢复匿名 Credit delta。
+按协调器收敛指令，本现场以诚实 WIP 安全点提交：不继续修测试隔离、不继续设计 Task/legacy/quota/conversion。后续 owner 必须先恢复每个定向夹具对 migration/state schema 的独立建表语义，再重新运行同一命令。

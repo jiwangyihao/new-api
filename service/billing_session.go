@@ -263,6 +263,13 @@ func (s *BillingSession) IsDistributorTokenBilling() bool {
 	return ok && sub.DistributorTokenBilling
 }
 
+func (s *BillingSession) UsesCreditRequestTarget() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sub, ok := s.funding.(*SubscriptionFunding)
+	return ok && sub.creditValuationTracked && sub.EntitlementType == model.SubscriptionEntitlementCreditBalance
+}
+
 func (s *BillingSession) SubscriptionConcurrencyLimit() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

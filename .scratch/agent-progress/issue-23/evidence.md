@@ -455,3 +455,10 @@ git diff --check
 格式化范围：`model/credit_valuation.go`、`service/billing.go`、`service/billing_session.go`、`service/subscription_billing_test.go`、`service/task_billing.go`、`service/task_billing_test.go`。范围不含清理实现文件，不实现 #24–#28，不改 conversion/FX/marker 生命周期。
 
 Dispatch：原 capability 已 revoked，不能发送有效 `worker_done`；等待协调器新 Dispatch。
+
+## 2026-08-05 Issue #23 最终聚焦门禁
+- `go test ./model -run "^(TestCleanupSubscriptionPreConsumeRecords|TestPreviewSubscriptionPreConsumeCleanup|TestTaskSubscriptionRequestProjection)" -count=10`：`go test: 1 packages ok`。
+- `go test -race ./model` cleanup 并发与共享事务 coalescer 聚焦用例：`go test: 1 packages ok`。
+- model 请求领域、service BillingSession/Task identity、service 窄 race、controller Credit/Subscription 聚焦门禁：每条均 `go test: 1 packages ok`。
+- `git diff --check` 无输出。
+- 未运行：真实 MySQL/PostgreSQL 零 SKIP（#27）、全项目测试、生产部署。无前端/UI 变更，不需要浏览器验证。

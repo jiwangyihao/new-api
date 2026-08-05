@@ -1,7 +1,7 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：`HANDOFF_READY`；Task identity 最终文件状态已通过完整定向 `count=10`、窄 `-race` 与 `git diff --check`，旧 Dispatch capability 已失效，不发送旧 `worker_done`。
+- 阶段：`COMPLETE`；Task identity 最终文件状态已通过完整定向 `count=10`、窄 `-race` 与 `git diff --check`，旧 Dispatch capability 已失效，不发送旧 `worker_done`。
 - 当前结果：新 Task 持久化 `subscription_request_id`；真实 Task 初始 BillingSession reserve/settle 保持请求 route 非终态；轮询追加、成功 final、失败 refund 与重放复用同一身份；legacy Task 使用稳定 `legacy-task:<task_pk>` 并仅在数量归属可证明时构造 unknown 快照，否则失败关闭；timed Task 兼容条件保持不变。
 
 ## 已完成
@@ -21,3 +21,9 @@
 
 ## 最近安全提交
 - `e83551e89`（Task 生命周期现场）及其前置 `d9e620191`、`578551963`、`55e5c50f6`、`ea016089a`；最终验证后的状态/证据将单独提交安全点。
+
+
+## 2026-08-05 最终完成
+- 请求记录清理合同已交付：终态资格、排他 cutoff、Task 投影与引用保护、历史 NULL fail-closed、稳定有界 batch、幂等、失败原子性、真实 SQLite 并发串行化、只读诊断、审计事实保留。
+- 最终聚焦 model/service/controller 门禁及 cleanup/coalescer/Task identity 窄 race 均通过。
+- 未运行真实 MySQL/PostgreSQL、全项目测试或部署；这些结果未声称通过。

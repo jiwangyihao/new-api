@@ -1,7 +1,7 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`AUDIT_RETENTION_GREEN_READY`。
+- 阶段：`COMPLETE`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
@@ -30,3 +30,12 @@
 ## 后续范围
 1. 先使终态资格 RED 转 GREEN，再逐项增加 cutoff 边界、Task/回调持久引用保护、稳定 batch、幂等、失败原子性、只读诊断、并发与审计保留。
 2. 禁止继续 Task/legacy/quota/conversion 工作；禁止实现 #24–#28。
+
+## 最终门禁
+- cleanup/Task 投影组：`go test ./model -run "^(TestCleanupSubscriptionPreConsumeRecords|TestPreviewSubscriptionPreConsumeCleanup|TestTaskSubscriptionRequestProjection)" -count=10`，`go test: 1 packages ok`。
+- model 窄 race：cleanup 并发与 coalescer 用例，`go test: 1 packages ok`。
+- 请求领域 model 聚焦门禁：`go test: 1 packages ok`。
+- BillingSession/Task identity service 聚焦门禁及窄 race：均 `go test: 1 packages ok`。
+- controller Credit/Subscription 聚焦门禁：`go test: 1 packages ok`。
+- `git diff --check` 无输出。
+- 未运行：真实 MySQL/PostgreSQL 零 SKIP（归 #27）、全项目测试、生产部署。无 UI 变更，不需要浏览器验证。

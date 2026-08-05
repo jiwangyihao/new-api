@@ -202,3 +202,43 @@ func TestCreditValuationRequestTargetDecreaseAuditsRestoreAbsorbedByOtherDebt(t 
 	require.Zero(t, record.RestoredUnknownCredit)
 	require.Equal(t, "refunded", record.Status)
 }
+
+func TestCreditValuationRequestTargetDecreaseMarksReopenedDebtUnknown(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, option, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-reopened-debt-unknown"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 1_000)
+	require.NoError(t, err)
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, preConsumed.UserSubscriptionId)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 1_200, false))
+
+	option.MonthlyTokenLimit = 200
+	additional := completeAdditionalCreditValuationOrder(t, db, user, option, creditPlan, 91_006, 8_000_000)
+	require.Equal(t, int64(200), additional.CreditBalance.GrossCredit)
+	require.Equal(t, int64(200), additional.CreditBalance.DebtOffset)
+	require.Zero(t, additional.CreditBalance.AvailableCredit)
+	require.Zero(t, additional.CreditBalance.SettlementDebt)
+
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 1_000, true))
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, preConsumed.UserSubscriptionId).Error)
+	require.Equal(t, int64(1_200), subscription.TokenLimit)
+	require.Equal(t, int64(1_000), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(200), state.AvailableCredit)
+	require.Zero(t, state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Equal(t, int64(200), state.UnknownCredit)
+
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(1_000), record.AppliedCredit)
+	require.Zero(t, record.DebtFormedCredit)
+	require.Equal(t, int64(200), record.RestoredUnknownCredit)
+	require.Zero(t, record.AbsorbedRestoreExactCostMicros)
+	require.Equal(t, "settled", record.Status)
+}

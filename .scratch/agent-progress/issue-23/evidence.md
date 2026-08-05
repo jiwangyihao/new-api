@@ -167,3 +167,14 @@ go test ./model -run '^TestCreditValuationRequestTargetDecreaseAuditsRestoreAbso
 go test: 1 packages ok
 ```
 结论：真实 SQLite 通过公开预扣/结算入口交错两个请求；退款请求的 400 Credit 快照中仅 200 重新成为可用量并恢复 8,000,000 micros，另 8,000,000 micros 进入 `absorbed_restore_exact_cost_micros`，未增加物化价值。该合同在补测试时已由既有恢复实现满足，因此本循环为直接 GREEN 的行为固化，而非新增生产实现。
+
+### 行为证明：后来 ingress 抵债后的退款转 unknown
+命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetDecreaseMarksReopenedDebtUnknown$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：真实 SQLite 通过公开入口预扣 1,000、追加到 1,200 形成 200 请求欠额；随后 200 Credit / 8,000,000 micros exact ingress 全部抵债、净可用与净成本均为 0；目标回退到 1,000 后重新形成的 200 可用 Credit 全部标记 unknown，状态 exact/estimated 为 0，请求 `restored_unknown_credit=200`。未把后来 ingress 价格或当前池平均伪造成恢复成本。

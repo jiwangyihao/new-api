@@ -312,3 +312,17 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 结论：现实现正确保留原 request attribution，但 conversion 尚未在同一事务内把 timed reserve 转换为不可变的虚拟 exact request deduction snapshot。后续 final settle 与新 request 断言因该首个行为失败未执行；下一步 GREEN 必须从此源头补齐，不得用匿名 delta 或改写原 `UserSubscriptionId`。
 
 范围说明：本 RED 未修改生产代码，未扩展 refund/并发，也未进入 API/UI。
+
+## 2026-08-05 — 在途 request 最窄 GREEN 交接
+
+根因：timed reserve 仅持久化 original source attribution 与 `PreConsumed`，conversion 事务未把未终态 request 固化为 request-aware settle 可识别的虚拟 exact snapshot，因此 RED 观测 `AppliedCredit=0`。
+
+最小实现仅修改 `model/subscription_conversion.go`：Confirm 在原事务、source 状态切换前，按 request ID 顺序锁定该 timed source 的未终态 reserve；保持 original `UserSubscriptionId` 不变，复用既有 record 字段写入 `AppliedCredit=PreConsumed`、目标 valuation subscription、按冻结 source plan/FX 整数 floor 计算的 exact cost、valuation rule 和 settlement version。未新增 schema、第二套 ledger 或匿名 delta。
+
+验证命令：`go test ./model -run TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。行为证据：原 request attribution 保持 timed source；`AppliedCredit` 与 reserve 相同；final settle 保持 deduction snapshot、不向目标 Credit 写入旧 request 扣减且不重复扣 source；conversion 后的新 request 才选择目标 Credit。
+
+格式化与差异：`gofmt -w model/subscription_conversion.go`、`git diff --check` 均成功。
+
+诚实未完成项：reserve → conversion → refund，以及双连接 conversion/final 合法串行化尚未实现或验证；本安全点不得宣称整个在途 request 合同完成。

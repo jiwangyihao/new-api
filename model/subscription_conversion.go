@@ -261,6 +261,16 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		if err := tx.Create(conversion).Error; err != nil {
 			return err
 		}
+		if valuationSource != nil {
+			if err := freezeTimedConversionInFlightRequestsTx(
+				tx,
+				sourceSubscriptionId,
+				grant.UserSubscriptionId,
+				valuationSource,
+			); err != nil {
+				return err
+			}
+		}
 		statusUpdate := tx.Model(&UserSubscription{}).
 			Where("id = ? AND user_id = ? AND status = ?", sourceSubscriptionId, userId, source.Status).
 			Updates(map[string]any{
@@ -354,6 +364,54 @@ func validateSubscriptionConversionReplayFactsTx(tx *gorm.DB, conversion *Subscr
 	}
 	if conversion.ValuationCreditBasis != conversion.CreditBasis || conversion.GrossCredit <= 0 {
 		return ErrConversionIdempotencyConflict
+	}
+	return nil
+}
+
+func freezeTimedConversionInFlightRequestsTx(tx *gorm.DB, sourceSubscriptionId int, valuationSubscriptionId int, valuationSource *CreditValuationSourceSnapshot) error {
+	if tx == nil || sourceSubscriptionId <= 0 || valuationSubscriptionId <= 0 || valuationSource == nil || valuationSource.FXRateSnapshot == nil {
+		return ErrCreditValuationSourceInvalid
+	}
+	var records []SubscriptionPreConsumeRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("user_subscription_id = ? AND status = ? AND finalized_at = 0 AND valuation_subscription_id = 0", sourceSubscriptionId, "consumed").
+		Order("id asc").
+		Find(&records).Error; err != nil {
+		return err
+	}
+	for index := range records {
+		record := &records[index]
+		if record.PreConsumed <= 0 || record.AppliedCredit != 0 {
+			return ErrCreditValuationTargetConflict
+		}
+		sourceCostMicros, err := mulDivFloor(valuationSource.SourcePriceMicros, record.PreConsumed, valuationSource.SourcePlanCredit)
+		if err != nil {
+			return err
+		}
+		exactCostMicros, err := valuationSource.FXRateSnapshot.ConvertMicros(sourceCostMicros)
+		if err != nil {
+			return err
+		}
+		now := getDBTimestampTx(tx)
+		updated := tx.Model(&SubscriptionPreConsumeRecord{}).
+			Where("id = ? AND applied_credit = 0 AND valuation_subscription_id = 0 AND finalized_at = 0", record.Id).
+			Updates(map[string]any{
+				"applied_credit":                 record.PreConsumed,
+				"deducted_available_credit":      record.PreConsumed,
+				"valuation_subscription_id":      valuationSubscriptionId,
+				"deducted_exact_cost_micros":     exactCostMicros,
+				"deducted_estimated_cost_micros": 0,
+				"deducted_unknown_credit":        0,
+				"valuation_rule_version":         CreditValuationRuleVersion,
+				"settlement_version":             1,
+				"updated_at":                     now,
+			})
+		if updated.Error != nil {
+			return updated.Error
+		}
+		if updated.RowsAffected != 1 {
+			return ErrCreditValuationTargetConflict
+		}
 	}
 	return nil
 }

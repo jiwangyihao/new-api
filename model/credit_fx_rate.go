@@ -21,6 +21,7 @@ var (
 	ErrCreditFXNonPositive         = errors.New("credit_fx_non_positive")
 	ErrCreditFXUnsupportedCurrency = errors.New("credit_fx_unsupported_currency")
 	ErrCreditFXDirectionMismatch   = errors.New("credit_fx_direction_mismatch")
+	ErrCreditFXOverflow            = errors.New("credit_fx_overflow")
 )
 
 type CreditFXRateSnapshotInput struct {
@@ -38,6 +39,20 @@ type CreditFXRateSnapshot struct {
 	Denominator       int64  `json:"denominator,string"`
 	CapturedAt        int64  `json:"captured_at"`
 	Direction         string `json:"direction"`
+}
+
+func (snapshot CreditFXRateSnapshot) ConvertMicros(amountMicros int64) (int64, error) {
+	if amountMicros < 0 || snapshot.Numerator <= 0 || snapshot.Denominator <= 0 {
+		return 0, ErrCreditFXRateInvalid
+	}
+	converted, err := mulDivFloor(amountMicros, snapshot.Numerator, snapshot.Denominator)
+	if err == nil {
+		return converted, nil
+	}
+	if errors.Is(err, ErrCreditValuationOverflow) {
+		return 0, ErrCreditFXOverflow
+	}
+	return 0, ErrCreditFXRateInvalid
 }
 
 func ParseCreditFXRateSnapshot(input CreditFXRateSnapshotInput) (CreditFXRateSnapshot, error) {

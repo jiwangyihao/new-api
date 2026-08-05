@@ -151,3 +151,19 @@
 真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXOverflow` 与 `CreditFXRateSnapshot.ConvertMicros` 尚不存在。
 
 结论：C 组 RED 对要求的整数换算接口与稳定 overflow sentinel 敏感；下一步只使用定宽整数实现，不引入 `float64` 或大整数热路径分配。
+
+## 2026-08-05 — C 组整数 floor/overflow GREEN
+
+最小实现增加 `CreditFXRateSnapshot.ConvertMicros` 与稳定 `ErrCreditFXOverflow`。换算复用现有无分配定宽整数 `mulDivFloor`（`bits.Mul64`/`bits.Div64`），严格计算 `floor(amountMicros × numerator / denominator)`；非法/非正 ratio 与分母零返回稳定 invalid sentinel，最终结果超出 `int64` 返回 overflow sentinel。
+
+命令：`go test ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+窄竞态命令：`go test -race ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+联合回归命令：`go test ./model -run "Test(ParseCreditFXRateSnapshot|CreditFXRateSnapshotConvertMicros)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 同时通过；C 组期间未进入 conversion/request/API/UI。

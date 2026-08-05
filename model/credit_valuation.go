@@ -679,6 +679,10 @@ func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionI
 	if targetCredit < 0 {
 		return ErrCreditValuationNegativeInput
 	}
+	return subscriptionTokenDeltaCoalescer.addRequestTarget(requestId, originalSubscriptionId, targetCredit, final)
+}
+
+func settleUserSubscriptionRequestTargetDirect(requestId string, originalSubscriptionId int, targetCredit int64, final bool) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var route SubscriptionPreConsumeRecord
 		if err := tx.Where("request_id = ?", requestId).First(&route).Error; err != nil {

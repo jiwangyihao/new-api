@@ -323,3 +323,38 @@ go test: 1 packages ok
 git diff --check: clean
 ```
 结论：最小 GREEN 仅迁移 `SubscriptionFunding`/`BillingSession` 的 request-aware 同步链路；timed 兼容与既有 task reserve 回归保持通过。本安全点未进入 coalescer、Task 身份或清理。
+
+## 链路安全点 2：Credit 逐请求目标合并器
+
+### RED：公开请求目标入口绕过合并器
+命令：
+```text
+go test ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+```
+关键输出：
+```text
+Credit request target bypassed the coalescer
+FAIL github.com/QuantumNous/new-api/model
+```
+精确症状：配置 100ms 合并窗口后，第一个请求目标调用立即返回；现有合并器只接受匿名 subscription delta，公开 Credit 请求目标没有入队身份、稳定顺序或逐请求结果。
+
+### GREEN：逐请求身份、顺序与结果
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+```
+关键输出：`go test: 1 packages ok`。
+
+定向回归、race 与空白检查：
+```text
+go test ./model -run '^(TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults|TestPostConsumeUserSubscriptionTokenDeltaCoalescesConcurrentHotWrites|TestCreditValuationRequestTarget)' -count=1
+go test -race ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults$' -count=1
+git diff --check
+```
+关键输出：
+```text
+go test: 1 packages ok
+go test -race: 1 packages ok
+git diff --check: clean
+```
+结论：Credit 请求目标在原 coalescer 内按 original subscription 分组，队列项持久携带 request ID、原订阅 ID、目标累计量与 final，按入队顺序逐条事务结算并逐请求返回错误；499/500 预扣的两个请求各追加 1 后，第一请求获得最后 1 可用 Credit 的成本，第二请求形成 1 欠额，结果等同同序逐条事务。原 timed 匿名 delta 合并测试保持通过。

@@ -167,3 +167,10 @@
 联合回归命令：`go test ./model -run "Test(ParseCreditFXRateSnapshot|CreditFXRateSnapshotConvertMicros)" -count=1`
 
 真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 同时通过；C 组期间未进入 conversion/request/API/UI。
+
+## 2026-08-05 — C 组 GREEN 安全点校准
+
+- C 组独立 RED：`a783ff3c1`（`test(issue-26): 固化 FX 整数换算 RED`）。
+- C 组独立 GREEN：`5318e5cc2`（`feat(issue-26): 实现 FX 整数安全换算`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- FX A/B/C 已形成完整定向 seam；下一条行为周期进入 timed conversion Quote 冻结估值，暂不展开 Confirm、request、API 或 UI。

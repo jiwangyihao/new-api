@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`FX_FLOOR_OVERFLOW_GREEN`，C 组整数 floor/overflow 测试、重复验证与窄 race 已通过，待提交独立 GREEN 安全点。
-- 最近安全 SHA：`a783ff3c1`（C 组整数换算 RED）。
+- 阶段：`FX_COMPLETE`，A/B/C 三组 RED/GREEN 已独立提交，C 组提交后工作树已验证 clean。
+- 最近安全 SHA：`5318e5cc2`（`feat(issue-26): 实现 FX 整数安全换算`）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,13 +11,12 @@
 
 ## 下一条命令
 
-`git add model/credit_fx_rate.go .scratch/agent-progress/issue-26/status.md .scratch/agent-progress/issue-26/evidence.md && git commit -m "feat(issue-26): 实现 FX 整数安全换算"`
+完成仅含 status/evidence 的安全点校准，然后定向定位现有 timed conversion quote/confirm seam 与测试惯例；下一条行为 RED 必须只覆盖 Quote 冻结 source tier 单位价值、currency、转换数量和 FX snapshot。
 
-提交并确认 clean 后报告协调器；C 组完成前未进入 conversion/request/API/UI。
+不得并行展开 request、API 或 UI；先完成 Quote 冻结估值的单一 RED→GREEN。
 
 ## 未提交文件
 
-- `model/credit_fx_rate.go`
 - `.scratch/agent-progress/issue-26/status.md`
 - `.scratch/agent-progress/issue-26/evidence.md`
 
@@ -27,11 +26,11 @@
 - 基线后的两条提交仅为 Issue #26 调度/恢复文档；Issue #26 首个 FX parser 已在后续 `58866ae7b` RED 与 `bb399d868` GREEN 中落地。
 - 协调器已明确暂停 conversion、request、API/UI 探索，先只完成 FX A/B/C 三组。
 - parser/provider 必须是唯一运行时 FX seam，禁止触碰 `float64 USDExchangeRate`。
-- C 组 GREEN 使用现有定宽 `bits.Mul64`/`bits.Div64` 路径，无 `float64` 或大整数热路径分配；`count=10`、窄 `-race`、A/B/C 联合回归与 diff-check 均通过。
+- FX parser/snapshot 已完成 A/B/C：稳定非法错误、identity/双向倒数、确定性冻结、overflow-safe floor；下一步进入 timed conversion Quote 冻结估值。
 
 ## 恢复入口
 
 1. 运行 `git status --short --branch`，确认分支与 clean/预期未提交文件。
 2. 读取本目录 `contract.md`、`status.md`、`evidence.md`。
-3. 最近 clean 安全点是 C 组 RED `a783ff3c1`；提交当前 GREEN 后以最新 `feat(issue-26)` 提交为恢复点。
-4. 当前只允许完成 C 组 clean 提交并报告；提交前未进入 conversion/request/API/UI。
+3. 最近 clean 安全点是 C 组 GREEN `5318e5cc2`；若只有本状态校准未提交，先提交它。
+4. 下一步只定位并写 Quote 冻结估值首个 RED；不得提前展开 Confirm、request、API 或 UI。

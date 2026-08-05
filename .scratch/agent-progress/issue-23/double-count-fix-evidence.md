@@ -22,7 +22,16 @@ FAIL github.com/QuantumNous/new-api/service
 
 ## GREEN
 
-待执行。
+修复：`SubscriptionFunding.Settle` 保持 funding 持久化与兼容快照的单一所有者；`BillingSession.Reserve` 不再重复累加 `TokenUsedAfter`、`TokenRemaining` 或 `AmountUsedAfter`，仅更新 session 账本并同步一次 `RelayInfo`。
+
+```text
+go test ./service -run '^TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields$' -count=1
+PASS
+go test ./service -run '^TestSubscriptionBillingReserveDoesNotDoubleCountCompatibilityFields$' -count=10
+PASS
+```
+
+原有 `expected 100` 断言未修改。
 
 ## 宽回归与竞态
 

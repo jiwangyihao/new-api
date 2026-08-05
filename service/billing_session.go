@@ -309,18 +309,6 @@ func (s *BillingSession) Reserve(targetQuota int) error {
 
 	if sub, ok := s.funding.(*SubscriptionFunding); ok {
 		sub.preConsumed += int64(delta)
-		if sub.DistributorTokenBilling {
-			sub.TokenUsedAfter += int64(delta)
-			if sub.TokenLimit > 0 {
-				remaining := sub.TokenLimit - sub.TokenUsedAfter
-				if remaining < 0 {
-					remaining = 0
-				}
-				sub.TokenRemaining = remaining
-			}
-		} else {
-			sub.AmountUsedAfter += int64(delta)
-		}
 		s.preConsumedSubscription += int64(delta)
 	}
 	s.preConsumedQuota += delta

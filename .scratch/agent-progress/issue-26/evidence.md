@@ -112,3 +112,13 @@
 - A 组独立 GREEN：`2c3685f11`（`feat(issue-26): 分类 FX 非法输入错误`）。
 - GREEN 提交命令串包含 `git diff --check`；提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - 下一步只做 B 组 identity/反向、确定性与快照冻结；B 组提交前禁止 C 组或 conversion。
+
+## 2026-08-05 — B 组 identity/反向 RED
+
+新增 table-driven 公共行为测试 `TestParseCreditFXRateSnapshotFreezesDirectionalRatios`，覆盖 CNY/CNY 与 USD/USD 固定 `1/1`、USD→CNY `73/10`、CNY→USD 严格倒数 `10/73`、相同 input + captured_at 的确定性，以及已返回值快照不随后续 Option 原始文本变化。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotFreezesDirectionalRatios -count=1`
+
+真实结果：`FAIL`。USD→CNY 子例已通过；`CNY_identity`、`USD_identity` 与 `CNY_to_USD` 子例均在 parser 返回非预期错误处失败，证明现有 seam 缺少 identity 与反向分支，而非环境或无关测试失败。
+
+结论：B 组 RED 对指定的方向比率行为敏感；下一步只增加 identity 与反向最小分支并复验确定性/冻结断言。

@@ -60,3 +60,58 @@ func TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors(t *testin
 		})
 	}
 }
+
+func TestParseCreditFXRateSnapshotFreezesDirectionalRatios(t *testing.T) {
+	tests := []struct {
+		name              string
+		sourceCurrency    string
+		valuationCurrency string
+		direction         string
+		rateProvided      bool
+		wantNumerator     int64
+		wantDenominator   int64
+	}{
+		{name: "CNY identity", sourceCurrency: "CNY", valuationCurrency: "CNY", direction: "IDENTITY", wantNumerator: 1, wantDenominator: 1},
+		{name: "USD identity", sourceCurrency: "USD", valuationCurrency: "USD", direction: "IDENTITY", wantNumerator: 1, wantDenominator: 1},
+		{name: "USD to CNY", sourceCurrency: "USD", valuationCurrency: "CNY", direction: "USD_TO_CNY", rateProvided: true, wantNumerator: 73, wantDenominator: 10},
+		{name: "CNY to USD", sourceCurrency: "CNY", valuationCurrency: "USD", direction: "CNY_TO_USD", rateProvided: true, wantNumerator: 10, wantDenominator: 73},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optionRate := "7.300000"
+			input := CreditFXRateSnapshotInput{
+				SourceCurrency:    test.sourceCurrency,
+				ValuationCurrency: test.valuationCurrency,
+				Direction:         test.direction,
+				CapturedAt:        1_800_000_000,
+			}
+			if test.rateProvided {
+				input.RateText = &optionRate
+			}
+
+			first, err := ParseCreditFXRateSnapshot(input)
+			require.NoError(t, err)
+			second, err := ParseCreditFXRateSnapshot(input)
+			require.NoError(t, err)
+			require.Equal(t, first, second, "same input and captured_at must be deterministic")
+			require.Equal(t, CreditFXRateSnapshot{
+				SourceCurrency:    test.sourceCurrency,
+				ValuationCurrency: test.valuationCurrency,
+				Numerator:         test.wantNumerator,
+				Denominator:       test.wantDenominator,
+				CapturedAt:        1_800_000_000,
+				Direction:         test.direction,
+			}, first)
+
+			if test.rateProvided {
+				optionRate = "8.100000"
+				updated, updateErr := ParseCreditFXRateSnapshot(input)
+				require.NoError(t, updateErr)
+				require.NotEqual(t, first, updated)
+				require.Equal(t, test.wantNumerator, first.Numerator, "frozen snapshot must not follow later Option changes")
+				require.Equal(t, test.wantDenominator, first.Denominator, "frozen snapshot must not follow later Option changes")
+			}
+		})
+	}
+}

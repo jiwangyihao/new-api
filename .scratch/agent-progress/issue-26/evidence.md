@@ -198,3 +198,21 @@
 - FX 仅覆盖同币种 CNY → CNY 的冻结 `1/1`；未添加或假设新的 conversion schema。
 - `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功且无输出。
 - 当前只提交 RED 与进度证据，不实现 GREEN、跨币种、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 同币种冻结估值 GREEN
+
+最小实现仅修改 `model/subscription_conversion.go` 与 `model/credit_balance.go`：Confirm 在既有事务中从锁定后的 source plan 读取权威 `price_amount_micros`/currency，以 quote 的 `credit_basis`/`gross_credit` 和目标 plan valuation currency 构造 `CreditValuationSourceSnapshot`，沿既有 `GrantCreditBalanceTx` ingress 写入 conversion、ledger 与 valuation state。同币种 conversion ledger 冻结 FX `1/1`，未新增 schema。
+
+单测命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`；`1 × 100 + 25 = 125` 与 `40,000,000 × 125 / 100 = 50,000,000` micros 全部断言通过。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+首次联合回归发现 legacy marker-not-ready conversion 在 ledger FX 写入分支解引用 nil `ValuationSource`。根因是 FX ledger 冻结分支只按 source type 判断，未跟随 valuation runtime gate；修复为同时要求 `valuationReady`，保持 legacy path 不读取 absent valuation source。
+
+最终定向回归：`go test ./model -run "Test(ConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation|CreditValuationOrderIngressCreatesExactState|RecalculateTimedSubscriptionConversionQuoteFormulaBoundaries|TimedConversionPreservesCompletedLogOwnershipAndTargetsNewUsage)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion.go model/credit_balance.go` 与 `git diff --check` 均成功；未进入跨币种、并发、在途 request 或 API/UI。

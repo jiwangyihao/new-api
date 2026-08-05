@@ -159,6 +159,45 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		if !quote.CanConfirm {
 			return subscriptionConversionRejection(quote)
 		}
+		var valuationSource *CreditValuationSourceSnapshot
+		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+		if err != nil {
+			return err
+		}
+		if valuationReady {
+			var sourcePlan SubscriptionPlan
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", quote.PlanId).First(&sourcePlan).Error; err != nil {
+				return err
+			}
+			if sourcePlan.PriceAmountMicros == nil {
+				return ErrSubscriptionPlanPriceRequired
+			}
+			if *sourcePlan.PriceAmountMicros <= 0 {
+				return ErrCreditValuationSourceInvalid
+			}
+			sourceCurrency, err := NormalizeCreditValuationCurrency(sourcePlan.Currency)
+			if err != nil {
+				return err
+			}
+			if creditPlan.ValuationCurrency == nil {
+				return ErrCreditValuationCurrencyRequired
+			}
+			valuationCurrency, err := NormalizeCreditValuationCurrency(*creditPlan.ValuationCurrency)
+			if err != nil {
+				return err
+			}
+			if sourceCurrency != valuationCurrency {
+				return ErrCreditValuationUnsupportedCurrency
+			}
+			valuationSource = &CreditValuationSourceSnapshot{
+				SourcePriceMicros: *sourcePlan.PriceAmountMicros,
+				SourcePlanCredit:  quote.CreditBasis,
+				GrossCredit:       quote.GrossCredit,
+				SourceCurrency:    sourceCurrency,
+				ValuationCurrency: valuationCurrency,
+				RuleVersion:       CreditValuationRuleVersion,
+			}
+		}
 		snapshotBytes, err := common.Marshal(quote)
 		if err != nil {
 			return err
@@ -174,6 +213,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			TargetPlanId:            creditPlan.Id,
 			Reason:                  "计时套餐转换为 Credit 余额",
 			PreserveActiveSelection: true,
+			ValuationSource:         valuationSource,
 		})
 		if err != nil {
 			return err
@@ -192,6 +232,23 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			BalanceBefore: grant.BalanceBefore, BalanceAfter: grant.BalanceAfter,
 			LastGrantedAt: quote.LastGrantedAt, LastGrantTimeSource: quote.LastGrantTimeSource, LastGrantSource: quote.LastGrantSource,
 			ConvertedAt: dbNow, CreatedAt: dbNow,
+		}
+		if valuationSource != nil {
+			var ledger CreditBalanceLedger
+			if err := tx.Where("id = ?", grant.LedgerId).First(&ledger).Error; err != nil {
+				return err
+			}
+			conversion.ValuationCurrency = ledger.ValuationCurrency
+			conversion.ValuationSourcePriceMicros = valuationSource.SourcePriceMicros
+			conversion.ValuationCreditBasis = valuationSource.SourcePlanCredit
+			conversion.ValuationGrossCostMicros = ledger.ValuationGrossCostMicros
+			conversion.ValuationNetCostMicros = ledger.ValuationNetCostMicros
+			conversion.ValuationConfidence = ledger.ValuationConfidence
+			conversion.ValuationRuleVersion = ledger.ValuationRuleVersion
+			conversion.FxSourceCurrency = ledger.FxSourceCurrency
+			conversion.FxRateNumerator = ledger.FxRateNumerator
+			conversion.FxRateDenominator = ledger.FxRateDenominator
+			conversion.FxCapturedAt = ledger.FxCapturedAt
 		}
 		if err := tx.Create(conversion).Error; err != nil {
 			return err

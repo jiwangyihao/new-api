@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`FX_PARSER_RED`，首个公共行为测试已按预期因接口缺失失败。
-- 最近安全 SHA：`0c0f540b7f39cda3769d81f1c1983ffb922b7823`。
+- 阶段：`FX_PARSER_GREEN`，首个公共行为测试已通过，待提交独立 GREEN 安全点。
+- 最近安全 SHA：`58866ae7b`（首个 parser RED）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,13 +11,13 @@
 
 ## 下一条命令
 
-`go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1`
+`git add model/credit_fx_rate.go .scratch/agent-progress/issue-26/status.md .scratch/agent-progress/issue-26/evidence.md && git commit -m "feat(issue-26): 实现 FX 快照规范解析"`
 
-当前 RED 已观测；提交本 RED 后，最小 GREEN 只实现 `CreditFXRateSnapshotInput`、`CreditFXRateSnapshot`、`CreditFXDirectionUSDtoCNY` 与 `ParseCreditFXRateSnapshot`，使 `7.300000` 规范约分为 `73/10`。
+提交后确认工作树 clean 并报告该 GREEN 安全点；未收到后续指令前不扩展错误矩阵、conversion、API 或 UI。
 
 ## 未提交文件
 
-- `model/credit_fx_rate_test.go`
+- `model/credit_fx_rate.go`
 - `.scratch/agent-progress/issue-26/status.md`
 - `.scratch/agent-progress/issue-26/evidence.md`
 
@@ -27,11 +27,11 @@
 - 基线后的两条提交仅为 Issue #26 调度/恢复文档；尚无 Issue #26 运行时代码。
 - 最新协调指令要求不重新通读全部材料，安全提交后直接进入 FX parser 首个 RED。
 - parser/provider 必须是唯一运行时 FX seam，禁止触碰 `float64 USDExchangeRate`。
-- 首个 RED 只覆盖 USD → CNY 规范十进制解析、约分和方向；非法值、identity、反向换算、floor 与 overflow 必须后续逐条 RED→GREEN。
+- 首个 GREEN 只覆盖 USD → CNY 的 `7.300000` 规范解析、约分和方向，并暂用单一导出 sentinel `ErrCreditFXRateInvalid`；非法矩阵、identity、反向换算、floor 与 overflow 尚未扩展。
 
 ## 恢复入口
 
 1. 运行 `git status --short --branch`，确认分支与 clean/预期未提交文件。
 2. 读取本目录 `contract.md`、`status.md`、`evidence.md`。
 3. 若三份文件尚未提交，执行“下一条命令”；若已提交，以日志中最新 `docs(issue-26)` SHA 为安全点。
-4. 首个 RED 已由 `go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1` 证明；最小 GREEN 只实现该测试要求的公共行为。
+4. 首个 GREEN 已由唯一测试证明；提交后以最新 `feat(issue-26): 实现 FX 快照规范解析` 提交为恢复点，先报告协调器。

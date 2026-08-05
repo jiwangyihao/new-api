@@ -70,3 +70,13 @@
 - `undefined: CreditFXDirectionUSDtoCNY`
 
 结论：RED 对预期缺失行为敏感，未因无关测试或环境失败。下一步最小 GREEN 只实现该测试要求的结构化类型、方向常量、规范十进制解析与最大公约数约分。
+
+## 2026-08-05 — FX parser 首个 GREEN
+
+最小实现新增 `model/credit_fx_rate.go`，公开范围严格限于首个 RED 编译和行为所需的 `CreditFXRateSnapshotInput`、`CreditFXRateSnapshot`、`CreditFXDirectionUSDtoCNY`、`ErrCreditFXRateInvalid` 与 `ParseCreditFXRateSnapshot`。实现以整数逐位解析规范正十进制，不读取或运算 `float64 USDExchangeRate`，并将 `7.300000` 约分为 `73/10`。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+格式化：`gofmt -w model/credit_fx_rate.go` 成功且无输出。当前周期未扩展非法矩阵、identity、反向换算、floor、overflow、conversion、API 或 UI。

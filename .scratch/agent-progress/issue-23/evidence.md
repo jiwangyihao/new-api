@@ -195,3 +195,25 @@ go test ./model -run '^TestCreditValuationRequestTargetFullRestoreClearsSnapshot
 go test: 1 packages ok
 ```
 结论：1,003 Credit 混合池包含不可整除成本，预扣后先少退 1 Credit、再全退到 0；最终请求 exact/estimated/unknown 活动快照全部归零，物化池完整恢复到 1,003 Credit / 40,010,000 micros，没有舍入残值。
+
+### RED/GREEN：请求记录缺失返回稳定 sentinel
+RED 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetMissingRecordReturnsStableError$' -count=1
+```
+关键输出：
+```text
+undefined: ErrCreditValuationRequestNotFound
+FAIL github.com/QuantumNous/new-api/model [build failed]
+```
+根因：公开请求结算入口直接透传 `gorm.ErrRecordNotFound`，调用方无法依赖稳定领域错误。
+
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetMissingRecordReturnsStableError$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：缺失请求记录稳定返回 `ErrCreditValuationRequestNotFound`，真实 Credit 数量、估值金额和版本保持不变。

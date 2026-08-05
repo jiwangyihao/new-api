@@ -677,6 +677,9 @@ func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionI
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var route SubscriptionPreConsumeRecord
 		if err := tx.Where("request_id = ?", requestId).First(&route).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCreditValuationRequestNotFound
+			}
 			return err
 		}
 		if route.UserSubscriptionId != originalSubscriptionId {

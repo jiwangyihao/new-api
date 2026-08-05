@@ -275,3 +275,21 @@ func TestCreditValuationRequestTargetFullRestoreClearsSnapshotRemainders(t *test
 	require.Zero(t, record.DeductedUnknownCredit)
 	require.Equal(t, "refunded", record.Status)
 }
+
+func TestCreditValuationRequestTargetMissingRecordReturnsStableError(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	_, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	err := SettleUserSubscriptionRequestTarget("credit-request-missing", completed.CreditBalance.UserSubscriptionId, 1, true)
+	require.ErrorIs(t, err, ErrCreditValuationRequestNotFound)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Zero(t, subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(1_000), state.AvailableCredit)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(1), state.StateVersion)
+}

@@ -21,6 +21,7 @@ var (
 	ErrCreditValuationStateMismatch       = errors.New("credit_valuation_state_mismatch")
 	ErrCreditValuationTargetConflict      = errors.New("credit_valuation_target_conflict")
 	ErrCreditValuationMappingConflict     = errors.New("credit_valuation_mapping_conflict")
+	ErrCreditValuationRequestNotFound      = errors.New("credit_valuation_request_not_found")
 	ErrCreditBalanceAllocationUnavailable = errors.New("credit_balance_allocation_unavailable")
 	ErrSubscriptionPlanPriceInvalid       = errors.New("subscription_plan_price_invalid")
 	ErrSubscriptionPlanPriceNegative      = errors.New("subscription_plan_price_negative")

@@ -181,3 +181,13 @@
 - 最后业务 GREEN：`5318e5cc2`；随后安全点校准：`fd6d316f7`。
 - 协调器明确撤销继续探索 conversion Quote 的方向；此前仅做定向查看，未修改 conversion、request、API 或 UI 文件。
 - 当前恢复阶段固定为 `FX_VECTORS_HANDOFF_READY`；提交本校准并确认 clean 后停止，等待新的显式派发。
+
+## 2026-08-05 — Conversion 同币种冻结估值 RED
+
+新增真实 SQLite tracer `TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation`：迁移 valuation schema、置 marker ready、创建 CNY source timed plan 与 CNY Credit target，按 `1 × 100 + 25 = 125` 验证 conversion、ledger、source 状态和目标 valuation state 原子冻结 `40,000,000 × 125 / 100 = 50,000,000` micros，以及 FX `1/1`。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=1`
+
+真实结果：`FAIL`。`ConfirmTimedSubscriptionConversion` 返回稳定 `credit_valuation_source_required`，精确表明现有 conversion 调用 `GrantCreditBalanceTx` 时未提供 `CreditValuationSourceSnapshot`；事务因此 fail-closed，未产生部分写入。
+
+结论：RED 到达真实 Confirm → Grant ingress seam；下一步最小 GREEN 只连接同币种 source plan 精确价格/currency、credit basis/gross credit 与目标 valuation currency，并冻结现有 conversion/ledger 字段。

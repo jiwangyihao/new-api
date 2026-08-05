@@ -5839,6 +5839,18 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
+    "This is a rules-based valuation, not a new payment.": "これはルールに基づく評価であり、新規入金ではありません。",
+    "Source price micros": "ソース価格（micros）",
+    "Source → target currency": "ソース通貨 → ターゲット通貨",
+    "Valuation Credit basis": "評価用 Credit 基準",
+    "Gross cost micros": "総コスト（micros）",
+    "Net cost micros": "純コスト（micros）",
+    "Unrounded unit value": "丸め前の単位価値",
+    "Rule version": "ルールバージョン",
+    "State version": "状態バージョン",
+    "Frozen FX": "固定 FX",
+    "FX direction": "FX 方向",
+    "FX captured at": "FX 取得時刻",
     "Zoom": "ズーム"
   }
 }

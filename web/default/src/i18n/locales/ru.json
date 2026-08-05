@@ -5839,6 +5839,18 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
+    "This is a rules-based valuation, not a new payment.": "Это оценка по правилам, а не новый платёж.",
+    "Source price micros": "Цена источника в micros",
+    "Source → target currency": "Исходная валюта → целевая валюта",
+    "Valuation Credit basis": "База Credit для оценки",
+    "Gross cost micros": "Валовая стоимость в micros",
+    "Net cost micros": "Чистая стоимость в micros",
+    "Unrounded unit value": "Неокруглённая стоимость единицы",
+    "Rule version": "Версия правила",
+    "State version": "Версия состояния",
+    "Frozen FX": "Зафиксированный FX",
+    "FX direction": "Направление FX",
+    "FX captured at": "Время фиксации FX",
     "Zoom": "Zoom"
   }
 }

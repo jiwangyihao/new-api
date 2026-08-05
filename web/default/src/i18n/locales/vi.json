@@ -5839,6 +5839,18 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
+    "This is a rules-based valuation, not a new payment.": "Đây là giá trị ước tính theo quy tắc, không phải khoản thanh toán mới.",
+    "Source price micros": "Giá nguồn theo micros",
+    "Source → target currency": "Tiền tệ nguồn → tiền tệ đích",
+    "Valuation Credit basis": "Cơ sở Credit định giá",
+    "Gross cost micros": "Tổng chi phí theo micros",
+    "Net cost micros": "Chi phí ròng theo micros",
+    "Unrounded unit value": "Giá trị đơn vị chưa làm tròn",
+    "Rule version": "Phiên bản quy tắc",
+    "State version": "Phiên bản trạng thái",
+    "Frozen FX": "FX đã đóng băng",
+    "FX direction": "Hướng FX",
+    "FX captured at": "Thời điểm ghi nhận FX",
     "Zoom": "Zoom"
   }
 }

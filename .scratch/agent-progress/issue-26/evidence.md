@@ -422,3 +422,10 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 未新增持久 schema：`SubscriptionConversion.ValuationStateVersionAfter` 是只读、禁止 migration 的查询字段；Confirm 直接复用事务内已读取 ledger，replay/history 在既有 conversion 查询中联接 immutable ledger，返回同一权威版本。
 - 命令：`gofmt -w model/subscription_conversion.go model/subscription_conversion_quote.go controller/subscription_conversion.go router/subscription_conversion_route_test.go && go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`。
 - 结果：PASS（`go test: 1 packages ok`）。Confirm 与后续 history 返回相同 `state_version_after="1"`；既有 quote/confirm 回归同时通过。
+
+## 2026-08-06 — 既有钱包 conversion history 冻结事实 UI GREEN
+
+- 在既有 `TimedSubscriptionConversionQuotesCard` 的 history 结果内增加冻结估值详情；未新建页面、端点或抽象。显示 source price micros、source→target currency、valuation Credit basis、gross/net cost micros、未舍入单位价值有理数、rule/state version、FX numerator/denominator/direction/captured_at，并明确“基于规则的估值，不是新增收款”。
+- 所有原始整数保持 API 字符串原样展示；未用 `Number` 转换或紧凑格式重写 micros/FX。组件 RED 真实结果为 `14 pass / 1 fail`，缺失首个 `40000000`；GREEN 后 `15 pass / 0 fail`。
+- 六语言新增 12 个 UI 键；`bun run i18n:sync` 报告六语言 `missingCount=0`、`extrasCount=0`。报告既有 untranslated 基线仍为 fr=9、ja=204、ru=219、vi=12、zh=114，不冒充清零。
+- 完整前端门禁：`bun run i18n:sync && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx && bun run typecheck && bun run build`；结果全部 PASS，组件 15/15，`tsc -b` 成功，Rsbuild `ready built`。

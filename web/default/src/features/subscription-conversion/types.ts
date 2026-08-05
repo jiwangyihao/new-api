@@ -98,6 +98,20 @@ export interface SubscriptionConversionHistory {
   last_grant_time_source: string
   last_grant_source: string
   converted_at: string
+  source_price_micros?: string
+  source_currency?: string
+  target_currency?: string
+  valuation_credit_basis?: string
+  gross_cost_micros?: string
+  net_cost_micros?: string
+  unit_value_numerator_micros?: string
+  unit_value_denominator?: string
+  rule_version?: number
+  state_version_after?: string
+  fx_numerator?: string
+  fx_denominator?: string
+  fx_captured_at?: string
+  fx_direction?: string
 }
 
 export interface SubscriptionConversionConfirmRequest {

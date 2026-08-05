@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`API_STATE_VERSION_GREEN`；跨币种 route tracer 已同时覆盖冻结估值/FX、rule version、ledger state version 与稳定错误 code，定向路由测试 GREEN。
-- 最近 clean SHA：`cb24d5534`（`feat(issue-26): 暴露转换冻结估值事实`）；当前 state-version adapter、router tracer 与 progress 证据待独立提交。
+- 阶段：`UI_FROZEN_FACTS_GREEN`；既有钱包 conversion history 已展示冻结估值/FX/rule-state versions，组件测试、typecheck、build 与六语言 missing/extras 全部通过。
+- 最近 clean SHA：`2687cde91`（`feat(issue-26): 暴露转换估值状态版本`）；当前仅 UI/types/六语言与 progress 证据待提交。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,13 +11,13 @@
 
 ## 下一条命令
 
-`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`
+`bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`
 
-下一步提交 API adapter + router tracer clean 安全点；提交前不进入 UI/browser。
+下一步提交 UI GREEN 安全点，再启动真实 Go embed 应用并用 Orca 浏览器 smoke；不新增 UI/schema/端点。
 
 ## 未提交文件
 
-- `model/subscription_conversion.go`、`model/subscription_conversion_quote.go`、`controller/subscription_conversion.go`、`router/subscription_conversion_route_test.go`、本目录 status/evidence；无 UI、schema 或新端点。
+- conversion card/types、六语言 locale、status/evidence；无其他生产文件。
 
 ## 上下文风险
 

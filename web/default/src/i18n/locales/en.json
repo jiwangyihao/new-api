@@ -5839,6 +5839,18 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
+    "This is a rules-based valuation, not a new payment.": "This is a rules-based valuation, not a new payment.",
+    "Source price micros": "Source price micros",
+    "Source → target currency": "Source → target currency",
+    "Valuation Credit basis": "Valuation Credit basis",
+    "Gross cost micros": "Gross cost micros",
+    "Net cost micros": "Net cost micros",
+    "Unrounded unit value": "Unrounded unit value",
+    "Rule version": "Rule version",
+    "State version": "State version",
+    "Frozen FX": "Frozen FX",
+    "FX direction": "FX direction",
+    "FX captured at": "FX captured at",
     "Zoom": "Zoom"
   }
 }

@@ -5839,6 +5839,18 @@
     "Zero retention": "零数据保留",
     "Zhipu": "智谱",
     "Zhipu V4": "智谱 V4",
+    "This is a rules-based valuation, not a new payment.": "这是基于规则的估值，不是新增收款。",
+    "Source price micros": "来源价格（micros）",
+    "Source → target currency": "来源币种 → 目标币种",
+    "Valuation Credit basis": "估值 Credit 基数",
+    "Gross cost micros": "总成本（micros）",
+    "Net cost micros": "净成本（micros）",
+    "Unrounded unit value": "未舍入单位价值",
+    "Rule version": "规则版本",
+    "State version": "状态版本",
+    "Frozen FX": "冻结 FX",
+    "FX direction": "FX 方向",
+    "FX captured at": "FX 快照时间",
     "Zoom": "缩放"
   }
 }

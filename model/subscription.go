@@ -96,11 +96,12 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound             = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid        = errors.New("subscription order status invalid")
-	ErrSubscriptionOrderSnapshotMismatch     = errors.New("subscription order entitlement snapshot mismatch")
-	ErrNoActiveSubscription                  = errors.New("no active subscription")
-	ErrSubscriptionPreConsumeRequestConflict = errors.New("subscription pre-consume request conflict")
+	ErrSubscriptionOrderNotFound              = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid         = errors.New("subscription order status invalid")
+	ErrSubscriptionOrderSnapshotMismatch      = errors.New("subscription order entitlement snapshot mismatch")
+	ErrNoActiveSubscription                   = errors.New("no active subscription")
+	ErrSubscriptionPreConsumeRequestConflict  = errors.New("subscription pre-consume request conflict")
+	ErrCreditValuationAnonymousDeltaForbidden = errors.New("credit valuation anonymous subscription delta forbidden")
 )
 
 const subscriptionPreConsumeRequestFingerprintVersion = 1
@@ -3345,6 +3346,17 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 	_ = getSubscriptionPlanInfoCache().SetWithTTL(cacheKey, *info, subscriptionPlanInfoCacheTTL())
 	return info, nil
 }
+
+func rejectCreditAnonymousSubscriptionDelta(userSubscriptionId int) error {
+	var subscription UserSubscription
+	if err := DB.Select("entitlement_type").Where("id = ?", userSubscriptionId).First(&subscription).Error; err != nil {
+		return err
+	}
+	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return ErrCreditValuationAnonymousDeltaForbidden
+	}
+	return nil
+}
 func tokenUsedDeltaExpr(delta int64) clause.Expr {
 	if delta < 0 {
 		return gorm.Expr("CASE WHEN ? + ? < 0 THEN 0 ELSE ? + ? END", clause.Column{Name: "token_used"}, delta, clause.Column{Name: "token_used"}, delta)
@@ -3402,6 +3414,9 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 func PostConsumeUserSubscriptionTokenDelta(userSubscriptionId int, delta int64) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
+	}
+	if err := rejectCreditAnonymousSubscriptionDelta(userSubscriptionId); err != nil {
+		return err
 	}
 	if delta == 0 {
 		return nil
@@ -3530,6 +3545,9 @@ func applyConvertedSubscriptionTokenDeltaTx(tx *gorm.DB, source *UserSubscriptio
 func PostConsumeUserSubscriptionAmountDelta(userSubscriptionId int, delta int64) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
+	}
+	if err := rejectCreditAnonymousSubscriptionDelta(userSubscriptionId); err != nil {
+		return err
 	}
 	if delta == 0 {
 		return nil

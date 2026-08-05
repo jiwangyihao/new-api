@@ -131,3 +131,72 @@ F1 实现仅增加版本 1 的确定性 SHA-256 指纹：固定宽度大端整�
 - 提交：`07801e667`（`fix(issue-23): 绑定预扣请求不可变指纹`）。
 - 提交后 `git status --short` 无输出。
 - F1 至此冻结；后续只处理 F2，不再扩展 F1 schema、接口、缓存或重试。
+
+### F2 RED：Credit 匿名 delta 与 PostConsumeQuota 绕路
+
+命令：
+
+```text
+go test ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=1
+```
+
+结果：RED。
+
+```text
+model\subscription_anonymous_delta_test.go:51:28: undefined: ErrCreditValuationAnonymousDeltaForbidden
+FAIL github.com/QuantumNous/new-api/model [build failed]
+--- FAIL: TestPostConsumeQuotaCreditUsesStableRequestTarget
+    expected AppliedCredit: 150
+    actual AppliedCredit:   100
+FAIL github.com/QuantumNous/new-api/service
+```
+
+分类：model 测试当前只证明稳定匿名拒绝 sentinel 尚不存在，尚未运行 helper 的零写入断言；service 运行时测试已证明 `PostConsumeQuota` 将 `token_used` 匿名增加，却没有把同一 `request_id` 的累计目标从 100 更新为 150，请求快照仍停在 100。
+
+### F2 RED：匿名 helper 运行时未拒绝 Credit
+
+加入稳定 sentinel 声明但尚未添加 helper 门禁后运行：
+
+```text
+go test ./model -run 'TestCreditValuationAnonymousSubscriptionDeltasAreForbidden$' -count=1
+```
+
+结果：token delta 与 amount delta 两个子测试均 RED，`Expected error ... but got nil`；旧实现实际修改了 Credit 数量或 amount 路径而未返回稳定错误。
+
+### F2 GREEN：匿名拒绝、request-aware target 与兼容边界
+
+单次命令：
+
+```text
+go test ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|TimedSubscriptionAnonymousDeltasRemainCompatible|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=1
+```
+
+结果：PASS，`go test: 2 packages ok`。
+
+- token/amount 两个匿名 helper 在任何写入或入队前读取目标权益；`credit_balance` 返回 `ErrCreditValuationAnonymousDeltaForbidden`，权益、估值状态、版本、请求记录和 ledger 快照零写入。
+- timed token/amount 匿名兼容分别成功更新 `token_used` 与 `amount_used`。
+- `PostConsumeQuota` 读取已提交 request record 的 `applied_credit`，以 `applied_credit + delta` 计算目标，并复用 `SettleUserSubscriptionRequestTarget`；100 预扣 + 50 最终增量得到 applied=150、available=850、exact=34,000,000 micros、state_version=3、单一 request record。
+
+重复、race 与 converted/timed 回归命令：
+
+```text
+go test ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|TimedSubscriptionAnonymousDeltasRemainCompatible|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=10
+go test -race ./model ./service -run 'Test(CreditValuationAnonymousSubscriptionDeltasAreForbidden|PostConsumeQuotaCreditUsesStableRequestTarget)$' -count=1
+go test ./model -run 'TestConvertedSubscription' -count=1
+go test ./service -run 'TestPostConsumeQuota(SubscriptionDoesNotConsumeTokenKeyQuota|LegacySubscriptionUsesAmountUsed)$' -count=1
+```
+
+结果：四条命令均 PASS，依次输出 `go test: 2 packages ok`、`go test: 2 packages ok`、`go test: 1 packages ok`、`go test: 1 packages ok`。converted source 路由与 timed token/amount 兼容未回归。
+
+### F2 匿名 helper 调用点审计
+
+修改导出符号前的 LSP references 已记录：token helper 13 个引用，amount helper 8 个引用。
+
+- `service/quota.go`：Credit 已迁移到 `request_id + applied_credit + delta` 的累计目标入口；仅非 Credit 调用匿名 helper。
+- `service/funding_source.go`：已跟踪 Credit 先走 `settleCreditRequestTarget`；未跟踪 Credit 落到 helper 时由稳定 sentinel 失败关闭；timed 保持兼容。
+- `service/billing_session.go`：兼容退款 helper 只用于非 Credit request-aware 分支；误入 Credit 时由 helper 失败关闭。
+- `service/task_billing.go`：Credit target 使用 request-aware/legacy task 入口；converted source 继续允许原映射路径；amount helper 保留 timed 路径。
+- `model/subscription.go`：`PostConsumeUserSubscriptionDelta` 是 token helper 别名，因此继承相同 Credit 拒绝；converted source 内部路由保持原逻辑。
+- 其余引用均为 model/controller 测试；最终包门禁会捕获仍假定 Credit 匿名写入成功的旧测试，并仅按 F2 合同迁移测试夹具，不放宽生产门禁。
+
+结论：production service/controller/relay/Task 不存在可成功写入 Credit target 的匿名 helper 绕路；保留的成功匿名路径仅为 timed 与 converted source 明确兼容边界。

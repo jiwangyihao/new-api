@@ -2,22 +2,22 @@
 
 ## 当前阶段
 
-F1 已完成并提交 clean 安全点；当前进入 F2 RED。
+F1 已在 `07801e667` clean 提交；F2 已 GREEN 并通过单次、`-count=10`、窄 `-race`、timed/converted 兼容验证，待 clean 安全提交。
 
 ## 已完成
 
-- 冻结现场核验：分支、HEAD、clean 状态与 merge-base 均符合指令。
-- 必读合同、最终 Spec FAIL 报告与历史证据已读取；诊断、TDD、模块设计与 Orca 调度约束已加载。
-- F1 断言级 RED：旧实现对同 `request_id` 的 user、规范化 model、quota_type、distributor amount 冲突及缺指纹记录均错误返回成功。
-- F1 GREEN：请求记录在预扣事务内持久化版本 1、SHA-256 确定性指纹；固定宽度大端编码覆盖 user/quota/amount，长度前缀覆盖规范化 model，无分隔符歧义。
-- 同指纹重放严格无写入；异参、缺失或未知版本指纹通过 `ErrSubscriptionPreConsumeRequestConflict` 失败关闭。
-- 双连接同 `request_id` 并发测试只接受一个创建成功，另一个同指纹幂等成功或稳定冲突；最终仅一条请求记录和一次 200 Credit 扣除。
-- F1 三测单次、四测 `-count=10`、并发窄 `-race` 与附加式 SQLite schema 断言均已实际通过；精确命令记录于 evidence。
+- 冻结现场、必读合同、最终 Spec FAIL 与历史证据已核验；诊断、TDD、模块设计与 Orca 调度约束已加载。
+- F1：版本 1 SHA-256 不可变请求指纹覆盖 user、规范化 model、quota_type、distributor amount；异参/缺失指纹稳定失败关闭，相同参数无写入重放；双连接、`-count=10` 与窄 `-race` 通过。
+- F2 RED：匿名 token/amount helper 对 Credit 返回成功；`PostConsumeQuota` 将 `token_used` 从 100 匿名增加却使 request record `applied_credit` 停留 100。
+- F2 GREEN：两个导出匿名 helper 对 `credit_balance` 返回 `ErrCreditValuationAnonymousDeltaForbidden` 且零写入；timed 与 converted 原路径保持兼容。
+- `PostConsumeQuota` 对 Credit 读取稳定 `RequestId` 的已提交 `applied_credit`，加本次 delta 得到累计 target，再调用 `SettleUserSubscriptionRequestTarget`；缺 request、映射冲突、负目标/溢出沿既有稳定错误失败关闭。
+- F2 核心单次、`-count=10`、窄 `-race`、converted source 与 timed `PostConsumeQuota` 回归均通过；精确命令见 evidence。
 
 ## 下一步
 
-1. 为 Credit 匿名 token/amount helper 与 `PostConsumeQuota` 匿名绕路写最小运行时 RED。
-2. 只实现稳定匿名拒绝 sentinel 与现有 request-aware 累计目标迁移，保留 timed/converted。
+1. `gofmt`、`git diff --check` 并提交 F2 clean 安全点。
+2. 仅运行既定 Issue #23 聚焦回归与 `go test ./model ./service ./controller -count=1` 最终门禁。
+3. 更新验收映射、确认 clean tree，报告协调者。
 
 ## 阻塞
 
@@ -25,5 +25,6 @@ F1 已完成并提交 clean 安全点；当前进入 F2 RED。
 
 ## 最近安全提交
 
-- `0855b96b5`：F1 断言级 RED 与稳定 sentinel/附加字段声明。
-- `07801e667`：F1 版本化不可变请求指纹、失败关闭、双连接并发与验证证据。
+- `07801e667`：F1 版本化不可变请求指纹与验证。
+- `0ba04adfb`：记录 F1 clean 安全点。
+- F2 GREEN 提交：待创建。

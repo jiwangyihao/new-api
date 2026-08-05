@@ -277,3 +277,19 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 独立 GREEN：`7a899945d`（`feat(issue-26): 拒绝转换权威事实冲突`）。
 - GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - 下一步仅验收真实文件 SQLite 下同 source/key 双连接同时 Confirm；禁止不同 source、在途 request、API/UI。
+
+## 2026-08-05 — Conversion 同事实双连接并发 GREEN
+
+新增真实文件 SQLite 测试 `TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce`。fixture 使用临时数据库文件、WAL、两个连接；两个 goroutine 各自进入 Confirm 事务，并在 `after_quote` hook 通过确定性 barrier 同时释放，从而真实竞争同一 source/key。
+
+首次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`，现实现直接 GREEN，无生产修复。两个调用返回完全相同 conversion；恰好一个 `Replayed=false`、一个 `Replayed=true`；conversion、source、ledger、valuation state 各唯一，source 指向唯一 conversion。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+窄竞态命令：`go test -race ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion_valuation_test.go` 与 `git diff --check` 均成功；未扩展不同 source、在途 request 或 API/UI。

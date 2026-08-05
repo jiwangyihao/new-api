@@ -1,6 +1,7 @@
 package model
 
 import (
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -336,4 +337,107 @@ func TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnRep
 	require.ErrorIs(t, err, ErrConversionIdempotencyConflict)
 	require.Nil(t, replayed)
 	require.Equal(t, before, captureConversionValuationWriteCounts(t), "conflicting replay must produce zero writes")
+}
+
+func TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce(t *testing.T) {
+	db, _ := setupSubscriptionConversionEligibilityConcurrencyTestDB(t)
+	require.NoError(t, migrateCreditValuationSchema(db))
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(2)
+
+	const (
+		userID               = 26_401
+		sourcePlanID         = 26_402
+		sourceSubscriptionID = 26_403
+		creditBasis          = int64(100)
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+	require.NoError(t, db.Create(&User{
+		Id: userID, Username: "conversion-concurrent-replay", Status: common.UserStatusEnabled,
+	}).Error)
+
+	plan := seedConversionQuoteTimedPlan(t, sourcePlanID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, db.Save(plan).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id:                      sourceSubscriptionID,
+		UserId:                  userID,
+		PlanId:                  sourcePlanID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              75,
+		TokenUsed:               50,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	results := make([]*SubscriptionConversionResult, 2)
+	errorsByWorker := make([]error, 2)
+	var workers sync.WaitGroup
+	workers.Add(len(results))
+	for index := range results {
+		go func() {
+			defer workers.Done()
+			var signalOnce sync.Once
+			hooks := &subscriptionConversionHooks{at: func(phase subscriptionConversionHookPhase) error {
+				if phase == subscriptionConversionAfterQuotePhase {
+					signalOnce.Do(func() { arrived <- struct{}{} })
+					<-release
+				}
+				return nil
+			}}
+			results[index], errorsByWorker[index] = confirmTimedSubscriptionConversion(
+				userID,
+				sourceSubscriptionID,
+				"concurrent-same-facts",
+				hooks,
+			)
+		}()
+	}
+	<-arrived
+	<-arrived
+	close(release)
+	workers.Wait()
+
+	replayCount := 0
+	for index := range results {
+		require.NoError(t, errorsByWorker[index])
+		require.NotNil(t, results[index])
+		if results[index].Replayed {
+			replayCount++
+		}
+	}
+	require.Equal(t, 1, replayCount)
+	require.Equal(t, results[0].Conversion, results[1].Conversion)
+	require.Equal(t, conversionValuationWriteCounts{conversions: 1, ledgers: 1, states: 1}, captureConversionValuationWriteCounts(t))
+
+	var sourceCount int64
+	require.NoError(t, db.Model(&UserSubscription{}).Where("id = ?", sourceSubscriptionID).Count(&sourceCount).Error)
+	require.Equal(t, int64(1), sourceCount)
+	var source UserSubscription
+	require.NoError(t, db.First(&source, sourceSubscriptionID).Error)
+	require.Equal(t, SubscriptionStatusConverted, source.Status)
+	require.Equal(t, results[0].Conversion.Id, source.ConversionId)
 }

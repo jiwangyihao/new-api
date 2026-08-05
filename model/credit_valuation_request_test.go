@@ -293,3 +293,31 @@ func TestCreditValuationRequestTargetMissingRecordReturnsStableError(t *testing.
 	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
 	require.Equal(t, int64(1), state.StateVersion)
 }
+
+func TestCreditValuationRequestTargetRejectsIncreaseAfterFinalization(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-finalized-increase"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 200, true))
+
+	err = SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 300, true)
+	require.ErrorIs(t, err, ErrCreditValuationFinalizedConflict)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(800), state.AvailableCredit)
+	require.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(2), state.StateVersion)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(1), record.SettlementVersion)
+	require.Equal(t, "settled", record.Status)
+}

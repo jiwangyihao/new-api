@@ -338,7 +338,7 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 			if final && ((targetCredit == 0 && record.Status == "refunded") || (targetCredit > 0 && record.Status == "settled")) {
 				return nil
 			}
-			return ErrCreditValuationTargetConflict
+			return ErrCreditValuationFinalizedConflict
 		}
 		if !final {
 			return nil
@@ -368,7 +368,7 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 		return nil
 	}
 	if route.FinalizedAt > 0 {
-		return ErrCreditValuationTargetConflict
+		return ErrCreditValuationFinalizedConflict
 	}
 
 	var subscription UserSubscription
@@ -486,8 +486,11 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
 		return ErrCreditValuationTargetConflict
 	}
-	if targetCredit < 0 || targetCredit >= record.AppliedCredit || (record.FinalizedAt > 0 && !final) {
+	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
 		return ErrCreditValuationTargetConflict
+	}
+	if record.FinalizedAt > 0 && !final {
+		return ErrCreditValuationFinalizedConflict
 	}
 
 	refund := record.AppliedCredit - targetCredit

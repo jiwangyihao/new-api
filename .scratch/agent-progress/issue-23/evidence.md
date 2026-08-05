@@ -217,3 +217,25 @@ go test ./model -run '^TestCreditValuationRequestTargetMissingRecordReturnsStabl
 go test: 1 packages ok
 ```
 结论：缺失请求记录稳定返回 `ErrCreditValuationRequestNotFound`，真实 Credit 数量、估值金额和版本保持不变。
+
+### RED/GREEN：终态后非法增加返回稳定 sentinel
+RED 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetRejectsIncreaseAfterFinalization$' -count=1
+```
+关键输出：
+```text
+undefined: ErrCreditValuationFinalizedConflict
+FAIL github.com/QuantumNous/new-api/model [build failed]
+```
+根因：终态后增加与普通目标冲突共用 `ErrCreditValuationTargetConflict`，调用方无法区分稳定终态冲突。
+
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTarget(RejectsIncreaseAfterFinalization|FinalizesSameTargetIdempotently)$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：终态后目标增加稳定返回 `ErrCreditValuationFinalizedConflict` 且数量/价值/版本不变；相同终态目标重放仍严格无操作。

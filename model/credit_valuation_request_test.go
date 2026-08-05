@@ -242,3 +242,36 @@ func TestCreditValuationRequestTargetDecreaseMarksReopenedDebtUnknown(t *testing
 	require.Zero(t, record.AbsorbedRestoreExactCostMicros)
 	require.Equal(t, "settled", record.Status)
 }
+
+func TestCreditValuationRequestTargetFullRestoreClearsSnapshotRemainders(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, option, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	option.MonthlyTokenLimit = 3
+	additional := completeAdditionalCreditValuationOrder(t, db, user, option, creditPlan, 91_007, 10_000)
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, additional.CreditBalance.UserSubscriptionId)
+
+	const requestID = "credit-request-full-restore-remainder"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 1_003)
+	require.NoError(t, err)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 1_002, false))
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, 0, true))
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, preConsumed.UserSubscriptionId).Error)
+	require.Equal(t, int64(1_003), subscription.TokenLimit)
+	require.Zero(t, subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(1_003), state.AvailableCredit)
+	require.Equal(t, int64(40_010_000), state.ExactCostMicros)
+
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Zero(t, record.AppliedCredit)
+	require.Zero(t, record.DeductedAvailableCredit)
+	require.Zero(t, record.DeductedExactCostMicros)
+	require.Zero(t, record.DeductedEstimatedCostMicros)
+	require.Zero(t, record.DeductedUnknownCredit)
+	require.Equal(t, "refunded", record.Status)
+}

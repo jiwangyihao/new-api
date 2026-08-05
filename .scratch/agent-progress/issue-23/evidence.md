@@ -178,3 +178,20 @@ go test ./model -run '^TestCreditValuationRequestTargetDecreaseMarksReopenedDebt
 go test: 1 packages ok
 ```
 结论：真实 SQLite 通过公开入口预扣 1,000、追加到 1,200 形成 200 请求欠额；随后 200 Credit / 8,000,000 micros exact ingress 全部抵债、净可用与净成本均为 0；目标回退到 1,000 后重新形成的 200 可用 Credit 全部标记 unknown，状态 exact/estimated 为 0，请求 `restored_unknown_credit=200`。未把后来 ingress 价格或当前池平均伪造成恢复成本。
+
+### 行为证明：全退款清空活动快照舍入余数
+初次命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetFullRestoreClearsSnapshotRemainders$' -count=1
+```
+初次关键输出：测试夹具使用 `10` micros，低于套餐精确价格最小有效单位，订单完成在测试助手处失败；该失败不在请求恢复路径。
+
+修正夹具后 GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetFullRestoreClearsSnapshotRemainders$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：1,003 Credit 混合池包含不可整除成本，预扣后先少退 1 Credit、再全退到 0；最终请求 exact/estimated/unknown 活动快照全部归零，物化池完整恢复到 1,003 Credit / 40,010,000 micros，没有舍入残值。

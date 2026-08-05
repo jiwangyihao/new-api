@@ -573,12 +573,100 @@ func TestLegacyCreditTaskReplayConflictIsAtomic(t *testing.T) {
 	require.NoError(t, model.SettleLegacyCreditTaskRequestTarget(requestID, subID, 100, 140, true))
 	before := loadCreditTaskRequestRecord(t, requestID)
 
-	err = model.SettleLegacyCreditTaskRequestTarget(requestID, subID, 90, 140, true)
-	require.ErrorIs(t, err, model.ErrCreditValuationTargetConflict)
+	err = model.SettleLegacyCreditTaskRequestTarget(requestID, subID, 140, 150, true)
+	require.ErrorIs(t, err, model.ErrCreditValuationFinalizedConflict)
 	after := loadCreditTaskRequestRecord(t, requestID)
 	require.Equal(t, before.SettlementVersion, after.SettlementVersion)
 	require.Equal(t, before.FinalizedAt, after.FinalizedAt)
 	require.Equal(t, int64(140), getSubscriptionTokenUsedForTaskTest(t, subID))
+}
+
+func TestCreditTaskSettlementFailsClosedWhenValuationNotReady(t *testing.T) {
+	truncate(t)
+	const requestID = "req-credit-task-runtime-not-ready"
+	task := seedCreditTaskRequestLifecycle(t, requestID, "task-credit-runtime-not-ready", 100)
+	require.NoError(t, model.DB.Where("version = ?", 1).Delete(&model.CreditValuationMigration{}).Error)
+
+	beforeRecord := loadCreditTaskRequestRecord(t, requestID)
+	var beforeState model.CreditValuationState
+	require.NoError(t, model.DB.First(&beforeState, task.PrivateData.SubscriptionId).Error)
+
+	err := taskAdjustFunding(task, 40, true)
+	require.ErrorIs(t, err, model.ErrCreditValuationStateMismatch)
+	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
+	afterRecord := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, beforeRecord.AppliedCredit, afterRecord.AppliedCredit)
+	require.Equal(t, beforeRecord.SettlementVersion, afterRecord.SettlementVersion)
+	require.Equal(t, beforeRecord.Status, afterRecord.Status)
+	var afterState model.CreditValuationState
+	require.NoError(t, model.DB.First(&afterState, task.PrivateData.SubscriptionId).Error)
+	require.Equal(t, beforeState.StateVersion, afterState.StateVersion)
+	require.Equal(t, beforeState.AvailableCredit, afterState.AvailableCredit)
+	require.Equal(t, beforeState.ExactCostMicros, afterState.ExactCostMicros)
+}
+
+func TestCreditTaskSettlementFailsClosedWhenValuationStateMissing(t *testing.T) {
+	truncate(t)
+	const requestID = "req-credit-task-state-missing"
+	task := seedCreditTaskRequestLifecycle(t, requestID, "task-credit-state-missing", 100)
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", task.PrivateData.SubscriptionId).Delete(&model.CreditValuationState{}).Error)
+
+	beforeRecord := loadCreditTaskRequestRecord(t, requestID)
+	err := taskAdjustFunding(task, 40, true)
+	require.ErrorIs(t, err, model.ErrCreditValuationStateMissing)
+	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
+	afterRecord := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, beforeRecord.AppliedCredit, afterRecord.AppliedCredit)
+	require.Equal(t, beforeRecord.SettlementVersion, afterRecord.SettlementVersion)
+	require.Equal(t, beforeRecord.Status, afterRecord.Status)
+	var stateCount int64
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_subscription_id = ?", task.PrivateData.SubscriptionId).Count(&stateCount).Error)
+	require.Zero(t, stateCount)
+}
+
+func TestLegacyCreditTaskRefundReplaysWhileAccountHasSettlementDebt(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 123, 124, 125, 126, 127
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-legacy-credit-debt", 100, 120)
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		AvailableCredit:    0,
+		ExactCostMicros:    0,
+		Currency:           "CNY",
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+	task := makeTask(userID, channelID, 40, tokenID, BillingSourceSubscription, subID)
+	task.TaskID = "task-credit-legacy-debt-refund"
+	require.NoError(t, model.DB.Create(task).Error)
+	requestID, err := taskSubscriptionRequestID(task)
+	require.NoError(t, err)
+
+	RefundTaskQuota(context.Background(), task, "legacy debt refund")
+	refunded := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Zero(t, refunded.AppliedCredit)
+	require.Equal(t, int64(80), getSubscriptionTokenUsedForTaskTest(t, subID))
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, subID).Error)
+	require.Equal(t, int64(20), state.AvailableCredit)
+	require.Equal(t, int64(20), state.UnknownCredit)
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	RefundTaskQuota(context.Background(), &reloaded, "legacy debt refund replay")
+	replayed := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, refunded.SettlementVersion, replayed.SettlementVersion)
+	require.Equal(t, refunded.FinalizedAt, replayed.FinalizedAt)
+	require.Equal(t, int64(80), getSubscriptionTokenUsedForTaskTest(t, subID))
+	var replayedState model.CreditValuationState
+	require.NoError(t, model.DB.First(&replayedState, subID).Error)
+	require.Equal(t, state.StateVersion, replayedState.StateVersion)
+	require.Equal(t, state.UnknownCredit, replayedState.UnknownCredit)
 }
 
 func seedCreditTaskRequestLifecycle(t *testing.T, requestID string, taskID string, preConsumed int64) *model.Task {

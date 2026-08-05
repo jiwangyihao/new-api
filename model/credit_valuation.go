@@ -672,6 +672,76 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	return nil
 }
 
+// SettleLegacyCreditTaskRequestTarget creates the request snapshot that old
+// persisted tasks lack, then settles through the same request-aware module.
+// The historical pre-consume cost is unknowable, so its active snapshot is
+// classified as unknown; only later positive deltas consume the current pool.
+func SettleLegacyCreditTaskRequestTarget(requestId string, originalSubscriptionId int, initialAppliedCredit int64, targetCredit int64, final bool) error {
+	requestId = strings.TrimSpace(requestId)
+	if requestId == "" || originalSubscriptionId <= 0 {
+		return ErrCreditValuationTargetConflict
+	}
+	if initialAppliedCredit < 0 || targetCredit < 0 {
+		return ErrCreditValuationNegativeInput
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var subscription UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", originalSubscriptionId).First(&subscription).Error; err != nil {
+			return err
+		}
+		if subscription.EntitlementType != SubscriptionEntitlementCreditBalance || subscription.TokenUsed < initialAppliedCredit {
+			return ErrCreditValuationStateMismatch
+		}
+
+		var state CreditValuationState
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_subscription_id = ?", subscription.Id).First(&state).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrCreditValuationStateMissing
+		}
+		if err != nil {
+			return err
+		}
+		if err := validateCreditValuationState(&subscription, &state); err != nil {
+			return err
+		}
+
+		now := getDBTimestampTx(tx)
+		candidate := SubscriptionPreConsumeRecord{
+			RequestId:               requestId,
+			UserId:                  subscription.UserId,
+			UserSubscriptionId:      subscription.Id,
+			PreConsumed:             initialAppliedCredit,
+			AppliedCredit:           initialAppliedCredit,
+			DeductedAvailableCredit: initialAppliedCredit,
+			ValuationSubscriptionId: subscription.Id,
+			DeductedUnknownCredit:   initialAppliedCredit,
+			ValuationRuleVersion:    CreditValuationRuleVersion,
+			SettlementVersion:       1,
+			Status:                  "consumed",
+			CreatedAt:               now,
+			UpdatedAt:               now,
+		}
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "request_id"}},
+			DoNothing: true,
+		}).Create(&candidate).Error; err != nil {
+			return err
+		}
+
+		var route SubscriptionPreConsumeRecord
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).First(&route).Error; err != nil {
+			return err
+		}
+		if route.UserId != subscription.UserId || route.UserSubscriptionId != originalSubscriptionId || route.ValuationSubscriptionId != originalSubscriptionId {
+			return ErrCreditValuationMappingConflict
+		}
+		if route.ValuationRuleVersion != CreditValuationRuleVersion {
+			return ErrCreditValuationTargetConflict
+		}
+		return SettleCreditRequestTargetTx(tx, &route, targetCredit, final)
+	})
+}
+
 func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionId int, targetCredit int64, final bool) error {
 	requestId = strings.TrimSpace(requestId)
 	if requestId == "" || originalSubscriptionId <= 0 {

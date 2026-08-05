@@ -124,6 +124,13 @@ func taskAdjustFunding(task *model.Task, delta int, final bool) error {
 			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
 		}
 		if sub.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+			valuationReady, err := model.CreditValuationRuntimeReadyTx(model.DB)
+			if err != nil {
+				return err
+			}
+			if !valuationReady {
+				return model.ErrCreditValuationStateMismatch
+			}
 			requestID, err := taskSubscriptionRequestID(task)
 			if err != nil {
 				return err
@@ -131,6 +138,9 @@ func taskAdjustFunding(task *model.Task, delta int, final bool) error {
 			target := int64(task.Quota) + int64(delta)
 			if target < 0 {
 				return model.ErrCreditValuationNegativeInput
+			}
+			if strings.TrimSpace(task.PrivateData.SubscriptionRequestId) == "" {
+				return model.SettleLegacyCreditTaskRequestTarget(requestID, task.PrivateData.SubscriptionId, int64(task.Quota), target, final)
 			}
 			return model.SettleUserSubscriptionRequestTarget(requestID, task.PrivateData.SubscriptionId, target, final)
 		}

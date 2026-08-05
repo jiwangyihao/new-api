@@ -447,3 +447,14 @@ git diff --check
 格式化：仅运行 `gofmt` 于 `model/task.go`、`model/credit_valuation.go`、`service/task_billing.go`、`service/task_billing_test.go`；`service/billing_session.go` 的探索性改动已撤销。
 
 范围：本安全点未进入预扣记录清理，未实现 #24–#28，也未改 conversion/FX/marker。
+
+### 遗留兼容独立续作裁决
+证据命令：
+```text
+go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
+go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=10
+go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
+```
+关键输出：三条命令均为 `go test: 1 packages ok`。旧实现复现为测试包无法解析 `model.SettleLegacyCreditTaskRequestTarget`，因此裁决 A：`model/credit_valuation.go` 的 legacy 请求快照入口与 `service/task_billing.go` 的确定性路由是已持久化旧 Task 完成 final/refund/replay 的必要生产兼容，不得退回 Credit 匿名 delta。
+
+本续作保持 `service/billing_session.go` 无差异；legacy 安全点与 `SubscriptionPreConsumeRecord` 清理严格分开提交。

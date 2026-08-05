@@ -42,3 +42,9 @@ M service/task_billing_test.go
 - GREEN：新增 nullable `varchar(64)` 投影列与非唯一索引 `idx_tasks_subscription_request_id`；公开 Insert/Update 从 `TaskPrivateData.subscription_request_id` 同步，显式非空列不一致返回稳定错误；空身份与 timed Task 保持 NULL。
 - 验证：六个投影合同用例（含 Insert/Update 两种非空冲突 fail-closed）`count=1`、`count=10` 均返回 `go test: 1 packages ok`；Insert 冲突不落库；`git diff --check` 无输出。
 - 范围：未回填历史 JSON-only/NULL 行；未实现清理 `NOT EXISTS`；真实 MySQL/PostgreSQL 零 SKIP 验收仍归 #27。
+
+## 持久 Task 引用保护安全点
+- RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsProtectsActiveTaskReferences$' -count=1` 失败，`expected: 1`、`actual: 3`；旧清理误删仍被 `SUBMITTED`/`IN_PROGRESS` 持久 Task 引用的 settled/refunded 请求记录。
+- GREEN：数据库侧相关 `NOT EXISTS` 精确保护非空投影；删除前按稳定主键分批完整分类活跃 NULL 投影 Task。仅可证明为 timed 且 JSON request identity 为空时放行；缺失/未知/Credit/混合版本返回稳定 `ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference`，事务内删除数为 0。
+- 验证：测试分别覆盖 ambiguous NULL fail-closed 且零删除、明确 timed NULL 不阻断，以及非空 `SUBMITTED`/`IN_PROGRESS` 精确保护；`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+- 范围：历史 JSON-only/NULL 行不回填；真实 MySQL/PostgreSQL 零 SKIP 验收仍归 #27。

@@ -3123,14 +3123,72 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	return resetCount, nil
 }
 
+const subscriptionCleanupReferenceBatchSize = 100
+
+var ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference = errors.New("subscription pre-consume cleanup blocked by ambiguous active task reference")
+
+func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
+	var tasks []Task
+	return tx.Select("id", "private_data").
+		Where("status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("subscription_request_id IS NULL").
+		Order("id ASC").
+		FindInBatches(&tasks, subscriptionCleanupReferenceBatchSize, func(_ *gorm.DB, _ int) error {
+			subscriptionIDs := make([]int, 0, len(tasks))
+			seenSubscriptionIDs := make(map[int]struct{}, len(tasks))
+			for _, task := range tasks {
+				if strings.TrimSpace(task.PrivateData.SubscriptionRequestId) != "" || task.PrivateData.SubscriptionId <= 0 {
+					return ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference
+				}
+				if _, seen := seenSubscriptionIDs[task.PrivateData.SubscriptionId]; seen {
+					continue
+				}
+				seenSubscriptionIDs[task.PrivateData.SubscriptionId] = struct{}{}
+				subscriptionIDs = append(subscriptionIDs, task.PrivateData.SubscriptionId)
+			}
+			if len(subscriptionIDs) == 0 {
+				return nil
+			}
+
+			var subscriptions []UserSubscription
+			if err := tx.Select("id", "entitlement_type").Where("id IN ?", subscriptionIDs).Find(&subscriptions).Error; err != nil {
+				return err
+			}
+			entitlementBySubscriptionID := make(map[int]string, len(subscriptions))
+			for _, subscription := range subscriptions {
+				entitlementBySubscriptionID[subscription.Id] = subscription.EntitlementType
+			}
+			for _, subscriptionID := range subscriptionIDs {
+				if entitlementBySubscriptionID[subscriptionID] != SubscriptionEntitlementTimed {
+					return ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference
+				}
+			}
+			return nil
+		}).Error
+}
+
 // CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
 func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).Delete(&SubscriptionPreConsumeRecord{})
-	return res.RowsAffected, res.Error
+	var deleted int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
+			return err
+		}
+		activeTaskReference := tx.Model(&Task{}).
+			Select("1").
+			Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+			Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
+		res := tx.Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+			Where("NOT EXISTS (?)", activeTaskReference).
+			Delete(&SubscriptionPreConsumeRecord{})
+		deleted = res.RowsAffected
+		return res.Error
+	})
+	return deleted, err
 }
 
 type SubscriptionPlanInfo struct {

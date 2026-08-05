@@ -1,7 +1,7 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`TASK_PROJECTION_GREEN_READY`。
+- 阶段：`REFERENCE_NOT_EXISTS_GREEN_READY`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
@@ -13,6 +13,8 @@
 - cutoff GREEN：清理改按 `finalized_at < cutoff` 判断；阈值前删除，等于与阈值后保留。单测 `count=1` 与全部 cleanup 用例 `count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。
 - Task 投影 RED：schema 缺列/索引；Insert 后投影为 NULL；Update 不一致未报错。GREEN：`tasks.subscription_request_id` 为 nullable `varchar(64)`、命名非唯一索引 `idx_tasks_subscription_request_id`；公开 Insert/Update 从 JSON 同步，显式非空列不一致稳定返回 `task subscription request identity projection mismatch`，空身份及 timed Task 保持 NULL。
 - 验证：六个投影合同用例（含 Insert/Update 两种非空冲突 fail-closed）`count=1` 与 `count=10` 均为 `go test: 1 packages ok`；Insert 冲突不落库；`git diff --check` 无输出。此安全点未实现清理 `NOT EXISTS`，未回填历史 JSON-only 行。
+- 引用保护 RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsProtectsActiveTaskReferences$' -count=1` 行为失败，`expected: 1`、`actual: 3`；旧清理误删仍被 `SUBMITTED`/`IN_PROGRESS` 持久 Task 投影引用的 settled/refunded 记录。
+- 引用保护 GREEN：数据库侧相关 `NOT EXISTS` 精确保护非空投影；删除前用稳定主键 `FindInBatches` 完整分类活跃 NULL 投影 Task。只有可证明为 timed 且 JSON request identity 为空时放行；缺失/未知/Credit/混合版本返回稳定 `ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference`，整次删除数为 0。全部 cleanup 用例 `count=10` 为 `go test: 1 packages ok`；`git diff --check` 无输出。
 
 ## Cleanup RED 证据
 - 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。

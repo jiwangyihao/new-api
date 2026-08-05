@@ -2,7 +2,7 @@
 
 ## 当前状态
 - 阶段：`cleanup RED_IN_PROGRESS`。
-- legacy Task 兼容已在独立安全提交 `78c487e96` 收敛；该提交后的工作树已确认干净。
+- legacy Task 生产兼容提交为 `78c487e96`，旧匿名夹具迁移与最终 evidence 提交为 `ea016089a`；后者是开始 cleanup 前的干净安全 HEAD。
 - 当前仅处理 `SubscriptionPreConsumeRecord` 的安全清理；停止所有 Task 身份扩展、conversion、quota 重构及 #24–#28 探索。
 
 ## 已收敛遗留项

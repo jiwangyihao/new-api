@@ -1,12 +1,14 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords(t *testing.T) {
@@ -270,4 +272,42 @@ func TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches(t *testing
 	deleted, err = cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
 	require.NoError(t, err)
 	require.Zero(t, deleted)
+}
+
+func TestCleanupSubscriptionPreConsumeRecordsRollsBackBatchOnDeleteFailure(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Task{}))
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+
+	requestIDs := []string{"cleanup-rollback-first", "cleanup-rollback-second"}
+	for _, requestID := range requestIDs {
+		preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 10)
+		require.NoError(t, err)
+		require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+		require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, subscriptionID, 10, true))
+	}
+	expiredAt := GetDBTimestamp() - 3_600
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id IN ?", requestIDs).
+		UpdateColumn("finalized_at", expiredAt).Error)
+
+	injectedErr := errors.New("injected cleanup delete failure")
+	const callbackName = "issue23:inject_cleanup_delete_failure"
+	require.NoError(t, db.Callback().Delete().After("gorm:delete").Register(callbackName, func(tx *gorm.DB) {
+		if tx.Statement != nil && tx.Statement.Schema != nil && tx.Statement.Schema.Name == "SubscriptionPreConsumeRecord" {
+			tx.AddError(injectedErr)
+		}
+	}))
+	t.Cleanup(func() { db.Callback().Delete().Remove(callbackName) })
+
+	deleted, err := cleanupSubscriptionPreConsumeRecordsBatch(60, len(requestIDs))
+	require.ErrorIs(t, err, injectedErr)
+	require.Zero(t, deleted)
+
+	var remaining []string
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Order("id ASC").Pluck("request_id", &remaining).Error)
+	require.Equal(t, requestIDs, remaining)
 }

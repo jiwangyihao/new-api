@@ -3211,7 +3211,10 @@ func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize
 		deleted = res.RowsAffected
 		return res.Error
 	})
-	return deleted, err
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 type SubscriptionPlanInfo struct {

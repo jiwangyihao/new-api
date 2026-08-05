@@ -54,3 +54,8 @@ M service/task_billing_test.go
 - GREEN：事务内按稳定 `id ASC` 选择至多 batch 条候选，再以同一终态/cutoff/引用条件删除；公开入口固定 batch=100。
 - 幂等：测试 batch=2 时首轮删除前两条、次轮删除最后一条、第三轮返回 0；相同快照与参数产生确定删除集合。
 - 验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+
+## 批次失败原子性安全点
+- RED：DELETE 后注入稳定错误，事务实际回滚，但 helper 错误返回已删除 2 条，违反错误时零影响合同。
+- GREEN：事务返回任何错误时稳定返回 `(0, err)`；测试确认同批两条请求记录均保留。
+- 验证：故障注入单用例 `count=1` 与 `go test ./model -run '^TestCleanupSubscriptionPreConsumeRecords' -count=10` 均返回 `go test: 1 packages ok`；`git diff --check` 无输出。

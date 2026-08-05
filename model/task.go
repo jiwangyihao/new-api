@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -101,10 +102,11 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource         string              `json:"billing_source,omitempty"`          // "wallet" 或 "subscription"
+	SubscriptionId        int                 `json:"subscription_id,omitempty"`         // 订阅 ID，用于订阅退款
+	SubscriptionRequestId string              `json:"subscription_request_id,omitempty"` // Credit 请求级结算身份
+	TokenId               int                 `json:"token_id,omitempty"`                // 令牌 ID，用于令牌额度退款
+	BillingContext        *TaskBillingContext `json:"billing_context,omitempty"`         // 计费参数快照（用于轮询阶段重新计算）
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -172,39 +174,44 @@ type SyncTaskQueryParams struct {
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
 	properties := Properties{}
 	privateData := TaskPrivateData{}
-	if relayInfo != nil && relayInfo.ChannelMeta != nil {
-		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
-			privateData.Key = relayInfo.ChannelMeta.ApiKey
+	userID := 0
+	channelID := 0
+	taskID := ""
+	if relayInfo != nil {
+		userID = relayInfo.UserId
+		privateData.SubscriptionRequestId = strings.TrimSpace(relayInfo.RequestId)
+		if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.PublicTaskID != "" {
+			taskID = relayInfo.TaskRelayInfo.PublicTaskID
 		}
-		if relayInfo.UpstreamModelName != "" {
-			properties.UpstreamModelName = relayInfo.UpstreamModelName
+		if relayInfo.ChannelMeta != nil {
+			channelID = relayInfo.ChannelMeta.ChannelId
+			if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
+				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
+				privateData.Key = relayInfo.ChannelMeta.ApiKey
+			}
+			if relayInfo.ChannelMeta.UpstreamModelName != "" {
+				properties.UpstreamModelName = relayInfo.ChannelMeta.UpstreamModelName
+			}
 		}
 		if relayInfo.OriginModelName != "" {
 			properties.OriginModelName = relayInfo.OriginModelName
 		}
 	}
-
-	// 使用预生成的公开 ID（如果有），否则新生成
-	taskID := ""
-	if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.PublicTaskID != "" {
-		taskID = relayInfo.TaskRelayInfo.PublicTaskID
-	} else {
+	if taskID == "" {
 		taskID = GenerateTaskID()
 	}
 
-	t := &Task{
+	return &Task{
 		TaskID:      taskID,
-		UserId:      relayInfo.UserId,
+		UserId:      userID,
 		SubmitTime:  time.Now().Unix(),
 		Status:      TaskStatusNotStart,
 		Progress:    "0%",
-		ChannelId:   relayInfo.ChannelId,
+		ChannelId:   channelID,
 		Platform:    platform,
 		Properties:  properties,
 		PrivateData: privateData,
 	}
-	return t
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {

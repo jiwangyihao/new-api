@@ -50,6 +50,9 @@ func TestMain(m *testing.M) {
 		&model.UserSubscription{},
 		&model.SubscriptionPlan{},
 		&model.SubscriptionConversion{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.CreditValuationState{},
+		&model.CreditValuationMigration{},
 		&model.CreditBalanceLedger{},
 		&model.TrialCode{},
 		&model.TrialRedemption{},
@@ -84,6 +87,9 @@ func truncate(t *testing.T) {
 			"user_subscriptions",
 			"subscription_plans",
 			"subscription_conversions",
+			"subscription_pre_consume_records",
+			"credit_valuation_states",
+			"credit_valuation_migrations",
 			"credit_balance_ledgers",
 			"abilities",
 			"log_aggregation_events",
@@ -416,6 +422,126 @@ func TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections(t *testing.T) {
 	require.Equal(t, int64(100), getSubscriptionTokenUsedForTaskTest(t, subID))
 	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
 	require.Equal(t, int64(9), sub.AmountUsed)
+}
+
+func TestCreditTaskPersistsSubscriptionRequestIDAcrossReload(t *testing.T) {
+	truncate(t)
+	relayInfo := &relaycommon.RelayInfo{
+		UserId:         83,
+		RequestId:      "req-credit-task-persisted",
+		BillingSource:  BillingSourceSubscription,
+		SubscriptionId: 83,
+	}
+	task := model.InitTask("video", relayInfo)
+	task.TaskID = "task-credit-request-id-reload"
+	require.NoError(t, model.DB.Create(task).Error)
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	require.Equal(t, relayInfo.RequestId, reloaded.PrivateData.SubscriptionRequestId)
+}
+
+func TestLegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey(t *testing.T) {
+	truncate(t)
+	first := makeTask(83, 83, 100, 83, BillingSourceSubscription, 83)
+	first.TaskID = "task-credit-legacy-first"
+	second := makeTask(83, 83, 100, 83, BillingSourceSubscription, 83)
+	second.TaskID = "task-credit-legacy-second"
+	require.NoError(t, model.DB.Create(first).Error)
+	require.NoError(t, model.DB.Create(second).Error)
+
+	firstRequestID, err := taskSubscriptionRequestID(first)
+	require.NoError(t, err)
+	secondRequestID, err := taskSubscriptionRequestID(second)
+	require.NoError(t, err)
+	require.NotEqual(t, firstRequestID, secondRequestID)
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, first.ID).Error)
+	reloadedRequestID, err := taskSubscriptionRequestID(&reloaded)
+	require.NoError(t, err)
+	require.Equal(t, firstRequestID, reloadedRequestID)
+}
+
+func seedCreditTaskRequestLifecycle(t *testing.T, requestID string, taskID string, preConsumed int64) *model.Task {
+	t.Helper()
+	const userID, tokenID, planID, subID, channelID = 83, 84, 85, 86, 87
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-task-identity", 1_000, 0)
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		Currency:           "CNY",
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+	_, err := model.PreConsumeUserSubscriptionByUnits(requestID, userID, "video-model", 0, preConsumed, preConsumed)
+	require.NoError(t, err)
+
+	task := makeTask(userID, channelID, int(preConsumed), tokenID, BillingSourceSubscription, subID)
+	task.TaskID = taskID
+	task.PrivateData.SubscriptionRequestId = requestID
+	require.NoError(t, model.DB.Create(task).Error)
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	return &reloaded
+}
+
+func loadCreditTaskRequestRecord(t *testing.T, requestID string) model.SubscriptionPreConsumeRecord {
+	t.Helper()
+	var record model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&record).Error)
+	return record
+}
+
+func TestCreditTaskSuccessFinalAndReplayReusePersistedRequestID(t *testing.T) {
+	truncate(t)
+	const requestID = "req-credit-task-success-replay"
+	task := seedCreditTaskRequestLifecycle(t, requestID, "task-credit-success-replay", 100)
+	require.NoError(t, model.SettleUserSubscriptionRequestTarget(requestID, task.PrivateData.SubscriptionId, 140, false))
+	task.Quota = 140
+	require.NoError(t, task.UpdateQuota())
+	require.Equal(t, "consumed", loadCreditTaskRequestRecord(t, requestID).Status)
+
+	RecalculateTaskQuota(context.Background(), task, 140, "credit task success")
+	settled := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, int64(140), settled.AppliedCredit)
+	require.Equal(t, "settled", settled.Status)
+	require.Positive(t, settled.FinalizedAt)
+	require.Equal(t, int64(140), getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	RecalculateTaskQuota(context.Background(), &reloaded, 140, "credit task success replay")
+	replayed := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, settled.SettlementVersion, replayed.SettlementVersion)
+	require.Equal(t, settled.FinalizedAt, replayed.FinalizedAt)
+	require.Equal(t, int64(140), getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
+}
+
+func TestCreditTaskFailureRefundAndReplayReusePersistedRequestID(t *testing.T) {
+	truncate(t)
+	const requestID = "req-credit-task-failure-replay"
+	task := seedCreditTaskRequestLifecycle(t, requestID, "task-credit-failure-replay", 100)
+
+	RefundTaskQuota(context.Background(), task, "credit task failed")
+	refunded := loadCreditTaskRequestRecord(t, requestID)
+	require.Zero(t, refunded.AppliedCredit)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Positive(t, refunded.FinalizedAt)
+	require.Zero(t, getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
+
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	RefundTaskQuota(context.Background(), &reloaded, "credit task failed replay")
+	replayed := loadCreditTaskRequestRecord(t, requestID)
+	require.Equal(t, refunded.SettlementVersion, replayed.SettlementVersion)
+	require.Equal(t, refunded.FinalizedAt, replayed.FinalizedAt)
+	require.Zero(t, getSubscriptionTokenUsedForTaskTest(t, task.PrivateData.SubscriptionId))
 }
 
 func TestConvertedTimedTaskSettlementKeepsSourceIdentityAndAdjustsCreditBalance(t *testing.T) {

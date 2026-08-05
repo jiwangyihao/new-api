@@ -67,7 +67,8 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 		fundingDelta = int(fundingDelta64)
 	}
 	if subscriptionFunding, ok := s.funding.(*SubscriptionFunding); ok {
-		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens, true)
+		final := s.relayInfo == nil || s.relayInfo.RelayFormat != types.RelayFormatTask
+		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens, final)
 		if err != nil {
 			return err
 		}

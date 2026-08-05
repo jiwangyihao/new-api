@@ -1,8 +1,8 @@
 # Issue #23 状态
 
 ## 当前阶段
-- 阶段：`Task identity / RED`；已从协调器冻结的 clean HEAD `128b71c442c028ae5cf33d3bee201282115346f0` 原位续作。
-- 当前定位：只实现 `TaskPrivateData.subscription_request_id` 的新 Task 持久身份、legacy Task 主键确定性身份，以及 reserve/追加/success final/failure refund/replay 复用；本安全点完成前不进入清理。
+- 阶段：`HANDOFF_READY`；已完成异步 Task 持久请求身份安全点，停止于协调器指定边界，不进入清理、conversion、quota 重构或 #24–#28。
+- 当前结果：新 Task 持久化 `subscription_request_id`；legacy Task 使用稳定 `legacy-task:<task_pk>`；Credit Task 初始 reserve、追加、成功 final、失败 refund 与重放复用同一身份；timed Task 分支保持原行为。
 
 ## 已完成
 - 已读取仓库与全局规则、父 PRD #19、Issue #23、执行合同、第二波次合同、`CONTEXT.md`、ADR 0001/0002、规格 5.4/6/7.3–7.5/9/11.3/13/14、计划任务 3/6、Issue #20/#22 合同。
@@ -11,12 +11,13 @@
 - 已确认起始 HEAD 和 merge-base 都是 `ec1858fec89509bdec9a90a230a8496047c5becd`，起始工作树干净。
 
 ## 下一步
-1. 在既有异步 Task 测试接缝写新 Task JSON 持久身份与 legacy 主键确定性身份 RED。
-2. 用最小实现让 Credit Task 的 reserve、追加、成功 final、失败 refund 与重放复用同一 ID，并保持 timed Task 匿名 delta 兼容。
-3. 完成新旧 Task、同 subscription 多 Task、成功/失败重放、错误隔离的 `count=10` 与窄 `-race` 后提交 Task identity 安全点；此前不进入清理或 #24–#27。
+1. 协调器验收并决定后续 Dispatch；本安全点不继续扩展。
+2. 已按要求保留非目标：请求记录清理、conversion、quota 重构及 #24–#28 均未实施。
 
-## 阻塞
-- 无技术阻塞；严格按冻结续作范围推进。
+## 阻塞与风险
+- 无当前技术阻塞。
+- 定向四项 Task identity 生命周期测试的 `count=10` 与窄 `-race` 均通过；同 subscription 多 legacy Task 隔离由持久主键身份断言覆盖。
+- 一次非门禁旧匿名 Credit Task 兼容用例仍期望匿名 delta 行为并失败；按协调器明确指令未分析 quota、未修改旧夹具或扩展范围，精确现场已记录于 `evidence.md`。
 
 ## 最近安全提交
-- `128b71c442c028ae5cf33d3bee201282115346f0`（Task identity HANDOFF_READY；接管前工作树 clean）。
+- 本文件与 Task identity 实现同步提交为 clean 安全点；父提交 `147680357`。

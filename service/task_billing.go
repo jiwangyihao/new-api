@@ -70,6 +70,21 @@ func taskIsSubscription(task *model.Task) bool {
 	return task.PrivateData.BillingSource == BillingSourceSubscription && task.PrivateData.SubscriptionId > 0
 }
 
+var ErrTaskSubscriptionRequestIdentityUnavailable = errors.New("persisted task identity is required for subscription settlement")
+
+func taskSubscriptionRequestID(task *model.Task) (string, error) {
+	if task == nil {
+		return "", ErrTaskSubscriptionRequestIdentityUnavailable
+	}
+	if requestID := strings.TrimSpace(task.PrivateData.SubscriptionRequestId); requestID != "" {
+		return requestID, nil
+	}
+	if task.ID <= 0 {
+		return "", ErrTaskSubscriptionRequestIdentityUnavailable
+	}
+	return fmt.Sprintf("legacy-task:%d", task.ID), nil
+}
+
 func loadTaskSubscription(task *model.Task) (*model.UserSubscription, error) {
 	if !taskIsSubscription(task) {
 		return nil, errors.New("task subscription funding is required")
@@ -99,7 +114,7 @@ func taskUsesDistributorSubscription(sub *model.UserSubscription) (bool, error) 
 }
 
 // taskAdjustFunding 只调整任务资金来源；API Key 旧 quota 不参与请求或任务结算。
-func taskAdjustFunding(task *model.Task, delta int) error {
+func taskAdjustFunding(task *model.Task, delta int, final bool) error {
 	if taskIsSubscription(task) {
 		sub, err := loadTaskSubscription(task)
 		if err != nil {
@@ -109,7 +124,18 @@ func taskAdjustFunding(task *model.Task, delta int) error {
 			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
 		}
 		if sub.EntitlementType == model.SubscriptionEntitlementCreditBalance {
-			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
+			requestID, err := taskSubscriptionRequestID(task)
+			if err != nil {
+				return err
+			}
+			target := int64(task.Quota) + int64(delta)
+			if target < 0 {
+				return model.ErrCreditValuationNegativeInput
+			}
+			return model.SettleUserSubscriptionRequestTarget(requestID, task.PrivateData.SubscriptionId, target, final)
+		}
+		if delta == 0 {
+			return nil
 		}
 		distributor, err := taskUsesDistributorSubscription(sub)
 		if err != nil {
@@ -169,7 +195,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 	}
 
 	// 1. 退还任务资金来源（订阅资金来源；旧 wallet 路径已禁用）
-	if err := taskAdjustFunding(task, -quota); err != nil {
+	if err := taskAdjustFunding(task, -quota, true); err != nil {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return
 	}
@@ -205,6 +231,10 @@ func RecalculateTaskQuotaWithClamp(ctx context.Context, task *model.Task, actual
 	quotaDelta := actualQuota - preConsumedQuota
 
 	if quotaDelta == 0 {
+		if err := taskAdjustFunding(task, 0, true); err != nil {
+			logger.LogError(ctx, fmt.Sprintf("任务终态结算失败 task %s: %s", task.TaskID, err.Error()))
+			return
+		}
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
 		return
@@ -219,7 +249,7 @@ func RecalculateTaskQuotaWithClamp(ctx context.Context, task *model.Task, actual
 	))
 
 	// 调整任务资金来源；API Key 旧 quota 不参与差额结算。
-	if err := taskAdjustFunding(task, quotaDelta); err != nil {
+	if err := taskAdjustFunding(task, quotaDelta, true); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算资金调整失败 task %s: %s", task.TaskID, err.Error()))
 		return
 	}

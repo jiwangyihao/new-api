@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`INFLIGHT_REFUND_RED_READY`，只允许新增真实 SQLite public reserve → conversion → refund 行为 tracer；随后才进入 conversion ↔ final/refund 双连接并发。
-- 最近 clean SHA：`85660501ca95fae1fbcc6a1bff2fc07adf0424bd`（在途 request final-settle GREEN）。
+- 阶段：`INFLIGHT_REFUND_RED_OBSERVED`；public reserve → conversion → refund 行为已稳定失败，等待独立 RED 安全点提交后才允许分析并实现 GREEN。
+- 最近 clean SHA：`2f7c804c5`（`docs(issue-26): 校准退款续作安全点`）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,15 +11,17 @@
 
 ## 下一条命令
 
-在 `model/subscription_conversion_settlement_test.go` 相邻 tracer 中新增 public `PreConsumeUserSubscriptionByUnits → ConfirmTimedSubscriptionConversion → SettleUserSubscriptionRequestTarget(..., 0, true)` 退款行为测试，然后执行：
+独立提交 `TestTimedReserveConversionRefundRestoresVirtualExactSnapshot` RED；随后仅分析 `SettleUserSubscriptionRequestTarget(..., 0, true)` 返回稳定 `credit_valuation_state_mismatch` 的根因并实现最小 GREEN。
 
-`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`
+已执行：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
 
-必须观察真实行为 RED；退款 GREEN 与 conversion ↔ final/refund 双连接 barrier 均尚未完成。
+精确旧行为：reserve 与 conversion 均成功，虚拟 exact snapshot 已冻结；refund 进入 public request-target 入口后返回 `*errors.errorString("credit_valuation_state_mismatch")`，未到达恢复目标 Credit 的断言。
 
 ## 未提交文件
 
-- 无；当前 staged、unstaged、untracked 均为 0。
+- `model/subscription_conversion_settlement_test.go`
+- `.scratch/agent-progress/issue-26/status.md`
+- `.scratch/agent-progress/issue-26/evidence.md`
 
 ## 上下文风险
 

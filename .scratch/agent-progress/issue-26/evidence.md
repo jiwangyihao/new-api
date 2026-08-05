@@ -344,3 +344,11 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 已完成：FX parser/向量、同币种与跨币种 conversion、权威事实冲突、同 source 双连接幂等、reserve → conversion → final settle 虚拟 exact snapshot。
 - 未完成：reserve → conversion → refund，以及 conversion ↔ final/refund 真实文件 SQLite 双连接确定性 barrier。
 - 下一条命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`；先新增 public-path tracer 并取得行为 RED。
+
+## 2026-08-06 — reserve → conversion → refund 行为 RED
+
+- 新增真实 SQLite public-path tracer `TestTimedReserveConversionRefundRestoresVirtualExactSnapshot`，完整调用 `PreConsumeUserSubscriptionByUnits → ConfirmTimedSubscriptionConversion → SettleUserSubscriptionRequestTarget(requestID, sourceID, 0, true)`；fixture 直接复制相邻 final-settle tracer，只把最终累计目标改为 `0`，并断言原 timed attribution、虚拟 exact snapshot、全退款舍入余数、目标 Credit 数量/价值恢复。
+- 首次运行因测试查询误用了不存在的 `credit_valuation_states.subscription_id` 而失败，不计作行为 RED；更正为真实字段 `user_subscription_id` 后重新执行同一 public-path tracer。
+- 命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 真实结果：`FAIL`（行为失败，非编译/fixture 失败）。reserve 与 conversion 成功，原 request 已冻结 `AppliedCredit=10`、`DeductedAvailableCredit=10`、`DeductedExactCostMicros=4,000,000`、目标 `ValuationSubscriptionId`；refund 调用精确返回 `type=*errors.errorString value="credit_valuation_state_mismatch"`（`subscription_conversion_settlement_test.go:278`）。
+- 结论：旧实现已能建立转换虚拟 exact snapshot，但 public target=0 恢复路径在写入前拒绝目标状态一致性，无法完成全退款；RED 对用户要求的具体行为敏感。此提交不含 GREEN、并发或生产代码修改。

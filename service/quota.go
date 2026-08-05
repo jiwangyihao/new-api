@@ -21,7 +21,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 type TokenDetails struct {
@@ -430,39 +429,19 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		}
 		delta := int64(quota)
 		if delta != 0 {
-			var subscription model.UserSubscription
-			if err = model.DB.Select("entitlement_type").Where("id = ?", relayInfo.SubscriptionId).First(&subscription).Error; err != nil {
-				return err
-			}
-			if subscription.EntitlementType == model.SubscriptionEntitlementCreditBalance {
-				var record model.SubscriptionPreConsumeRecord
-				if err = model.DB.Select("pre_consumed", "user_subscription_id").Where("request_id = ?", relayInfo.RequestId).First(&record).Error; err != nil {
-					if errors.Is(err, gorm.ErrRecordNotFound) {
-						return model.ErrCreditValuationRequestNotFound
-					}
-					return err
-				}
-				if record.UserSubscriptionId != relayInfo.SubscriptionId {
-					return model.ErrCreditValuationMappingConflict
-				}
-				target := record.PreConsumed + delta
-				if (delta > 0 && target < record.PreConsumed) || (delta < 0 && target > record.PreConsumed) || target < 0 {
-					return model.ErrCreditValuationOverflow
-				}
-				if err = model.SettleUserSubscriptionRequestTarget(relayInfo.RequestId, relayInfo.SubscriptionId, target, false); err != nil {
-					return err
-				}
-				relayInfo.SubscriptionPostDelta = target - record.PreConsumed
-			} else if relayInfo.SubscriptionDistributorTokenBilling {
-				err = model.PostConsumeUserSubscriptionTokenDelta(relayInfo.SubscriptionId, delta)
-			} else {
-				err = model.PostConsumeUserSubscriptionAmountDelta(relayInfo.SubscriptionId, delta)
-			}
+			result, err := model.PostConsumeUserSubscriptionRequestDelta(
+				relayInfo.RequestId,
+				relayInfo.SubscriptionId,
+				delta,
+				relayInfo.SubscriptionDistributorTokenBilling,
+			)
 			if err != nil {
 				return err
 			}
-			if subscription.EntitlementType != model.SubscriptionEntitlementCreditBalance {
-				relayInfo.SubscriptionPostDelta += delta
+			if result.ReplacePostDelta {
+				relayInfo.SubscriptionPostDelta = result.PostDelta
+			} else {
+				relayInfo.SubscriptionPostDelta += result.PostDelta
 			}
 		}
 	} else {

@@ -40,3 +40,11 @@ F1/F2 已实现、验证并提交；最终门禁、SQLite 请求链、三包宽�
 - 冻结候选 `3cc5608f88b395057efc7abac04b93965866c1aa` 上新增同一 `RelayInfo`、同一 `request_id`、相同 `PostConsumeQuota(relayInfo, 50, 100, false)` 第二次调用后的可观察合同；旧实现精确 RED 为 `SubscriptionPostDelta` 期望 50、实际 100，且其前面的 request record、权益、估值状态三份数据库不变断言均通过。
 - 最小修复仅调整 `PostConsumeQuota` Credit 分支：继续以 `record.PreConsumed + delta` 调用 `SettleUserSubscriptionRequestTarget(..., false)`，成功后令 `SubscriptionPostDelta = target - record.PreConsumed`；非 Credit 分支保留 `+= delta`。
 - 单次、`-count=10` 与窄 `-race` 三条指定聚焦命令均 PASS；详细 RED/GREEN 与未运行边界见 `f2-post-delta-replay-evidence.md`。
+
+## Standards M1 模型接缝收敛
+
+- 固定 `a72fe0416f30230971701fa8e36f6c42d1d0c998` 基线上，将 `PostConsumeQuota` 的 entitlement、request record、GORM 与 target 计算下沉到 `model.PostConsumeUserSubscriptionRequestDelta`；Service 只传递业务参数、传播 Model 错误，并按结果替换 Credit 稳定 post-delta 或累加非 Credit delta。
+- Credit 仍以真实 `RequestId`、原 `SubscriptionId` 和不可变 `record.PreConsumed + delta` 调用 `SettleUserSubscriptionRequestTarget(..., false)`；缺 request、映射冲突、负 target、溢出及既有 target sentinel 均稳定传播并保持零写入。
+- 公开 Model tracer 通过真实 SQLite 覆盖 100 预扣 + 50 post delta、相同调用重放三对象不变、错误零写入与 timed distributor 兼容；现有 Service 测试继续守住首次及重放后的 `SubscriptionPostDelta == 50`。
+- tracer 单次与 `-count=10`、Service 重放 `-count=10`、四合同组合 `-count=10`、两项窄 `-race`、`go test ./model ./service -count=1` 均 PASS；本次 Go 文件已 `gofmt`，`git diff --check` PASS。详见 `standards-m1-model-seam-evidence.md`。
+- 按 M1 边界未运行 controller、全项目、前端、真实 MySQL/PostgreSQL、服务或部署；未改变 `final=false`、通知、违规费、退款、`BillingSession`、coalescer、schema、缓存、锁、重试或 #24–#28。

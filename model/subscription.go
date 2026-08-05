@@ -3406,6 +3406,56 @@ func isRetryableConvertedSubscriptionSettlementError(err error) bool {
 		strings.Contains(message, "sqlite_locked")
 }
 
+// UserSubscriptionPostConsumeResult tells callers whether the successful delta
+// replaces a request-stable Credit result or accumulates a non-Credit delta.
+type UserSubscriptionPostConsumeResult struct {
+	PostDelta        int64
+	ReplacePostDelta bool
+}
+
+// PostConsumeUserSubscriptionRequestDelta routes request-aware Credit targets
+// and compatible non-Credit deltas without exposing persistence details.
+func PostConsumeUserSubscriptionRequestDelta(requestId string, userSubscriptionId int, delta int64, distributor bool) (UserSubscriptionPostConsumeResult, error) {
+	var subscription UserSubscription
+	if err := DB.Select("entitlement_type").Where("id = ?", userSubscriptionId).First(&subscription).Error; err != nil {
+		return UserSubscriptionPostConsumeResult{}, ErrDatabase
+	}
+	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
+		var record SubscriptionPreConsumeRecord
+		if err := DB.Select("pre_consumed", "user_subscription_id").Where("request_id = ?", requestId).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return UserSubscriptionPostConsumeResult{}, ErrCreditValuationRequestNotFound
+			}
+			return UserSubscriptionPostConsumeResult{}, ErrDatabase
+		}
+		if record.UserSubscriptionId != userSubscriptionId {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationMappingConflict
+		}
+		target, ok := checkedAddInt64(record.PreConsumed, delta)
+		if !ok {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationOverflow
+		}
+		if target < 0 {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationNegativeInput
+		}
+		if err := SettleUserSubscriptionRequestTarget(requestId, userSubscriptionId, target, false); err != nil {
+			return UserSubscriptionPostConsumeResult{}, err
+		}
+		return UserSubscriptionPostConsumeResult{PostDelta: target - record.PreConsumed, ReplacePostDelta: true}, nil
+	}
+
+	var err error
+	if distributor {
+		err = PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)
+	} else {
+		err = PostConsumeUserSubscriptionAmountDelta(userSubscriptionId, delta)
+	}
+	if err != nil {
+		return UserSubscriptionPostConsumeResult{}, err
+	}
+	return UserSubscriptionPostConsumeResult{PostDelta: delta}, nil
+}
+
 // Update subscription token_used by delta (positive consume more, negative refund).
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
 	return PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)

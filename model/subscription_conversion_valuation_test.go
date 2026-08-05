@@ -271,3 +271,69 @@ func requirePersistedCreditFXRateOption(t *testing.T, want string) {
 	require.NoError(t, DB.Where("key = ?", "USDExchangeRate").First(&stored).Error)
 	require.Equal(t, want, stored.Value)
 }
+
+func TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&User{}))
+	require.NoError(t, migrateCreditValuationSchema(DB))
+
+	const (
+		userID               = 26_301
+		sourcePlanID         = 26_302
+		sourceSubscriptionID = 26_303
+		creditBasis          = int64(100)
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, DB.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+	require.NoError(t, DB.Create(&User{
+		Id: userID, Username: "conversion-fingerprint-conflict", Status: common.UserStatusEnabled,
+	}).Error)
+
+	plan := seedConversionQuoteTimedPlan(t, sourcePlanID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, DB.Save(plan).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id:                      sourceSubscriptionID,
+		UserId:                  userID,
+		PlanId:                  sourcePlanID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              75,
+		TokenUsed:               50,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	first, err := ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID, "authoritative-facts-conflict")
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+	before := captureConversionValuationWriteCounts(t)
+
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).
+		Where("id = ?", sourcePlanID).
+		UpdateColumn("price_amount_micros", int64(41_000_000)).Error)
+
+	replayed, err := ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID, "authoritative-facts-conflict")
+
+	require.ErrorIs(t, err, ErrConversionIdempotencyConflict)
+	require.Nil(t, replayed)
+	require.Equal(t, before, captureConversionValuationWriteCounts(t), "conflicting replay must produce zero writes")
+}

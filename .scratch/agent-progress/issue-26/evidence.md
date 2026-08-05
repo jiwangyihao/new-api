@@ -246,3 +246,13 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 真实结果：`ok github.com/QuantumNous/new-api/model`。生产文件与测试已执行 `gofmt`，`git diff --check` 成功。
 
 范围说明：本安全点未新增 schema，未进入在途 request/API/UI；按最新收敛指令未扩展并发双确认或同 source 权威事实指纹冲突测试，因此不将这两项声明为已验收。
+
+## 2026-08-05 — Conversion 权威事实冲突 RED
+
+新增真实 SQLite tracer `TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay`：首次同币种 Confirm 成功后，将同 source plan 的权威 `price_amount_micros` 从 `40,000,000` 修改为 `41,000,000`，随后以同 source/key 重放；要求稳定 `ErrConversionIdempotencyConflict` 且 conversion/ledger/state 计数不变。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=1`
+
+真实结果：`FAIL`（build failed），编译器精确报告 `ErrConversionIdempotencyConflict` 尚不存在。该 RED 明确要求可由 `errors.Is` 判断的稳定冲突，而不是自由文本或普通不存在 source 失败。
+
+结论：下一步最小 GREEN 需在重放返回前以已持久化 conversion 冻结事实核对当前权威 source plan；不修改 committed conversion，冲突路径零写入。

@@ -35,4 +35,46 @@ ec1858fec89509bdec9a90a230a8496047c5becd
 
 ## RED / GREEN / 回归
 
-待每次实际命令完成后追加精确命令、输出和分类；不得把未运行项写成 PASS。
+### F1 RED：公开预扣接口缺少请求指纹冲突合同
+
+命令：
+
+```text
+go test ./model -run 'TestPreConsumeUserSubscriptionByUnits(RejectsConflictingRequestReplayWithoutWrites|ReplaysEquivalentNormalizedRequestWithoutWrites|RejectsMissingRequestFingerprintWithoutWrites)$' -count=1
+```
+
+结果：测试骨架编译 RED；仅证明稳定 sentinel 尚不存在，尚未验证旧实现的运行时冲突行为：
+
+```text
+# github.com/QuantumNous/new-api/model [github.com/QuantumNous/new-api/model.test]
+model\credit_valuation_request_test.go:97:35: undefined: ErrSubscriptionPreConsumeRequestConflict
+model\credit_valuation_request_test.go:146:33: undefined: ErrSubscriptionPreConsumeRequestConflict
+FAIL github.com/QuantumNous/new-api/model [build failed]
+```
+
+测试骨架预期通过公开 `PreConsumeUserSubscriptionByUnits` 和真实 SQLite 覆盖四类冲突、完整参数重放、缺指纹失败关闭和持久化快照零写入；本次编译失败发生在执行前，因此这些运行时断言尚未得到验证。下一步只添加 sentinel 与附加式字段声明，使测试进入断言级 RED，再记录旧实现的精确行为。
+
+### F1 RED：旧实现静默接受异参和缺指纹重放
+
+仅添加导出 sentinel 与附加式字段声明、尚未加入任何比较/写入行为后，再次运行同一定向命令。
+
+结果：断言级 RED。四类异参重放与缺指纹重放均错误返回 `nil`；等价规范化参数重放通过。`different user` 还观察到旧分支继续读取原权益并尝试刷新传入用户的缓存，但没有数据库写入。
+
+```text
+--- FAIL: TestPreConsumeUserSubscriptionByUnitsRejectsConflictingRequestReplayWithoutWrites
+    --- FAIL: .../different_user
+        Error: An error is expected but got nil.
+    --- FAIL: .../different_normalized_model
+        Error: An error is expected but got nil.
+    --- FAIL: .../different_quota_type
+        Error: An error is expected but got nil.
+    --- FAIL: .../different_distributor_amount
+        Error: An error is expected but got nil.
+--- FAIL: TestPreConsumeUserSubscriptionByUnitsRejectsMissingRequestFingerprintWithoutWrites
+    Error: An error is expected but got nil.
+FAIL github.com/QuantumNous/new-api/model
+```
+
+该运行已通过真实 SQLite 和公开接口精确复现最终 Spec F1；失败发生在预期的稳定冲突断言，不是夹具、编译或邻近路径噪声。
+
+后续 GREEN 与回归命令在实际运行后追加；未运行项不记为 PASS。

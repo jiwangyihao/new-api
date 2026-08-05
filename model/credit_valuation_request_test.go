@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"testing"
@@ -36,6 +37,109 @@ func completeAdditionalCreditValuationOrder(t *testing.T, db *gorm.DB, user User
 	}
 	require.NoError(t, db.Create(&order).Error)
 	return completeCreditValuationOrder(t, db, &order)
+}
+
+type subscriptionPreConsumeReplaySnapshot struct {
+	Record       SubscriptionPreConsumeRecord
+	Subscription UserSubscription
+	Valuation    CreditValuationState
+	RecordCount  int64
+	LedgerCount  int64
+}
+
+func captureSubscriptionPreConsumeReplaySnapshot(t *testing.T, db *gorm.DB, requestID string, subscriptionID int) subscriptionPreConsumeReplaySnapshot {
+	t.Helper()
+	var snapshot subscriptionPreConsumeReplaySnapshot
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&snapshot.Record).Error)
+	require.NoError(t, db.First(&snapshot.Subscription, subscriptionID).Error)
+	require.NoError(t, db.Where("user_subscription_id = ?", subscriptionID).First(&snapshot.Valuation).Error)
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).Count(&snapshot.RecordCount).Error)
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&snapshot.LedgerCount).Error)
+	return snapshot
+}
+
+func TestPreConsumeUserSubscriptionByUnitsRejectsConflictingRequestReplayWithoutWrites(t *testing.T) {
+	tests := []struct {
+		name                    string
+		replayUserOffset        int
+		replayModel             string
+		replayQuotaType         int
+		replayDistributorAmount int64
+	}{
+		{name: "different user", replayUserOffset: 1, replayModel: "gpt-4o-gizmo-original", replayDistributorAmount: 200},
+		{name: "different normalized model", replayModel: "gpt-4-gizmo-original", replayDistributorAmount: 200},
+		{name: "different quota type", replayModel: "gpt-4o-gizmo-original", replayQuotaType: 1, replayDistributorAmount: 200},
+		{name: "different distributor amount", replayModel: "gpt-4o-gizmo-original", replayDistributorAmount: 201},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupCreditValuationTracerTestDB(t)
+			user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+			completed := completeCreditValuationOrder(t, db, &order)
+			const requestID = "pre-consume-fingerprint-conflict"
+			first, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o-gizmo-original", 0, 0, 200)
+			require.NoError(t, err)
+			require.Equal(t, completed.CreditBalance.UserSubscriptionId, first.UserSubscriptionId)
+
+			replayUserID := user.Id + test.replayUserOffset
+			before := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+
+			_, err = PreConsumeUserSubscriptionByUnits(requestID, replayUserID, test.replayModel, test.replayQuotaType, 0, test.replayDistributorAmount)
+			require.Error(t, err)
+			require.True(t, errors.Is(err, ErrSubscriptionPreConsumeRequestConflict))
+
+			after := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+			require.Equal(t, before, after)
+		})
+	}
+}
+
+func TestPreConsumeUserSubscriptionByUnitsReplaysEquivalentNormalizedRequestWithoutWrites(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	const requestID = "pre-consume-fingerprint-replay"
+
+	first, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o-gizmo-original", 0, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, first.UserSubscriptionId)
+	before := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+
+	replayed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o-gizmo-retry", 0, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, first.UserSubscriptionId, replayed.UserSubscriptionId)
+	require.Equal(t, first.PreConsumed, replayed.PreConsumed)
+	require.Equal(t, first.AppliedCredit, replayed.AppliedCredit)
+	require.Equal(t, first.TokenUsedAfter, replayed.TokenUsedAfter)
+
+	after := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+	require.Equal(t, before, after)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsRejectsMissingRequestFingerprintWithoutWrites(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	const requestID = "pre-consume-fingerprint-missing"
+
+	first, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, first.UserSubscriptionId)
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id = ?", requestID).
+		UpdateColumns(map[string]any{
+			"request_fingerprint":         "",
+			"request_fingerprint_version": 0,
+		}).Error)
+	before := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+
+	_, err = PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, ErrSubscriptionPreConsumeRequestConflict))
+
+	after := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
+	require.Equal(t, before, after)
 }
 
 func TestCreditValuationRequestTargetIncreaseUsesCurrentPool(t *testing.T) {

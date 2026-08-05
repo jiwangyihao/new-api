@@ -92,10 +92,11 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound         = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid    = errors.New("subscription order status invalid")
-	ErrSubscriptionOrderSnapshotMismatch = errors.New("subscription order entitlement snapshot mismatch")
-	ErrNoActiveSubscription              = errors.New("no active subscription")
+	ErrSubscriptionOrderNotFound             = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid        = errors.New("subscription order status invalid")
+	ErrSubscriptionOrderSnapshotMismatch     = errors.New("subscription order entitlement snapshot mismatch")
+	ErrNoActiveSubscription                  = errors.New("no active subscription")
+	ErrSubscriptionPreConsumeRequestConflict = errors.New("subscription pre-consume request conflict")
 )
 
 const (
@@ -1979,6 +1980,8 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 type SubscriptionPreConsumeRecord struct {
 	Id                                 int    `json:"id"`
 	RequestId                          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex"`
+	RequestFingerprintVersion          int    `json:"request_fingerprint_version" gorm:"not null;default:0"`
+	RequestFingerprint                 string `json:"request_fingerprint" gorm:"type:varchar(64);not null;default:''"`
 	UserId                             int    `json:"user_id" gorm:"index"`
 	UserSubscriptionId                 int    `json:"user_subscription_id" gorm:"index"`
 	PreConsumed                        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`

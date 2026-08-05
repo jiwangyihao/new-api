@@ -141,3 +141,13 @@
 - B 组独立 GREEN：`c4d419e0e`（`feat(issue-26): 冻结 FX 双向比率快照`）。
 - GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - 到达的“继续 B 组”指令晚于上述提交，因此未重复制造同一 RED；按其禁止范围保持不进入 C 组或 conversion。
+
+## 2026-08-05 — C 组整数 floor/overflow RED
+
+新增 table-driven 公共行为测试 `TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor`，覆盖 `floor(amount × numerator / denominator)`、`MaxInt64` 宽中间乘积、结果溢出、分母零与小于 1 micros 的余数清空。
+
+命令：`go test ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=1`
+
+真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXOverflow` 与 `CreditFXRateSnapshot.ConvertMicros` 尚不存在。
+
+结论：C 组 RED 对要求的整数换算接口与稳定 overflow sentinel 敏感；下一步只使用定宽整数实现，不引入 `float64` 或大整数热路径分配。

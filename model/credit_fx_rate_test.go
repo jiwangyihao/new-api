@@ -1,6 +1,7 @@
 package model
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -112,6 +113,41 @@ func TestParseCreditFXRateSnapshotFreezesDirectionalRatios(t *testing.T) {
 				require.Equal(t, test.wantNumerator, first.Numerator, "frozen snapshot must not follow later Option changes")
 				require.Equal(t, test.wantDenominator, first.Denominator, "frozen snapshot must not follow later Option changes")
 			}
+		})
+	}
+}
+
+func TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor(t *testing.T) {
+	tests := []struct {
+		name        string
+		amount      int64
+		numerator   int64
+		denominator int64
+		want        int64
+		wantErr     error
+	}{
+		{name: "floor fractional result", amount: 10, numerator: 2, denominator: 3, want: 6},
+		{name: "wide intermediate", amount: math.MaxInt64, numerator: math.MaxInt64, denominator: math.MaxInt64, want: math.MaxInt64},
+		{name: "result overflow", amount: math.MaxInt64, numerator: 2, denominator: 1, wantErr: ErrCreditFXOverflow},
+		{name: "zero denominator", amount: 10, numerator: 1, denominator: 0, wantErr: ErrCreditFXRateInvalid},
+		{name: "remainder clears to zero", amount: 1, numerator: 1, denominator: 3, want: 0},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshot := CreditFXRateSnapshot{
+				Numerator:   test.numerator,
+				Denominator: test.denominator,
+			}
+
+			got, err := snapshot.ConvertMicros(test.amount)
+
+			if test.wantErr != nil {
+				require.ErrorIs(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
 		})
 	}
 }

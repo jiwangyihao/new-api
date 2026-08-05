@@ -437,24 +437,21 @@ go test ./service -run '^Test(LegacyCreditTaskRequestIDUsesPersistentTaskPrimary
 - Credit 估值 marker 非 ready 或状态缺失时失败关闭；不再存在 Credit 匿名 delta 旁路。timed Task 分支保持原兼容行为。
 
 ### Task identity 最终定向验证
-命令：
+最终文件状态命令：
 ```text
-go test ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing)$' -count=10
-go test -race ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing)$' -count=1
+go test ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing|CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskFailureRefundReusesInitialBillingRequestIdentity|SettleBillingKeepsTimedDistributorTaskTokenInputUnchanged)$' -count=10
+go test -race ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditTaskSettlementFailsClosedWhenValuationNotReady|CreditTaskSettlementFailsClosedWhenValuationStateMissing|CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskFailureRefundReusesInitialBillingRequestIdentity|SettleBillingKeepsTimedDistributorTaskTokenInputUnchanged)$' -count=1
 git diff --check
 ```
-关键输出：`count=10: 1 packages ok`；`-race: 1 packages ok`；`git diff --check` 无输出。覆盖新 Task JSON 重启稳定、legacy 主键确定身份、同 subscription 多 Task 隔离、成功 final/replay、失败 refund/replay、并发首次创建幂等、终态冲突原子回滚、不可证明归属失败关闭、他方欠额隔离、marker/state 失败关闭。
+关键输出：`count=10: go test: 1 packages ok`；`-race: go test: 1 packages ok`；`git diff --check` 无输出。
 
-格式化：仅运行 `gofmt` 于 `model/credit_valuation.go`、`service/task_billing.go`、`service/task_billing_test.go`；`service/billing_session.go` 无未提交差异。
+真实链路覆盖：
+- `TestCreditTaskInitialSettlementPersistsNonFinalRequestIdentity` 通过 `PreConsumeBilling → BillingSession.Reserve → SettleBilling → InitTask/Insert → DB reload → RecalculateTaskQuota` 证明同一 request ID 的目标 100→150 保持 `consumed/finalized_at=0`，持久 Task JSON 保存身份，轮询追加至 175 并 final，重放无状态漂移。
+- `TestCreditTaskFailureRefundReusesInitialBillingRequestIdentity` 通过真实初始 BillingSession、Task 持久化/重载和 `RefundTaskQuota` 证明失败退款及重放复用同一 ID。
+- `SettleBilling` 只对 `UsesCreditRequestTarget()` 填充 Task 的 `SubscriptionTokens`；`TestSettleBillingKeepsTimedDistributorTaskTokenInputUnchanged` 证明 timed distributor Task 仍保留原输入语义。
+- legacy Task 仅从持久主键派生身份；可证明数量归属时建立 unknown 快照，不可证明时失败关闭；他方 settlement debt 不归入本 Task route。
+- marker 非 ready、估值状态缺失均稳定失败并保持数量、请求记录与状态原子不变。
 
-范围：本安全点不包含预扣记录清理文件，不实现 #24–#28，不改 conversion/FX/marker 生命周期。
+格式化范围：`model/credit_valuation.go`、`service/billing.go`、`service/billing_session.go`、`service/subscription_billing_test.go`、`service/task_billing.go`、`service/task_billing_test.go`。范围不含清理实现文件，不实现 #24–#28，不改 conversion/FX/marker 生命周期。
 
-## Task lifecycle 续作 WIP 安全点
-
-定向命令：
-```text
-go test ./service -run '^Test(CreditTaskInitialSettlementPersistsNonFinalRequestIdentity|CreditTaskPersistsSubscriptionRequestIDAcrossReload|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|LegacyCreditTaskRefundReplaysWhileAccountHasSettlementDebt|LegacyCreditTaskRefundReplaysWhileOtherRequestOwnsSettlementDebt|LegacyCreditTaskSettlementFailsClosedWhenAppliedCreditIsUnprovable)$' -count=1
-```
-关键输出：`FAIL github.com/QuantumNous/new-api/service`。首个明确阻塞为多个 Task 用例在夹具创建 `CreditValuationMigration` 时返回 `SQL logic error: no such table: credit_valuation_migrations (1)`；该组合命令未进入目标生命周期断言，因此不能声称当前 WIP GREEN。
-
-按协调器收敛指令，本现场以诚实 WIP 安全点提交：不继续修测试隔离、不继续设计 Task/legacy/quota/conversion。后续 owner 必须先恢复每个定向夹具对 migration/state schema 的独立建表语义，再重新运行同一命令。
+Dispatch：原 capability 已 revoked，不能发送有效 `worker_done`；等待协调器新 Dispatch。

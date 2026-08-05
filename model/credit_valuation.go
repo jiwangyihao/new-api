@@ -671,11 +671,13 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	*route = record
 	return nil
 }
-
 func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionId int, targetCredit int64, final bool) error {
 	requestId = strings.TrimSpace(requestId)
-	if requestId == "" || originalSubscriptionId <= 0 || targetCredit < 0 {
+	if requestId == "" || originalSubscriptionId <= 0 {
 		return ErrCreditValuationTargetConflict
+	}
+	if targetCredit < 0 {
+		return ErrCreditValuationNegativeInput
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var route SubscriptionPreConsumeRecord

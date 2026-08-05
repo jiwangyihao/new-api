@@ -239,3 +239,25 @@ go test ./model -run '^TestCreditValuationRequestTarget(RejectsIncreaseAfterFina
 go test: 1 packages ok
 ```
 结论：终态后目标增加稳定返回 `ErrCreditValuationFinalizedConflict` 且数量/价值/版本不变；相同终态目标重放仍严格无操作。
+
+### RED/GREEN：负目标返回稳定算术 sentinel
+RED 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetRejectsNegativeTargetAtomically$' -count=1
+```
+关键输出：
+```text
+expected: credit_valuation_negative_input
+FAIL github.com/QuantumNous/new-api/model
+```
+根因：公开入口把负目标泛化为目标冲突。
+
+GREEN 命令：
+```text
+go test ./model -run '^TestCreditValuationRequestTargetRejectsNegativeTargetAtomically$' -count=1
+```
+关键输出：
+```text
+go test: 1 packages ok
+```
+结论：负目标稳定返回 `ErrCreditValuationNegativeInput`，请求数量、成本、状态版本、结算版本和终态均保持不变。

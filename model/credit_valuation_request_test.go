@@ -321,3 +321,30 @@ func TestCreditValuationRequestTargetRejectsIncreaseAfterFinalization(t *testing
 	require.Equal(t, int64(1), record.SettlementVersion)
 	require.Equal(t, "settled", record.Status)
 }
+
+func TestCreditValuationRequestTargetRejectsNegativeTargetAtomically(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+
+	const requestID = "credit-request-negative-target"
+	preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+
+	err = SettleUserSubscriptionRequestTarget(requestID, preConsumed.UserSubscriptionId, -1, true)
+	require.ErrorIs(t, err, ErrCreditValuationNegativeInput)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscription.Id).Error)
+	require.Equal(t, int64(800), state.AvailableCredit)
+	require.Equal(t, int64(32_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(2), state.StateVersion)
+	var record SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+	require.Equal(t, int64(200), record.AppliedCredit)
+	require.Equal(t, int64(1), record.SettlementVersion)
+	require.Zero(t, record.FinalizedAt)
+}

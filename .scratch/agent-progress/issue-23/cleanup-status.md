@@ -1,14 +1,14 @@
 # Issue #23 请求记录清理状态
 
 ## 当前状态
-- 阶段：`GREEN_READY`。
+- 阶段：`GREEN_COMMITTED`。
 - 恢复 HEAD：`952322017b37c2511ce12a84769a401e0e68b0ab`；进入本阶段前 `git status --short` 为空。
 - cleanup RED 已提交于 `c31a612ae`，目标用例通过公开请求预扣/结算入口构造事实。
 - 本安全点只收敛清理资格：`CleanupSubscriptionPreConsumeRecords` 仅删除 cutoff 前的 `settled`/`refunded`，保留 `consumed`、未知状态与其他非终态。
 - RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1` 失败，`expected: 2`、`actual: 4`。
 - GREEN：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1` 通过，`go test: 1 packages ok`。
 - 稳定验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=10` 通过，`go test: 1 packages ok`；`git diff --check` 无输出。
-- 当前 dirty：`.scratch/agent-progress/issue-23/cleanup-status.md`、`model/subscription.go`；提交后应恢复 clean tree。
+- 生产改动安全提交：`bfa31bb09`（`fix(credit): 限制预扣记录清理终态资格`）；旧实现删除 4 条，现仅删除 2 条过期 `settled/refunded`，并保留 `consumed/unknown`。
 
 ## Cleanup RED 证据
 - 命令：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1`。

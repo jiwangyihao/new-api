@@ -23,3 +23,10 @@ M service/task_billing_test.go
 
 ### 下一条 RED/GREEN
 待运行现有 `TestCreditTaskSuccessFinalAndReplayReusePersistedRequestID`（及直接相关持久 identity 用例），分别在当前差异与撤销该一行差异的状态下验证是否只有 `final=true` 能得到 `settled` 终态。
+
+## 终态清理资格安全点（bfa31bb09）
+- RED：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=1` 失败；期望删除 2 条，旧实现实际删除 4 条，错误删除了过期 `consumed` 与未知状态记录。
+- GREEN：`CleanupSubscriptionPreConsumeRecords` 增加明确终态资格，仅允许删除 cutoff 前的 `settled`/`refunded`。
+- 结果：同一场景现仅删除 2 条过期终态记录，并保留 `consumed` 与未知状态记录。
+- 稳定验证：`go test ./model -run '^TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords$' -count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。
+- 本安全点未实现 Task/回调引用保护、稳定 batch、并发、失败原子性或只读诊断。

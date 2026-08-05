@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -140,6 +141,68 @@ func TestPreConsumeUserSubscriptionByUnitsRejectsMissingRequestFingerprintWithou
 
 	after := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, first.UserSubscriptionId)
 	require.Equal(t, before, after)
+}
+
+func TestPreConsumeUserSubscriptionByUnitsConcurrentSameRequestHasSingleWrite(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(2)
+	sqlDB.SetMaxIdleConns(2)
+
+	const requestID = "pre-consume-fingerprint-concurrent"
+	ready := make(chan struct{}, 2)
+	release := make(chan struct{})
+	type result struct {
+		preConsumed *SubscriptionPreConsumeResult
+		err         error
+	}
+	results := make(chan result, 2)
+	var start sync.WaitGroup
+	start.Add(2)
+	for range 2 {
+		go func() {
+			start.Done()
+			start.Wait()
+			var barrierOnce sync.Once
+			preConsumed, consumeErr := preConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 200, &subscriptionTransactionHooks{
+				onPreConsumeAttemptStarted: func() {
+					barrierOnce.Do(func() {
+						ready <- struct{}{}
+						<-release
+					})
+				},
+			})
+			results <- result{preConsumed: preConsumed, err: consumeErr}
+		}()
+	}
+	<-ready
+	<-ready
+	close(release)
+
+	successes := 0
+	for range 2 {
+		result := <-results
+		if result.err != nil {
+			require.ErrorIs(t, result.err, ErrSubscriptionPreConsumeRequestConflict)
+			continue
+		}
+		successes++
+		require.NotNil(t, result.preConsumed)
+		require.Equal(t, completed.CreditBalance.UserSubscriptionId, result.preConsumed.UserSubscriptionId)
+		require.Equal(t, int64(200), result.preConsumed.PreConsumed)
+	}
+	require.GreaterOrEqual(t, successes, 1)
+
+	snapshot := captureSubscriptionPreConsumeReplaySnapshot(t, db, requestID, completed.CreditBalance.UserSubscriptionId)
+	require.Equal(t, int64(1), snapshot.RecordCount)
+	require.Equal(t, int64(200), snapshot.Record.PreConsumed)
+	require.Equal(t, int64(200), snapshot.Record.AppliedCredit)
+	require.Equal(t, int64(200), snapshot.Subscription.TokenUsed)
+	require.Equal(t, int64(800), snapshot.Valuation.AvailableCredit)
+	require.Equal(t, int64(2), snapshot.Valuation.StateVersion)
 }
 
 func TestCreditValuationRequestTargetIncreaseUsesCurrentPool(t *testing.T) {

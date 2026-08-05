@@ -78,3 +78,50 @@ FAIL github.com/QuantumNous/new-api/model
 该运行已通过真实 SQLite 和公开接口精确复现最终 Spec F1；失败发生在预期的稳定冲突断言，不是夹具、编译或邻近路径噪声。
 
 后续 GREEN 与回归命令在实际运行后追加；未运行项不记为 PASS。
+
+### F1 GREEN：完整参数、四类冲突与缺指纹失败关闭
+
+命令：
+
+```text
+go test ./model -run 'TestPreConsumeUserSubscriptionByUnits(RejectsConflictingRequestReplayWithoutWrites|ReplaysEquivalentNormalizedRequestWithoutWrites|RejectsMissingRequestFingerprintWithoutWrites)$' -count=1
+```
+
+结果：PASS，`go test: 1 packages ok`。
+
+验证行为：
+
+- 完整规范化参数重放返回原请求结果，记录、权益、估值状态、版本和 ledger 均不变；
+- user、规范化 model、quota_type、distributor amount 任一变化均满足 `errors.Is(err, ErrSubscriptionPreConsumeRequestConflict)`；
+- 缺失或版本为 0 的指纹失败关闭，持久化快照不变。
+
+### F1 GREEN：附加式 SQLite schema
+
+命令：
+
+```text
+go test ./model -run 'Test(PreConsumeUserSubscriptionByUnits(RejectsConflictingRequestReplayWithoutWrites|ReplaysEquivalentNormalizedRequestWithoutWrites|RejectsMissingRequestFingerprintWithoutWrites)|CreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable)$' -count=1
+```
+
+结果：PASS，`go test: 1 packages ok`。两次迁移均成功，`request_fingerprint_version` 与 `request_fingerprint` 列存在；未切换 migration marker、未回填历史。
+
+### F1 GREEN：真实 SQLite 双连接同 request_id 并发
+
+单次命令：
+
+```text
+go test ./model -run 'TestPreConsumeUserSubscriptionByUnitsConcurrentSameRequestHasSingleWrite$' -count=1
+```
+
+结果：PASS，`go test: 1 packages ok`。测试将 SQLite 连接池设为两个连接，并用事务起点屏障同时提交相同指纹：至少一个调用成功，另一个只允许同指纹幂等成功或 `ErrSubscriptionPreConsumeRequestConflict`；最终恰有一条 request record、一次 200 Credit 扣除、available=800、state_version=2。
+
+重复与 race 命令：
+
+```text
+go test ./model -run 'TestPreConsumeUserSubscriptionByUnits(RejectsConflictingRequestReplayWithoutWrites|ReplaysEquivalentNormalizedRequestWithoutWrites|RejectsMissingRequestFingerprintWithoutWrites|ConcurrentSameRequestHasSingleWrite)$' -count=10
+go test -race ./model -run 'TestPreConsumeUserSubscriptionByUnitsConcurrentSameRequestHasSingleWrite$' -count=1
+```
+
+结果：两条命令均 PASS，各输出 `go test: 1 packages ok`。
+
+F1 实现仅增加版本 1 的确定性 SHA-256 指纹：固定宽度大端整数编码 user/quota/amount，长度前缀编码经 `FormatMatchingModelName` 规范化的 model；不使用 map、分隔字符串、时间、随机数、浮点或进程状态。

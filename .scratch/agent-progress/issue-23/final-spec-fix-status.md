@@ -2,21 +2,22 @@
 
 ## 当前阶段
 
-准备完成，进入 F1 RED。
+F1 已 GREEN 并完成真实 SQLite 双连接并发、`-count=10` 与窄 `-race` 验证，待格式检查与 clean 安全提交。
 
 ## 已完成
 
 - 冻结现场核验：分支、HEAD、clean 状态与 merge-base 均符合指令。
-- 读取父 PRD #19、Issue #23、依赖 #22、执行合同、Wave 2 合同、Issue #23 指令/验收、最终 Spec FAIL 报告、历史进度证据、`CONTEXT.md`、ADR 与 2026-08-02 spec/plan 相关合同。
-- 已加载 `diagnosing-bugs`、`tdd`、`codebase-design` 与 Orca orchestration 指南。
-- 根因定位：`preConsumeUserSubscriptionByUnits` 的既有记录分支未绑定调用不可变参数。
+- 必读合同、最终 Spec FAIL 报告与历史证据已读取；诊断、TDD、模块设计与 Orca 调度约束已加载。
+- F1 断言级 RED：旧实现对同 `request_id` 的 user、规范化 model、quota_type、distributor amount 冲突及缺指纹记录均错误返回成功。
+- F1 GREEN：请求记录在预扣事务内持久化版本 1、SHA-256 确定性指纹；固定宽度大端编码覆盖 user/quota/amount，长度前缀覆盖规范化 model，无分隔符歧义。
+- 同指纹重放严格无写入；异参、缺失或未知版本指纹通过 `ErrSubscriptionPreConsumeRequestConflict` 失败关闭。
+- 双连接同 `request_id` 并发测试只接受一个创建成功，另一个同指纹幂等成功或稳定冲突；最终仅一条请求记录和一次 200 Credit 扣除。
+- F1 三测单次、四测 `-count=10`、并发窄 `-race` 与附加式 SQLite schema 断言均已实际通过；精确命令记录于 evidence。
 
 ## 下一步
 
-1. 通过公开 `PreConsumeUserSubscriptionByUnits` 和真实 SQLite 写 F1 RED。
-2. 实现附加式持久化指纹、稳定 sentinel 与 fail-closed 重放。
-3. 完成 F1 单次、重复、并发、故障注入和 race 验证并提交安全点。
-4. 仅在 F1 安全提交后进入 F2。
+1. 对修改 Go 文件运行 `gofmt`，执行 `git diff --check` 并提交 F1 clean 安全点。
+2. F1 提交完成后进入 F2 RED；不再扩展 F1 schema、接口、缓存或通用重试。
 
 ## 阻塞
 
@@ -24,4 +25,5 @@
 
 ## 最近安全提交
 
-起始安全点：`8cdfd4acb78b502af4c0232460baf7df852b7b2c`。
+- `0855b96b5`：F1 断言级 RED 与稳定 sentinel/附加字段声明。
+- F1 GREEN 提交：待创建。

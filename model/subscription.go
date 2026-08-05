@@ -1,6 +1,9 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -98,6 +102,21 @@ var (
 	ErrNoActiveSubscription                  = errors.New("no active subscription")
 	ErrSubscriptionPreConsumeRequestConflict = errors.New("subscription pre-consume request conflict")
 )
+
+const subscriptionPreConsumeRequestFingerprintVersion = 1
+
+func subscriptionPreConsumeRequestFingerprint(userId int, modelName string, quotaType int, distributorAmount int64) string {
+	normalizedModel := ratio_setting.FormatMatchingModelName(strings.TrimSpace(modelName))
+	payload := make([]byte, 0, 41+len(normalizedModel))
+	payload = binary.BigEndian.AppendUint32(payload, subscriptionPreConsumeRequestFingerprintVersion)
+	payload = binary.BigEndian.AppendUint64(payload, uint64(int64(userId)))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(int64(quotaType)))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(distributorAmount))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(len(normalizedModel)))
+	payload = append(payload, normalizedModel...)
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
 
 const (
 	PaymentProviderBalance      = "balance"
@@ -2936,6 +2955,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		return nil, errors.New("amount must be > 0")
 	}
 	now := GetDBTimestamp()
+	requestFingerprint := subscriptionPreConsumeRequestFingerprint(userId, modelName, quotaType, distributorAmount)
 	returnValue := &SubscriptionPreConsumeResult{}
 	var repairedSettingJSON string
 	var selectionBusinessErr error
@@ -2953,6 +2973,9 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return query.Error
 		}
 		if query.RowsAffected > 0 {
+			if existing.RequestFingerprintVersion != subscriptionPreConsumeRequestFingerprintVersion || existing.RequestFingerprint != requestFingerprint {
+				return ErrSubscriptionPreConsumeRequestConflict
+			}
 			if existing.Status == "refunded" {
 				return errors.New("subscription pre-consume already refunded")
 			}
@@ -2967,7 +2990,6 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
 			returnValue.CreditValuationTracked = existing.ValuationSubscriptionId > 0
 			returnValue.AppliedCredit = existing.AppliedCredit
-			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
 			return nil
 		}
 
@@ -2992,11 +3014,13 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		distributor := selection.Distributor
 		consumeAmount := distributorAmount
 		record := &SubscriptionPreConsumeRecord{
-			RequestId:          requestId,
-			UserId:             userId,
-			UserSubscriptionId: sub.Id,
-			PreConsumed:        consumeAmount,
-			Status:             "consumed",
+			RequestId:                 requestId,
+			RequestFingerprintVersion: subscriptionPreConsumeRequestFingerprintVersion,
+			RequestFingerprint:        requestFingerprint,
+			UserId:                    userId,
+			UserSubscriptionId:        sub.Id,
+			PreConsumed:               consumeAmount,
+			Status:                    "consumed",
 		}
 		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
 		if err != nil {

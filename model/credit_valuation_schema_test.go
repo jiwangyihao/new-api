@@ -23,7 +23,7 @@ func TestCreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable(t *testing.
 	for _, modelValue := range []any{&CreditValuationState{}, &CreditValuationMigration{}, &TimedSubscriptionValuationGrant{}} {
 		require.True(t, db.Migrator().HasTable(modelValue))
 	}
-	for _, column := range []string{"applied_credit", "deducted_exact_cost_micros", "finalized_at"} {
+	for _, column := range []string{"request_fingerprint_version", "request_fingerprint", "applied_credit", "deducted_exact_cost_micros", "finalized_at"} {
 		require.True(t, db.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, column), column)
 	}
 	for _, column := range []string{"valuation_currency", "valuation_gross_cost_micros", "fx_rate_denominator"} {

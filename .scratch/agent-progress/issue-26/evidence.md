@@ -216,3 +216,13 @@
 最终定向回归：`go test ./model -run "Test(ConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation|CreditValuationOrderIngressCreatesExactState|RecalculateTimedSubscriptionConversionQuoteFormulaBoundaries|TimedConversionPreservesCompletedLogOwnershipAndTargetsNewUsage)" -count=1`
 
 真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion.go model/credit_balance.go` 与 `git diff --check` 均成功；未进入跨币种、并发、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 跨币种冻结与重放 RED
+
+新增真实 SQLite table-driven tracer `TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay`，覆盖 CNY→USD reciprocal floor、USD→CNY forward floor、冻结 FX numerator/denominator/captured_at、Option 原始文本变化后同 source 同事实重放不重估，以及同 idempotency key 更换 source 的冲突零写入。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=1`
+
+真实结果：`FAIL`。CNY→USD 与 USD→CNY 两个子例均由真实 Confirm 返回稳定 `credit_valuation_unsupported_currency`；失败发生在当前同币种 guard，证明跨币种 snapshot 与整数换算尚未连接，同时保持事务 fail-closed。
+
+结论：RED 已覆盖跨币种 conversion、冻结快照、重放和冲突零写入的最终公共路径；下一步最小 GREEN 只复用唯一 `CreditFXRateSnapshot` seam 与现有 conversion/ledger/state/idempotency 事务。

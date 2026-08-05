@@ -108,3 +108,154 @@ func TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation(t *testi
 func pointerToInt64(value int64) *int64 {
 	return &value
 }
+
+func TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay(t *testing.T) {
+	tests := []struct {
+		name                  string
+		sourceCurrency        string
+		valuationCurrency     string
+		sourcePriceMicros     int64
+		wantGrossCostMicros   int64
+		wantFXRateNumerator   int64
+		wantFXRateDenominator int64
+	}{
+		{
+			name:                  "CNY to USD floors reciprocal conversion",
+			sourceCurrency:        "CNY",
+			valuationCurrency:     "USD",
+			sourcePriceMicros:     40_000_000,
+			wantGrossCostMicros:   6_849_315,
+			wantFXRateNumerator:   10,
+			wantFXRateDenominator: 73,
+		},
+		{
+			name:                  "USD to CNY floors forward conversion",
+			sourceCurrency:        "USD",
+			valuationCurrency:     "CNY",
+			sourcePriceMicros:     4_000_000,
+			wantGrossCostMicros:   36_500_000,
+			wantFXRateNumerator:   73,
+			wantFXRateDenominator: 10,
+		},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupSubscriptionConversionQuoteTestDB(t)
+			require.NoError(t, DB.AutoMigrate(&User{}))
+			require.NoError(t, migrateCreditValuationSchema(DB))
+			updateFXOption := seedCreditFXRateOptionForTest(t, "7.3")
+
+			userID := 26_201 + index*10
+			sourcePlanID := userID + 1
+			sourceSubscriptionID := userID + 2
+			const creditBasis = int64(100)
+			const grossCredit = int64(125)
+			now := GetDBTimestamp()
+
+			require.NoError(t, DB.Model(&SubscriptionPlan{}).
+				Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+				UpdateColumn("valuation_currency", test.valuationCurrency).Error)
+			require.NoError(t, DB.Create(&CreditValuationMigration{
+				Version:           CreditValuationRuleVersion,
+				Status:            CreditValuationMigrationReady,
+				ValuationCurrency: test.valuationCurrency,
+			}).Error)
+			require.NoError(t, DB.Create(&User{
+				Id: userID, Username: "conversion-cross-currency", Status: common.UserStatusEnabled,
+			}).Error)
+
+			plan := seedConversionQuoteTimedPlan(t, sourcePlanID, creditBasis)
+			plan.PriceAmountMicros = pointerToInt64(test.sourcePriceMicros)
+			plan.Currency = test.sourceCurrency
+			require.NoError(t, DB.Save(plan).Error)
+			require.NoError(t, DB.Create(&UserSubscription{
+				Id:                      sourceSubscriptionID,
+				UserId:                  userID,
+				PlanId:                  sourcePlanID,
+				EntitlementType:         SubscriptionEntitlementTimed,
+				TokenLimit:              75,
+				TokenUsed:               50,
+				GrantReason:             SubscriptionGrantOrder,
+				Source:                  SubscriptionGrantOrder,
+				StartTime:               now - 40*24*60*60,
+				EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+				Status:                  SubscriptionStatusActive,
+				LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+				LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+				LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+				LastGrantSource:         SubscriptionGrantOrder,
+			}).Error)
+
+			first, err := ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID, "cross-currency-valuation")
+			require.NoError(t, err)
+			require.False(t, first.Replayed)
+			require.Equal(t, grossCredit, first.Conversion.GrossCredit)
+			require.Equal(t, test.valuationCurrency, first.Conversion.ValuationCurrency)
+			require.Equal(t, test.sourcePriceMicros, first.Conversion.ValuationSourcePriceMicros)
+			require.Equal(t, test.wantGrossCostMicros, first.Conversion.ValuationGrossCostMicros)
+			require.Equal(t, test.sourceCurrency, first.Conversion.FxSourceCurrency)
+			require.Equal(t, test.wantFXRateNumerator, first.Conversion.FxRateNumerator)
+			require.Equal(t, test.wantFXRateDenominator, first.Conversion.FxRateDenominator)
+			require.Positive(t, first.Conversion.FxCapturedAt)
+
+			var ledger CreditBalanceLedger
+			require.NoError(t, DB.First(&ledger, first.Conversion.LedgerId).Error)
+			require.Equal(t, test.wantGrossCostMicros, ledger.ValuationGrossCostMicros)
+			require.Equal(t, test.wantFXRateNumerator, ledger.FxRateNumerator)
+			require.Equal(t, test.wantFXRateDenominator, ledger.FxRateDenominator)
+			require.Equal(t, first.Conversion.FxCapturedAt, ledger.FxCapturedAt)
+
+			updateFXOption("8.1")
+			replayed, err := ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID, "cross-currency-valuation")
+			require.NoError(t, err)
+			require.True(t, replayed.Replayed)
+			require.Equal(t, first.Conversion, replayed.Conversion, "committed snapshot must not follow later Option changes")
+
+			before := captureConversionValuationWriteCounts(t)
+			_, err = ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID+99, "cross-currency-valuation")
+			require.Error(t, err)
+			require.Equal(t, before, captureConversionValuationWriteCounts(t), "conflicting replay must produce zero writes")
+		})
+	}
+}
+
+type conversionValuationWriteCounts struct {
+	conversions int64
+	ledgers     int64
+	states      int64
+}
+
+func captureConversionValuationWriteCounts(t *testing.T) conversionValuationWriteCounts {
+	t.Helper()
+	var counts conversionValuationWriteCounts
+	require.NoError(t, DB.Model(&SubscriptionConversion{}).Count(&counts.conversions).Error)
+	require.NoError(t, DB.Model(&CreditBalanceLedger{}).Count(&counts.ledgers).Error)
+	require.NoError(t, DB.Model(&CreditValuationState{}).Count(&counts.states).Error)
+	return counts
+}
+
+func seedCreditFXRateOptionForTest(t *testing.T, value string) func(string) {
+	t.Helper()
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	previous, existed := common.OptionMap["USDExchangeRate"]
+	common.OptionMap["USDExchangeRate"] = value
+	common.OptionMapRWMutex.Unlock()
+	t.Cleanup(func() {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		if existed {
+			common.OptionMap["USDExchangeRate"] = previous
+		} else {
+			delete(common.OptionMap, "USDExchangeRate")
+		}
+	})
+	return func(next string) {
+		common.OptionMapRWMutex.Lock()
+		defer common.OptionMapRWMutex.Unlock()
+		common.OptionMap["USDExchangeRate"] = next
+	}
+}

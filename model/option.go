@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -21,6 +22,8 @@ type Option struct {
 	Key   string `json:"key" gorm:"primaryKey"`
 	Value string `json:"value"`
 }
+
+var creditFXRateOptionMutex sync.Mutex
 
 func IsDeprecatedBusinessGroupOption(key string) bool {
 	switch key {
@@ -228,18 +231,32 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
-	// Save to database first
-	option := Option{
-		Key: key,
+	if key == "USDExchangeRate" {
+		creditFXRateOptionMutex.Lock()
+		defer creditFXRateOptionMutex.Unlock()
+		snapshot, err := prepareCreditFXRateSnapshot(value, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		if err := DB.Transaction(func(tx *gorm.DB) error {
+			return tx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "key"}},
+				DoUpdates: clause.AssignmentColumns([]string{"value"}),
+			}).Create(&Option{Key: key, Value: value}).Error
+		}); err != nil {
+			return err
+		}
+		applyCreditFXRateOption(value, snapshot)
+		return nil
 	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
+	option := Option{Key: key}
+	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
 	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
-	// Update OptionMap
+	if err := DB.Save(&option).Error; err != nil {
+		return err
+	}
 	return updateOptionMap(key, value)
 }
 func init() {
@@ -365,6 +382,16 @@ func prepareMigratedOptionsRuntimePlan(values map[string]string) (migratedOption
 
 func updateOptionMap(key string, value string) (err error) {
 	if IsDeprecatedBusinessGroupOption(key) {
+		return nil
+	}
+	if key == "USDExchangeRate" {
+		creditFXRateOptionMutex.Lock()
+		defer creditFXRateOptionMutex.Unlock()
+		snapshot, err := prepareCreditFXRateSnapshot(value, common.GetTimestamp())
+		if err != nil {
+			return err
+		}
+		applyCreditFXRateOption(value, snapshot)
 		return nil
 	}
 
@@ -546,7 +573,8 @@ func updateOptionMap(key string, value string) (err error) {
 	case "Price":
 		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
 	case "USDExchangeRate":
-		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		// Applied before the generic OptionMap mutation so invalid raw text cannot
+		// contaminate runtime state.
 	case "MinTopUp":
 		operation_setting.MinTopUp, _ = strconv.Atoi(value)
 	case "StripeApiSecret":
@@ -738,6 +766,17 @@ func updateOptionMap(key string, value string) (err error) {
 		// No additional in-memory variable to update.
 	}
 	return err
+}
+
+func applyCreditFXRateOption(value string, snapshot CreditFXRateSnapshot) {
+	common.OptionMapRWMutex.Lock()
+	defer common.OptionMapRWMutex.Unlock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMap["USDExchangeRate"] = value
+	operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+	publishCreditFXRateSnapshot(snapshot)
 }
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理

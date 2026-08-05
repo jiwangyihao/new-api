@@ -237,25 +237,37 @@ func captureConversionValuationWriteCounts(t *testing.T) conversionValuationWrit
 
 func seedCreditFXRateOptionForTest(t *testing.T, value string) func(string) {
 	t.Helper()
+	require.NoError(t, DB.AutoMigrate(&Option{}))
+	var previous Option
+	previousQuery := DB.Where("key = ?", "USDExchangeRate").Limit(1).Find(&previous)
+	require.NoError(t, previousQuery.Error)
+	existed := previousQuery.RowsAffected == 1
 	common.OptionMapRWMutex.Lock()
 	if common.OptionMap == nil {
 		common.OptionMap = make(map[string]string)
 	}
-	previous, existed := common.OptionMap["USDExchangeRate"]
-	common.OptionMap["USDExchangeRate"] = value
 	common.OptionMapRWMutex.Unlock()
+	require.NoError(t, UpdateOption("USDExchangeRate", value))
+	requirePersistedCreditFXRateOption(t, value)
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		defer common.OptionMapRWMutex.Unlock()
 		if existed {
-			common.OptionMap["USDExchangeRate"] = previous
-		} else {
-			delete(common.OptionMap, "USDExchangeRate")
+			require.NoError(t, UpdateOption("USDExchangeRate", previous.Value))
+			return
 		}
+		require.NoError(t, DB.Where("key = ?", "USDExchangeRate").Delete(&Option{}).Error)
+		common.OptionMapRWMutex.Lock()
+		delete(common.OptionMap, "USDExchangeRate")
+		common.OptionMapRWMutex.Unlock()
 	})
 	return func(next string) {
-		common.OptionMapRWMutex.Lock()
-		defer common.OptionMapRWMutex.Unlock()
-		common.OptionMap["USDExchangeRate"] = next
+		require.NoError(t, UpdateOption("USDExchangeRate", next))
+		requirePersistedCreditFXRateOption(t, next)
 	}
+}
+
+func requirePersistedCreditFXRateOption(t *testing.T, want string) {
+	t.Helper()
+	var stored Option
+	require.NoError(t, DB.Where("key = ?", "USDExchangeRate").First(&stored).Error)
+	require.Equal(t, want, stored.Value)
 }

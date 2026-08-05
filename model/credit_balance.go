@@ -368,17 +368,10 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		ledger.ValuationStateVersionAfter = valuationMutation.StateVersionAfter
 	}
 	if valuationReady && request.SourceType == CreditBalanceLedgerSourceSubscriptionConversion {
-		sourceCurrency, err := NormalizeCreditValuationCurrency(request.ValuationSource.SourceCurrency)
-		if err != nil {
-			return nil, err
-		}
-		if sourceCurrency != valuationIngress.currency {
-			return nil, ErrCreditValuationUnsupportedCurrency
-		}
-		ledger.FxSourceCurrency = sourceCurrency
-		ledger.FxRateNumerator = 1
-		ledger.FxRateDenominator = 1
-		ledger.FxCapturedAt = ledger.CreatedAt
+		ledger.FxSourceCurrency = valuationIngress.fxSourceCurrency
+		ledger.FxRateNumerator = valuationIngress.fxRateNumerator
+		ledger.FxRateDenominator = valuationIngress.fxRateDenominator
+		ledger.FxCapturedAt = valuationIngress.fxCapturedAt
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err

@@ -226,3 +226,23 @@
 真实结果：`FAIL`。CNY→USD 与 USD→CNY 两个子例均由真实 Confirm 返回稳定 `credit_valuation_unsupported_currency`；失败发生在当前同币种 guard，证明跨币种 snapshot 与整数换算尚未连接，同时保持事务 fail-closed。
 
 结论：RED 已覆盖跨币种 conversion、冻结快照、重放和冲突零写入的最终公共路径；下一步最小 GREEN 只复用唯一 `CreditFXRateSnapshot` seam 与现有 conversion/ledger/state/idempotency 事务。
+
+## 2026-08-05 — Conversion 跨币种冻结与重放 GREEN
+
+最小实现复用唯一 `CreditFXRateSnapshot` parser/provider：`USDExchangeRate` 原始十进制在任何写入前严格解析；专用互斥覆盖单个 GORM upsert transaction 到运行时发布，数据库提交成功后才同时更新 OptionMap 与 atomic snapshot。解析或数据库失败不会发布运行时 snapshot。
+
+Confirm 在既有事务中从锁定 source plan 和 target valuation currency 获取方向，并只调用 `CurrentCreditFXRateSnapshot`；`CreditValuationSourceSnapshot` 携带冻结 snapshot，ingress 先计算 source gross cost，再用 `ConvertMicros` 做 overflow-safe integer floor。既有 ledger、conversion 与 valuation state 持久化同一 valuation currency、cost 与 FX numerator/denominator/captured_at，未新增 schema。
+
+单次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。CNY→USD 冻结 `10/73` 并 floor 为 `6,849,315` micros；USD→CNY 冻结 `73/10` 为 `36,500,000` micros。Option 从 `7.3` 持久化更新为 `8.1` 后，同 source/key 重放读取已提交 conversion，不重估旧 snapshot；冲突调用保持 conversion/ledger/state 计数不变。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+联合回归：`go test ./model -run "Test(ConfirmTimedSubscriptionConversionFreezes(SameCurrency|CrossCurrency)|CreditValuationOrderIngressCreatesExactState|ParseCreditFXRateSnapshot|CreditFXRateSnapshotConvertMicros|TimedConversionPreservesCompletedLogOwnershipAndTargetsNewUsage)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。生产文件与测试已执行 `gofmt`，`git diff --check` 成功。
+
+范围说明：本安全点未新增 schema，未进入在途 request/API/UI；按最新收敛指令未扩展并发双确认或同 source 权威事实指纹冲突测试，因此不将这两项声明为已验收。

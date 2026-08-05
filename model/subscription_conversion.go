@@ -186,8 +186,9 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			if err != nil {
 				return err
 			}
-			if sourceCurrency != valuationCurrency {
-				return ErrCreditValuationUnsupportedCurrency
+			fxSnapshot, err := CurrentCreditFXRateSnapshot(sourceCurrency, valuationCurrency, dbNow)
+			if err != nil {
+				return err
 			}
 			valuationSource = &CreditValuationSourceSnapshot{
 				SourcePriceMicros: *sourcePlan.PriceAmountMicros,
@@ -196,6 +197,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 				SourceCurrency:    sourceCurrency,
 				ValuationCurrency: valuationCurrency,
 				RuleVersion:       CreditValuationRuleVersion,
+				FXRateSnapshot:    &fxSnapshot,
 			}
 		}
 		snapshotBytes, err := common.Marshal(quote)

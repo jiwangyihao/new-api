@@ -45,14 +45,19 @@ type CreditValuationSourceSnapshot struct {
 	SourceCurrency    string
 	ValuationCurrency string
 	RuleVersion       int
+	FXRateSnapshot    *CreditFXRateSnapshot
 }
 
 type creditValuationIngress struct {
-	grossCredit     int64
-	grossCostMicros int64
-	currency        string
-	confidence      string
-	ruleVersion     int
+	grossCredit       int64
+	grossCostMicros   int64
+	currency          string
+	confidence        string
+	ruleVersion       int
+	fxSourceCurrency  string
+	fxRateNumerator   int64
+	fxRateDenominator int64
+	fxCapturedAt      int64
 }
 
 type CreditValuationMutationResult struct {
@@ -78,21 +83,41 @@ func newForwardCreditValuationIngress(source CreditValuationSourceSnapshot) (cre
 	if err != nil {
 		return creditValuationIngress{}, err
 	}
-	// Cross-currency runtime valuation is owned by Issue #26. Issue #22 only
-	// accepts authoritative source facts already expressed in the pool currency.
-	if sourceCurrency != valuationCurrency {
-		return creditValuationIngress{}, ErrCreditValuationUnsupportedCurrency
+	fxSnapshot := source.FXRateSnapshot
+	if fxSnapshot == nil {
+		if sourceCurrency != valuationCurrency {
+			return creditValuationIngress{}, ErrCreditValuationUnsupportedCurrency
+		}
+		identity, identityErr := ParseCreditFXRateSnapshot(CreditFXRateSnapshotInput{
+			SourceCurrency: sourceCurrency, ValuationCurrency: valuationCurrency,
+			Direction: CreditFXDirectionIdentity, CapturedAt: 1,
+		})
+		if identityErr != nil {
+			return creditValuationIngress{}, identityErr
+		}
+		fxSnapshot = &identity
 	}
-	grossCostMicros, err := mulDivFloor(source.SourcePriceMicros, source.GrossCredit, source.SourcePlanCredit)
+	if fxSnapshot.SourceCurrency != sourceCurrency || fxSnapshot.ValuationCurrency != valuationCurrency {
+		return creditValuationIngress{}, ErrCreditValuationSourceInvalid
+	}
+	sourceGrossCostMicros, err := mulDivFloor(source.SourcePriceMicros, source.GrossCredit, source.SourcePlanCredit)
+	if err != nil {
+		return creditValuationIngress{}, err
+	}
+	grossCostMicros, err := fxSnapshot.ConvertMicros(sourceGrossCostMicros)
 	if err != nil {
 		return creditValuationIngress{}, err
 	}
 	return creditValuationIngress{
-		grossCredit:     source.GrossCredit,
-		grossCostMicros: grossCostMicros,
-		currency:        valuationCurrency,
-		confidence:      CreditValuationConfidenceExact,
-		ruleVersion:     source.RuleVersion,
+		grossCredit:       source.GrossCredit,
+		grossCostMicros:   grossCostMicros,
+		currency:          valuationCurrency,
+		confidence:        CreditValuationConfidenceExact,
+		ruleVersion:       source.RuleVersion,
+		fxSourceCurrency:  fxSnapshot.SourceCurrency,
+		fxRateNumerator:   fxSnapshot.Numerator,
+		fxRateDenominator: fxSnapshot.Denominator,
+		fxCapturedAt:      fxSnapshot.CapturedAt,
 	}, nil
 }
 

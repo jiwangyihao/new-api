@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync/atomic"
 )
 
 const (
@@ -23,6 +24,8 @@ var (
 	ErrCreditFXDirectionMismatch   = errors.New("credit_fx_direction_mismatch")
 	ErrCreditFXOverflow            = errors.New("credit_fx_overflow")
 )
+
+var runtimeCreditFXRateSnapshot atomic.Pointer[CreditFXRateSnapshot]
 
 type CreditFXRateSnapshotInput struct {
 	SourceCurrency    string
@@ -93,6 +96,51 @@ func ParseCreditFXRateSnapshot(input CreditFXRateSnapshotInput) (CreditFXRateSna
 		CapturedAt:        input.CapturedAt,
 		Direction:         direction,
 	}, nil
+}
+
+func prepareCreditFXRateSnapshot(rateText string, capturedAt int64) (CreditFXRateSnapshot, error) {
+	return ParseCreditFXRateSnapshot(CreditFXRateSnapshotInput{
+		SourceCurrency:    "USD",
+		ValuationCurrency: "CNY",
+		Direction:         CreditFXDirectionUSDtoCNY,
+		RateText:          &rateText,
+		CapturedAt:        capturedAt,
+	})
+}
+
+func publishCreditFXRateSnapshot(snapshot CreditFXRateSnapshot) {
+	runtimeCreditFXRateSnapshot.Store(&snapshot)
+}
+
+func CurrentCreditFXRateSnapshot(sourceCurrency string, valuationCurrency string, identityCapturedAt int64) (CreditFXRateSnapshot, error) {
+	sourceCurrency, err := NormalizeCreditValuationCurrency(sourceCurrency)
+	if err != nil {
+		return CreditFXRateSnapshot{}, ErrCreditFXUnsupportedCurrency
+	}
+	valuationCurrency, err = NormalizeCreditValuationCurrency(valuationCurrency)
+	if err != nil {
+		return CreditFXRateSnapshot{}, ErrCreditFXUnsupportedCurrency
+	}
+	if sourceCurrency == valuationCurrency {
+		return ParseCreditFXRateSnapshot(CreditFXRateSnapshotInput{
+			SourceCurrency:    sourceCurrency,
+			ValuationCurrency: valuationCurrency,
+			Direction:         CreditFXDirectionIdentity,
+			CapturedAt:        identityCapturedAt,
+		})
+	}
+	canonical := runtimeCreditFXRateSnapshot.Load()
+	if canonical == nil {
+		return CreditFXRateSnapshot{}, ErrCreditFXRateMissing
+	}
+	snapshot := *canonical
+	if sourceCurrency == "CNY" {
+		snapshot.SourceCurrency = "CNY"
+		snapshot.ValuationCurrency = "USD"
+		snapshot.Numerator, snapshot.Denominator = snapshot.Denominator, snapshot.Numerator
+		snapshot.Direction = CreditFXDirectionCNYtoUSD
+	}
+	return snapshot, nil
 }
 
 func creditFXDirection(sourceCurrency string, valuationCurrency string) string {

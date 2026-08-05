@@ -87,3 +87,13 @@
 - 独立 GREEN：`bb399d868`（`feat(issue-26): 实现 FX 快照规范解析`）。
 - GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - 下一步按协调器收敛顺序执行：A 非法输入 → B identity/反向 → C floor/overflow；每组独立 RED→GREEN，期间暂停 conversion、request、API/UI。
+
+## 2026-08-05 — A 组非法输入 RED
+
+新增公共行为测试 `TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors`，逐项要求缺失、空值、非法十进制、超精度、零/负值、不支持币种和声明方向不匹配返回可由 `errors.Is` 判断的稳定 sentinel。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors -count=1`
+
+真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXRateMissing`、`ErrCreditFXRateEmpty`、`ErrCreditFXInvalidDecimal`、`ErrCreditFXPrecisionExceeded`、`ErrCreditFXNonPositive`、`ErrCreditFXUnsupportedCurrency`、`ErrCreditFXDirectionMismatch` 以及 `CreditFXRateSnapshotInput.Direction` 尚不存在。
+
+结论：A 组 RED 对稳定错误分类与显式方向合同敏感；下一步只实现这些缺失行为，不涉及 identity、反向换算、floor 或 overflow。

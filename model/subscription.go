@@ -1,6 +1,9 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -13,6 +16,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -92,11 +96,28 @@ const (
 )
 
 var (
-	ErrSubscriptionOrderNotFound         = errors.New("subscription order not found")
-	ErrSubscriptionOrderStatusInvalid    = errors.New("subscription order status invalid")
-	ErrSubscriptionOrderSnapshotMismatch = errors.New("subscription order entitlement snapshot mismatch")
-	ErrNoActiveSubscription              = errors.New("no active subscription")
+	ErrSubscriptionOrderNotFound              = errors.New("subscription order not found")
+	ErrSubscriptionOrderStatusInvalid         = errors.New("subscription order status invalid")
+	ErrSubscriptionOrderSnapshotMismatch      = errors.New("subscription order entitlement snapshot mismatch")
+	ErrNoActiveSubscription                   = errors.New("no active subscription")
+	ErrSubscriptionPreConsumeRequestConflict  = errors.New("subscription pre-consume request conflict")
+	ErrCreditValuationAnonymousDeltaForbidden = errors.New("credit valuation anonymous subscription delta forbidden")
 )
+
+const subscriptionPreConsumeRequestFingerprintVersion = 1
+
+func subscriptionPreConsumeRequestFingerprint(userId int, modelName string, quotaType int, distributorAmount int64) string {
+	normalizedModel := ratio_setting.FormatMatchingModelName(strings.TrimSpace(modelName))
+	payload := make([]byte, 0, 41+len(normalizedModel))
+	payload = binary.BigEndian.AppendUint32(payload, subscriptionPreConsumeRequestFingerprintVersion)
+	payload = binary.BigEndian.AppendUint64(payload, uint64(int64(userId)))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(int64(quotaType)))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(distributorAmount))
+	payload = binary.BigEndian.AppendUint64(payload, uint64(len(normalizedModel)))
+	payload = append(payload, normalizedModel...)
+	digest := sha256.Sum256(payload)
+	return hex.EncodeToString(digest[:])
+}
 
 const (
 	PaymentProviderBalance      = "balance"
@@ -1904,6 +1925,7 @@ func AdminDeleteUserSubscription(userSubscriptionId int) (string, error) {
 type SubscriptionPreConsumeResult struct {
 	UserSubscriptionId         int
 	PreConsumed                int64
+	AppliedCredit              int64
 	AmountTotal                int64
 	AmountUsedBefore           int64
 	AmountUsedAfter            int64
@@ -1978,6 +2000,8 @@ func ExpireDueSubscriptions(limit int) (int, error) {
 type SubscriptionPreConsumeRecord struct {
 	Id                                 int    `json:"id"`
 	RequestId                          string `json:"request_id" gorm:"type:varchar(64);uniqueIndex"`
+	RequestFingerprintVersion          int    `json:"request_fingerprint_version" gorm:"not null;default:0"`
+	RequestFingerprint                 string `json:"request_fingerprint" gorm:"type:varchar(64);not null;default:''"`
 	UserId                             int    `json:"user_id" gorm:"index"`
 	UserSubscriptionId                 int    `json:"user_subscription_id" gorm:"index"`
 	PreConsumed                        int64  `json:"pre_consumed" gorm:"type:bigint;not null;default:0"`
@@ -2932,6 +2956,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		return nil, errors.New("amount must be > 0")
 	}
 	now := GetDBTimestamp()
+	requestFingerprint := subscriptionPreConsumeRequestFingerprint(userId, modelName, quotaType, distributorAmount)
 	returnValue := &SubscriptionPreConsumeResult{}
 	var repairedSettingJSON string
 	var selectionBusinessErr error
@@ -2949,6 +2974,9 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return query.Error
 		}
 		if query.RowsAffected > 0 {
+			if existing.RequestFingerprintVersion != subscriptionPreConsumeRequestFingerprintVersion || existing.RequestFingerprint != requestFingerprint {
+				return ErrSubscriptionPreConsumeRequestConflict
+			}
 			if existing.Status == "refunded" {
 				return errors.New("subscription pre-consume already refunded")
 			}
@@ -2962,7 +2990,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			}
 			fillSubscriptionPreConsumeResult(returnValue, &sub, plan, existing.PreConsumed, sub.AmountUsed, sub.TokenUsed, isDistributorSubscription(&sub, plan))
 			returnValue.CreditValuationTracked = existing.ValuationSubscriptionId > 0
-			cachePrimaryBillableSelectionTx(tx, userId, &sub, plan, returnValue.DistributorTokenBilling)
+			returnValue.AppliedCredit = existing.AppliedCredit
 			return nil
 		}
 
@@ -2987,11 +3015,13 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		distributor := selection.Distributor
 		consumeAmount := distributorAmount
 		record := &SubscriptionPreConsumeRecord{
-			RequestId:          requestId,
-			UserId:             userId,
-			UserSubscriptionId: sub.Id,
-			PreConsumed:        consumeAmount,
-			Status:             "consumed",
+			RequestId:                 requestId,
+			RequestFingerprintVersion: subscriptionPreConsumeRequestFingerprintVersion,
+			RequestFingerprint:        requestFingerprint,
+			UserId:                    userId,
+			UserSubscriptionId:        sub.Id,
+			PreConsumed:               consumeAmount,
+			Status:                    "consumed",
 		}
 		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
 		if err != nil {
@@ -3035,6 +3065,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		}
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		returnValue.CreditValuationTracked = record.ValuationSubscriptionId > 0
+		returnValue.AppliedCredit = record.AppliedCredit
 		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
 		return nil
 	}
@@ -3120,14 +3151,171 @@ func ResetDueSubscriptions(limit int) (int, error) {
 	return resetCount, nil
 }
 
-// CleanupSubscriptionPreConsumeRecords removes old idempotency records to keep table small.
-func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
+const subscriptionCleanupReferenceBatchSize = 100
+
+var ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference = errors.New("subscription pre-consume cleanup blocked by ambiguous active task reference")
+
+func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
+	var tasks []Task
+	return tx.Select("id", "private_data").
+		Where("status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("subscription_request_id IS NULL").
+		Order("id ASC").
+		FindInBatches(&tasks, subscriptionCleanupReferenceBatchSize, func(_ *gorm.DB, _ int) error {
+			subscriptionIDs := make([]int, 0, len(tasks))
+			seenSubscriptionIDs := make(map[int]struct{}, len(tasks))
+			for _, task := range tasks {
+				if strings.TrimSpace(task.PrivateData.SubscriptionRequestId) != "" || task.PrivateData.SubscriptionId <= 0 {
+					return ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference
+				}
+				if _, seen := seenSubscriptionIDs[task.PrivateData.SubscriptionId]; seen {
+					continue
+				}
+				seenSubscriptionIDs[task.PrivateData.SubscriptionId] = struct{}{}
+				subscriptionIDs = append(subscriptionIDs, task.PrivateData.SubscriptionId)
+			}
+			if len(subscriptionIDs) == 0 {
+				return nil
+			}
+
+			var subscriptions []UserSubscription
+			if err := tx.Select("id", "entitlement_type").Where("id IN ?", subscriptionIDs).Find(&subscriptions).Error; err != nil {
+				return err
+			}
+			entitlementBySubscriptionID := make(map[int]string, len(subscriptions))
+			for _, subscription := range subscriptions {
+				entitlementBySubscriptionID[subscription.Id] = subscription.EntitlementType
+			}
+			for _, subscriptionID := range subscriptionIDs {
+				if entitlementBySubscriptionID[subscriptionID] != SubscriptionEntitlementTimed {
+					return ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference
+				}
+			}
+			return nil
+		}).Error
+}
+
+func subscriptionPreConsumeActiveTaskReferenceQuery(tx *gorm.DB) *gorm.DB {
+	return tx.Model(&Task{}).
+		Select("1").
+		Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
+}
+
+func subscriptionPreConsumeCleanupCandidateQuery(tx *gorm.DB, cutoff int64) *gorm.DB {
+	return tx.Model(&SubscriptionPreConsumeRecord{}).
+		Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+		Where("NOT EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
+}
+
+type SubscriptionPreConsumeCleanupPreview struct {
+	Cutoff            int64
+	BatchSize         int
+	CandidateCount    int64
+	ProtectedCount    int64
+	TerminalCounts    map[string]int64
+	ProtectionReasons map[string]int64
+}
+
+// PreviewSubscriptionPreConsumeCleanup reports the next cleanup batch without modifying data.
+func PreviewSubscriptionPreConsumeCleanup(olderThanSeconds int64, batchSize int) (SubscriptionPreConsumeCleanupPreview, error) {
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}
+	if batchSize <= 0 {
+		batchSize = subscriptionPreConsumeCleanupBatchSize
+	}
+	preview := SubscriptionPreConsumeCleanupPreview{
+		Cutoff:            GetDBTimestamp() - olderThanSeconds,
+		BatchSize:         batchSize,
+		TerminalCounts:    make(map[string]int64),
+		ProtectionReasons: make(map[string]int64),
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
+			return err
+		}
+		var candidateIDs []int
+		if err := subscriptionPreConsumeCleanupCandidateQuery(tx, preview.Cutoff).
+			Select("id").
+			Order("id ASC").
+			Limit(batchSize).
+			Pluck("id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		preview.CandidateCount = int64(len(candidateIDs))
+		if len(candidateIDs) > 0 {
+			var terminalCounts []struct {
+				Status string
+				Count  int64
+			}
+			if err := tx.Model(&SubscriptionPreConsumeRecord{}).
+				Select("status, COUNT(*) AS count").
+				Where("id IN ?", candidateIDs).
+				Group("status").
+				Order("status ASC").
+				Scan(&terminalCounts).Error; err != nil {
+				return err
+			}
+			for _, terminalCount := range terminalCounts {
+				preview.TerminalCounts[terminalCount.Status] = terminalCount.Count
+			}
+		}
+		protectedQuery := tx.Model(&SubscriptionPreConsumeRecord{}).
+			Where("finalized_at < ? AND status IN ?", preview.Cutoff, []string{"settled", "refunded"}).
+			Where("EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
+		if err := protectedQuery.Count(&preview.ProtectedCount).Error; err != nil {
+			return err
+		}
+		if preview.ProtectedCount > 0 {
+			preview.ProtectionReasons["active_task_reference"] = preview.ProtectedCount
+		}
+		return nil
+	})
+	return preview, err
+}
+
+const subscriptionPreConsumeCleanupBatchSize = 100
+
+// CleanupSubscriptionPreConsumeRecords removes one bounded batch of old idempotency records.
+func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
+	return cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds, subscriptionPreConsumeCleanupBatchSize)
+}
+
+func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize int) (int64, error) {
+	if olderThanSeconds <= 0 {
+		olderThanSeconds = 7 * 24 * 3600
+	}
+	if batchSize <= 0 {
+		batchSize = subscriptionPreConsumeCleanupBatchSize
+	}
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	res := DB.Where("updated_at < ?", cutoff).Delete(&SubscriptionPreConsumeRecord{})
-	return res.RowsAffected, res.Error
+	var deleted int64
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
+			return err
+		}
+		var candidateIDs []int
+		if err := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
+			Select("id").
+			Order("id ASC").
+			Limit(batchSize).
+			Pluck("id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		if len(candidateIDs) == 0 {
+			return nil
+		}
+		res := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
+			Where("id IN ?", candidateIDs).
+			Delete(&SubscriptionPreConsumeRecord{})
+		deleted = res.RowsAffected
+		return res.Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
 }
 
 type SubscriptionPlanInfo struct {
@@ -3157,6 +3345,17 @@ func GetSubscriptionPlanInfoByUserSubscriptionId(userSubscriptionId int) (*Subsc
 	}
 	_ = getSubscriptionPlanInfoCache().SetWithTTL(cacheKey, *info, subscriptionPlanInfoCacheTTL())
 	return info, nil
+}
+
+func rejectCreditAnonymousSubscriptionDelta(userSubscriptionId int) error {
+	var subscription UserSubscription
+	if err := DB.Select("entitlement_type").Where("id = ?", userSubscriptionId).First(&subscription).Error; err != nil {
+		return err
+	}
+	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
+		return ErrCreditValuationAnonymousDeltaForbidden
+	}
+	return nil
 }
 func tokenUsedDeltaExpr(delta int64) clause.Expr {
 	if delta < 0 {
@@ -3207,6 +3406,56 @@ func isRetryableConvertedSubscriptionSettlementError(err error) bool {
 		strings.Contains(message, "sqlite_locked")
 }
 
+// UserSubscriptionPostConsumeResult tells callers whether the successful delta
+// replaces a request-stable Credit result or accumulates a non-Credit delta.
+type UserSubscriptionPostConsumeResult struct {
+	PostDelta        int64
+	ReplacePostDelta bool
+}
+
+// PostConsumeUserSubscriptionRequestDelta routes request-aware Credit targets
+// and compatible non-Credit deltas without exposing persistence details.
+func PostConsumeUserSubscriptionRequestDelta(requestId string, userSubscriptionId int, delta int64, distributor bool) (UserSubscriptionPostConsumeResult, error) {
+	var subscription UserSubscription
+	if err := DB.Select("entitlement_type").Where("id = ?", userSubscriptionId).First(&subscription).Error; err != nil {
+		return UserSubscriptionPostConsumeResult{}, ErrDatabase
+	}
+	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
+		var record SubscriptionPreConsumeRecord
+		if err := DB.Select("pre_consumed", "user_subscription_id").Where("request_id = ?", requestId).First(&record).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return UserSubscriptionPostConsumeResult{}, ErrCreditValuationRequestNotFound
+			}
+			return UserSubscriptionPostConsumeResult{}, ErrDatabase
+		}
+		if record.UserSubscriptionId != userSubscriptionId {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationMappingConflict
+		}
+		target, ok := checkedAddInt64(record.PreConsumed, delta)
+		if !ok {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationOverflow
+		}
+		if target < 0 {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationNegativeInput
+		}
+		if err := SettleUserSubscriptionRequestTarget(requestId, userSubscriptionId, target, false); err != nil {
+			return UserSubscriptionPostConsumeResult{}, err
+		}
+		return UserSubscriptionPostConsumeResult{PostDelta: target - record.PreConsumed, ReplacePostDelta: true}, nil
+	}
+
+	var err error
+	if distributor {
+		err = PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)
+	} else {
+		err = PostConsumeUserSubscriptionAmountDelta(userSubscriptionId, delta)
+	}
+	if err != nil {
+		return UserSubscriptionPostConsumeResult{}, err
+	}
+	return UserSubscriptionPostConsumeResult{PostDelta: delta}, nil
+}
+
 // Update subscription token_used by delta (positive consume more, negative refund).
 func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error {
 	return PostConsumeUserSubscriptionTokenDelta(userSubscriptionId, delta)
@@ -3215,6 +3464,9 @@ func PostConsumeUserSubscriptionDelta(userSubscriptionId int, delta int64) error
 func PostConsumeUserSubscriptionTokenDelta(userSubscriptionId int, delta int64) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
+	}
+	if err := rejectCreditAnonymousSubscriptionDelta(userSubscriptionId); err != nil {
+		return err
 	}
 	if delta == 0 {
 		return nil
@@ -3343,6 +3595,9 @@ func applyConvertedSubscriptionTokenDeltaTx(tx *gorm.DB, source *UserSubscriptio
 func PostConsumeUserSubscriptionAmountDelta(userSubscriptionId int, delta int64) error {
 	if userSubscriptionId <= 0 {
 		return errors.New("invalid userSubscriptionId")
+	}
+	if err := rejectCreditAnonymousSubscriptionDelta(userSubscriptionId); err != nil {
+		return err
 	}
 	if delta == 0 {
 		return nil

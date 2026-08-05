@@ -390,7 +390,10 @@ func TestExternalCreditPurchaseWebhookAndRefundLifecycle(t *testing.T) {
 	assert.Equal(t, int64(1), topUpCount)
 	assert.Equal(t, int64(1), orderCount)
 
-	require.NoError(t, model.PostConsumeUserSubscriptionTokenDelta(existingCreditSubscriptionID, purchasedCredit))
+	require.NoError(t, model.DB.AutoMigrate(&model.SubscriptionPreConsumeRecord{}))
+	consumed, err := model.PreConsumeUserSubscriptionByUnits("external-credit-lifecycle-consume", buyerID, "gpt-4o", 0, 0, purchasedCredit)
+	require.NoError(t, err)
+	require.Equal(t, existingCreditSubscriptionID, consumed.UserSubscriptionId)
 	require.NoError(t, model.DB.First(&balance, existingCreditSubscriptionID).Error)
 	assert.Equal(t, int64(1300), balance.TokenLimit)
 	assert.Equal(t, int64(1100), balance.TokenUsed)

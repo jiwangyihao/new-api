@@ -71,6 +71,7 @@ type SubscriptionFunding struct {
 	creditValuationTracked bool
 	subscriptionId         int
 	preConsumed            int64
+	targetAppliedCredit    int64
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal                int64
 	AmountUsedAfter            int64
@@ -125,6 +126,7 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	s.TokenUsedAfter = res.TokenUsedAfter
 	s.DistributorTokenBilling = res.DistributorTokenBilling
 	s.creditValuationTracked = res.CreditValuationTracked
+	s.targetAppliedCredit = res.AppliedCredit
 	s.concurrencyLimit = res.ConcurrencyLimit
 	s.queueCapacity = res.QueueCapacity
 	s.TokenRemaining = res.TokenRemaining
@@ -142,18 +144,30 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 	return nil
 }
 
-func (s *SubscriptionFunding) settleCreditRequestTarget(targetCredit int64) (bool, error) {
+func (s *SubscriptionFunding) settleCreditRequestTarget(targetCredit int64, final bool) (bool, error) {
 	if s == nil || !s.creditValuationTracked || s.EntitlementType != model.SubscriptionEntitlementCreditBalance {
 		return false, nil
 	}
-	return true, model.SettleCreditRequestTarget(s.requestId, targetCredit, true)
+	if err := model.SettleUserSubscriptionRequestTarget(s.requestId, s.subscriptionId, targetCredit, final); err != nil {
+		return true, err
+	}
+	s.targetAppliedCredit = targetCredit
+	return true, nil
 }
 
 func (s *SubscriptionFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	if s.DistributorTokenBilling {
+	if s.creditValuationTracked && s.EntitlementType == model.SubscriptionEntitlementCreditBalance {
+		target := s.targetAppliedCredit + int64(delta)
+		if (delta > 0 && target < s.targetAppliedCredit) || target < 0 {
+			return model.ErrCreditValuationOverflow
+		}
+		if _, err := s.settleCreditRequestTarget(target, false); err != nil {
+			return err
+		}
+	} else if s.DistributorTokenBilling {
 		if err := model.PostConsumeUserSubscriptionTokenDelta(s.subscriptionId, int64(delta)); err != nil {
 			return err
 		}
@@ -185,6 +199,9 @@ func (s *SubscriptionFunding) Refund() error {
 		return nil
 	}
 	return refundWithRetry(func() error {
+		if handled, err := s.settleCreditRequestTarget(0, true); handled {
+			return err
+		}
 		return model.RefundSubscriptionPreConsume(s.requestId)
 	})
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -61,8 +63,9 @@ type Task struct {
 	Properties Properties            `json:"properties" gorm:"type:json"`
 	Username   string                `json:"username,omitempty" gorm:"-"`
 	// 禁止返回给用户，内部可能包含key等隐私信息
-	PrivateData TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
-	Data        json.RawMessage `json:"data" gorm:"type:json"`
+	PrivateData           TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
+	SubscriptionRequestId *string         `json:"-" gorm:"column:subscription_request_id;type:varchar(64);index:idx_tasks_subscription_request_id"`
+	Data                  json.RawMessage `json:"data" gorm:"type:json"`
 }
 
 func (t *Task) SetData(data any) {
@@ -101,10 +104,11 @@ type TaskPrivateData struct {
 	UpstreamTaskID string `json:"upstream_task_id,omitempty"` // 上游真实 task ID
 	ResultURL      string `json:"result_url,omitempty"`       // 任务成功后的结果 URL（视频地址等）
 	// 计费上下文：用于异步退款/差额结算（轮询阶段读取）
-	BillingSource  string              `json:"billing_source,omitempty"`  // "wallet" 或 "subscription"
-	SubscriptionId int                 `json:"subscription_id,omitempty"` // 订阅 ID，用于订阅退款
-	TokenId        int                 `json:"token_id,omitempty"`        // 令牌 ID，用于令牌额度退款
-	BillingContext *TaskBillingContext `json:"billing_context,omitempty"` // 计费参数快照（用于轮询阶段重新计算）
+	BillingSource         string              `json:"billing_source,omitempty"`          // "wallet" 或 "subscription"
+	SubscriptionId        int                 `json:"subscription_id,omitempty"`         // 订阅 ID，用于订阅退款
+	SubscriptionRequestId string              `json:"subscription_request_id,omitempty"` // Credit 请求级结算身份
+	TokenId               int                 `json:"token_id,omitempty"`                // 令牌 ID，用于令牌额度退款
+	BillingContext        *TaskBillingContext `json:"billing_context,omitempty"`         // 计费参数快照（用于轮询阶段重新计算）
 }
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
@@ -172,39 +176,44 @@ type SyncTaskQueryParams struct {
 func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) *Task {
 	properties := Properties{}
 	privateData := TaskPrivateData{}
-	if relayInfo != nil && relayInfo.ChannelMeta != nil {
-		if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
-			relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
-			privateData.Key = relayInfo.ChannelMeta.ApiKey
+	userID := 0
+	channelID := 0
+	taskID := ""
+	if relayInfo != nil {
+		userID = relayInfo.UserId
+		privateData.SubscriptionRequestId = strings.TrimSpace(relayInfo.RequestId)
+		if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.PublicTaskID != "" {
+			taskID = relayInfo.TaskRelayInfo.PublicTaskID
 		}
-		if relayInfo.UpstreamModelName != "" {
-			properties.UpstreamModelName = relayInfo.UpstreamModelName
+		if relayInfo.ChannelMeta != nil {
+			channelID = relayInfo.ChannelMeta.ChannelId
+			if relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeGemini ||
+				relayInfo.ChannelMeta.ChannelType == constant.ChannelTypeVertexAi {
+				privateData.Key = relayInfo.ChannelMeta.ApiKey
+			}
+			if relayInfo.ChannelMeta.UpstreamModelName != "" {
+				properties.UpstreamModelName = relayInfo.ChannelMeta.UpstreamModelName
+			}
 		}
 		if relayInfo.OriginModelName != "" {
 			properties.OriginModelName = relayInfo.OriginModelName
 		}
 	}
-
-	// 使用预生成的公开 ID（如果有），否则新生成
-	taskID := ""
-	if relayInfo.TaskRelayInfo != nil && relayInfo.TaskRelayInfo.PublicTaskID != "" {
-		taskID = relayInfo.TaskRelayInfo.PublicTaskID
-	} else {
+	if taskID == "" {
 		taskID = GenerateTaskID()
 	}
 
-	t := &Task{
+	return &Task{
 		TaskID:      taskID,
-		UserId:      relayInfo.UserId,
+		UserId:      userID,
 		SubmitTime:  time.Now().Unix(),
 		Status:      TaskStatusNotStart,
 		Progress:    "0%",
-		ChannelId:   relayInfo.ChannelId,
+		ChannelId:   channelID,
 		Platform:    platform,
 		Properties:  properties,
 		PrivateData: privateData,
 	}
-	return t
 }
 
 func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
@@ -356,10 +365,32 @@ func GetByTaskIds(userId int, taskIds []any) ([]*Task, error) {
 	return task, nil
 }
 
-func (Task *Task) Insert() error {
-	var err error
-	err = DB.Create(Task).Error
-	return err
+var ErrTaskSubscriptionRequestProjectionMismatch = errors.New("task subscription request identity projection mismatch")
+
+func (t *Task) prepareSubscriptionRequestProjection() error {
+	if t == nil {
+		return ErrTaskSubscriptionRequestProjectionMismatch
+	}
+	requestID := strings.TrimSpace(t.PrivateData.SubscriptionRequestId)
+	if t.SubscriptionRequestId != nil {
+		projectedRequestID := strings.TrimSpace(*t.SubscriptionRequestId)
+		if projectedRequestID != "" && projectedRequestID != requestID {
+			return ErrTaskSubscriptionRequestProjectionMismatch
+		}
+	}
+	if requestID == "" {
+		t.SubscriptionRequestId = nil
+		return nil
+	}
+	t.SubscriptionRequestId = &requestID
+	return nil
+}
+
+func (t *Task) Insert() error {
+	if err := t.prepareSubscriptionRequestProjection(); err != nil {
+		return err
+	}
+	return DB.Create(t).Error
 }
 
 type taskSnapshot struct {
@@ -394,10 +425,11 @@ func (t *Task) Snapshot() taskSnapshot {
 	}
 }
 
-func (Task *Task) Update() error {
-	var err error
-	err = DB.Save(Task).Error
-	return err
+func (t *Task) Update() error {
+	if err := t.prepareSubscriptionRequestProjection(); err != nil {
+		return err
+	}
+	return DB.Save(t).Error
 }
 
 func (t *Task) UpdateQuota() error {

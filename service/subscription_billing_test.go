@@ -17,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	appLogger "github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/creditbilling"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
@@ -216,7 +217,7 @@ func (l *subscriptionSettleSQLLogger) Trace(ctx context.Context, begin time.Time
 	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
 }
 
-func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
+func TestSubscriptionBillingSettleUsesSingleEntitlementGuardRead(t *testing.T) {
 	truncate(t)
 	const userID = 8051
 	const tokenID = 8052
@@ -239,7 +240,7 @@ func TestSubscriptionBillingSettleAvoidsHotSubscriptionRead(t *testing.T) {
 
 	require.NoError(t, SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{SubscriptionTokens: 28}))
 
-	assert.Equal(t, int64(0), readLogger.reads.Load(), "settlement should use preconsume snapshot and avoid rereading the hot subscription row")
+	assert.Equal(t, int64(1), readLogger.reads.Load(), "timed settlement performs one non-locking entitlement guard read")
 	assert.Equal(t, int64(28), getSubscriptionTokenUsed(t, subID))
 	assert.Equal(t, int64(10), relayInfo.SubscriptionTokenUsedAfterPreConsume)
 	assert.Equal(t, int64(18), relayInfo.SubscriptionPostDelta)
@@ -1839,6 +1840,7 @@ func TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve(t *testing.T) {
 		EndTime:         0,
 		GrantReason:     model.SubscriptionGrantOrder,
 	}).Error)
+	seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-task", "req-credit-task", "subscription_only")
@@ -1866,6 +1868,194 @@ func TestCreditBalanceTaskBillingUsesTokenUnitsAndRefundsReserve(t *testing.T) {
 	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
 	require.NoError(t, model.DB.Select("amount_used").Where("id = ?", subID).First(&sub).Error)
 	require.Equal(t, int64(7), sub.AmountUsed)
+}
+
+func TestCreditBillingSessionRefundUsesStableRequestTarget(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 82911, 82912, 82913, 82914, 82915
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-request-target", 1_000, 0)
+	require.NoError(t, model.DB.Migrator().DropTable(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	t.Cleanup(func() {
+		_ = model.DB.Migrator().DropTable(&model.CreditValuationState{}, &model.CreditValuationMigration{})
+	})
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		Currency:           "CNY",
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+
+	const requestID = "req-credit-target-refund"
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-request-target", requestID, "subscription_only")
+	freezeCreditBillingForServiceTest(t, ctx, relayInfo, channelID, creditbilling.ModeUsageTokens, 0, false)
+	relayInfo.SetEstimatePromptTokens(100)
+	preConsumeForBillingTest(t, ctx, relayInfo, 999)
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+
+	loadRecord := func() model.SubscriptionPreConsumeRecord {
+		var record model.SubscriptionPreConsumeRecord
+		require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&record).Error)
+		return record
+	}
+	require.Equal(t, int64(100), loadRecord().AppliedCredit)
+	require.NoError(t, session.Reserve(150))
+	require.Equal(t, int64(150), loadRecord().AppliedCredit)
+	require.NoError(t, session.SettleSubscriptionIncrement(25))
+	require.Equal(t, int64(175), loadRecord().AppliedCredit)
+
+	session.refundSync()
+	refunded := loadRecord()
+	require.Zero(t, refunded.AppliedCredit)
+	require.Zero(t, refunded.DeductedAvailableCredit)
+	require.Zero(t, refunded.DeductedExactCostMicros)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", subID).First(&state).Error)
+	require.Equal(t, int64(1_000), state.AvailableCredit)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	var requestCount int64
+	require.NoError(t, model.DB.Model(&model.SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Count(&requestCount).Error)
+	require.Equal(t, int64(1), requestCount)
+}
+
+func TestCreditTaskInitialSettlementPersistsNonFinalRequestIdentity(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 82921, 82922, 82923, 82924, 82925
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-task-lifecycle", 1_000, 0)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		Currency:           "CNY",
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+
+	const requestID = "req-credit-task-real-lifecycle"
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-task-lifecycle", requestID, "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatTask
+	relayInfo.RelayMode = relayconstant.RelayModeVideoSubmit
+	relayInfo.OriginModelName = "video-model"
+	relayInfo.SetEstimatePromptTokens(100)
+	preConsumeForBillingTest(t, ctx, relayInfo, 100)
+
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+	require.NoError(t, session.Reserve(150))
+	require.NoError(t, SettleBilling(ctx, relayInfo, 150))
+	var active model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&active).Error)
+	require.Equal(t, int64(150), active.AppliedCredit)
+	require.Equal(t, "consumed", active.Status)
+	require.Zero(t, active.FinalizedAt)
+
+	task := model.InitTask("video", relayInfo)
+	task.TaskID = "task-credit-real-lifecycle"
+	task.Quota = 150
+	task.PrivateData.BillingSource = relayInfo.BillingSource
+	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
+	require.NoError(t, task.Insert())
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	require.Equal(t, requestID, reloaded.PrivateData.SubscriptionRequestId)
+
+	RecalculateTaskQuota(context.Background(), &reloaded, 175, "task poll final")
+	var settled model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&settled).Error)
+	require.Equal(t, int64(175), settled.AppliedCredit)
+	require.Equal(t, "settled", settled.Status)
+	require.Positive(t, settled.FinalizedAt)
+	require.Equal(t, int64(175), getSubscriptionTokenUsed(t, subID))
+
+	var replayedTask model.Task
+	require.NoError(t, model.DB.First(&replayedTask, task.ID).Error)
+	RecalculateTaskQuota(context.Background(), &replayedTask, 175, "task poll final replay")
+	var replayed model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&replayed).Error)
+	require.Equal(t, settled.SettlementVersion, replayed.SettlementVersion)
+	require.Equal(t, settled.FinalizedAt, replayed.FinalizedAt)
+}
+
+func TestCreditTaskFailureRefundReusesInitialBillingRequestIdentity(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 82931, 82932, 82933, 82934, 82935
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-task-refund", 1_000, 0)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		Currency:           "CNY",
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+
+	const requestID = "req-credit-task-real-refund"
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-task-refund", requestID, "subscription_only")
+	relayInfo.RelayFormat = types.RelayFormatTask
+	relayInfo.RelayMode = relayconstant.RelayModeVideoSubmit
+	relayInfo.OriginModelName = "video-model"
+	relayInfo.SetEstimatePromptTokens(100)
+	preConsumeForBillingTest(t, ctx, relayInfo, 100)
+	require.NoError(t, SettleBilling(ctx, relayInfo, 100))
+	var active model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&active).Error)
+	require.Equal(t, "consumed", active.Status)
+	require.Zero(t, active.FinalizedAt)
+
+	task := model.InitTask("video", relayInfo)
+	task.TaskID = "task-credit-real-refund"
+	task.Quota = 100
+	task.PrivateData.BillingSource = relayInfo.BillingSource
+	task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
+	require.NoError(t, task.Insert())
+	var reloaded model.Task
+	require.NoError(t, model.DB.First(&reloaded, task.ID).Error)
+	RefundTaskQuota(context.Background(), &reloaded, "task failed")
+
+	var refunded model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&refunded).Error)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Zero(t, refunded.AppliedCredit)
+	require.Equal(t, int64(0), getSubscriptionTokenUsed(t, subID))
+
+	var replayedTask model.Task
+	require.NoError(t, model.DB.First(&replayedTask, task.ID).Error)
+	RefundTaskQuota(context.Background(), &replayedTask, "task failed replay")
+	var replayed model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&replayed).Error)
+	require.Equal(t, refunded.SettlementVersion, replayed.SettlementVersion)
+	require.Equal(t, refunded.FinalizedAt, replayed.FinalizedAt)
+}
+
+func TestSettleBillingKeepsTimedDistributorTaskTokenInputUnchanged(t *testing.T) {
+	ctx := newBillingTestContext(t)
+	relayInfo := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatTask}
+	session := &BillingSession{funding: &SubscriptionFunding{
+		DistributorTokenBilling: true,
+		EntitlementType:         model.SubscriptionEntitlementTimed,
+	}}
+	relayInfo.Billing = session
+
+	require.NoError(t, SettleBilling(ctx, relayInfo, 175))
+	require.True(t, session.settled)
+	require.Zero(t, session.preConsumedSubscription)
+	require.Zero(t, session.funding.(*SubscriptionFunding).targetAppliedCredit)
 }
 
 func TestTaskBillingMapsMissingSubscriptionWithStructuredError(t *testing.T) {

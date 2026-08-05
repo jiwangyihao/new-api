@@ -34,9 +34,9 @@ func seedCreditBillingRuntime(t *testing.T, userID, tokenID, planID, subID, chan
 	t.Helper()
 	seedRuntimeDistributorBilling(t, userID, tokenID, planID, subID, tokenKey, subLimit, subUsed)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Updates(map[string]any{
-		"entitlement_type":                 model.SubscriptionEntitlementCreditBalance,
-		"credit_balance_configured":        true,
-		"credit_balance_purchase_enabled":  false,
+		"entitlement_type":                  model.SubscriptionEntitlementCreditBalance,
+		"credit_balance_configured":         true,
+		"credit_balance_purchase_enabled":   false,
 		"credit_balance_redemption_enabled": false,
 		"credit_balance_conversion_enabled": false,
 	}).Error)
@@ -46,6 +46,25 @@ func seedCreditBillingRuntime(t *testing.T, userID, tokenID, planID, subID, chan
 		"end_time":         0,
 	}).Error)
 	seedChannel(t, channelID)
+}
+
+func seedReadyCreditValuationForServiceTest(t *testing.T, userID int, subscriptionID int, availableCredit int64) {
+	t.Helper()
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", subscriptionID).Delete(&model.CreditValuationState{}).Error)
+	require.NoError(t, model.DB.Where("version = ?", model.CreditValuationRuleVersion).Delete(&model.CreditValuationMigration{}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subscriptionID,
+		UserId:             userID,
+		AvailableCredit:    availableCredit,
+		UnknownCredit:      availableCredit,
+		Currency:           "CNY",
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
 }
 
 func TestTextFixedRequestChargesConfiguredCreditsOnce(t *testing.T) {
@@ -91,6 +110,7 @@ func TestTextFixedRequestNoTrustedUsageRefundsPreconsume(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subID, channelID = 97511, 97512, 97513, 97514, 97515
 	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-fixed-missing", 1_000, 0)
+	seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-fixed-missing", "req-credit-fixed-missing", "subscription_only")
@@ -132,6 +152,7 @@ func TestTextTrustedZeroUsageDiffersByBillingMode(t *testing.T) {
 			channelID := userID + 400
 			tokenKey := "sk-credit-zero-" + tc.name
 			seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, tokenKey, 1_000, 0)
+			seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
 
 			ctx := newBillingTestContext(t)
 			relayInfo := newBillingTestRelayInfo(userID, tokenID, tokenKey, "req-credit-zero-"+tc.name, "subscription_only")
@@ -176,6 +197,7 @@ func TestTextDynamicMultiplierEnabledAppliesUpstreamMultiplier(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subID, channelID = 97541, 97542, 97543, 97544, 97545
 	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-dynamic-enabled", 1_000, 0)
+	seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
 
 	ctx := newBillingTestContext(t)
 	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-dynamic-enabled", "req-credit-dynamic-enabled", "subscription_only")

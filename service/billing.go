@@ -59,9 +59,9 @@ func codexProAdjustedSubscriptionTokens(relayInfo *relaycommon.RelayInfo, tokens
 }
 
 const (
-	BillingMultiplierSourceNormal                = "normal"
-	BillingMultiplierSourceFreeModel             = "free_model"
-	BillingMultiplierSourceUsageUnavailable      = "usage_unavailable"
+	BillingMultiplierSourceNormal           = "normal"
+	BillingMultiplierSourceFreeModel        = "free_model"
+	BillingMultiplierSourceUsageUnavailable = "usage_unavailable"
 )
 
 func creditBillingInputFromRelayInfo(relayInfo *relaycommon.RelayInfo, hasTrustedUsage bool, rawMeteredTokens int64) creditbilling.CreditBillingInput {
@@ -211,7 +211,7 @@ func SeedNewAPIBillingRelayInfo(relayInfo *relaycommon.RelayInfo, billing dto.Ne
 // 否则回退到旧的 PostConsumeQuota 路径（兼容按次计费等场景）。
 func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuota int) error {
 	input := BillingSettleInput{WalletQuota: actualQuota}
-	if session, ok := relayInfo.Billing.(*BillingSession); ok && !session.IsDistributorTokenBilling() {
+	if session, ok := relayInfo.Billing.(*BillingSession); ok && (!session.IsDistributorTokenBilling() || session.UsesCreditRequestTarget()) {
 		input.SubscriptionTokens = int64(actualQuota)
 	}
 	return SettleBillingWithInput(ctx, relayInfo, input)

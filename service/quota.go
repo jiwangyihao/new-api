@@ -429,15 +429,20 @@ func PostConsumeQuota(relayInfo *relaycommon.RelayInfo, quota int, preConsumedQu
 		}
 		delta := int64(quota)
 		if delta != 0 {
-			if relayInfo.SubscriptionDistributorTokenBilling {
-				err = model.PostConsumeUserSubscriptionTokenDelta(relayInfo.SubscriptionId, delta)
-			} else {
-				err = model.PostConsumeUserSubscriptionAmountDelta(relayInfo.SubscriptionId, delta)
-			}
+			result, err := model.PostConsumeUserSubscriptionRequestDelta(
+				relayInfo.RequestId,
+				relayInfo.SubscriptionId,
+				delta,
+				relayInfo.SubscriptionDistributorTokenBilling,
+			)
 			if err != nil {
 				return err
 			}
-			relayInfo.SubscriptionPostDelta += delta
+			if result.ReplacePostDelta {
+				relayInfo.SubscriptionPostDelta = result.PostDelta
+			} else {
+				relayInfo.SubscriptionPostDelta += result.PostDelta
+			}
 		}
 	} else {
 		return ErrLegacyWalletFundingDisabled

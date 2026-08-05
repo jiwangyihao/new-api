@@ -1,0 +1,50 @@
+# Issue #23 最终 Spec F1/F2 修复状态
+
+## 当前阶段
+
+F1/F2 已实现、验证并提交；最终门禁、SQLite 请求链、三包宽回归与窄 `-race` 全部通过。本文件记录最终可交付状态，提交后向协调者报告。
+
+## 已完成
+
+- F1：版本 1 SHA-256 不可变请求指纹覆盖 user、规范化 model、quota_type、distributor amount；异参/缺失指纹稳定失败关闭，相同参数无写入重放；双连接、`-count=10` 与窄 `-race` 通过。
+- F2：匿名 token/amount helper 对 `credit_balance` 返回 `ErrCreditValuationAnonymousDeltaForbidden` 且零写入；`PostConsumeQuota` 使用稳定 `RequestId`、原 `SubscriptionId` 和不可变 `pre_consumed + delta` 调用 request-aware 累计目标入口，相同调用重放无写入；timed/converted 保持兼容。
+- 生产提交：`2bb68e770`（禁止 Credit 匿名结算）、`45b9d64f4`（保持同步结算重放幂等）。
+- 回归夹具提交：`dc333c928`；仅把旧 Credit 匿名写入夹具迁移到 request-aware/entitlement-guard 合同。
+- 最终聚焦 request/coalescer/Task/cleanup/double-count 正则、真实 SQLite 请求链、F1/F2 `-count=10`、相关窄 `-race` 均 PASS。
+- `go test ./model ./service ./controller -count=1` PASS；修改 Go 文件已 `gofmt`；`git diff --check` PASS。
+
+## 验收映射
+
+- Issue #23 AC1：预扣数量/估值/请求指纹同事务；四类冲突、缺指纹、重放和双连接验证通过。
+- AC2–6：既有累计 target、快照恢复、欠额、absorbed、coalescer 聚焦回归通过。
+- AC7：Credit 匿名 helper 失败关闭；`PostConsumeQuota` request-aware；timed/converted 明确兼容。
+- AC8–12：Task identity、conversion seam、cleanup、错误回滚和并发/race 聚焦回归通过。
+- #22 冻结 800 available / 32 CNY tracer 与五接口仍由三包宽回归覆盖通过；未实现 #24–#28。
+
+## 未运行范围
+
+- 未运行真实 MySQL 5.7/PostgreSQL 9.6、全项目测试或部署；三数据库零 SKIP 留给 #27，发布留给 #28。
+- #26 seam 保持 `original_subscription_id + valuation_subscription_id + request_id`，未实现转换单位价值、FX 或虚拟快照。
+
+## 最近安全提交
+
+- `07801e667`：F1 版本化不可变请求指纹与验证。
+- `0ba04adfb`：记录 F1 clean 安全点。
+- `2bb68e770`：禁止 Credit 匿名结算并迁移 `PostConsumeQuota`。
+- `45b9d64f4`：修复 `PostConsumeQuota` 相同调用重放累加。
+- `dc333c928`：迁移 Credit 结算回归夹具。
+- 最终状态与证据：本文件所在提交。
+
+## F2 post-delta 重放 blocker 收敛
+
+- 冻结候选 `3cc5608f88b395057efc7abac04b93965866c1aa` 上新增同一 `RelayInfo`、同一 `request_id`、相同 `PostConsumeQuota(relayInfo, 50, 100, false)` 第二次调用后的可观察合同；旧实现精确 RED 为 `SubscriptionPostDelta` 期望 50、实际 100，且其前面的 request record、权益、估值状态三份数据库不变断言均通过。
+- 最小修复仅调整 `PostConsumeQuota` Credit 分支：继续以 `record.PreConsumed + delta` 调用 `SettleUserSubscriptionRequestTarget(..., false)`，成功后令 `SubscriptionPostDelta = target - record.PreConsumed`；非 Credit 分支保留 `+= delta`。
+- 单次、`-count=10` 与窄 `-race` 三条指定聚焦命令均 PASS；详细 RED/GREEN 与未运行边界见 `f2-post-delta-replay-evidence.md`。
+
+## Standards M1 模型接缝收敛
+
+- 固定 `a72fe0416f30230971701fa8e36f6c42d1d0c998` 基线上，将 `PostConsumeQuota` 的 entitlement、request record、GORM 与 target 计算下沉到 `model.PostConsumeUserSubscriptionRequestDelta`；Service 只传递业务参数、传播 Model 错误，并按结果替换 Credit 稳定 post-delta 或累加非 Credit delta。
+- Credit 仍以真实 `RequestId`、原 `SubscriptionId` 和不可变 `record.PreConsumed + delta` 调用 `SettleUserSubscriptionRequestTarget(..., false)`；缺 request、映射冲突、负 target、溢出及既有 target sentinel 均稳定传播并保持零写入。
+- 公开 Model tracer 通过真实 SQLite 覆盖 100 预扣 + 50 post delta、相同调用重放三对象不变、错误零写入与 timed distributor 兼容；现有 Service 测试继续守住首次及重放后的 `SubscriptionPostDelta == 50`。
+- tracer 单次与 `-count=10`、Service 重放 `-count=10`、四合同组合 `-count=10`、两项窄 `-race`、`go test ./model ./service -count=1` 均 PASS；本次 Go 文件已 `gofmt`，`git diff --check` PASS。详见 `standards-m1-model-seam-evidence.md`。
+- 按 M1 边界未运行 controller、全项目、前端、真实 MySQL/PostgreSQL、服务或部署；未改变 `final=false`、通知、违规费、退款、`BillingSession`、coalescer、schema、缓存、锁、重试或 #24–#28。

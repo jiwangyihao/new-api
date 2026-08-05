@@ -396,3 +396,42 @@ func TestRedemptionCreditBalanceReplaysExactResultAndRejectsSourceConflict(t *te
 	require.NoError(t, db.First(&balance, first.CreditBalance.UserSubscriptionId).Error)
 	require.Equal(t, int64(1_000), balance.TokenLimit)
 }
+
+func TestRedemptionCreditBalanceOffsetsDebtBeforeExactValue(t *testing.T) {
+	tests := []struct {
+		name          string
+		debt          int64
+		wantNetCredit int64
+		wantNetMicros int64
+		wantDebtAfter int64
+	}{
+		{name: "partial debt", debt: 300, wantNetCredit: 700, wantNetMicros: 28_000_000},
+		{name: "full debt", debt: 1_200, wantNetCredit: 0, wantNetMicros: 0, wantDebtAfter: 200},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, userID, _, _ := seedRedemptionCreditPositiveIngress(t, test.debt)
+
+			result, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, result.CreditBalance)
+			require.Equal(t, int64(1_000), result.CreditBalance.GrossCredit)
+			require.Equal(t, test.wantNetCredit, result.CreditBalance.NetCredit)
+			require.Equal(t, int64(40_000_000), result.CreditBalance.GrossAmountMicros)
+			require.Equal(t, test.wantNetMicros, result.CreditBalance.NetAmountMicros)
+			require.Equal(t, test.wantDebtAfter, result.CreditBalance.SettlementDebt)
+			var state CreditValuationState
+			require.NoError(t, db.First(&state, result.CreditBalance.UserSubscriptionId).Error)
+			require.Equal(t, test.wantNetCredit, state.AvailableCredit)
+			require.Equal(t, test.wantNetMicros, state.ExactCostMicros)
+			require.Zero(t, state.EstimatedCostMicros)
+			require.Zero(t, state.UnknownCredit)
+			var ledger CreditBalanceLedger
+			require.NoError(t, db.First(&ledger, result.CreditBalance.LedgerId).Error)
+			require.Equal(t, test.debt-test.wantDebtAfter, ledger.DebtOffset)
+			require.Equal(t, test.wantNetCredit, ledger.NetCredit)
+			require.Equal(t, test.wantNetMicros, ledger.ValuationNetCostMicros)
+		})
+	}
+}

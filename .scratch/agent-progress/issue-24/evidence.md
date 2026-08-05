@@ -55,3 +55,10 @@
 - RED 结果：底层已经发现 `credit_valuation_idempotency_mismatch`，但 `Redeem` 把它折叠成 `redeem.failed`，违反稳定 code/sentinel 合同。
 - GREEN：同一命令通过，`go test: 1 packages ok`，约 15.03 秒。
 - 行为：同一兑换重放复用原 ledger ID 与 state version；将已冻结来源价格从 40 CNY 篡改为 80 CNY 并重开来源后返回稳定 mismatch，ledger 仍仅一行、state version 仍为 1、exact cost 仍为 `40,000,000`、余额仍为 1,000。
+
+### 兑换 settlement debt 优先抵扣
+
+- GREEN：`go test ./model -run TestRedemptionCreditBalanceOffsetsDebtBeforeExactValue -count=1` → `go test: 1 packages ok`，约 16.98 秒；#22 深模块已实现该不变量，本组新增真实兑换入口证明，无需额外生产改动。
+- 部分抵债：300 debt + 1,000 Credit 得到 net 700、`28,000,000` micros exact、debt 归零。
+- 全额抵债：1,200 debt + 1,000 Credit 得到 net 0、净成本 0、剩余 debt 200；毛成本仍冻结为 `40,000,000` micros。
+- 两例均保持 estimated/unknown 为 0，ledger 的 `debt_offset`、`net_credit`、`valuation_net_cost_micros` 与状态一致。

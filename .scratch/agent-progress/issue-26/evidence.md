@@ -134,3 +134,10 @@
 回归命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors|FreezesDirectionalRatios)" -count=1`
 
 真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 和 `git diff --check` 同时通过；未进入 C 组或 conversion。
+
+## 2026-08-05 — B 组 GREEN 安全点校准
+
+- B 组独立 RED：`b9b3098c9`（`test(issue-26): 固化 FX 方向冻结 RED`）。
+- B 组独立 GREEN：`c4d419e0e`（`feat(issue-26): 冻结 FX 双向比率快照`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 到达的“继续 B 组”指令晚于上述提交，因此未重复制造同一 RED；按其禁止范围保持不进入 C 组或 conversion。

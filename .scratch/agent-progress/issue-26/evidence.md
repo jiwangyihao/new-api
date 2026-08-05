@@ -174,3 +174,10 @@
 - C 组独立 GREEN：`5318e5cc2`（`feat(issue-26): 实现 FX 整数安全换算`）。
 - GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
 - FX A/B/C 已形成完整定向 seam；下一条行为周期进入 timed conversion Quote 冻结估值，暂不展开 Confirm、request、API 或 UI。
+
+## 2026-08-05 — FX 向量交接就绪
+
+- FX A/B/C 已全部完成：非法输入稳定错误、同币种 `1/1`、USD↔CNY 严格倒数、确定性/冻结快照，以及 overflow-safe 整数 floor。
+- 最后业务 GREEN：`5318e5cc2`；随后安全点校准：`fd6d316f7`。
+- 协调器明确撤销继续探索 conversion Quote 的方向；此前仅做定向查看，未修改 conversion、request、API 或 UI 文件。
+- 当前恢复阶段固定为 `FX_VECTORS_HANDOFF_READY`；提交本校准并确认 clean 后停止，等待新的显式派发。

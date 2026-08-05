@@ -348,8 +348,17 @@ go test -race ./model -run '^TestCreditRequestTargetCoalescerPreservesEnqueueOrd
 
 已发现缺口：提交 `4224f3b57` 只把请求目标排队后逐项调用 `settleUserSubscriptionRequestTargetDirect`，每项仍开启独立事务。它证明了身份、顺序和逐请求返回，但没有满足“一次 flush 共享同一事务”的冻结合同；原测试也没有覆盖中间失败归属。该提交不得视为完整 GREEN，下一纠正提交必须在一个 `DB.Transaction` 内按稳定顺序加载 route 并调用 `SettleCreditRequestTargetTx`，再逐项回写实际结果。
 
-### 纠正 RED：共享事务与中间失败归属
-共享事务观察 RED：首轮实现一次 flush 使用两个事务，断言 `expected: 1, actual: 2`。中间失败归属 RED：测试引用尚不存在的 `ErrCreditValuationBatchRolledBack`，证明实现未定义“整批回滚但仅失败项保留原领域错误”的逐项结果合同。
+### 纠正 RED：共享事务中间失败归属
+可复现命令：
+```text
+go test ./model -run '^TestCreditRequestTargetCoalescerRollsBackBatchAndAttributesMiddleFailure$' -count=1
+```
+真实关键输出：
+```text
+undefined: ErrCreditValuationBatchRolledBack
+FAIL github.com/QuantumNous/new-api/model [build failed]
+```
+结论：首轮实现未定义共享事务失败时的逐请求结果；测试要求实际失败项保留原领域错误，所有因整批事务回滚而未提交的其他项返回稳定 `ErrCreditValuationBatchRolledBack`。未把未观察到的事务池计数作为证据。
 
 ### 纠正 GREEN：单事务稳定顺序与整批回滚结果
 定向命令：

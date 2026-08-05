@@ -97,3 +97,11 @@
 真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXRateMissing`、`ErrCreditFXRateEmpty`、`ErrCreditFXInvalidDecimal`、`ErrCreditFXPrecisionExceeded`、`ErrCreditFXNonPositive`、`ErrCreditFXUnsupportedCurrency`、`ErrCreditFXDirectionMismatch` 以及 `CreditFXRateSnapshotInput.Direction` 尚不存在。
 
 结论：A 组 RED 对稳定错误分类与显式方向合同敏感；下一步只实现这些缺失行为，不涉及 identity、反向换算、floor 或 overflow。
+
+## 2026-08-05 — A 组非法输入 GREEN
+
+最小实现新增并分类 `ErrCreditFXRateMissing`、`ErrCreditFXRateEmpty`、`ErrCreditFXInvalidDecimal`、`ErrCreditFXPrecisionExceeded`、`ErrCreditFXNonPositive`、`ErrCreditFXUnsupportedCurrency`、`ErrCreditFXDirectionMismatch`，并增加可选显式 `Direction` 输入校验。未实现 B 组 identity/反向或 C 组 floor/overflow。
+
+命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。随后 `gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 均成功；按 Go 1.22 规则将纯计数循环改为 `range len(part)` 后再次运行同一测试，仍为 GREEN。

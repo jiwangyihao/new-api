@@ -48,3 +48,10 @@
 - RED 结果：真实 `Redeem` 事务返回 `credit_valuation_source_required`（外层稳定 `redeem.failed`），证明兑换尚未把冻结来源事实交给 #22 ingress。
 - GREEN：同一命令通过，`go test: 1 packages ok`，约 14.43 秒。
 - 行为：`40 CNY / 1,000 Credit` 兑换经真实 SQLite 入口形成 1,000 gross/net Credit、`40,000,000` gross/net micros CNY、exact state version 1；ledger 结构化保存 `redemption:93004`、plan、价格、Credit 分母、1:1 FX、规则版本和参数指纹，档位改为 80 CNY 后历史 fulfillment/ledger/state 仍为 40 CNY。
+
+### 兑换重放与来源冲突
+
+- RED：`go test ./model -run TestRedemptionCreditBalanceReplaysExactResultAndRejectsSourceConflict -count=1`。
+- RED 结果：底层已经发现 `credit_valuation_idempotency_mismatch`，但 `Redeem` 把它折叠成 `redeem.failed`，违反稳定 code/sentinel 合同。
+- GREEN：同一命令通过，`go test: 1 packages ok`，约 15.03 秒。
+- 行为：同一兑换重放复用原 ledger ID 与 state version；将已冻结来源价格从 40 CNY 篡改为 80 CNY 并重开来源后返回稳定 mismatch，ledger 仍仅一行、state version 仍为 1、exact cost 仍为 `40,000,000`、余额仍为 1,000。

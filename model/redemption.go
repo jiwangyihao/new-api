@@ -570,7 +570,8 @@ func isPublicRedemptionError(err error) bool {
 		errors.Is(err, ErrRedemptionModeInvalid) ||
 		errors.Is(err, ErrCreditBalanceRedemptionUnavailable) ||
 		errors.Is(err, ErrRedemptionPlanIneligible) ||
-		errors.Is(err, ErrRedemptionAlreadyUsed)
+		errors.Is(err, ErrRedemptionAlreadyUsed) ||
+		errors.Is(err, ErrCreditValuationIdempotencyMismatch)
 }
 
 func freezeRedemptionSourceSnapshotTx(tx *gorm.DB, redemption *Redemption) (*SubscriptionPlan, error) {

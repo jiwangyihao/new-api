@@ -353,3 +353,46 @@ func TestRedemptionCreditBalanceFreezesExactTierSnapshot(t *testing.T) {
 	require.NoError(t, db.First(&state, result.CreditBalance.UserSubscriptionId).Error)
 	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
 }
+
+func TestRedemptionCreditBalanceReplaysExactResultAndRejectsSourceConflict(t *testing.T) {
+	db, userID, _, redemptionID := seedRedemptionCreditPositiveIngress(t, 0)
+
+	first, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.NoError(t, err)
+	require.NotNil(t, first)
+	require.NotNil(t, first.CreditBalance)
+
+	replay, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.NoError(t, err)
+	require.NotNil(t, replay)
+	require.True(t, replay.Replayed)
+	require.Equal(t, first.CreditBalance.LedgerId, replay.CreditBalance.LedgerId)
+	require.Equal(t, first.CreditBalance.ValuationStateVersionAfter, replay.CreditBalance.ValuationStateVersionAfter)
+
+	var saved Redemption
+	require.NoError(t, db.First(&saved, redemptionID).Error)
+	var fulfillment RedemptionFulfillmentSnapshot
+	require.NoError(t, common.UnmarshalJsonStr(saved.FulfillmentSnapshot, &fulfillment))
+	conflictingPriceMicros := int64(80_000_000)
+	fulfillment.Entitlement.ListPriceMicros = &conflictingPriceMicros
+	conflictingPayload, err := common.Marshal(fulfillment)
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&Redemption{}).Where("id = ?", redemptionID).Updates(map[string]any{
+		"status": common.RedemptionCodeStatusEnabled, "fulfillment_snapshot": string(conflictingPayload),
+	}).Error)
+
+	conflict, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.Nil(t, conflict)
+	require.ErrorIs(t, err, ErrCreditValuationIdempotencyMismatch)
+
+	var ledgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceRedemption, redemptionID).Count(&ledgerCount).Error)
+	require.Equal(t, int64(1), ledgerCount)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, first.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(1), state.StateVersion)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+	var balance UserSubscription
+	require.NoError(t, db.First(&balance, first.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(1_000), balance.TokenLimit)
+}

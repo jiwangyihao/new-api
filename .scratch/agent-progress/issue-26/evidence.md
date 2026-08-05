@@ -293,3 +293,10 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 窄竞态命令：`go test -race ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=1`
 
 真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion_valuation_test.go` 与 `git diff --check` 均成功；未扩展不同 source、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 并发安全点校准与在途 RED 启动
+
+- conversion 并发验证已提交为 `3d2baf4c7`（`test(issue-26): 验证转换并发幂等`）。
+- 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 当前阶段切换为 `INFLIGHT_REQUEST_RED`：仅创建一条 public reserve → conversion → final settle 的真实 SQLite 确定性交错 RED。
+- RED 必须断言 original subscription_id/request deduction snapshot 保持、不重定向 Credit、不重复扣减，以及 conversion 后新请求才进入 Credit；本阶段不实现 GREEN、refund/并发扩展或 API/UI。

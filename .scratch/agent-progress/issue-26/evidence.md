@@ -80,3 +80,10 @@
 真实结果：`ok github.com/QuantumNous/new-api/model`。
 
 格式化：`gofmt -w model/credit_fx_rate.go` 成功且无输出。当前周期未扩展非法矩阵、identity、反向换算、floor、overflow、conversion、API 或 UI。
+
+## 2026-08-05 — 首个 GREEN 安全点校准
+
+- 独立 RED：`58866ae7b`（`test(issue-26): 固化 FX 快照解析首个 RED`）。
+- 独立 GREEN：`bb399d868`（`feat(issue-26): 实现 FX 快照规范解析`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步按协调器收敛顺序执行：A 非法输入 → B identity/反向 → C floor/overflow；每组独立 RED→GREEN，期间暂停 conversion、request、API/UI。

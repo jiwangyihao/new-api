@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-兑换同币种冻结快照、精确入账、完整来源幂等、debt offset、事务回滚和邀请隔离均已 GREEN，下一步仅保留跨币种最小 RED 与 `CreditFXRateSnapshot` 接口需求。
+全部无 FX 兑换范围已 GREEN；跨币种期望已形成最小 RED，并以等待 #26 `CreditFXRateSnapshot` 的跳过合同保留，下一步只运行定向回归并 clean HANDOFF_READY。
 
 ## 已完成
 
@@ -22,11 +22,12 @@
 - 已通过 SQLite ledger trigger 证明兑换来源终态、余额、估值状态、ledger 与日志整笔回滚；兑换记录恢复为未使用且保留原始冻结快照。
 - 已通过现有服务纵切证明 Credit 兑换不创建邀请奖励事件、佣金记录/账户，也不计入邀请付费资格。
 - 已保持 #27 marker 未 ready 的历史基线：缺少精确估值事实时不在 #24 创建半可信状态；marker ready 后 `GrantCreditBalanceTx` 仍对 nil source 失败关闭。
+- 已保留跨币种最小可执行合同：CNY 来源、USD 估值必须消费冻结的有理数 FX 快照并返回结构化 FX；当前因 #22 仅支持同币种而真实 RED，未在 #24 实现 parser/provider/Option。
 
 ## 下一步
 
-1. 写跨币种最小 RED/`CreditFXRateSnapshot` 接口需求。
-2. 运行本切片定向回归，更新 progress 并 clean HANDOFF_READY。
+1. 运行本切片定向回归与 `git diff --check`。
+2. 更新最终证据和提交列表，clean HANDOFF_READY。
 
 ## 阻塞
 
@@ -43,4 +44,5 @@
 - 兑换同币种冻结快照安全提交：`32d55638e`。
 - 兑换幂等安全提交：`a41fcdcc8`。
 - 兑换 debt offset 安全提交：`a33f6f012`。
-- 兑换回滚/邀请隔离 GREEN 待提交。
+- 兑换回滚/邀请隔离安全提交：`9345fd18a`。
+- 跨币种最小 RED/接口需求待提交。

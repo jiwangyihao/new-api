@@ -70,3 +70,10 @@
 - 初次邀请隔离 RED：`go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1` 因历史非-ready Credit 池未设置 valuation currency 而返回 `credit_valuation_currency_required`，暴露 #24 不应提前改变 #27 marker 前基线。
 - GREEN：兼容非-ready 快照后，`go test ./model -run 'TestRedemptionCreditBalance(FreezesExactTierSnapshot|ReplaysExactResultAndRejectsSourceConflict|OffsetsDebtBeforeExactValue)' -count=1 && go test ./service -run 'TestCreditFulfillmentPathsDoNotCreateInvitationBenefits/Credit_redemption' -count=1` → 两个 package 均通过，约 38.20 秒。
 - 隔离行为：Credit 兑换后 invitation reward event、commission record、commission account 均为 0；邀请月度资格只统计独立 timed paid control，不把 Credit 兑换计入 qualified paid。
+
+### 跨币种最小 RED（等待 #26）
+
+- RED：`go test ./model -run TestRedemptionCreditBalanceCrossCurrencyRequiresFrozenFXSnapshot -count=1`。
+- RED 结果：CNY 来源档位、USD Credit 估值池经真实 `Redeem` 入口命中 `credit_valuation_unsupported_currency`（外层 `redeem.failed`）；证明 #22 当前没有可消费的冻结 FX 快照接缝。
+- 期望合同：成功响应必须保留 source=`CNY`、valuation=`USD` 及正 numerator/denominator/captured_at；测试以显式 `t.Skip` 保留，待 #26 提供唯一 `CreditFXRateSnapshot` 后移除跳过并 GREEN。
+- 本切片未实现 FX parser/provider/Option、动态汇率或 conversion 生命周期，也未把该 RED 误报为通过。

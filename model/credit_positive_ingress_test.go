@@ -461,3 +461,22 @@ func TestRedemptionCreditBalanceLedgerFailureRollsBackEverything(t *testing.T) {
 		require.Zero(t, count)
 	}
 }
+
+func TestRedemptionCreditBalanceCrossCurrencyRequiresFrozenFXSnapshot(t *testing.T) {
+	t.Skip("RED: requires Issue #26 CreditFXRateSnapshot ingress seam")
+	db, userID, _, _ := seedRedemptionCreditPositiveIngress(t, 0)
+	valuationCurrency := "USD"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		Update("valuation_currency", valuationCurrency).Error)
+
+	result, err := Redeem("credit-positive-redemption", userID, RedemptionModeCreditBalance)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.CreditBalance)
+	require.Equal(t, "CNY", result.CreditBalance.SourceCurrency)
+	require.Equal(t, "USD", result.CreditBalance.ValuationCurrency)
+	require.Positive(t, result.CreditBalance.FxRateNumerator)
+	require.Positive(t, result.CreditBalance.FxRateDenominator)
+	require.Positive(t, result.CreditBalance.FxCapturedAt)
+}

@@ -58,6 +58,12 @@
 - ingress 先抵扣 settlement debt；只有 `net_credit` 与 `floor(gross_cost × net_credit / gross_credit)` 进入 exact 状态。
 - 同币种 FX 固定 `1/1`。CNY/USD 跨币种等待 #26 的唯一 `CreditFXRateSnapshot` seam；#24 不复制 parser/provider。
 
+### 跨币种接缝需求（交接 #26）
+
+#24 只声明消费者需求，不实现类型、provider、Option 或生命周期。#26 应提供唯一不可变 `CreditFXRateSnapshot`，至少包含 `source_currency`、`valuation_currency`、正整数 `numerator`/`denominator` 与正 `captured_at`；快照语义为 `floor(source_amount_micros × numerator / denominator)` 得到估值币种 micros。
+
+普通 Credit ingress 的最窄接缝应允许 `CreditValuationSourceSnapshot` 携带上述冻结快照；同币种继续使用 `1/1`，跨币种只允许 CNY/USD 且必须有完整快照。兑换和管理员 increase 只消费调用时已冻结的快照并把全部字段纳入参数指纹、ledger、响应与重放校验，不负责查汇率、解析配置或动态重估；缺失/零分母/币种对不匹配必须稳定失败并整笔回滚。
+
 ## 结构化 ledger 字段
 
 至少保存：

@@ -389,3 +389,11 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功。
 - 提交后 `git status --short` 无输出：staged、unstaged、untracked 均为 0。
 - 阶段保持 `INFLIGHT_CONCURRENCY_HANDOFF_READY`；未修改生产代码，未进入 API/UI、#24/#25/#27/#28、MySQL/PostgreSQL、全仓测试或部署。
+
+## 2026-08-06 — 最终交付从 kernel_unavailable 原地恢复
+
+- Git 冻结起点：`git status --short --branch` 观测分支 `jiwangyihao/issue-26-conversion-fx`，staged/unstaged/untracked 均为 `0`；`git rev-parse HEAD` 为 `c709ccb2c375031eabf43703334dffd44b39856a`。
+- Orca 运行态：`orca status --json` 返回 runtime `ready`、Orca `1.4.170`；`orca worktree current --json` 返回同一 HEAD，`parentWorktreeId` 仍为 `credit-operational-value-integration` 工作树。
+- 可见 UI 判定为“存在”：`web/default/src/pages/wallet/index.tsx` 挂载 `TimedSubscriptionConversionQuotesCard`；`web/default/src/features/subscription-conversion/` 已实现 quote API、confirm API、31 日块 BigInt live quote、preview/confirm 与 conversion history；`web/default/src/features/admin-analytics/` 已实现 conversion summary/history 面板。后续只做现有路径必要验收/纵向补齐，禁止为 browser 另建 UI。
+- 后端现有入口：`GET /api/subscription/self/conversion-quotes`、`POST /api/subscription/self/conversions`、`GET /api/admin/analytics/subscription-conversion`，以及同页使用的 subscription drilldown/history。恢复时尚未宣称现有 DTO 已完整暴露冻结 price/currency/FX/micros/rule version；该项必须由真实 API tracer 与浏览器结果决定。
+- 当前有效 task/dispatch：`task_f80f4a22a9be` / `ctx_d834ee4a8128`。下一步先运行既有 quote/confirm route tracer，再对 history 与五个运营分析 API 做真实 SQLite 验收。

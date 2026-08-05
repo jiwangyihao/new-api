@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`INFLIGHT_CONCURRENCY_HANDOFF_READY`；真实文件 SQLite WAL 双连接 conversion ↔ final settle/full refund 两类 deterministic barrier 均由现实现直接 GREEN，无生产代码修改。
-- 最近 clean SHA：`0409df31d8b6723cdcafe6b7aba7e29c289fae92`（`test(issue-26): 验证转换结算双连接串行化`）。
+- 阶段：`API_BROWSER_FINAL_DELIVERY_RECOVERED`；从 `kernel_unavailable` 原地恢复，已确认现有钱包 conversion quote/confirm/history 与管理员 conversion analytics 是 #26 可见产品路径，禁止新建第二套 UI。
+- 最近 clean SHA：`c709ccb2c375031eabf43703334dffd44b39856a`（最终交付冻结起点）。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,29 +11,25 @@
 
 ## 下一条命令
 
-等待协调器下一阶段指令；本阶段不进入 API/UI 或其他范围。
+`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays)" -count=1`
 
-并发验证已提交：
-
-- `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`：PASS。
-- `go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`：PASS。
-- `go test -race ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`：PASS。
+恢复后执行顺序：现有 quote/confirm/history/analytics API 真实 SQLite 路由 → 必要 DTO/UI 纵向补齐（若观察到缺口，严格 TDD）→ 聚焦回归/race → 前端测试/typecheck/build/i18n → 真实应用与 Orca Chromium 验收 → Gate A–G 汇总与资源清理。
 
 ## 未提交文件
 
-- 无；提交 `0409df31d` 后 staged、unstaged、untracked 全零。
+- 无；冻结起点 `c709ccb2c` 的 staged、unstaged、untracked 全零。
 
 ## 上下文风险
 
-- 当前有效 Dispatch：task `task_b6c2c840cda6`、dispatch `ctx_cdf46ee2f559`；只通过注入的 Orca orchestration capability 与协调器通信。
-- 基线后的两条提交仅为 Issue #26 调度/恢复文档；Issue #26 首个 FX parser 已在后续 `58866ae7b` RED 与 `bb399d868` GREEN 中落地。
-- 协调器已显式恢复 conversion 冻结纵切，覆盖此前 `FX_VECTORS_HANDOFF_READY` 停止指令。
-- parser/provider 是唯一运行时 FX seam，禁止触碰 `float64 USDExchangeRate`。
-- 根因：timed reserve 只记录 source attribution/PreConsumed；conversion 未把它映射为可由 request-aware settle 识别的虚拟 exact deduction snapshot，导致 `AppliedCredit=0`。
+- 当前有效 Dispatch：task `task_f80f4a22a9be`、dispatch `ctx_d834ee4a8128`；只通过注入的 Orca orchestration capability 与协调器通信。
+- Orca runtime `ready`（`1.4.170`）；当前 worktree HEAD 与 Git 一致，parentWorktreeId 仍严格指向 `credit-operational-value-integration`。
+- 现有可见 UI：`web/default/src/pages/wallet/index.tsx` 挂载 `TimedSubscriptionConversionQuotesCard`；组件展示 31 日块公式、quote preview/confirm 与 conversion history；`features/admin-analytics` 提供 conversion summary/history。
+- 是否已完整展示冻结精确价格/currency/FX/micros/rule version 仍需通过 DTO、真实 API 与浏览器验收判定；若缺失，只补既有 API/UI 纵切，不创建新 UI。
+- parser/provider 是唯一运行时 FX seam，禁止触碰 `float64 USDExchangeRate`；冻结 conversion 与在途 settlement 合同不得重写或“优化”。
 
 ## 恢复入口
 
-1. 运行 `git status --short --branch`，确认分支与 clean/预期未提交文件。
-2. 读取本目录 `contract.md`、`status.md`、`evidence.md`。
-3. 最近 clean 安全点为 `85660501c`（`feat(issue-26): 固化在途请求虚拟快照`）。
-4. GREEN 只覆盖 reserve → conversion → final settle 及 conversion 后新 request；refund 与双连接串行化仍未完成。
+1. 运行 `git status --short --branch` 与 `git rev-parse HEAD`，确认冻结起点 `c709ccb2c375031eabf43703334dffd44b39856a` clean。
+2. 读取本目录 `contract.md`、`status.md`、`evidence.md`；不要重新探索规范。
+3. 现有产品路径已判定为钱包 conversion quote/confirm/history 与管理员 conversion analytics；不得新建第二套 UI。
+4. 下一步从真实 SQLite route tracer 开始，按本文件“下一条命令”执行。

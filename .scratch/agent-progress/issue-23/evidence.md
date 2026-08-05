@@ -414,30 +414,36 @@ FAIL github.com/QuantumNous/new-api/service [build failed]
 ```
 结论：旧 Task 缺字段时尚无基于数据库主键的确定性身份；无法证明重启稳定或同 subscription 多 Task 隔离。
 
-### GREEN：持久身份、legacy 隔离与生命周期重放
-定向命令：
-```text
-go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
-go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=10
-go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID)$' -count=1
-```
-关键输出：三条命令均为 `go test: 1 packages ok`。`InitTask` 在 `TaskRelayInfo`、`ChannelMeta` 等嵌套私有数据为空时安全构造 Task，并把新 Task 的 `request_id` 持久化为 `subscription_request_id`；成功 final、失败 refund 及数据库重载后的重放都复用该身份。
-
-同 subscription 多 Task 隔离由 `TestLegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey` 的既有最小断言覆盖：两个相同 subscription 的 legacy Task 持久化后得到不同的 `legacy-task:<task_pk>`，首个 Task 重载后身份保持相同。未新增第五个测试。
-
-Task 初始 `BillingSession` 对 Credit Task 使用 `final=false`，后续追加、成功 final 或失败 refund 均由持久请求身份提交累计目标；普通 timed Task 分支未改。
-
-### 格式与空白检查
+### RED 3：成功终态相同目标未 final
 命令：
 ```text
-gofmt -w model/task.go service/billing_session.go service/task_billing.go service/task_billing_test.go
+go test ./service -run '^TestCreditTaskSuccessFinalAndReplayReusePersistedRequestID$' -count=1
+```
+关键输出：期望 `settled`，实际 `consumed`。根因是 `quotaDelta == 0` 提前返回，轮询成功无法用相同 request ID 把持久请求记录推进终态。
+
+### RED 4：legacy Task 缺请求记录绕过深模块
+命令：
+```text
+go test ./service -run '^Test(LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections)$' -count=1
+```
+关键输出：legacy 请求 `record not found`；既有非 ready 匿名兼容测试期望 `token_used=140`、实际为 `100`。
+
+### GREEN：持久身份、legacy 隔离与生命周期重放
+- 新 Task JSON 保留提交 request ID；legacy Task 仅从持久化主键形成 `legacy-task:<id>`，反序列化后不变且同 subscription 的 Task 身份互异。
+- Credit Task 重算和失败退款使用 `request_id + target + final=true`；相同目标也进入深模块完成终态，成功/失败重放不增加版本或重复改数量。
+- 窄 `SettleLegacyCreditTaskRequestTarget` 采用固定锁序：目标 `UserSubscription` → `CreditValuationState` → request record。缺失记录以 unknown 活动快照建立兼容路由；追加按当前池出账，退款/重放继续走 request-aware 深模块。
+- legacy 首次创建使用 request ID 唯一键 `ON CONFLICT DO NOTHING`，随后锁记录并验证不可变参数；同 request 并发重放稳定幂等，参数冲突返回领域 sentinel 且原子回滚。
+- 非 ready 时保留既有匿名 Task 兼容；未伪造估值状态。
+
+### Task identity 最终定向验证
+命令：
+```text
+go test ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections)$' -count=10
+go test -race ./service -run '^Test(CreditTaskPersistsSubscriptionRequestIDAcrossReload|LegacyCreditTaskRequestIDUsesPersistentTaskPrimaryKey|LegacyCreditTaskConcurrentReplayIsAtomic|LegacyCreditTaskReplayConflictIsAtomic|CreditTaskSuccessFinalAndReplayReusePersistedRequestID|CreditTaskFailureRefundAndReplayReusePersistedRequestID|CreditBalanceTaskBillingAdjustsTokenUsedBothDirections)$' -count=1
 git diff --check
 ```
-关键输出：`git diff --check` 无输出，检查通过。
+关键输出：`count=10: 1 packages ok`；`-race: 1 packages ok`；`git diff --check` 无输出。覆盖新 Task JSON 重启稳定、legacy 主键确定身份、同 subscription 多 Task 隔离、成功 final/replay、失败 refund/replay、并发首次创建幂等、不可变参数冲突原子回滚与非 ready 兼容。
 
-### 非门禁旧匿名 Task 观察
-在协调器冻结“不要分析 quota”范围前执行：
-```text
-go test ./service -run '^Test(CreditBalanceTaskBillingAdjustsTokenUsedBothDirections|ConvertedTimedTaskSettlementKeepsSourceIdentityAndAdjustsCreditBalance)$' -count=1
-```
-关键输出：`TestCreditBalanceTaskBillingAdjustsTokenUsedBothDirections` 期望 `token_used=140`、实际为 `100`；该旧夹具没有预扣请求记录或持久 Task 身份。按续作指令未修改该测试、未分析 quota、未扩展到调用链重构；timed 子用例未报告断言失败。
+格式化：仅运行 `gofmt` 于 `model/task.go`、`model/credit_valuation.go`、`service/task_billing.go`、`service/task_billing_test.go`；`service/billing_session.go` 的探索性改动已撤销。
+
+范围：本安全点未进入预扣记录清理，未实现 #24–#28，也未改 conversion/FX/marker。

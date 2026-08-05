@@ -17,24 +17,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type subscriptionConversionObservableFacts struct {
+	Id                       string `json:"id"`
+	SourceSubscriptionId     string `json:"source_subscription_id"`
+	TargetSubscriptionId     string `json:"target_subscription_id"`
+	Full31DayBlocks          string `json:"full_31_day_blocks"`
+	CreditBasis              string `json:"credit_basis"`
+	CurrentRemainingCredit   string `json:"current_remaining_credit"`
+	GrossCredit              string `json:"gross_credit"`
+	DebtOffset               string `json:"debt_offset"`
+	NetAvailableCredit       string `json:"net_available_credit"`
+	AvailableCreditAfter     string `json:"available_credit_after"`
+	SettlementDebtAfter      string `json:"settlement_debt_after"`
+	SourcePriceMicros        string `json:"source_price_micros"`
+	SourceCurrency           string `json:"source_currency"`
+	TargetCurrency           string `json:"target_currency"`
+	ValuationCreditBasis     string `json:"valuation_credit_basis"`
+	GrossCostMicros          string `json:"gross_cost_micros"`
+	NetCostMicros            string `json:"net_cost_micros"`
+	UnitValueNumeratorMicros string `json:"unit_value_numerator_micros"`
+	UnitValueDenominator     string `json:"unit_value_denominator"`
+	RuleVersion              int    `json:"rule_version"`
+	FxNumerator              string `json:"fx_numerator"`
+	FxDenominator            string `json:"fx_denominator"`
+	FxCapturedAt             string `json:"fx_captured_at"`
+	FxDirection              string `json:"fx_direction"`
+}
+
 type subscriptionConversionRouteResponse struct {
+	Code    string `json:"code"`
 	Message string `json:"message"`
 	Success bool   `json:"success"`
 	Data    struct {
-		Replayed   bool `json:"replayed"`
-		Conversion struct {
-			Id                     string `json:"id"`
-			SourceSubscriptionId   string `json:"source_subscription_id"`
-			TargetSubscriptionId   string `json:"target_subscription_id"`
-			Full31DayBlocks        string `json:"full_31_day_blocks"`
-			CreditBasis            string `json:"credit_basis"`
-			CurrentRemainingCredit string `json:"current_remaining_credit"`
-			GrossCredit            string `json:"gross_credit"`
-			DebtOffset             string `json:"debt_offset"`
-			NetAvailableCredit     string `json:"net_available_credit"`
-			AvailableCreditAfter   string `json:"available_credit_after"`
-			SettlementDebtAfter    string `json:"settlement_debt_after"`
-		} `json:"conversion"`
+		Replayed   bool                                  `json:"replayed"`
+		Conversion subscriptionConversionObservableFacts `json:"conversion"`
+	} `json:"data"`
+}
+
+type subscriptionConversionObservableListResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Conversions []subscriptionConversionObservableFacts `json:"conversions"`
 	} `json:"data"`
 }
 
@@ -163,6 +186,148 @@ func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *te
 		Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionConversion, sourceID).
 		Count(&ledgerCount).Error)
 	assert.Equal(t, int64(1), ledgerCount)
+}
+
+func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionPublicPlansRouteTestDB(t)
+	require.NoError(t, db.AutoMigrate(
+		&model.User{},
+		&model.Token{},
+		&model.UserSubscription{},
+		&model.SubscriptionOrder{},
+		&model.Redemption{},
+		&model.InvitationRewardEvent{},
+		&model.CreditBalanceLedger{},
+		&model.SubscriptionConversion{},
+		&model.CreditValuationState{},
+		&model.CreditValuationMigration{},
+		&model.SubscriptionPreConsumeRecord{},
+		&model.Option{},
+	))
+	model.ClearPrimaryBillableSubscriptionCacheForTest()
+
+	const (
+		userID       = 26_901
+		sourceID     = 26_902
+		conflictID   = 26_903
+		creditPlanID = 26_904
+		timedPlanID  = 26_905
+	)
+	accessToken := "subscription-conversion-frozen-facts-token"
+	settingBytes, err := common.Marshal(map[string]any{
+		"active_subscription_id":        sourceID,
+		"subscription_billing_strategy": model.SubscriptionBillingStrategySingleActive,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.User{
+		Id: userID, Username: "subscription-conversion-frozen-facts", Status: common.UserStatusEnabled,
+		Role: common.RoleRootUser, AccessToken: &accessToken, Setting: string(settingBytes),
+	}).Error)
+
+	creditCode := "subscription_conversion_frozen_facts_credit"
+	valuationCurrency := "USD"
+	require.NoError(t, db.Create(&model.SubscriptionPlan{
+		Id: creditPlanID, Title: "USD Credit balance", EntitlementType: model.SubscriptionEntitlementCreditBalance,
+		Enabled: true, BusinessCode: &creditCode, CreditBalanceConfigured: true, CreditBalanceConversionEnabled: true,
+		ValuationCurrency: &valuationCurrency,
+	}).Error)
+	timedCode := "subscription_conversion_frozen_facts_timed"
+	sourcePriceMicros := int64(40_000_000)
+	require.NoError(t, db.Create(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "CNY monthly convertible", EntitlementType: model.SubscriptionEntitlementTimed,
+		Enabled: true, BusinessCode: &timedCode, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100, TimedConversionEnabled: true,
+		PriceAmount: 40, PriceAmountMicros: &sourcePriceMicros, Currency: "CNY",
+	}).Error)
+	now := model.GetDBTimestamp()
+	require.NoError(t, db.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady,
+		ValuationCurrency: "USD", FxRateNumerator: 10, FxRateDenominator: 73, FxCapturedAt: now,
+	}).Error)
+	common.OptionMapRWMutex.Lock()
+	if common.OptionMap == nil {
+		common.OptionMap = make(map[string]string)
+	}
+	common.OptionMapRWMutex.Unlock()
+	require.NoError(t, model.UpdateOption("USDExchangeRate", "7.3"))
+
+	basis := int64(100)
+	for _, id := range []int{sourceID, conflictID} {
+		require.NoError(t, db.Create(&model.UserSubscription{
+			Id: id, UserId: userID, PlanId: timedPlanID, EntitlementType: model.SubscriptionEntitlementTimed,
+			TokenLimit: 100, TokenUsed: 20, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+			StartTime: now - 40*24*60*60, EndTime: now + model.TimedSubscriptionConversionBlockSeconds + 600,
+			Status: model.SubscriptionStatusActive, LastGrantedAt: now - 40*24*60*60,
+			LastGrantCreditSnapshot: &basis, LastGrantTimeSource: model.SubscriptionGrantTimeSourceLive,
+			LastGrantSource: model.SubscriptionGrantOrder,
+		}).Error)
+	}
+
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
+	SetApiRouter(engine)
+
+	quote := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
+	require.Len(t, quote.Data.Quotes, 2)
+	quoteByID := conversionQuoteRouteItemsByID(quote.Data.Quotes)
+	require.Equal(t, "180", quoteByID[strconv.Itoa(sourceID)].GrossCredit)
+
+	const idempotencyKey = "cross-currency-observable-facts"
+	confirmed := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
+		`{"subscription_id":"26902","idempotency_key":"`+idempotencyKey+`"}`)
+	require.True(t, confirmed.Success, confirmed.Message)
+	facts := confirmed.Data.Conversion
+	assert.Equal(t, "40000000", facts.SourcePriceMicros)
+	assert.Equal(t, "CNY", facts.SourceCurrency)
+	assert.Equal(t, "USD", facts.TargetCurrency)
+	assert.Equal(t, "100", facts.ValuationCreditBasis)
+	assert.Equal(t, "9863013", facts.GrossCostMicros)
+	assert.Equal(t, "9863013", facts.NetCostMicros)
+	assert.Equal(t, "4000000", facts.UnitValueNumeratorMicros)
+	assert.Equal(t, "73", facts.UnitValueDenominator)
+	assert.Equal(t, model.CreditValuationRuleVersion, facts.RuleVersion)
+	assert.Equal(t, "10", facts.FxNumerator)
+	assert.Equal(t, "73", facts.FxDenominator)
+	assert.NotEmpty(t, facts.FxCapturedAt)
+	assert.Equal(t, model.CreditFXDirectionCNYtoUSD, facts.FxDirection)
+
+	require.NoError(t, model.UpdateOption("USDExchangeRate", "8.1"))
+	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
+		UpdateColumn("price_amount_micros", int64(41_000_000)).Error)
+	historyRecorder := httptest.NewRecorder()
+	historyRequest := httptest.NewRequest(http.MethodGet, "/api/subscription/self/conversion-quotes", nil)
+	historyRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	historyRequest.Header.Set("New-Api-User", strconv.Itoa(userID))
+	engine.ServeHTTP(historyRecorder, historyRequest)
+	require.Equal(t, http.StatusOK, historyRecorder.Code)
+	var history subscriptionConversionObservableListResponse
+	require.NoError(t, common.Unmarshal(historyRecorder.Body.Bytes(), &history))
+	require.True(t, history.Success)
+	require.Len(t, history.Data.Conversions, 1)
+	assert.Equal(t, facts, history.Data.Conversions[0], "history must expose the original frozen facts after price and FX updates")
+
+	analyticsRecorder := httptest.NewRecorder()
+	analyticsRequest := httptest.NewRequest(http.MethodGet, "/api/admin-analytics/subscription-conversion", nil)
+	analyticsRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	analyticsRequest.Header.Set("New-Api-User", strconv.Itoa(userID))
+	engine.ServeHTTP(analyticsRecorder, analyticsRequest)
+	require.Equal(t, http.StatusOK, analyticsRecorder.Code)
+	assert.Contains(t, analyticsRecorder.Body.String(), `"success":true`)
+
+	drilldownRecorder := httptest.NewRecorder()
+	drilldownRequest := httptest.NewRequest(http.MethodGet, "/api/admin-analytics/drilldown/subscriptions?subscription_statuses=converted&limit=20", nil)
+	drilldownRequest.Header.Set("Authorization", "Bearer "+accessToken)
+	drilldownRequest.Header.Set("New-Api-User", strconv.Itoa(userID))
+	engine.ServeHTTP(drilldownRecorder, drilldownRequest)
+	require.Equal(t, http.StatusOK, drilldownRecorder.Code)
+	assert.Contains(t, drilldownRecorder.Body.String(), strconv.Itoa(sourceID))
+	assert.Contains(t, drilldownRecorder.Body.String(), facts.TargetSubscriptionId)
+
+	conflict := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
+		`{"subscription_id":"26903","idempotency_key":"`+idempotencyKey+`"}`)
+	require.False(t, conflict.Success)
+	assert.Equal(t, "subscription_conversion_idempotency_conflict", conflict.Code)
 }
 
 func TestSubscriptionConversionRoutePreservesNonActiveSelectionAndCreatesSingleCreditBalance(t *testing.T) {

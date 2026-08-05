@@ -2,8 +2,8 @@
 
 ## 当前状态
 
-- 阶段：`API_BROWSER_FINAL_DELIVERY_RECOVERED`；从 `kernel_unavailable` 原地恢复，已确认现有钱包 conversion quote/confirm/history 与管理员 conversion analytics 是 #26 可见产品路径，禁止新建第二套 UI。
-- 最近 clean SHA：`c709ccb2c375031eabf43703334dffd44b39856a`（最终交付冻结起点）。
+- 阶段：`API_CROSS_CURRENCY_ROUTE_RED`；真实 SQLite quote → confirm → history/analytics tracer 已取得行为 RED，确认既有响应未结构化暴露冻结估值/FX 事实且稳定错误 code 为空。
+- 最近 clean SHA：`8e31445dd`（`docs(issue-26): 固化最终交付恢复点`）；当前仅有 router tracer 与 progress RED 证据待提交。
 - 工作分支：`jiwangyihao/issue-26-conversion-fx`。
 - 当前工作树：`C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`。
 - Orca parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
@@ -11,13 +11,13 @@
 
 ## 下一条命令
 
-`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays)" -count=1`
+`go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`
 
-恢复后执行顺序：现有 quote/confirm/history/analytics API 真实 SQLite 路由 → 必要 DTO/UI 纵向补齐（若观察到缺口，严格 TDD）→ 聚焦回归/race → 前端测试/typecheck/build/i18n → 真实应用与 Orca Chromium 验收 → Gate A–G 汇总与资源清理。
+下一步只处理该 tracer 证明的最小既有 conversion response DTO 与稳定错误映射缺口；不新增 UI、schema、抽象或端点。GREEN 后再继续其余 API/门禁。
 
 ## 未提交文件
 
-- 无；冻结起点 `c709ccb2c` 的 staged、unstaged、untracked 全零。
+- `router/subscription_conversion_route_test.go`、`.scratch/agent-progress/issue-26/status.md`、`.scratch/agent-progress/issue-26/evidence.md`；均属于本 RED 安全点，无生产/UI 文件。
 
 ## 上下文风险
 

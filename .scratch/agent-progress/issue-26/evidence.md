@@ -397,3 +397,12 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 可见 UI 判定为“存在”：`web/default/src/pages/wallet/index.tsx` 挂载 `TimedSubscriptionConversionQuotesCard`；`web/default/src/features/subscription-conversion/` 已实现 quote API、confirm API、31 日块 BigInt live quote、preview/confirm 与 conversion history；`web/default/src/features/admin-analytics/` 已实现 conversion summary/history 面板。后续只做现有路径必要验收/纵向补齐，禁止为 browser 另建 UI。
 - 后端现有入口：`GET /api/subscription/self/conversion-quotes`、`POST /api/subscription/self/conversions`、`GET /api/admin/analytics/subscription-conversion`，以及同页使用的 subscription drilldown/history。恢复时尚未宣称现有 DTO 已完整暴露冻结 price/currency/FX/micros/rule version；该项必须由真实 API tracer 与浏览器结果决定。
 - 当前有效 task/dispatch：`task_f80f4a22a9be` / `ctx_d834ee4a8128`。下一步先运行既有 quote/confirm route tracer，再对 history 与五个运营分析 API 做真实 SQLite 验收。
+
+## 2026-08-06 — 跨币种 quote → confirm → history/analytics 路由 tracer RED
+
+- 仅修改既有 `router/subscription_conversion_route_test.go`，新增真实 SQLite tracer `TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics`；主路径经认证 `GET /api/subscription/self/conversion-quotes` → `POST /api/subscription/self/conversions` → 再次 quote/history → 管理员 conversion analytics 与 subscription drilldown，并在同一幂等键换 source 时断言稳定错误 code。
+- fixture 使用 CNY timed source、USD Credit target、`USDExchangeRate=7.3`、valuation marker ready；quote 成功返回 `gross_credit="180"`，confirm 业务写入成功，随后把 source price 改为 `41,000,000` micros、FX 改为 `8.1` 后读取 history，确保下一 GREEN 可证明旧事实冻结而非动态重估。
+- 首次命令：`gofmt -w router/subscription_conversion_route_test.go && go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`。首次 fixture 编译失败：`ValuationCurrency` 需要 `*string`；修正测试 fixture 后重跑，不计作行为 RED。
+- 行为 RED 命令：`go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`。
+- 真实结果：`FAIL`。quote 与 confirm 均成功；confirm 响应中 `source_price_micros`、`source_currency`、`target_currency`、`valuation_credit_basis`、gross/net cost micros、未舍入 unit value numerator/denominator、rule version、FX numerator/denominator/captured_at/direction 全部缺失（字符串为空、version 为 `0`）。同幂等键换 source 的失败响应 `code` 也为空。
+- 结论：RED 到达真实 router/model 路径且只对已持久化冻结事实的 API 可观察缺口与稳定错误映射敏感；analytics 路由同一 tracer 已被调用，但测试因前述 confirm 字段断言使用 `assert` 收集全部缺口后继续完成。提交前无生产或 UI 修改。

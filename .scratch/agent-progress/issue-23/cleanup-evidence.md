@@ -65,3 +65,9 @@ M service/task_billing_test.go
 - 结果：活跃 `SUBMITTED`/`IN_PROGRESS` Task 投影使 cleanup 返回 0，两条请求记录均保留，两种重放均成功；结果属于合法串行化集合。
 - 验证：用例 `count=10` 与 `go test -race ./model -run '^TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays$' -count=1` 均返回 `go test: 1 packages ok`。
 - 生产改动：无；引用保护安全点已满足该并发合同。
+
+## 只读清理诊断安全点
+- 接口：`PreviewSubscriptionPreConsumeCleanup(retentionSeconds, batchSize)`；复用清理的终态、排他 cutoff、活跃 Task 引用与稳定主键 batch 条件。
+- 输出：cutoff、batch、候选数、受保护数、按终态汇总和稳定原因 `active_task_reference`。
+- 只读证明：重复调用返回相同结构；SQLite `total_changes()` 与请求记录总数调用前后不变。
+- 验证：诊断与 cleanup 聚焦用例 `count=10` 返回 `go test: 1 packages ok`；`git diff --check` 无输出。

@@ -425,3 +425,67 @@ func TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays(t
 		Order("id ASC").Pluck("request_id", &remaining).Error)
 	require.ElementsMatch(t, []string{requests[0].requestID, requests[1].requestID}, remaining)
 }
+
+func TestPreviewSubscriptionPreConsumeCleanupIsStableAndReadOnly(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Task{}))
+	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+
+	requests := []struct {
+		requestID string
+		target    int64
+		status    TaskStatus
+	}{
+		{requestID: "cleanup-preview-settled", target: 10},
+		{requestID: "cleanup-preview-refunded", target: 0},
+		{requestID: "cleanup-preview-protected", target: 10, status: TaskStatusSubmitted},
+	}
+	for _, request := range requests {
+		preConsumed, err := PreConsumeUserSubscriptionByUnits(request.requestID, user.Id, "gpt-4o", 0, 0, 10)
+		require.NoError(t, err)
+		require.Equal(t, subscriptionID, preConsumed.UserSubscriptionId)
+		require.NoError(t, SettleUserSubscriptionRequestTarget(request.requestID, subscriptionID, request.target, true))
+		if request.status != "" {
+			task := &Task{
+				TaskID: "task-" + request.requestID,
+				UserId: user.Id,
+				Status: request.status,
+				PrivateData: TaskPrivateData{
+					SubscriptionRequestId: request.requestID,
+				},
+			}
+			require.NoError(t, task.Insert())
+		}
+	}
+	expiredAt := GetDBTimestamp() - 3_600
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
+		Where("request_id IN ?", []string{requests[0].requestID, requests[1].requestID, requests[2].requestID}).
+		UpdateColumn("finalized_at", expiredAt).Error)
+
+	before := sqliteTotalChanges(t, db)
+	first, err := PreviewSubscriptionPreConsumeCleanup(60, 2)
+	require.NoError(t, err)
+	second, err := PreviewSubscriptionPreConsumeCleanup(60, 2)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	require.Equal(t, before, sqliteTotalChanges(t, db))
+	require.Equal(t, GetDBTimestamp()-60, first.Cutoff)
+	require.Equal(t, 2, first.BatchSize)
+	require.Equal(t, int64(2), first.CandidateCount)
+	require.Equal(t, int64(1), first.ProtectedCount)
+	require.Equal(t, map[string]int64{"refunded": 1, "settled": 1}, first.TerminalCounts)
+	require.Equal(t, map[string]int64{"active_task_reference": 1}, first.ProtectionReasons)
+
+	var count int64
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).Count(&count).Error)
+	require.Equal(t, int64(len(requests)), count)
+}
+
+func sqliteTotalChanges(t *testing.T, db *gorm.DB) int64 {
+	t.Helper()
+	var total int64
+	require.NoError(t, db.Raw("SELECT total_changes()").Scan(&total).Error)
+	return total
+}

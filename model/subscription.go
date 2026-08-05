@@ -3167,6 +3167,86 @@ func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
 		}).Error
 }
 
+func subscriptionPreConsumeActiveTaskReferenceQuery(tx *gorm.DB) *gorm.DB {
+	return tx.Model(&Task{}).
+		Select("1").
+		Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
+}
+
+func subscriptionPreConsumeCleanupCandidateQuery(tx *gorm.DB, cutoff int64) *gorm.DB {
+	return tx.Model(&SubscriptionPreConsumeRecord{}).
+		Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+		Where("NOT EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
+}
+
+type SubscriptionPreConsumeCleanupPreview struct {
+	Cutoff            int64
+	BatchSize         int
+	CandidateCount    int64
+	ProtectedCount    int64
+	TerminalCounts    map[string]int64
+	ProtectionReasons map[string]int64
+}
+
+// PreviewSubscriptionPreConsumeCleanup reports the next cleanup batch without modifying data.
+func PreviewSubscriptionPreConsumeCleanup(olderThanSeconds int64, batchSize int) (SubscriptionPreConsumeCleanupPreview, error) {
+	if olderThanSeconds <= 0 {
+		olderThanSeconds = 7 * 24 * 3600
+	}
+	if batchSize <= 0 {
+		batchSize = subscriptionPreConsumeCleanupBatchSize
+	}
+	preview := SubscriptionPreConsumeCleanupPreview{
+		Cutoff:            GetDBTimestamp() - olderThanSeconds,
+		BatchSize:         batchSize,
+		TerminalCounts:    make(map[string]int64),
+		ProtectionReasons: make(map[string]int64),
+	}
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
+			return err
+		}
+		var candidateIDs []int
+		if err := subscriptionPreConsumeCleanupCandidateQuery(tx, preview.Cutoff).
+			Select("id").
+			Order("id ASC").
+			Limit(batchSize).
+			Pluck("id", &candidateIDs).Error; err != nil {
+			return err
+		}
+		preview.CandidateCount = int64(len(candidateIDs))
+		if len(candidateIDs) > 0 {
+			var terminalCounts []struct {
+				Status string
+				Count  int64
+			}
+			if err := tx.Model(&SubscriptionPreConsumeRecord{}).
+				Select("status, COUNT(*) AS count").
+				Where("id IN ?", candidateIDs).
+				Group("status").
+				Order("status ASC").
+				Scan(&terminalCounts).Error; err != nil {
+				return err
+			}
+			for _, terminalCount := range terminalCounts {
+				preview.TerminalCounts[terminalCount.Status] = terminalCount.Count
+			}
+		}
+		protectedQuery := tx.Model(&SubscriptionPreConsumeRecord{}).
+			Where("finalized_at < ? AND status IN ?", preview.Cutoff, []string{"settled", "refunded"}).
+			Where("EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
+		if err := protectedQuery.Count(&preview.ProtectedCount).Error; err != nil {
+			return err
+		}
+		if preview.ProtectedCount > 0 {
+			preview.ProtectionReasons["active_task_reference"] = preview.ProtectedCount
+		}
+		return nil
+	})
+	return preview, err
+}
+
 const subscriptionPreConsumeCleanupBatchSize = 100
 
 // CleanupSubscriptionPreConsumeRecords removes one bounded batch of old idempotency records.
@@ -3187,15 +3267,9 @@ func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize
 		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
 			return err
 		}
-		activeTaskReference := tx.Model(&Task{}).
-			Select("1").
-			Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
-			Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
 		var candidateIDs []int
-		if err := tx.Model(&SubscriptionPreConsumeRecord{}).
+		if err := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
 			Select("id").
-			Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
-			Where("NOT EXISTS (?)", activeTaskReference).
 			Order("id ASC").
 			Limit(batchSize).
 			Pluck("id", &candidateIDs).Error; err != nil {
@@ -3204,9 +3278,8 @@ func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize
 		if len(candidateIDs) == 0 {
 			return nil
 		}
-		res := tx.Where("id IN ?", candidateIDs).
-			Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
-			Where("NOT EXISTS (?)", activeTaskReference).
+		res := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
+			Where("id IN ?", candidateIDs).
 			Delete(&SubscriptionPreConsumeRecord{})
 		deleted = res.RowsAffected
 		return res.Error

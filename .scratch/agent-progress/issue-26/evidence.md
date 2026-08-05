@@ -54,4 +54,19 @@
 
 ## TDD 记录
 
-尚未开始。安全提交后首个周期必须为：单一 FX parser 公共行为测试 → 观察真实 RED → 更新本文件并提交 RED。
+首个周期已进入 RED；以下记录测试、失败命令和可恢复的最小 GREEN 边界。
+
+## 2026-08-05 — FX parser 首个 RED
+
+新增公共行为测试 `TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY`，输入 `7.300000`、source `USD`、valuation `CNY`、正 captured_at，期望不可变快照规范化为 `73/10` 且方向为 `USD_TO_CNY`。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1`
+
+真实结果：`FAIL`（build failed），原因精确为尚不存在的公共 seam：
+
+- `undefined: ParseCreditFXRateSnapshot`
+- `undefined: CreditFXRateSnapshotInput`
+- `undefined: CreditFXRateSnapshot`
+- `undefined: CreditFXDirectionUSDtoCNY`
+
+结论：RED 对预期缺失行为敏感，未因无关测试或环境失败。下一步最小 GREEN 只实现该测试要求的结构化类型、方向常量、规范十进制解析与最大公约数约分。

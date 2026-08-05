@@ -352,3 +352,15 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
 - 真实结果：`FAIL`（行为失败，非编译/fixture 失败）。reserve 与 conversion 成功，原 request 已冻结 `AppliedCredit=10`、`DeductedAvailableCredit=10`、`DeductedExactCostMicros=4,000,000`、目标 `ValuationSubscriptionId`；refund 调用精确返回 `type=*errors.errorString value="credit_valuation_state_mismatch"`（`subscription_conversion_settlement_test.go:278`）。
 - 结论：旧实现已能建立转换虚拟 exact snapshot，但 public target=0 恢复路径在写入前拒绝目标状态一致性，无法完成全退款；RED 对用户要求的具体行为敏感。此提交不含 GREEN、并发或生产代码修改。
+
+## 2026-08-06 — reserve → conversion → refund 最小 GREEN
+
+- 根因：通用 restore 假定 `AppliedCredit` 已真实增加目标 Credit 的 `token_used`；转换虚拟快照并未扣目标池，因此全退款把虚拟 reserve 当作目标真实用量撤销，在 `refund > target.TokenUsed` 处稳定返回 `credit_valuation_state_mismatch`。
+- 最小实现只扩展既有 `restoreCreditRequestTargetTx`：先锁 request record；当 original 与 valuation subscription 不同时，验证 source `converted` 状态及持久 conversion 映射；把退款拆成目标真实追加用量撤销与转换虚拟 reserve 恢复。虚拟份额增加目标 `token_limit`，不减少从未增加过的目标 `token_used`；成本仍完全复用请求 active exact snapshot 的比例/清空余数算法。
+- 单次命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。原 timed `subscription_id` 与 `token_used=10` 保持；request 进入 `refunded`，`AppliedCredit`、`DeductedAvailableCredit`、active exact snapshot 清零；目标 Credit 恢复 10 Credit 与 `4,000,000` exact micros。
+- 重复命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=10`。
+- 结果：PASS（`go test: 1 packages ok`）。
+- 窄竞态命令：`go test -race ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。
+- 本 GREEN 未编写双连接并发测试、未新增 helper/schema，也未进入 API/UI 或其他 Issue 范围。

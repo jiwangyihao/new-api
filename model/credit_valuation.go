@@ -484,6 +484,49 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 }
 
 func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
+	var record SubscriptionPreConsumeRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
+		return err
+	}
+	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
+		return ErrCreditValuationTargetConflict
+	}
+	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
+		return ErrCreditValuationTargetConflict
+	}
+	if record.FinalizedAt > 0 && !final {
+		return ErrCreditValuationFinalizedConflict
+	}
+
+	convertedVirtual := record.UserSubscriptionId != record.ValuationSubscriptionId
+	if convertedVirtual {
+		if record.PreConsumed <= 0 {
+			return ErrCreditValuationMappingConflict
+		}
+		var source UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", record.UserSubscriptionId).First(&source).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCreditValuationMappingConflict
+			}
+			return err
+		}
+		if source.Status != SubscriptionStatusConverted || source.ConversionId <= 0 || source.ConvertedToSubscriptionId != record.ValuationSubscriptionId {
+			return ErrCreditValuationMappingConflict
+		}
+		var conversion SubscriptionConversion
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND source_subscription_id = ? AND target_subscription_id = ?", source.ConversionId, source.Id, record.ValuationSubscriptionId).
+			First(&conversion).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCreditValuationMappingConflict
+			}
+			return err
+		}
+		if conversion.ValuationRuleVersion != record.ValuationRuleVersion {
+			return ErrCreditValuationMappingConflict
+		}
+	}
+
 	var subscription UserSubscription
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.ValuationSubscriptionId).First(&subscription).Error; err != nil {
 		return err
@@ -504,22 +547,16 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 		return err
 	}
 
-	var record SubscriptionPreConsumeRecord
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
-		return err
-	}
-	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
-		return ErrCreditValuationTargetConflict
-	}
-	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
-		return ErrCreditValuationTargetConflict
-	}
-	if record.FinalizedAt > 0 && !final {
-		return ErrCreditValuationFinalizedConflict
-	}
-
 	refund := record.AppliedCredit - targetCredit
-	if refund > subscription.TokenUsed {
+	targetUsedRefund := refund
+	virtualRefund := int64(0)
+	if convertedVirtual {
+		targetUsedBefore := maxInt64(record.AppliedCredit-record.PreConsumed, 0)
+		targetUsedAfter := maxInt64(targetCredit-record.PreConsumed, 0)
+		targetUsedRefund = targetUsedBefore - targetUsedAfter
+		virtualRefund = refund - targetUsedRefund
+	}
+	if targetUsedRefund > subscription.TokenUsed {
 		return ErrCreditValuationStateMismatch
 	}
 	debtRefund := minInt64(refund, record.DebtFormedCredit)
@@ -547,8 +584,12 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	}
 
 	availableBefore := maxInt64(subscription.TokenLimit-subscription.TokenUsed, 0)
-	newTokenUsed := subscription.TokenUsed - refund
-	availableAfter := maxInt64(subscription.TokenLimit-newTokenUsed, 0)
+	newTokenLimit, ok := checkedAddInt64(subscription.TokenLimit, virtualRefund)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newTokenUsed := subscription.TokenUsed - targetUsedRefund
+	availableAfter := maxInt64(newTokenLimit-newTokenUsed, 0)
 	newlyAvailable := availableAfter - availableBefore
 	restorableSnapshotCredit := minInt64(snapshotRefund, newlyAvailable)
 
@@ -617,11 +658,13 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 
 	now := getDBTimestampTx(tx)
 	if err := tx.Model(&UserSubscription{}).Where("id = ?", subscription.Id).Updates(map[string]any{
-		"token_used": newTokenUsed,
-		"updated_at": now,
+		"token_limit": newTokenLimit,
+		"token_used":  newTokenUsed,
+		"updated_at":  now,
 	}).Error; err != nil {
 		return err
 	}
+	subscription.TokenLimit = newTokenLimit
 	subscription.TokenUsed = newTokenUsed
 	subscription.UpdatedAt = now
 	state.AvailableCredit = availableAfter

@@ -435,23 +435,49 @@ func subscriptionConversionRejection(quote *TimedSubscriptionConversionQuote) er
 func findSubscriptionConversionByIdempotencyTx(tx *gorm.DB, userId int, idempotencyKey string) (*SubscriptionConversion, bool, error) {
 	var conversion SubscriptionConversion
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Model(&SubscriptionConversion{}).
-		Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
-		Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
-		Where("subscription_conversions.user_id = ? AND subscription_conversions.idempotency_key = ?", userId, idempotencyKey).
+		Where("user_id = ? AND idempotency_key = ?", userId, idempotencyKey).
 		Limit(1).Find(&conversion)
-	return &conversion, query.RowsAffected > 0, query.Error
+	if query.Error != nil || query.RowsAffected == 0 {
+		return &conversion, false, query.Error
+	}
+	if err := hydrateSubscriptionConversionValuationStateVersionTx(tx, &conversion); err != nil {
+		return nil, false, err
+	}
+	return &conversion, true, nil
 }
 
 func findSubscriptionConversionBySourceTx(tx *gorm.DB, sourceSubscriptionId int) (*SubscriptionConversion, bool, error) {
 	var conversion SubscriptionConversion
 	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-		Model(&SubscriptionConversion{}).
-		Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
-		Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
-		Where("subscription_conversions.source_subscription_id = ?", sourceSubscriptionId).
+		Where("source_subscription_id = ?", sourceSubscriptionId).
 		Limit(1).Find(&conversion)
-	return &conversion, query.RowsAffected > 0, query.Error
+	if query.Error != nil || query.RowsAffected == 0 {
+		return &conversion, false, query.Error
+	}
+	if err := hydrateSubscriptionConversionValuationStateVersionTx(tx, &conversion); err != nil {
+		return nil, false, err
+	}
+	return &conversion, true, nil
+}
+
+func hydrateSubscriptionConversionValuationStateVersionTx(tx *gorm.DB, conversion *SubscriptionConversion) error {
+	if tx == nil || conversion == nil || conversion.LedgerId <= 0 {
+		return nil
+	}
+	var ledger struct {
+		ValuationStateVersionAfter int64
+	}
+	query := tx.Model(&CreditBalanceLedger{}).
+		Select("valuation_state_version_after").
+		Where("id = ?", conversion.LedgerId).
+		Limit(1).Find(&ledger)
+	if query.Error != nil {
+		return query.Error
+	}
+	if query.RowsAffected > 0 {
+		conversion.ValuationStateVersionAfter = ledger.ValuationStateVersionAfter
+	}
+	return nil
 }
 
 func findCommittedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversion, error) {

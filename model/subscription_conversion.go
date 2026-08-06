@@ -309,8 +309,12 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		if errors.Is(err, ErrConversionIdempotencyConflict) {
 			return nil, err
 		}
-		if replay, replayErr := findCommittedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey); replayErr == nil && replay != nil {
+		replay, replayErr := findCommittedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey)
+		if replayErr == nil && replay != nil {
 			return &SubscriptionConversionResult{Conversion: replay, Replayed: true}, nil
+		}
+		if errors.Is(replayErr, ErrConversionIdempotencyConflict) {
+			return nil, replayErr
 		}
 		return nil, err
 	}
@@ -451,32 +455,34 @@ func findSubscriptionConversionBySourceTx(tx *gorm.DB, sourceSubscriptionId int)
 }
 
 func findCommittedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversion, error) {
-	conversionQuery := func() *gorm.DB {
-		return DB.Model(&SubscriptionConversion{}).
-			Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
-			Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id")
-	}
-	var conversion SubscriptionConversion
-	query := conversionQuery().
-		Where("subscription_conversions.user_id = ? AND subscription_conversions.idempotency_key = ?", userId, idempotencyKey).
-		Limit(1).Find(&conversion)
-	if query.Error != nil {
-		return nil, query.Error
-	}
-	if query.RowsAffected > 0 {
-		if conversion.SourceSubscriptionId != sourceSubscriptionId {
-			return nil, errors.New("subscription conversion idempotency key mismatch")
+	var conversion *SubscriptionConversion
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		replay, found, err := findSubscriptionConversionByIdempotencyTx(tx, userId, idempotencyKey)
+		if err != nil {
+			return err
 		}
-		return &conversion, nil
+		if found {
+			if replay.SourceSubscriptionId != sourceSubscriptionId {
+				return ErrConversionIdempotencyConflict
+			}
+			if err := validateSubscriptionConversionReplayFactsTx(tx, replay); err != nil {
+				return err
+			}
+			conversion = replay
+			return nil
+		}
+
+		if _, found, err := findSubscriptionConversionBySourceTx(tx, sourceSubscriptionId); err != nil {
+			return err
+		} else if found {
+			return ErrConversionIdempotencyConflict
+		}
+		return gorm.ErrRecordNotFound
+	})
+	if err != nil {
+		return nil, err
 	}
-	query = conversionQuery().Where("subscription_conversions.source_subscription_id = ?", sourceSubscriptionId).Limit(1).Find(&conversion)
-	if query.Error != nil {
-		return nil, query.Error
-	}
-	if query.RowsAffected > 0 {
-		return nil, errors.New("source subscription already converted")
-	}
-	return nil, gorm.ErrRecordNotFound
+	return conversion, nil
 }
 
 func ListSubscriptionConversions(userId int, limit int) ([]SubscriptionConversion, error) {

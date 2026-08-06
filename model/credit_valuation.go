@@ -49,15 +49,17 @@ type CreditValuationSourceSnapshot struct {
 }
 
 type creditValuationIngress struct {
-	grossCredit       int64
-	grossCostMicros   int64
-	currency          string
-	confidence        string
-	ruleVersion       int
-	fxSourceCurrency  string
-	fxRateNumerator   int64
-	fxRateDenominator int64
-	fxCapturedAt      int64
+	grossCredit              int64
+	grossCostMicros          int64
+	currency                 string
+	confidence               string
+	ruleVersion              int
+	fxSourceCurrency         string
+	fxRateNumerator          int64
+	fxRateDenominator        int64
+	fxCapturedAt             int64
+	unitValueNumeratorMicros int64
+	unitValueDenominator     int64
 }
 
 type CreditValuationMutationResult struct {
@@ -100,6 +102,15 @@ func newForwardCreditValuationIngress(source CreditValuationSourceSnapshot) (cre
 	if fxSnapshot.SourceCurrency != sourceCurrency || fxSnapshot.ValuationCurrency != valuationCurrency {
 		return creditValuationIngress{}, ErrCreditValuationSourceInvalid
 	}
+	unitValueNumeratorMicros, unitValueDenominator, err := creditValuationUnitValueRatio(
+		source.SourcePriceMicros,
+		source.SourcePlanCredit,
+		fxSnapshot.Numerator,
+		fxSnapshot.Denominator,
+	)
+	if err != nil {
+		return creditValuationIngress{}, err
+	}
 	sourceGrossCostMicros, err := mulDivFloor(source.SourcePriceMicros, source.GrossCredit, source.SourcePlanCredit)
 	if err != nil {
 		return creditValuationIngress{}, err
@@ -109,16 +120,42 @@ func newForwardCreditValuationIngress(source CreditValuationSourceSnapshot) (cre
 		return creditValuationIngress{}, err
 	}
 	return creditValuationIngress{
-		grossCredit:       source.GrossCredit,
-		grossCostMicros:   grossCostMicros,
-		currency:          valuationCurrency,
-		confidence:        CreditValuationConfidenceExact,
-		ruleVersion:       source.RuleVersion,
-		fxSourceCurrency:  fxSnapshot.SourceCurrency,
-		fxRateNumerator:   fxSnapshot.Numerator,
-		fxRateDenominator: fxSnapshot.Denominator,
-		fxCapturedAt:      fxSnapshot.CapturedAt,
+		grossCredit:              source.GrossCredit,
+		grossCostMicros:          grossCostMicros,
+		currency:                 valuationCurrency,
+		confidence:               CreditValuationConfidenceExact,
+		ruleVersion:              source.RuleVersion,
+		fxSourceCurrency:         fxSnapshot.SourceCurrency,
+		fxRateNumerator:          fxSnapshot.Numerator,
+		fxRateDenominator:        fxSnapshot.Denominator,
+		fxCapturedAt:             fxSnapshot.CapturedAt,
+		unitValueNumeratorMicros: unitValueNumeratorMicros,
+		unitValueDenominator:     unitValueDenominator,
 	}, nil
+}
+
+func creditValuationUnitValueRatio(sourcePriceMicros int64, sourcePlanCredit int64, fxNumerator int64, fxDenominator int64) (int64, int64, error) {
+	if sourcePriceMicros <= 0 || sourcePlanCredit <= 0 || fxNumerator <= 0 || fxDenominator <= 0 {
+		return 0, 0, ErrCreditValuationSourceInvalid
+	}
+	priceDivisor := greatestCommonDivisor(sourcePriceMicros, sourcePlanCredit)
+	numerator := sourcePriceMicros / priceDivisor
+	denominator := sourcePlanCredit / priceDivisor
+	fxDivisor := greatestCommonDivisor(fxNumerator, denominator)
+	fxNumerator /= fxDivisor
+	denominator /= fxDivisor
+	rateDivisor := greatestCommonDivisor(numerator, fxDenominator)
+	numerator /= rateDivisor
+	fxDenominator /= rateDivisor
+	combinedNumerator, ok := checkedMulNonNegativeInt64(numerator, fxNumerator)
+	if !ok {
+		return 0, 0, ErrCreditValuationOverflow
+	}
+	combinedDenominator, ok := checkedMulNonNegativeInt64(denominator, fxDenominator)
+	if !ok || combinedNumerator <= 0 || combinedDenominator <= 0 {
+		return 0, 0, ErrCreditValuationOverflow
+	}
+	return combinedNumerator, combinedDenominator, nil
 }
 
 // CreditValuationRuntimeReadyTx only observes the existing marker. Marker

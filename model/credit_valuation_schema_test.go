@@ -26,10 +26,21 @@ func TestCreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable(t *testing.
 	for _, column := range []string{"request_fingerprint_version", "request_fingerprint", "applied_credit", "deducted_exact_cost_micros", "finalized_at"} {
 		require.True(t, db.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, column), column)
 	}
-	for _, column := range []string{"valuation_currency", "valuation_gross_cost_micros", "fx_rate_denominator"} {
+	for _, column := range []string{
+		"parameter_fingerprint", "target_plan_id", "source_plan_id", "source_duration_unit",
+		"source_duration_value", "source_quota_reset_period", "source_quota_reset_custom_seconds",
+		"valuation_source_price_micros", "valuation_credit_basis",
+		"valuation_unit_value_numerator_micros", "valuation_unit_value_denominator",
+		"valuation_currency", "valuation_gross_cost_micros", "fx_rate_denominator",
+	} {
 		require.True(t, db.Migrator().HasColumn(&CreditBalanceLedger{}, column), column)
 	}
-	for _, column := range []string{"valuation_source_price_micros", "valuation_credit_basis", "fx_captured_at"} {
+	for _, column := range []string{
+		"parameter_fingerprint", "source_token_limit", "source_token_used", "source_duration_unit",
+		"source_duration_value", "source_quota_reset_period", "source_quota_reset_custom_seconds",
+		"valuation_source_price_micros", "valuation_credit_basis",
+		"valuation_unit_value_numerator_micros", "valuation_unit_value_denominator", "fx_captured_at",
+	} {
 		require.True(t, db.Migrator().HasColumn(&SubscriptionConversion{}, column), column)
 	}
 }

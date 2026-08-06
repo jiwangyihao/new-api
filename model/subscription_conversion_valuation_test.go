@@ -86,6 +86,14 @@ func TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation(t *testi
 	require.Equal(t, int64(1), conversion.FxRateNumerator)
 	require.Equal(t, int64(1), conversion.FxRateDenominator)
 	require.Positive(t, conversion.FxCapturedAt)
+	require.NotEmpty(t, conversion.ParameterFingerprint)
+	require.Equal(t, int64(75), conversion.SourceTokenLimit)
+	require.Equal(t, int64(50), conversion.SourceTokenUsed)
+	require.Equal(t, SubscriptionDurationMonth, conversion.SourceDurationUnit)
+	require.Equal(t, 1, conversion.SourceDurationValue)
+	require.Equal(t, SubscriptionResetMonthly, conversion.SourceQuotaResetPeriod)
+	require.Equal(t, int64(400_000), conversion.ValuationUnitValueNumeratorMicros)
+	require.Equal(t, int64(1), conversion.ValuationUnitValueDenominator)
 
 	var ledger CreditBalanceLedger
 	require.NoError(t, DB.First(&ledger, conversion.LedgerId).Error)
@@ -96,6 +104,20 @@ func TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation(t *testi
 	require.Equal(t, int64(1), ledger.FxRateNumerator)
 	require.Equal(t, int64(1), ledger.FxRateDenominator)
 	require.Equal(t, conversion.FxCapturedAt, ledger.FxCapturedAt)
+	require.Equal(t, conversion.ParameterFingerprint, ledger.ParameterFingerprint)
+	require.Equal(t, sourcePlanID, ledger.SourcePlanId)
+	require.Equal(t, conversion.TargetPlanId, ledger.TargetPlanId)
+	require.Equal(t, int64(75), ledger.SourceTokenLimit)
+	require.Equal(t, int64(50), ledger.SourceTokenUsed)
+	require.Equal(t, SubscriptionStatusActive, ledger.SourceStatus)
+	require.Equal(t, SubscriptionDurationMonth, ledger.SourceDurationUnit)
+	require.Equal(t, 1, ledger.SourceDurationValue)
+	require.Equal(t, SubscriptionResetMonthly, ledger.SourceQuotaResetPeriod)
+	require.Equal(t, sourcePriceMicros, ledger.ValuationSourcePriceMicros)
+	require.Equal(t, creditBasis, ledger.ValuationCreditBasis)
+	require.Equal(t, int64(400_000), ledger.ValuationUnitValueNumeratorMicros)
+	require.Equal(t, int64(1), ledger.ValuationUnitValueDenominator)
+	require.Equal(t, grossCredit, ledger.NetGrantedCredit)
 
 	var source UserSubscription
 	require.NoError(t, DB.First(&source, sourceSubscriptionID).Error)
@@ -201,6 +223,16 @@ func TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndRepla
 			require.Equal(t, test.wantFXRateNumerator, first.Conversion.FxRateNumerator)
 			require.Equal(t, test.wantFXRateDenominator, first.Conversion.FxRateDenominator)
 			require.Positive(t, first.Conversion.FxCapturedAt)
+			require.NotEmpty(t, first.Conversion.ParameterFingerprint)
+			wantUnitNumerator, wantUnitDenominator, ratioErr := creditValuationUnitValueRatio(
+				test.sourcePriceMicros,
+				creditBasis,
+				test.wantFXRateNumerator,
+				test.wantFXRateDenominator,
+			)
+			require.NoError(t, ratioErr)
+			require.Equal(t, wantUnitNumerator, first.Conversion.ValuationUnitValueNumeratorMicros)
+			require.Equal(t, wantUnitDenominator, first.Conversion.ValuationUnitValueDenominator)
 
 			var ledger CreditBalanceLedger
 			require.NoError(t, DB.First(&ledger, first.Conversion.LedgerId).Error)
@@ -208,6 +240,9 @@ func TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndRepla
 			require.Equal(t, test.wantFXRateNumerator, ledger.FxRateNumerator)
 			require.Equal(t, test.wantFXRateDenominator, ledger.FxRateDenominator)
 			require.Equal(t, first.Conversion.FxCapturedAt, ledger.FxCapturedAt)
+			require.Equal(t, first.Conversion.ParameterFingerprint, ledger.ParameterFingerprint)
+			require.Equal(t, first.Conversion.ValuationUnitValueNumeratorMicros, ledger.ValuationUnitValueNumeratorMicros)
+			require.Equal(t, first.Conversion.ValuationUnitValueDenominator, ledger.ValuationUnitValueDenominator)
 
 			updateFXOption("8.1")
 			replayed, err := ConfirmTimedSubscriptionConversion(userID, sourceSubscriptionID, "cross-currency-valuation")

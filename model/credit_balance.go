@@ -32,38 +32,58 @@ const (
 )
 
 type CreditBalanceLedger struct {
-	Id                         int    `json:"id"`
-	UserId                     int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
-	UserSubscriptionId         int    `json:"user_subscription_id" gorm:"not null;index"`
-	Type                       string `json:"type" gorm:"type:varchar(32);not null;index"`
-	IdempotencyKey             string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
-	SourceType                 string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
-	SourceId                   int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
-	SourceSnapshot             string `json:"source_snapshot,omitempty" gorm:"type:text"`
-	GrossCredit                int64  `json:"gross_credit" gorm:"type:bigint;not null"`
-	DebtOffset                 int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
-	DebtFormed                 int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
-	AvailableCreditBefore      int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
-	SettlementDebtBefore       int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
-	BalanceBefore              int64  `json:"balance_before" gorm:"type:bigint;not null"`
-	BalanceAfter               int64  `json:"balance_after" gorm:"type:bigint;not null"`
-	AvailableCreditAfter       int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
-	SettlementDebtAfter        int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
-	OperatorUserId             int    `json:"operator_user_id" gorm:"not null;default:0"`
-	PaymentProvider            string `json:"payment_provider,omitempty" gorm:"type:varchar(50);not null;default:''"`
-	ParameterFingerprint       string `json:"-" gorm:"type:varchar(64);not null;default:''"`
-	Reason                     string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
-	ValuationCurrency          string `json:"valuation_currency" gorm:"type:varchar(8);not null;default:''"`
-	ValuationGrossCostMicros   int64  `json:"valuation_gross_cost_micros,string" gorm:"type:bigint;not null;default:0"`
-	ValuationNetCostMicros     int64  `json:"valuation_net_cost_micros,string" gorm:"type:bigint;not null;default:0"`
-	ValuationConfidence        string `json:"valuation_confidence" gorm:"type:varchar(16);not null;default:''"`
-	ValuationRuleVersion       int    `json:"valuation_rule_version" gorm:"not null;default:0"`
-	ValuationStateVersionAfter int64  `json:"valuation_state_version_after" gorm:"type:bigint;not null;default:0"`
-	FxSourceCurrency           string `json:"fx_source_currency" gorm:"type:varchar(8);not null;default:''"`
-	FxRateNumerator            int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
-	FxRateDenominator          int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
-	FxCapturedAt               int64  `json:"fx_captured_at" gorm:"type:bigint;not null;default:0"`
-	CreatedAt                  int64  `json:"created_at" gorm:"type:bigint;not null;index"`
+	Id                                int    `json:"id"`
+	UserId                            int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
+	UserSubscriptionId                int    `json:"user_subscription_id" gorm:"not null;index"`
+	Type                              string `json:"type" gorm:"type:varchar(32);not null;index"`
+	IdempotencyKey                    string `json:"idempotency_key" gorm:"type:varchar(128);not null;uniqueIndex:idx_credit_balance_ledger_user_key,priority:2"`
+	SourceType                        string `json:"source_type" gorm:"type:varchar(32);not null;uniqueIndex:idx_credit_balance_ledger_source,priority:1;index"`
+	SourceId                          int    `json:"source_id" gorm:"not null;uniqueIndex:idx_credit_balance_ledger_source,priority:2"`
+	SourceSnapshot                    string `json:"source_snapshot,omitempty" gorm:"type:text"`
+	GrossCredit                       int64  `json:"gross_credit" gorm:"type:bigint;not null"`
+	DebtOffset                        int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
+	DebtFormed                        int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
+	AvailableCreditBefore             int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtBefore              int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
+	BalanceBefore                     int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	BalanceAfter                      int64  `json:"balance_after" gorm:"type:bigint;not null"`
+	AvailableCreditAfter              int64  `json:"available_credit_after" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtAfter               int64  `json:"settlement_debt_after" gorm:"type:bigint;not null;default:0"`
+	OperatorUserId                    int    `json:"operator_user_id" gorm:"not null;default:0"`
+	PaymentProvider                   string `json:"payment_provider,omitempty" gorm:"type:varchar(50);not null;default:''"`
+	ParameterFingerprint              string `json:"-" gorm:"type:varchar(64);not null;default:''"`
+	SourcePlanId                      int    `json:"source_plan_id" gorm:"not null;default:0;index"`
+	TargetPlanId                      int    `json:"target_plan_id" gorm:"not null;default:0;index"`
+	SourceTokenLimit                  int64  `json:"source_token_limit,string" gorm:"type:bigint;not null;default:0"`
+	SourceTokenUsed                   int64  `json:"source_token_used,string" gorm:"type:bigint;not null;default:0"`
+	SourceStatus                      string `json:"source_status" gorm:"type:varchar(32);not null;default:''"`
+	SourceStartTime                   int64  `json:"source_start_time,string" gorm:"type:bigint;not null;default:0"`
+	SourceEndTime                     int64  `json:"source_end_time,string" gorm:"type:bigint;not null;default:0"`
+	Full31DayBlocks                   int64  `json:"full_31_day_blocks,string" gorm:"type:bigint;not null;default:0"`
+	CurrentRemainingCredit            int64  `json:"current_remaining_credit,string" gorm:"type:bigint;not null;default:0"`
+	CreditBasisSource                 string `json:"credit_basis_source" gorm:"type:varchar(32);not null;default:''"`
+	SourceDurationUnit                string `json:"source_duration_unit" gorm:"type:varchar(16);not null;default:''"`
+	SourceDurationValue               int    `json:"source_duration_value" gorm:"not null;default:0"`
+	SourceCustomSeconds               int64  `json:"source_custom_seconds,string" gorm:"type:bigint;not null;default:0"`
+	SourceQuotaResetPeriod            string `json:"source_quota_reset_period" gorm:"type:varchar(16);not null;default:''"`
+	SourceQuotaResetCustomSeconds     int64  `json:"source_quota_reset_custom_seconds,string" gorm:"type:bigint;not null;default:0"`
+	ValuationSourcePriceMicros        int64  `json:"valuation_source_price_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationCreditBasis              int64  `json:"valuation_credit_basis,string" gorm:"type:bigint;not null;default:0"`
+	ValuationUnitValueNumeratorMicros int64  `json:"valuation_unit_value_numerator_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationUnitValueDenominator     int64  `json:"valuation_unit_value_denominator,string" gorm:"type:bigint;not null;default:0"`
+	NetGrantedCredit                  int64  `json:"net_granted_credit,string" gorm:"type:bigint;not null;default:0"`
+	Reason                            string `json:"reason" gorm:"type:varchar(255);not null;default:''"`
+	ValuationCurrency                 string `json:"valuation_currency" gorm:"type:varchar(8);not null;default:''"`
+	ValuationGrossCostMicros          int64  `json:"valuation_gross_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationNetCostMicros            int64  `json:"valuation_net_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	ValuationConfidence               string `json:"valuation_confidence" gorm:"type:varchar(16);not null;default:''"`
+	ValuationRuleVersion              int    `json:"valuation_rule_version" gorm:"not null;default:0"`
+	ValuationStateVersionAfter        int64  `json:"valuation_state_version_after" gorm:"type:bigint;not null;default:0"`
+	FxSourceCurrency                  string `json:"fx_source_currency" gorm:"type:varchar(8);not null;default:''"`
+	FxRateNumerator                   int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
+	FxRateDenominator                 int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
+	FxCapturedAt                      int64  `json:"fx_captured_at" gorm:"type:bigint;not null;default:0"`
+	CreatedAt                         int64  `json:"created_at" gorm:"type:bigint;not null;index"`
 }
 
 type CreditBalanceLedgerHistoryItem struct {
@@ -80,6 +100,105 @@ func (l *CreditBalanceLedger) BeforeDelete(_ *gorm.DB) error {
 	return errors.New("credit balance ledger is immutable")
 }
 
+type CreditBalanceConversionSourceFacts struct {
+	ConversionIdempotencyKey string
+	SourcePlanId             int
+	SourceTokenLimit         int64
+	SourceTokenUsed          int64
+	SourceStatus             string
+	SourceStartTime          int64
+	SourceEndTime            int64
+	Full31DayBlocks          int64
+	CurrentRemainingCredit   int64
+	CreditBasisSource        string
+	DurationUnit             string
+	DurationValue            int
+	CustomSeconds            int64
+	QuotaResetPeriod         string
+	QuotaResetCustomSeconds  int64
+}
+
+type creditBalanceConversionFingerprintFacts struct {
+	Version                       int    `json:"version"`
+	UserId                        int    `json:"user_id"`
+	ConversionIdempotencyKey      string `json:"conversion_idempotency_key"`
+	SourceSubscriptionId          int    `json:"source_subscription_id"`
+	SourcePlanId                  int    `json:"source_plan_id"`
+	TargetPlanId                  int    `json:"target_plan_id"`
+	SourceTokenLimit              int64  `json:"source_token_limit"`
+	SourceTokenUsed               int64  `json:"source_token_used"`
+	SourceStatus                  string `json:"source_status"`
+	SourceStartTime               int64  `json:"source_start_time"`
+	SourceEndTime                 int64  `json:"source_end_time"`
+	Full31DayBlocks               int64  `json:"full_31_day_blocks"`
+	CurrentRemainingCredit        int64  `json:"current_remaining_credit"`
+	CreditBasisSource             string `json:"credit_basis_source"`
+	SourceDurationUnit            string `json:"source_duration_unit"`
+	SourceDurationValue           int    `json:"source_duration_value"`
+	SourceCustomSeconds           int64  `json:"source_custom_seconds"`
+	SourceQuotaResetPeriod        string `json:"source_quota_reset_period"`
+	SourceQuotaResetCustomSeconds int64  `json:"source_quota_reset_custom_seconds"`
+	SourcePriceMicros             int64  `json:"source_price_micros"`
+	ValuationCreditBasis          int64  `json:"valuation_credit_basis"`
+	GrossCredit                   int64  `json:"gross_credit"`
+	SourceCurrency                string `json:"source_currency"`
+	ValuationCurrency             string `json:"valuation_currency"`
+	RuleVersion                   int    `json:"rule_version"`
+	FxRateNumerator               int64  `json:"fx_rate_numerator"`
+	FxRateDenominator             int64  `json:"fx_rate_denominator"`
+	FxCapturedAt                  int64  `json:"fx_captured_at"`
+	UnitValueNumeratorMicros      int64  `json:"unit_value_numerator_micros"`
+	UnitValueDenominator          int64  `json:"unit_value_denominator"`
+}
+
+func creditBalanceConversionParameterFingerprint(request CreditBalanceGrantRequest, ingress creditValuationIngress) (string, error) {
+	source := request.ConversionSource
+	if source == nil || strings.TrimSpace(source.ConversionIdempotencyKey) == "" {
+		return "", ErrCreditValuationSourceInvalid
+	}
+	facts := creditBalanceConversionFingerprintFacts{
+		Version:                       1,
+		UserId:                        request.UserId,
+		ConversionIdempotencyKey:      strings.TrimSpace(source.ConversionIdempotencyKey),
+		SourceSubscriptionId:          request.SourceId,
+		SourcePlanId:                  source.SourcePlanId,
+		TargetPlanId:                  request.TargetPlanId,
+		SourceTokenLimit:              source.SourceTokenLimit,
+		SourceTokenUsed:               source.SourceTokenUsed,
+		SourceStatus:                  strings.TrimSpace(source.SourceStatus),
+		SourceStartTime:               source.SourceStartTime,
+		SourceEndTime:                 source.SourceEndTime,
+		Full31DayBlocks:               source.Full31DayBlocks,
+		CurrentRemainingCredit:        source.CurrentRemainingCredit,
+		CreditBasisSource:             strings.TrimSpace(source.CreditBasisSource),
+		SourceDurationUnit:            strings.TrimSpace(source.DurationUnit),
+		SourceDurationValue:           source.DurationValue,
+		SourceCustomSeconds:           source.CustomSeconds,
+		SourceQuotaResetPeriod:        NormalizeResetPeriod(source.QuotaResetPeriod),
+		SourceQuotaResetCustomSeconds: source.QuotaResetCustomSeconds,
+		GrossCredit:                   request.GrossCredit,
+	}
+	if valuation := request.ValuationSource; valuation != nil {
+		facts.SourcePriceMicros = valuation.SourcePriceMicros
+		facts.ValuationCreditBasis = valuation.SourcePlanCredit
+		facts.SourceCurrency = ingress.fxSourceCurrency
+		facts.ValuationCurrency = ingress.currency
+		facts.RuleVersion = ingress.ruleVersion
+		facts.FxRateNumerator = ingress.fxRateNumerator
+		facts.FxRateDenominator = ingress.fxRateDenominator
+		facts.FxCapturedAt = ingress.fxCapturedAt
+		facts.UnitValueNumeratorMicros = ingress.unitValueNumeratorMicros
+		facts.UnitValueDenominator = ingress.unitValueDenominator
+	}
+	payload, err := common.Marshal(facts)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", common.Sha256Raw(payload)), nil
+}
+
+// ConversionIdempotencyKey lives in ConversionSource; the ledger idempotency
+// key remains the source-derived allocation identity.
 type CreditBalanceGrantRequest struct {
 	UserId                  int
 	GrossCredit             int64
@@ -94,7 +213,9 @@ type CreditBalanceGrantRequest struct {
 	PaymentProvider         string
 	TargetPlanSnapshot      *SubscriptionPlan
 	ValuationSource         *CreditValuationSourceSnapshot
+	ConversionSource        *CreditBalanceConversionSourceFacts
 	PreserveActiveSelection bool
+	parameterFingerprint    string
 }
 
 type CreditBalanceGrantResult struct {
@@ -269,6 +390,15 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 			return nil, ErrCreditValuationSourceInvalid
 		}
 	}
+	if request.SourceType == CreditBalanceLedgerSourceSubscriptionConversion {
+		if request.ConversionSource == nil {
+			return nil, ErrCreditValuationSourceInvalid
+		}
+		request.parameterFingerprint, err = creditBalanceConversionParameterFingerprint(request, valuationIngress)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	var user User
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id", "setting").Where("id = ?", request.UserId).First(&user).Error; err != nil {
@@ -356,6 +486,8 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		SettlementDebtAfter:   debtAfter,
 		OperatorUserId:        request.OperatorUserId,
 		PaymentProvider:       request.PaymentProvider,
+		ParameterFingerprint:  request.parameterFingerprint,
+		TargetPlanId:          request.TargetPlanId,
 		Reason:                request.Reason,
 		CreatedAt:             getDBTimestampTx(tx),
 	}
@@ -367,11 +499,33 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		ledger.ValuationRuleVersion = valuationIngress.ruleVersion
 		ledger.ValuationStateVersionAfter = valuationMutation.StateVersionAfter
 	}
-	if valuationReady && request.SourceType == CreditBalanceLedgerSourceSubscriptionConversion {
-		ledger.FxSourceCurrency = valuationIngress.fxSourceCurrency
-		ledger.FxRateNumerator = valuationIngress.fxRateNumerator
-		ledger.FxRateDenominator = valuationIngress.fxRateDenominator
-		ledger.FxCapturedAt = valuationIngress.fxCapturedAt
+	if request.SourceType == CreditBalanceLedgerSourceSubscriptionConversion {
+		source := request.ConversionSource
+		ledger.SourcePlanId = source.SourcePlanId
+		ledger.SourceTokenLimit = source.SourceTokenLimit
+		ledger.SourceTokenUsed = source.SourceTokenUsed
+		ledger.SourceStatus = strings.TrimSpace(source.SourceStatus)
+		ledger.SourceStartTime = source.SourceStartTime
+		ledger.SourceEndTime = source.SourceEndTime
+		ledger.Full31DayBlocks = source.Full31DayBlocks
+		ledger.CurrentRemainingCredit = source.CurrentRemainingCredit
+		ledger.CreditBasisSource = strings.TrimSpace(source.CreditBasisSource)
+		ledger.SourceDurationUnit = strings.TrimSpace(source.DurationUnit)
+		ledger.SourceDurationValue = source.DurationValue
+		ledger.SourceCustomSeconds = source.CustomSeconds
+		ledger.SourceQuotaResetPeriod = NormalizeResetPeriod(source.QuotaResetPeriod)
+		ledger.SourceQuotaResetCustomSeconds = source.QuotaResetCustomSeconds
+		ledger.NetGrantedCredit = request.GrossCredit - debtOffset
+		if valuationReady {
+			ledger.ValuationSourcePriceMicros = request.ValuationSource.SourcePriceMicros
+			ledger.ValuationCreditBasis = request.ValuationSource.SourcePlanCredit
+			ledger.ValuationUnitValueNumeratorMicros = valuationIngress.unitValueNumeratorMicros
+			ledger.ValuationUnitValueDenominator = valuationIngress.unitValueDenominator
+			ledger.FxSourceCurrency = valuationIngress.fxSourceCurrency
+			ledger.FxRateNumerator = valuationIngress.fxRateNumerator
+			ledger.FxRateDenominator = valuationIngress.fxRateDenominator
+			ledger.FxCapturedAt = valuationIngress.fxCapturedAt
+		}
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err
@@ -390,6 +544,9 @@ func findCreditBalanceGrantResultTx(tx *gorm.DB, request CreditBalanceGrantReque
 	}
 	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != request.GrossCredit || ledger.Type != request.Type || ledger.SourceSnapshot != request.SourceSnapshot || ledger.PaymentProvider != strings.TrimSpace(request.PaymentProvider) {
 		return nil, false, errors.New("credit balance idempotency key mismatch")
+	}
+	if request.parameterFingerprint != "" && ledger.ParameterFingerprint != request.parameterFingerprint {
+		return nil, false, ErrConversionIdempotencyConflict
 	}
 	var balance UserSubscription
 	if err := tx.Select("id", "plan_id").Where("id = ?", ledger.UserSubscriptionId).First(&balance).Error; err != nil {

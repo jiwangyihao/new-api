@@ -266,6 +266,155 @@ func TestAdminCreditBalanceIncreaseLedgerFailureRollsBackEverything(t *testing.T
 	}
 }
 
+func TestAdminCreditBalanceIncreaseUsesFrozenFXSnapshotBothDirections(t *testing.T) {
+	tests := []struct {
+		name              string
+		sourceCurrency    string
+		valuationCurrency string
+		wantNumerator     int64
+		wantDenominator   int64
+		wantDirection     string
+		wantGrossMicros   int64
+	}{
+		{name: "CNY to USD", sourceCurrency: "CNY", valuationCurrency: "USD", wantNumerator: 10, wantDenominator: 73, wantDirection: CreditFXDirectionCNYtoUSD, wantGrossMicros: 4_383_561},
+		{name: "USD to CNY", sourceCurrency: "USD", valuationCurrency: "CNY", wantNumerator: 73, wantDenominator: 10, wantDirection: CreditFXDirectionUSDtoCNY, wantGrossMicros: 233_600_000},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			originalFX := runtimeCreditFXRateSnapshot.Load()
+			t.Cleanup(func() { runtimeCreditFXRateSnapshot.Store(originalFX) })
+			frozenFX, err := prepareCreditFXRateSnapshot("7.3", 1_800_000_300)
+			require.NoError(t, err)
+			publishCreditFXRateSnapshot(frozenFX)
+
+			db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+			require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", optionPlanID).Update("currency", test.sourceCurrency).Error)
+			require.NoError(t, db.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Updates(map[string]any{
+				"currency": test.valuationCurrency, "valuation_currency": test.valuationCurrency,
+			}).Error)
+
+			result, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+				UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+				PlanId: optionPlanID, IdempotencyKey: "admin-credit-cross-" + test.name,
+				OperatorUserId: 92_599, Reason: "跨币种售后补偿",
+			})
+			require.NoError(t, err)
+			require.False(t, result.Replayed)
+			require.Equal(t, test.sourceCurrency, result.CreditBalance.SourceCurrency)
+			require.Equal(t, test.valuationCurrency, result.CreditBalance.ValuationCurrency)
+			require.Equal(t, test.wantNumerator, result.CreditBalance.FxRateNumerator)
+			require.Equal(t, test.wantDenominator, result.CreditBalance.FxRateDenominator)
+			require.Equal(t, int64(1_800_000_300), result.CreditBalance.FxCapturedAt)
+			require.Equal(t, test.wantDirection, result.CreditBalance.FxDirection)
+			require.Equal(t, test.wantGrossMicros, result.CreditBalance.GrossAmountMicros)
+			require.Equal(t, test.wantGrossMicros, result.CreditBalance.NetAmountMicros)
+
+			var ledger CreditBalanceLedger
+			require.NoError(t, db.First(&ledger, result.CreditBalance.LedgerId).Error)
+			require.Equal(t, optionPlanID, ledger.PlanId)
+			require.Equal(t, int64(800), ledger.GrossCredit)
+			require.Equal(t, int64(800), ledger.NetCredit)
+			require.Equal(t, int64(40_000_000), ledger.SourcePriceMicros)
+			require.Equal(t, int64(1_000), ledger.SourcePlanCredit)
+			require.Equal(t, test.sourceCurrency, ledger.FxSourceCurrency)
+			require.Equal(t, test.valuationCurrency, ledger.ValuationCurrency)
+			require.Equal(t, test.wantNumerator, ledger.FxRateNumerator)
+			require.Equal(t, test.wantDenominator, ledger.FxRateDenominator)
+			require.Equal(t, int64(1_800_000_300), ledger.FxCapturedAt)
+			require.Equal(t, test.wantDirection, ledger.FxDirection)
+		})
+	}
+}
+
+func TestAdminCreditBalanceIncreaseReplayKeepsFrozenFXAfterOptionChange(t *testing.T) {
+	originalFX := runtimeCreditFXRateSnapshot.Load()
+	t.Cleanup(func() { runtimeCreditFXRateSnapshot.Store(originalFX) })
+	frozenFX, err := prepareCreditFXRateSnapshot("7.3", 1_800_000_301)
+	require.NoError(t, err)
+	publishCreditFXRateSnapshot(frozenFX)
+	db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+	valuationCurrency := "USD"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Updates(map[string]any{
+		"currency": valuationCurrency, "valuation_currency": valuationCurrency,
+	}).Error)
+	request := CreditBalanceAdjustmentRequest{
+		UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+		PlanId: optionPlanID, IdempotencyKey: "admin-credit-frozen-fx-replay",
+		OperatorUserId: 92_699, Reason: "跨币种售后补偿",
+	}
+
+	first, err := AdjustCreditBalance(request)
+	require.NoError(t, err)
+	updatedFX, err := prepareCreditFXRateSnapshot("8.1", 1_800_000_302)
+	require.NoError(t, err)
+	publishCreditFXRateSnapshot(updatedFX)
+	replay, err := AdjustCreditBalance(request)
+	require.NoError(t, err)
+	require.True(t, replay.Replayed)
+	require.True(t, replay.CreditBalance.Replayed)
+	require.Equal(t, first.CreditBalance.LedgerId, replay.CreditBalance.LedgerId)
+	require.Equal(t, first.CreditBalance.GrossAmountMicros, replay.CreditBalance.GrossAmountMicros)
+	require.Equal(t, first.CreditBalance.FxRateNumerator, replay.CreditBalance.FxRateNumerator)
+	require.Equal(t, first.CreditBalance.FxRateDenominator, replay.CreditBalance.FxRateDenominator)
+	require.Equal(t, first.CreditBalance.FxCapturedAt, replay.CreditBalance.FxCapturedAt)
+	require.Equal(t, first.CreditBalance.ValuationStateVersionAfter, replay.CreditBalance.ValuationStateVersionAfter)
+	var ledgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Where("source_type = ?", CreditBalanceLedgerSourceAdminAdjustment).Count(&ledgerCount).Error)
+	require.Equal(t, int64(1), ledgerCount)
+}
+
+func TestAdminCreditBalanceIncreaseRejectsInvalidFXAtomically(t *testing.T) {
+	originalFX := runtimeCreditFXRateSnapshot.Load()
+	t.Cleanup(func() { runtimeCreditFXRateSnapshot.Store(originalFX) })
+	runtimeCreditFXRateSnapshot.Store(nil)
+	db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+	valuationCurrency := "USD"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Updates(map[string]any{
+		"currency": valuationCurrency, "valuation_currency": valuationCurrency,
+	}).Error)
+
+	result, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+		UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+		PlanId: optionPlanID, IdempotencyKey: "admin-credit-invalid-fx",
+		OperatorUserId: 92_799, Reason: "跨币种售后补偿",
+	})
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrCreditValuationInvalidFX)
+	for _, target := range []any{&CreditBalanceAdjustment{}, &CreditBalanceLedger{}, &CreditValuationState{}, &UserSubscription{}} {
+		var count int64
+		require.NoError(t, db.Model(target).Count(&count).Error)
+		require.Zero(t, count)
+	}
+}
+
+func TestAdminCreditBalanceIncreaseCrossCurrencyLedgerFailureRollsBackEverything(t *testing.T) {
+	originalFX := runtimeCreditFXRateSnapshot.Load()
+	t.Cleanup(func() { runtimeCreditFXRateSnapshot.Store(originalFX) })
+	frozenFX, err := prepareCreditFXRateSnapshot("7.3", 1_800_000_303)
+	require.NoError(t, err)
+	publishCreditFXRateSnapshot(frozenFX)
+	db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+	valuationCurrency := "USD"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Updates(map[string]any{
+		"currency": valuationCurrency, "valuation_currency": valuationCurrency,
+	}).Error)
+	require.NoError(t, db.Exec(`CREATE TRIGGER reject_admin_cross_currency_ledger BEFORE INSERT ON credit_balance_ledgers WHEN NEW.source_type = 'admin_adjustment' BEGIN SELECT RAISE(FAIL, 'injected admin cross-currency ledger failure'); END`).Error)
+	t.Cleanup(func() { _ = db.Exec(`DROP TRIGGER IF EXISTS reject_admin_cross_currency_ledger`).Error })
+
+	result, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+		UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+		PlanId: optionPlanID, IdempotencyKey: "admin-credit-cross-failure",
+		OperatorUserId: 92_899, Reason: "跨币种售后补偿",
+	})
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "injected admin cross-currency ledger failure")
+	for _, target := range []any{&CreditBalanceAdjustment{}, &CreditBalanceLedger{}, &CreditValuationState{}, &UserSubscription{}} {
+		var count int64
+		require.NoError(t, db.Model(target).Count(&count).Error)
+		require.Zero(t, count)
+	}
+}
+
 func seedRedemptionCreditPositiveIngress(t *testing.T, debt int64) (*gorm.DB, int, int, int) {
 	return seedRedemptionCreditPositiveIngressCurrencies(t, debt, "CNY", "CNY")
 }

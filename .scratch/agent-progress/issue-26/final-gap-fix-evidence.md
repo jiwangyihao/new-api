@@ -28,15 +28,16 @@
 - GREEN：集中穷举 conversion stale/ineligible/idempotency conflict 与 `credit_fx_rate_missing`、`credit_fx_rate_empty`、`credit_fx_invalid_decimal`、`credit_fx_precision_exceeded`、`credit_fx_non_positive`、`credit_fx_direction_mismatch`、`credit_fx_unsupported_currency`、`credit_fx_overflow`；unknown/untyped 只用本地化通用 fallback。quote/confirm 均显式 `skipBusinessError: true` 并由 API 行为测试断言。stale 只刷新预览，不自动发第二次 confirm。
 - GREEN 命令：`bun test src/features/subscription-conversion/api.test.ts src/features/subscription-conversion/errors.test.ts src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`；结果 `23 pass / 0 fail`。
 - 六语言：新增 5 个合并后的可见消息键并分别翻译 en/zh/fr/ja/ru/vi；`bun run i18n:sync` 成功，六语言 `missingCount=0`、`extrasCount=0`。既有全库 untranslated 计数未在本 Dispatch 清理。
-- stable-code/i18n RED/GREEN 提交：待创建。
+- stable-code/i18n GREEN 提交：`c8aaf557f fix(subscription): 本地化转换稳定错误码`。
 
 ## Finding C：轮询 quote 写放大
 
-- RED 命令：待定位 `GetTimedConversionQuotes` 的真实 SQLite 行为接缝后记录。
-- RED 结果：待运行；必须观察数据库记录增长，不使用源码文本断言。
-- 根因：待 RED 后确认。
+- RED 命令：`go test ./model -run '^TestListTimedSubscriptionConversionQuotesReusesActiveQuoteForUnchangedFacts$' -count=1 -timeout=120s`。
+- RED 结果：真实 SQLite 连续两次调用 `ListTimedSubscriptionConversionQuotes`，相同 user/source/facts 得到不同 UUID（`b1e...` → `51d...`），持久 quote 记录数期望 1、实际 2。
+- 根因：`issueTimedSubscriptionConversionQuoteTx` 每次轮询无条件 `Create`；候选订阅无上限；source plan、target plan、Credit debt/valuation/FX 在每项重复查询；无有界过期清理。
+- 设计：quote identity 深模块在 canonical fingerprint 后复用 owner/source/fingerprint 的未过期 DB 记录；复用组合索引支撑查询。候选按 `id asc` 限 100；source plans 批量加载，target plan 与 Credit debt 在列表事务只读一次。每次新发 quote 前按 owner/source 稳定取至多 32 条已过期 identity 再按 PK 删除；不触碰未过期并发 Confirm。
 - GREEN：待实现。
-- 提交：待创建。
+- RED 提交：待创建。
 
 ## 预定验证边界
 

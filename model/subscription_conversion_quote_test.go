@@ -228,6 +228,55 @@ func TestListTimedSubscriptionConversionQuotesLimitsConversionHistory(t *testing
 	assert.Greater(t, result.Conversions[0].Id, result.Conversions[99].Id)
 }
 
+func TestListTimedSubscriptionConversionQuotesReusesActiveQuoteForUnchangedFacts(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	const (
+		userID         = 19_103
+		planID         = 29_103
+		subscriptionID = 39_103
+	)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id:                      subscriptionID,
+		UserId:                  userID,
+		PlanId:                  planID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              100,
+		TokenUsed:               25,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               databaseNow - 40*24*60*60,
+		EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+		LastGrantCreditSnapshot: &snapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	first, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, first.Quotes, 1)
+	require.NotEmpty(t, first.Quotes[0].QuoteId)
+
+	second, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, second.Quotes, 1)
+	assert.Equal(t, first.Quotes[0].QuoteId, second.Quotes[0].QuoteId)
+	assert.Equal(t, first.Quotes[0].FactsFingerprint, second.Quotes[0].FactsFingerprint)
+	assert.Equal(t, first.Quotes[0].CreatedAt, second.Quotes[0].CreatedAt)
+	assert.Equal(t, first.Quotes[0].ExpiresAt, second.Quotes[0].ExpiresAt)
+
+	var quoteCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
+		Where("user_id = ? AND source_subscription_id = ?", userID, subscriptionID).
+		Count(&quoteCount).Error)
+	assert.Equal(t, int64(1), quoteCount)
+}
+
 func TestUserSubscriptionGrantMetadataIsNotSerialized(t *testing.T) {
 	snapshot := int64(9_007_199_254_740_993)
 	data, err := common.Marshal(UserSubscription{

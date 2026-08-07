@@ -109,7 +109,7 @@ func TestSubscriptionConversionRouteConcurrentDifferentKeysConvertsSourceOnce(t 
 			continue
 		}
 		failures++
-		assert.Contains(t, result.response.Message, "already converted")
+		assert.Equal(t, "subscription_conversion_idempotency_conflict", result.response.Code)
 	}
 	assert.Equal(t, 1, successes)
 	assert.Equal(t, 1, failures)

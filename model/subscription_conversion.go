@@ -217,6 +217,13 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 				FXRateSnapshot:    &fxSnapshot,
 			}
 		}
+		var inFlightRequests []timedConversionInFlightRequest
+		if valuationSource != nil {
+			inFlightRequests, err = prepareTimedConversionInFlightRequestsTx(tx, sourceSubscriptionId)
+			if err != nil {
+				return err
+			}
+		}
 		snapshotBytes, err := common.Marshal(quote)
 		if err != nil {
 			return err
@@ -253,6 +260,16 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		})
 		if err != nil {
 			return err
+		}
+		if valuationSource != nil {
+			if err := applyTimedConversionInFlightRequestsTx(
+				tx,
+				inFlightRequests,
+				grant.UserSubscriptionId,
+				valuationSource,
+			); err != nil {
+				return err
+			}
 		}
 
 		var ledger CreditBalanceLedger
@@ -296,16 +313,6 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		}
 		if err := tx.Create(conversion).Error; err != nil {
 			return err
-		}
-		if valuationSource != nil {
-			if err := freezeTimedConversionInFlightRequestsTx(
-				tx,
-				sourceSubscriptionId,
-				grant.UserSubscriptionId,
-				valuationSource,
-			); err != nil {
-				return err
-			}
 		}
 		statusUpdate := tx.Model(&UserSubscription{}).
 			Where("id = ? AND user_id = ? AND status = ?", sourceSubscriptionId, userId, source.Status).
@@ -569,23 +576,47 @@ func validateSubscriptionConversionReplayFactsTx(tx *gorm.DB, conversion *Subscr
 	return nil
 }
 
-func freezeTimedConversionInFlightRequestsTx(tx *gorm.DB, sourceSubscriptionId int, valuationSubscriptionId int, valuationSource *CreditValuationSourceSnapshot) error {
-	if tx == nil || sourceSubscriptionId <= 0 || valuationSubscriptionId <= 0 || valuationSource == nil || valuationSource.FXRateSnapshot == nil {
-		return ErrCreditValuationSourceInvalid
+type timedConversionInFlightRequest struct {
+	id          int
+	requestID   string
+	preConsumed int64
+}
+
+func prepareTimedConversionInFlightRequestsTx(tx *gorm.DB, sourceSubscriptionId int) ([]timedConversionInFlightRequest, error) {
+	if tx == nil || sourceSubscriptionId <= 0 {
+		return nil, ErrCreditValuationSourceInvalid
 	}
 	var records []SubscriptionPreConsumeRecord
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("user_subscription_id = ? AND status = ? AND finalized_at = 0 AND valuation_subscription_id = 0", sourceSubscriptionId, "consumed").
-		Order("id asc").
+		Order("request_id asc").Order("id asc").
 		Find(&records).Error; err != nil {
-		return err
+		return nil, err
 	}
+	requests := make([]timedConversionInFlightRequest, len(records))
 	for index := range records {
-		record := &records[index]
-		if record.PreConsumed <= 0 || record.AppliedCredit != 0 {
+		record := records[index]
+		if record.Id <= 0 || strings.TrimSpace(record.RequestId) == "" || record.PreConsumed <= 0 || record.AppliedCredit != 0 || record.ValuationSubscriptionId != 0 || record.FinalizedAt != 0 {
+			return nil, ErrCreditValuationTargetConflict
+		}
+		requests[index] = timedConversionInFlightRequest{
+			id:          record.Id,
+			requestID:   record.RequestId,
+			preConsumed: record.PreConsumed,
+		}
+	}
+	return requests, nil
+}
+
+func applyTimedConversionInFlightRequestsTx(tx *gorm.DB, requests []timedConversionInFlightRequest, valuationSubscriptionId int, valuationSource *CreditValuationSourceSnapshot) error {
+	if tx == nil || valuationSubscriptionId <= 0 || valuationSource == nil || valuationSource.FXRateSnapshot == nil {
+		return ErrCreditValuationSourceInvalid
+	}
+	for _, request := range requests {
+		if request.id <= 0 || strings.TrimSpace(request.requestID) == "" || request.preConsumed <= 0 {
 			return ErrCreditValuationTargetConflict
 		}
-		sourceCostMicros, err := mulDivFloor(valuationSource.SourcePriceMicros, record.PreConsumed, valuationSource.SourcePlanCredit)
+		sourceCostMicros, err := mulDivFloor(valuationSource.SourcePriceMicros, request.preConsumed, valuationSource.SourcePlanCredit)
 		if err != nil {
 			return err
 		}
@@ -595,10 +626,10 @@ func freezeTimedConversionInFlightRequestsTx(tx *gorm.DB, sourceSubscriptionId i
 		}
 		now := getDBTimestampTx(tx)
 		updated := tx.Model(&SubscriptionPreConsumeRecord{}).
-			Where("id = ? AND applied_credit = 0 AND valuation_subscription_id = 0 AND finalized_at = 0", record.Id).
+			Where("id = ? AND request_id = ? AND status = ? AND applied_credit = 0 AND valuation_subscription_id = 0 AND finalized_at = 0", request.id, request.requestID, "consumed").
 			Updates(map[string]any{
-				"applied_credit":                 record.PreConsumed,
-				"deducted_available_credit":      record.PreConsumed,
+				"applied_credit":                 request.preConsumed,
+				"deducted_available_credit":      request.preConsumed,
 				"valuation_subscription_id":      valuationSubscriptionId,
 				"deducted_exact_cost_micros":     exactCostMicros,
 				"deducted_estimated_cost_micros": 0,

@@ -1,26 +1,29 @@
 # H1 证据记录
 
-## 安全点
+## 安全点与 RED
 
-- 冻结实现祖先：`6f865feca3cd517a3dd744e67ea1240d5001d2ed`。
-- RED 前安全提交：`5802fb461f70d2da075f13cef4f264282ed8336a`。
-- 当前工作树包含仅 H1 RED 测试及 progress 校准；未执行 reset、rebase、分支切换或 origin/main 操作。
-
-## H1 RED
-
-- 精确命令：`go test -v ./model -run '^TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress$' -count=1`
-- 真实结果：FAIL，`subscription_conversion_valuation_test.go:700` 报 `Should be empty, but was UserSubscription`。
-- 失败语义：`prematureTarget` 记录为 `UserSubscription`；该值来自真实 GORM target mutation callback。独立 SQLite WAL 观察连接确认 request 仍未冻结（`valuation_subscription_id = 0`、`applied_credit = 0`），因此不是编译、迁移、连接或夹具初始化失败。
-- 证据边界：测试通过真实双连接、WAL、事务和可控 callback 观察运行时顺序，不检查源码文本；SQLite 不证明其他数据库的行锁语义。
-- 结论：Confirm 当前在 `GrantCreditBalanceTx`/目标 ingress 与 `tx.Create(conversion)` 路径完成后，才调用 `freezeTimedConversionInFlightRequestsTx`；request → target 顺序违反合同。
+- 冻结实现祖先：`6f865feca3cd517a3dd744e67ea1240d5001d2ed`；progress 安全提交：`5802fb461f70d2da075f13cef4f264282ed8336a`；H1 RED 提交：`a9b6d92e668e73426f72d235cd4bad10a05c3e94`。
+- RED 命令：`go test -v ./model -run '^TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress$' -count=1`。
+- RED 结果：FAIL；`subscription_conversion_valuation_test.go:700` 报 `Should be empty, but was UserSubscription`。真实 SQLite WAL 双连接夹具已完成初始化；独立连接观察到 `valuation_subscription_id = 0`、`applied_credit = 0`，所以失败不是编译、迁移或夹具故障。
+- 结论：Confirm 在 request rows 选择/验证前进入目标 `UserSubscription` mutation，违反 request → target 固定锁序。
 
 ## H1 GREEN
 
-- 状态：未运行。
-- 计划：拆成目标 ingress 前 request rows 锁定/验证与捕获、目标 ingress 后仅更新已锁定 rows；相反 settle/refund 入口先按 request identity `FOR UPDATE` 锁定并验证 route，再进入 target mutation。
+- `subscription_conversion.go`：新增两阶段深模块 seam。`prepareTimedConversionInFlightRequestsTx` 在目标 ingress 前按 `request_id asc, id asc` 加 `UPDATE` 锁、验证并捕获 rows；`applyTimedConversionInFlightRequestsTx` 在目标 ingress 后只更新已捕获 rows。
+- `credit_valuation.go`：`SettleCreditRequestTargetTx` 入口按 `request_id` 加 `UPDATE` 锁，完整校验 route 的 id、user、source 与 valuation mapping，以锁定 record 覆盖传入 route 后才进入正向 settle 或 refund target mutation。
+- `subscription_delta_coalescer.go`：批次按 request identity 稳定排序，第一轮锁定并验证全部 routes，第二轮才执行 target settlement；错误仍按原始请求索引回填。
 
-## 范围与未完成
+## GREEN 验证
+
+- `go test -v ./model -run '^TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress$' -count=1`：PASS。
+- `go test ./model -run '^TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress$' -count=10`：PASS。
+- `go test -race ./model -run '^TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress$' -count=1`：PASS。
+- `go test ./model -run '^(TestTimedConversionConcurrentWithFinalSettleUsesLegalSerialization|TestTimedConversionConcurrentWithFullRefundUsesLegalSerialization|TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce|TestCreditRequestTargetCoalescerPreservesEnqueueOrderAndResults|TestCreditRequestTargetCoalescerRollsBackBatchAndAttributesMiddleFailure)$' -count=1`：PASS。
+- 同一 H1/settle/refund/concurrent/coalescer 定向集合 `-count=10`：PASS；同集合窄 `-race -count=1`：PASS。
+- 协调器独立验证当前三文件的 `TestConfirmTimedSubscriptionConversion`、`TestCreditValuationRequestTarget`、`TestFlushSubscriptionRequestTargets` 相关回归：PASS；`gofmt` 与 `git diff --check`：PASS。
+
+## 边界
 
 - 未触碰 #24 adjustment/redemption、#25、#27、#28，也未处理 M1/M3/M2。
-- MySQL/PostgreSQL 行锁门禁留给 #27；本阶段只提交跨方言 GORM 锁序实现与 SQLite 行为证据。
-- GREEN 后需运行同一测试、`-count=10`、必要窄 `-race`、`gofmt`、`git diff --check`，并在 clean 提交前校准本文件与 `status.md`。
+- SQLite 证据验证真实事务顺序与合法串行化，但不代替 MySQL/PostgreSQL 行锁门禁；三数据库验证留给 #27。
+- 本次提交将包含三个 H1 生产文件与本状态/证据校准；提交后必须确认 `git status --short` 为空。

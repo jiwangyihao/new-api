@@ -1057,10 +1057,17 @@ func AdminPreviewUserCreditBalance(c *gin.Context) {
 		UserId: userId, Operation: req.Operation, Amount: req.Amount, PlanId: req.PlanId,
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		writeAdminCreditBalanceAdjustmentError(c, err)
 		return
 	}
 	common.ApiSuccess(c, result)
+}
+func writeAdminCreditBalanceAdjustmentError(c *gin.Context, err error) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": err.Error(),
+		"code":    err.Error(),
+	})
 }
 
 func AdminAdjustUserCreditBalance(c *gin.Context) {
@@ -1075,7 +1082,7 @@ func AdminAdjustUserCreditBalance(c *gin.Context) {
 		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		writeAdminCreditBalanceAdjustmentError(c, err)
 		return
 	}
 	common.ApiSuccess(c, result)

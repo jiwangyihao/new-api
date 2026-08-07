@@ -348,3 +348,49 @@ func TestAdminCreditAdjustmentCommitRouteForwardsPlanAndReturnsAuthoritativeResu
 	assert.Equal(t, int64(1), adjustments)
 	assert.Equal(t, int64(1), ledgers)
 }
+
+func TestAdminCreditAdjustmentRoutesExposeStableCodesAndReplayCommittedResult(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
+
+	missingPlan := httptest.NewRecorder()
+	missingPlanRequest := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/adjustments/preview", userID),
+		bytes.NewBufferString(`{"operation":"increase","amount":800}`))
+	missingPlanRequest.Header.Set("Content-Type", "application/json")
+	missingPlanRequest.Header.Set("Authorization", "Bearer "+token)
+	missingPlanRequest.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(missingPlan, missingPlanRequest)
+	require.Equal(t, http.StatusOK, missingPlan.Code, missingPlan.Body.String())
+	assert.Contains(t, missingPlan.Body.String(), `"success":false`)
+	assert.Contains(t, missingPlan.Body.String(), `"code":"credit_valuation_plan_required"`)
+
+	requestBody := fmt.Sprintf(
+		`{"operation":"increase","amount":800,"plan_id":%d,"idempotency_key":"admin-http-replay-800","reason":"after-sales grant"}`,
+		planID,
+	)
+	first := performCreditAdjustmentRouteRequest(engine, token, userID, requestBody)
+	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+	assert.Contains(t, first.Body.String(), `"success":true`)
+	assert.Contains(t, first.Body.String(), `"replayed":false`)
+	replay := performCreditAdjustmentRouteRequest(engine, token, userID, requestBody)
+	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
+	assert.Contains(t, replay.Body.String(), `"success":true`)
+	assert.Contains(t, replay.Body.String(), `"replayed":true`)
+	assert.Contains(t, replay.Body.String(), `"gross_amount_micros":"32000000"`)
+	assert.Contains(t, replay.Body.String(), `"state_version_after":1`)
+
+	conflict := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":801,"plan_id":%d,"idempotency_key":"admin-http-replay-800","reason":"after-sales grant"}`,
+		planID,
+	))
+	require.Equal(t, http.StatusOK, conflict.Code, conflict.Body.String())
+	assert.Contains(t, conflict.Body.String(), `"success":false`)
+	assert.Contains(t, conflict.Body.String(), `"code":"credit_valuation_idempotency_mismatch"`)
+
+	var adjustments, ledgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Where("idempotency_key = ?", "admin-http-replay-800").Count(&adjustments).Error)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("idempotency_key = ?", "admin-http-replay-800").Count(&ledgers).Error)
+	assert.Equal(t, int64(1), adjustments)
+	assert.Equal(t, int64(1), ledgers)
+}

@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-管理员 adjustment HTTP 最小 GREEN 已完成：commit DTO/forwarding 保留 `plan_id`，只读 preview 路由/controller/service 返回权威整数估值且零写入；两条真实 route 测试 `-count=10` 通过，准备独立 clean 提交。
+管理员 adjustment HTTP 阶段完整 GREEN：plan_id commit、只读 preview、稳定 machine code、同 key 重放与事实冲突均通过真实 route `-count=10`；准备 API 阶段 clean 提交。
 
 ## 已完成
 
@@ -14,12 +14,13 @@
 - 已完整读取父 PRD #19、Issue #24、`CONTEXT.md`、ADR 0001/0002、2026-08-02 spec/plan、执行协议、Issue #24 指令/acceptance、Wave 2 contract/acceptance、Issue #20/#22 合同及既有 Issue #24 contract/status/evidence。
 - 已确认领域 H2 已完整 GREEN；本续作只补 API、preview、UI/i18n/browser 和最终门禁，不扩展 analytics 设计。
 - preview/commit 真实 HTTP GREEN：40 CNY / 1,000 Credit × 800 返回 `32,000,000` micros CNY；preview 无 adjustment/ledger/subscription 写入，commit 原子写入一条 adjustment 与 ledger。
+- 稳定码与幂等 HTTP GREEN：缺 plan 返回 `code=credit_valuation_plan_required`；同 key/同事实重放 `replayed=true` 且保持 `state_version_after=1`；amount 变化返回 `code=credit_valuation_idempotency_mismatch`，仅一条 adjustment/ledger。
 
 ## 下一步
 
-1. 提交后端 API GREEN clean 安全点。
-2. 继续用下一条 HTTP RED 冻结稳定错误码/幂等重放，不扩大现有 seam。
-3. 完成后端 API 阶段后再进入 UI/六语言/browser；不扩展 analytics 设计。
+1. 提交管理员 API 完整合同 clean 安全点。
+2. 后端 API 阶段完成后进入现有管理面板 UI 与六语言，不扩展 analytics 设计。
+3. UI 通过后再做真实浏览器与最终门禁。
 
 ## 阻塞
 

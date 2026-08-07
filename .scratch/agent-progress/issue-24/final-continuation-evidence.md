@@ -56,3 +56,11 @@
 - 结果：`go test: 1 packages ok`，约 15.86 秒；两条真实 Gin/AdminAuth/SQLite route 行为连续 10 次通过。
 - preview 可观察合同：`plan_id=9965`、gross Credit 800、gross/net `amount_micros="32000000"`、source/valuation currency CNY、confidence exact、`preview=true`；adjustment/ledger/subscription 计数均保持 0。
 - commit 可观察合同：请求中的 `plan_id=9965` 穿过 controller/service；响应含 gross Credit 800、gross/net `32000000`、`state_version_after=1`、`replayed=false`；数据库有且仅有一条对应 adjustment 与 ledger。
+
+## 管理员稳定错误码与幂等 HTTP 合同
+
+- RED：`go test ./router -run TestAdminCreditAdjustmentRoutesExposeStableCodesAndReplayCommittedResult -count=1 -v` → FAIL；缺 plan 与冲突分别只返回 `message=credit_valuation_plan_required` / `message=credit_valuation_idempotency_mismatch`，没有稳定 `code` 字段。
+- GREEN：controller 的 adjustment/preview 专用错误 writer 同时返回 `message` 与 `code=err.Error()`；不解析或映射错误文本。
+- 稳定验证：`gofmt -w controller/subscription.go router/subscription_credit_adjustment_route_test.go && go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult|RoutesExposeStableCodesAndReplayCommittedResult)$' -count=10 -v && git diff --check` → `go test: 1 packages ok`，约 10.62 秒，diff-check 无输出。
+- 行为：missing plan preview 返回 HTTP 200、`success=false`、`code=credit_valuation_plan_required`；首次提交 `replayed=false`；同 key/同事实重放 `replayed=true`、`gross_amount_micros="32000000"`、`state_version_after=1`；同 key/amount 801 返回 `code=credit_valuation_idempotency_mismatch`。
+- 原子性：重放与冲突后对应 idempotency key 的 adjustment/ledger 仍各一条。

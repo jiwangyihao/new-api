@@ -2,11 +2,13 @@ package model
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const subscriptionTokenDeltaCoalesceDelay = time.Millisecond
@@ -173,11 +175,29 @@ func flushSubscriptionRequestTargets(requests []*subscriptionRequestTarget) []er
 	if len(requests) == 0 {
 		return results
 	}
+	type indexedRequestTarget struct {
+		request *subscriptionRequestTarget
+		index   int
+	}
+	ordered := make([]indexedRequestTarget, len(requests))
+	for index, request := range requests {
+		ordered[index] = indexedRequestTarget{request: request, index: index}
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		leftID := ordered[left].request.requestId
+		rightID := ordered[right].request.requestId
+		if leftID == rightID {
+			return ordered[left].index < ordered[right].index
+		}
+		return leftID < rightID
+	})
 	failureIndex := -1
 	err := DB.Transaction(func(tx *gorm.DB) error {
-		for index, request := range requests {
-			var route SubscriptionPreConsumeRecord
-			if err := tx.Where("request_id = ?", request.requestId).First(&route).Error; err != nil {
+		lockedRoutes := make([]SubscriptionPreConsumeRecord, len(ordered))
+		for orderedIndex, indexed := range ordered {
+			request := indexed.request
+			index := indexed.index
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", request.requestId).First(&lockedRoutes[orderedIndex]).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					err = ErrCreditValuationRequestNotFound
 				}
@@ -185,12 +205,16 @@ func flushSubscriptionRequestTargets(requests []*subscriptionRequestTarget) []er
 				results[index] = err
 				return err
 			}
-			if route.UserSubscriptionId != request.originalSubscriptionId {
+			if lockedRoutes[orderedIndex].RequestId != request.requestId || lockedRoutes[orderedIndex].UserSubscriptionId != request.originalSubscriptionId {
 				failureIndex = index
 				results[index] = ErrCreditValuationMappingConflict
 				return ErrCreditValuationMappingConflict
 			}
-			if err := SettleCreditRequestTargetTx(tx, &route, request.targetCredit, request.final); err != nil {
+		}
+		for orderedIndex, indexed := range ordered {
+			request := indexed.request
+			index := indexed.index
+			if err := SettleCreditRequestTargetTx(tx, &lockedRoutes[orderedIndex], request.targetCredit, request.final); err != nil {
 				failureIndex = index
 				results[index] = err
 				return err

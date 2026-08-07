@@ -43,6 +43,8 @@ func TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors(t *testin
 		{name: "negative rate", mutate: func(input *CreditFXRateSnapshotInput) { input.RateText = rateText("-7.3") }, want: ErrCreditFXNonPositive},
 		{name: "unsupported currency", mutate: func(input *CreditFXRateSnapshotInput) { input.SourceCurrency = "EUR" }, want: ErrCreditFXUnsupportedCurrency},
 		{name: "direction mismatch", mutate: func(input *CreditFXRateSnapshotInput) { input.Direction = "CNY_TO_USD" }, want: ErrCreditFXDirectionMismatch},
+		{name: "integer overflow", mutate: func(input *CreditFXRateSnapshotInput) { input.RateText = rateText("9223372036854775808") }, want: ErrCreditFXOverflow},
+		{name: "fractional overflow", mutate: func(input *CreditFXRateSnapshotInput) { input.RateText = rateText("922337203685477580.8") }, want: ErrCreditFXOverflow},
 	}
 
 	for _, test := range tests {

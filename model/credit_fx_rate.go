@@ -198,7 +198,7 @@ func parsePositiveDecimalRatio(text string) (int64, int64, error) {
 		for index := range len(part) {
 			digit := uint64(part[index] - '0')
 			if numerator > (uint64(math.MaxInt64)-digit)/10 {
-				return 0, 0, ErrCreditFXRateInvalid
+				return 0, 0, ErrCreditFXOverflow
 			}
 			numerator = numerator*10 + digit
 		}

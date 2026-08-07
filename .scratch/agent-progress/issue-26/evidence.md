@@ -1,0 +1,460 @@
+# Issue #26 证据
+
+## 2026-08-05 — Lineage 与 Git 基线自检
+
+### Git 分支与工作树
+
+命令：`git status --short --branch`
+
+观测：
+
+- branch：`jiwangyihao/issue-26-conversion-fx`
+- staged：`0`
+- unstaged：`0`
+- untracked：`0`
+
+命令：`git rev-parse HEAD`
+
+观测：`60e71da8d5be73816dd7c892b0d4f96768db98b3`
+
+### 已验收实现祖先
+
+命令：`git merge-base HEAD fd4d4683bc3b3b2cdd78c8e5c851c58263e61971`
+
+观测：`fd4d4683bc3b3b2cdd78c8e5c851c58263e61971`
+
+### 基线后的提交范围
+
+命令：`git log --oneline fd4d4683bc3b3b2cdd78c8e5c851c58263e61971..HEAD`
+
+观测仅有两条调度/Agent 文档提交：
+
+- `60e71da8d docs(agents): 修正 Issue 26 开工基线规则`
+- `5409da885 docs(agents): 补充 Issue 26 调度与恢复边界`
+
+### Orca 原生 lineage
+
+命令：`orca status --json`
+
+观测：runtime `ready`，runtimeId `ce771a98-c24e-477f-b2bd-fcccd853bd5b`，Orca `1.4.170`。
+
+命令：`orca worktree current --json`
+
+观测：
+
+- worktree id：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/issue-26-conversion-fx`
+- head：`60e71da8d5be73816dd7c892b0d4f96768db98b3`
+- branch：`refs/heads/jiwangyihao/issue-26-conversion-fx`
+- parentWorktreeId：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`
+- parent capture source：`explicit-cli-flag`
+- parent confidence：`explicit`
+- baseRef：`jiwangyihao/credit-operational-value-integration`
+
+结论：五项开工前置条件全部符合；允许创建 Issue #26 的首批持久化文件。此时尚未修改运行时代码。
+
+## TDD 记录
+
+首个周期已进入 RED；以下记录测试、失败命令和可恢复的最小 GREEN 边界。
+
+## 2026-08-05 — FX parser 首个 RED
+
+新增公共行为测试 `TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY`，输入 `7.300000`、source `USD`、valuation `CNY`、正 captured_at，期望不可变快照规范化为 `73/10` 且方向为 `USD_TO_CNY`。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1`
+
+真实结果：`FAIL`（build failed），原因精确为尚不存在的公共 seam：
+
+- `undefined: ParseCreditFXRateSnapshot`
+- `undefined: CreditFXRateSnapshotInput`
+- `undefined: CreditFXRateSnapshot`
+- `undefined: CreditFXDirectionUSDtoCNY`
+
+结论：RED 对预期缺失行为敏感，未因无关测试或环境失败。下一步最小 GREEN 只实现该测试要求的结构化类型、方向常量、规范十进制解析与最大公约数约分。
+
+## 2026-08-05 — FX parser 首个 GREEN
+
+最小实现新增 `model/credit_fx_rate.go`，公开范围严格限于首个 RED 编译和行为所需的 `CreditFXRateSnapshotInput`、`CreditFXRateSnapshot`、`CreditFXDirectionUSDtoCNY`、`ErrCreditFXRateInvalid` 与 `ParseCreditFXRateSnapshot`。实现以整数逐位解析规范正十进制，不读取或运算 `float64 USDExchangeRate`，并将 `7.300000` 约分为 `73/10`。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotCanonicalizesUSDtoCNY -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+格式化：`gofmt -w model/credit_fx_rate.go` 成功且无输出。当前周期未扩展非法矩阵、identity、反向换算、floor、overflow、conversion、API 或 UI。
+
+## 2026-08-05 — 首个 GREEN 安全点校准
+
+- 独立 RED：`58866ae7b`（`test(issue-26): 固化 FX 快照解析首个 RED`）。
+- 独立 GREEN：`bb399d868`（`feat(issue-26): 实现 FX 快照规范解析`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步按协调器收敛顺序执行：A 非法输入 → B identity/反向 → C floor/overflow；每组独立 RED→GREEN，期间暂停 conversion、request、API/UI。
+
+## 2026-08-05 — A 组非法输入 RED
+
+新增公共行为测试 `TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors`，逐项要求缺失、空值、非法十进制、超精度、零/负值、不支持币种和声明方向不匹配返回可由 `errors.Is` 判断的稳定 sentinel。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotRejectsInvalidInputsWithStableErrors -count=1`
+
+真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXRateMissing`、`ErrCreditFXRateEmpty`、`ErrCreditFXInvalidDecimal`、`ErrCreditFXPrecisionExceeded`、`ErrCreditFXNonPositive`、`ErrCreditFXUnsupportedCurrency`、`ErrCreditFXDirectionMismatch` 以及 `CreditFXRateSnapshotInput.Direction` 尚不存在。
+
+结论：A 组 RED 对稳定错误分类与显式方向合同敏感；下一步只实现这些缺失行为，不涉及 identity、反向换算、floor 或 overflow。
+
+## 2026-08-05 — A 组非法输入 GREEN
+
+最小实现新增并分类 `ErrCreditFXRateMissing`、`ErrCreditFXRateEmpty`、`ErrCreditFXInvalidDecimal`、`ErrCreditFXPrecisionExceeded`、`ErrCreditFXNonPositive`、`ErrCreditFXUnsupportedCurrency`、`ErrCreditFXDirectionMismatch`，并增加可选显式 `Direction` 输入校验。未实现 B 组 identity/反向或 C 组 floor/overflow。
+
+命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。随后 `gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 均成功；按 Go 1.22 规则将纯计数循环改为 `range len(part)` 后再次运行同一测试，仍为 GREEN。
+
+## 2026-08-05 — A 组 GREEN 安全点校准
+
+- A 组独立 RED：`cb398810e`（`test(issue-26): 固化 FX 非法输入 RED`）。
+- A 组独立 GREEN：`2c3685f11`（`feat(issue-26): 分类 FX 非法输入错误`）。
+- GREEN 提交命令串包含 `git diff --check`；提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步只做 B 组 identity/反向、确定性与快照冻结；B 组提交前禁止 C 组或 conversion。
+
+## 2026-08-05 — B 组 identity/反向 RED
+
+新增 table-driven 公共行为测试 `TestParseCreditFXRateSnapshotFreezesDirectionalRatios`，覆盖 CNY/CNY 与 USD/USD 固定 `1/1`、USD→CNY `73/10`、CNY→USD 严格倒数 `10/73`、相同 input + captured_at 的确定性，以及已返回值快照不随后续 Option 原始文本变化。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotFreezesDirectionalRatios -count=1`
+
+真实结果：`FAIL`。USD→CNY 子例已通过；`CNY_identity`、`USD_identity` 与 `CNY_to_USD` 子例均在 parser 返回非预期错误处失败，证明现有 seam 缺少 identity 与反向分支，而非环境或无关测试失败。
+
+结论：B 组 RED 对指定的方向比率行为敏感；下一步只增加 identity 与反向最小分支并复验确定性/冻结断言。
+
+## 2026-08-05 — B 组 identity/反向 GREEN
+
+最小实现增加 `IDENTITY` 与 `CNY_TO_USD` 方向：同币种不读取 Option rate，固定冻结 `1/1`；USD→CNY 冻结已约分 ratio；CNY→USD 严格交换分子/分母。`CreditFXRateSnapshot` 是值类型，相同 input + captured_at 产生相同值；返回后的值不随后续 Option 原始文本变量变化。
+
+命令：`go test ./model -run TestParseCreditFXRateSnapshotFreezesDirectionalRatios -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+回归命令：`go test ./model -run "TestParseCreditFXRateSnapshot(CanonicalizesUSDtoCNY|RejectsInvalidInputsWithStableErrors|FreezesDirectionalRatios)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 和 `git diff --check` 同时通过；未进入 C 组或 conversion。
+
+## 2026-08-05 — B 组 GREEN 安全点校准
+
+- B 组独立 RED：`b9b3098c9`（`test(issue-26): 固化 FX 方向冻结 RED`）。
+- B 组独立 GREEN：`c4d419e0e`（`feat(issue-26): 冻结 FX 双向比率快照`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 到达的“继续 B 组”指令晚于上述提交，因此未重复制造同一 RED；按其禁止范围保持不进入 C 组或 conversion。
+
+## 2026-08-05 — C 组整数 floor/overflow RED
+
+新增 table-driven 公共行为测试 `TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor`，覆盖 `floor(amount × numerator / denominator)`、`MaxInt64` 宽中间乘积、结果溢出、分母零与小于 1 micros 的余数清空。
+
+命令：`go test ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=1`
+
+真实结果：`FAIL`（build failed）。编译器精确报告 `ErrCreditFXOverflow` 与 `CreditFXRateSnapshot.ConvertMicros` 尚不存在。
+
+结论：C 组 RED 对要求的整数换算接口与稳定 overflow sentinel 敏感；下一步只使用定宽整数实现，不引入 `float64` 或大整数热路径分配。
+
+## 2026-08-05 — C 组整数 floor/overflow GREEN
+
+最小实现增加 `CreditFXRateSnapshot.ConvertMicros` 与稳定 `ErrCreditFXOverflow`。换算复用现有无分配定宽整数 `mulDivFloor`（`bits.Mul64`/`bits.Div64`），严格计算 `floor(amountMicros × numerator / denominator)`；非法/非正 ratio 与分母零返回稳定 invalid sentinel，最终结果超出 `int64` 返回 overflow sentinel。
+
+命令：`go test ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+窄竞态命令：`go test -race ./model -run TestCreditFXRateSnapshotConvertMicrosUsesOverflowSafeFloor -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+联合回归命令：`go test ./model -run "Test(ParseCreditFXRateSnapshot|CreditFXRateSnapshotConvertMicros)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/credit_fx_rate.go` 与 `git diff --check` 同时通过；C 组期间未进入 conversion/request/API/UI。
+
+## 2026-08-05 — C 组 GREEN 安全点校准
+
+- C 组独立 RED：`a783ff3c1`（`test(issue-26): 固化 FX 整数换算 RED`）。
+- C 组独立 GREEN：`5318e5cc2`（`feat(issue-26): 实现 FX 整数安全换算`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- FX A/B/C 已形成完整定向 seam；下一条行为周期进入 timed conversion Quote 冻结估值，暂不展开 Confirm、request、API 或 UI。
+
+## 2026-08-05 — FX 向量交接就绪
+
+- FX A/B/C 已全部完成：非法输入稳定错误、同币种 `1/1`、USD↔CNY 严格倒数、确定性/冻结快照，以及 overflow-safe 整数 floor。
+- 最后业务 GREEN：`5318e5cc2`；随后安全点校准：`fd6d316f7`。
+- 协调器明确撤销继续探索 conversion Quote 的方向；此前仅做定向查看，未修改 conversion、request、API 或 UI 文件。
+- 当前恢复阶段固定为 `FX_VECTORS_HANDOFF_READY`；提交本校准并确认 clean 后停止，等待新的显式派发。
+
+## 2026-08-05 — Conversion 同币种冻结估值 RED
+
+新增真实 SQLite tracer `TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation`：迁移 valuation schema、置 marker ready、创建 CNY source timed plan 与 CNY Credit target，按 `1 × 100 + 25 = 125` 验证 conversion、ledger、source 状态和目标 valuation state 原子冻结 `40,000,000 × 125 / 100 = 50,000,000` micros，以及 FX `1/1`。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=1`
+
+真实结果：`FAIL`。`ConfirmTimedSubscriptionConversion` 返回稳定 `credit_valuation_source_required`，精确表明现有 conversion 调用 `GrantCreditBalanceTx` 时未提供 `CreditValuationSourceSnapshot`；事务因此 fail-closed，未产生部分写入。
+
+结论：RED 到达真实 Confirm → Grant ingress seam；下一步最小 GREEN 只连接同币种 source plan 精确价格/currency、credit basis/gross credit 与目标 valuation currency，并冻结现有 conversion/ledger 字段。
+
+### RED 范围收敛
+
+- tracer 只断言已有 schema 可持久化的 `SubscriptionConversion`、`CreditBalanceLedger`、`CreditValuationState` 字段及 source subscription converted mapping。
+- FX 仅覆盖同币种 CNY → CNY 的冻结 `1/1`；未添加或假设新的 conversion schema。
+- `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功且无输出。
+- 当前只提交 RED 与进度证据，不实现 GREEN、跨币种、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 同币种冻结估值 GREEN
+
+最小实现仅修改 `model/subscription_conversion.go` 与 `model/credit_balance.go`：Confirm 在既有事务中从锁定后的 source plan 读取权威 `price_amount_micros`/currency，以 quote 的 `credit_basis`/`gross_credit` 和目标 plan valuation currency 构造 `CreditValuationSourceSnapshot`，沿既有 `GrantCreditBalanceTx` ingress 写入 conversion、ledger 与 valuation state。同币种 conversion ledger 冻结 FX `1/1`，未新增 schema。
+
+单测命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`；`1 × 100 + 25 = 125` 与 `40,000,000 × 125 / 100 = 50,000,000` micros 全部断言通过。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+首次联合回归发现 legacy marker-not-ready conversion 在 ledger FX 写入分支解引用 nil `ValuationSource`。根因是 FX ledger 冻结分支只按 source type 判断，未跟随 valuation runtime gate；修复为同时要求 `valuationReady`，保持 legacy path 不读取 absent valuation source。
+
+最终定向回归：`go test ./model -run "Test(ConfirmTimedSubscriptionConversionFreezesSameCurrencyValuation|CreditValuationOrderIngressCreatesExactState|RecalculateTimedSubscriptionConversionQuoteFormulaBoundaries|TimedConversionPreservesCompletedLogOwnershipAndTargetsNewUsage)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion.go model/credit_balance.go` 与 `git diff --check` 均成功；未进入跨币种、并发、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 跨币种冻结与重放 RED
+
+新增真实 SQLite table-driven tracer `TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay`，覆盖 CNY→USD reciprocal floor、USD→CNY forward floor、冻结 FX numerator/denominator/captured_at、Option 原始文本变化后同 source 同事实重放不重估，以及同 idempotency key 更换 source 的冲突零写入。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=1`
+
+真实结果：`FAIL`。CNY→USD 与 USD→CNY 两个子例均由真实 Confirm 返回稳定 `credit_valuation_unsupported_currency`；失败发生在当前同币种 guard，证明跨币种 snapshot 与整数换算尚未连接，同时保持事务 fail-closed。
+
+结论：RED 已覆盖跨币种 conversion、冻结快照、重放和冲突零写入的最终公共路径；下一步最小 GREEN 只复用唯一 `CreditFXRateSnapshot` seam 与现有 conversion/ledger/state/idempotency 事务。
+
+## 2026-08-05 — Conversion 跨币种冻结与重放 GREEN
+
+最小实现复用唯一 `CreditFXRateSnapshot` parser/provider：`USDExchangeRate` 原始十进制在任何写入前严格解析；专用互斥覆盖单个 GORM upsert transaction 到运行时发布，数据库提交成功后才同时更新 OptionMap 与 atomic snapshot。解析或数据库失败不会发布运行时 snapshot。
+
+Confirm 在既有事务中从锁定 source plan 和 target valuation currency 获取方向，并只调用 `CurrentCreditFXRateSnapshot`；`CreditValuationSourceSnapshot` 携带冻结 snapshot，ingress 先计算 source gross cost，再用 `ConvertMicros` 做 overflow-safe integer floor。既有 ledger、conversion 与 valuation state 持久化同一 valuation currency、cost 与 FX numerator/denominator/captured_at，未新增 schema。
+
+单次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。CNY→USD 冻结 `10/73` 并 floor 为 `6,849,315` micros；USD→CNY 冻结 `73/10` 为 `36,500,000` micros。Option 从 `7.3` 持久化更新为 `8.1` 后，同 source/key 重放读取已提交 conversion，不重估旧 snapshot；冲突调用保持 conversion/ledger/state 计数不变。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionFreezesCrossCurrencyValuationAndReplay -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+联合回归：`go test ./model -run "Test(ConfirmTimedSubscriptionConversionFreezes(SameCurrency|CrossCurrency)|CreditValuationOrderIngressCreatesExactState|ParseCreditFXRateSnapshot|CreditFXRateSnapshotConvertMicros|TimedConversionPreservesCompletedLogOwnershipAndTargetsNewUsage)" -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。生产文件与测试已执行 `gofmt`，`git diff --check` 成功。
+
+范围说明：本安全点未新增 schema，未进入在途 request/API/UI；按最新收敛指令未扩展并发双确认或同 source 权威事实指纹冲突测试，因此不将这两项声明为已验收。
+
+## 2026-08-05 — Conversion 权威事实冲突 RED
+
+新增真实 SQLite tracer `TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay`：首次同币种 Confirm 成功后，将同 source plan 的权威 `price_amount_micros` 从 `40,000,000` 修改为 `41,000,000`，随后以同 source/key 重放；要求稳定 `ErrConversionIdempotencyConflict` 且 conversion/ledger/state 计数不变。
+
+命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=1`
+
+真实结果：`FAIL`（build failed），编译器精确报告 `ErrConversionIdempotencyConflict` 尚不存在。该 RED 明确要求可由 `errors.Is` 判断的稳定冲突，而不是自由文本或普通不存在 source 失败。
+
+结论：下一步最小 GREEN 需在重放返回前以已持久化 conversion 冻结事实核对当前权威 source plan；不修改 committed conversion，冲突路径零写入。
+
+## 2026-08-05 — Conversion 权威事实冲突 GREEN
+
+最小实现仅修改 `model/errors.go` 与 `model/subscription_conversion.go`：新增稳定 `ErrConversionIdempotencyConflict`；在两个 committed replay 分支返回前，以 conversion 已冻结的 source plan ID、source price micros、source currency、credit basis 和 valuation rule version核对当前权威 source plan。冲突不修改 committed conversion，并在事务错误 fallback 前直接保留稳定 sentinel，避免旧的 committed lookup 将冲突误转成成功重放。
+
+单次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionRejectsChangedAuthoritativeFactsOnReplay -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。测试断言 `errors.Is(err, ErrConversionIdempotencyConflict)` 且 conversion/ledger/state 计数保持不变；`gofmt` 与 `git diff --check` 均成功。
+
+范围说明：本安全点未实现并发双确认，未进入在途 request、API/UI 或其他 Issue 范围。
+
+## 2026-08-05 — Conversion 权威事实冲突 GREEN 安全点校准
+
+- 独立 RED：`28b77ba73`（`test(issue-26): 固化转换权威事实冲突 RED`）。
+- 独立 GREEN：`7a899945d`（`feat(issue-26): 拒绝转换权威事实冲突`）。
+- GREEN 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 下一步仅验收真实文件 SQLite 下同 source/key 双连接同时 Confirm；禁止不同 source、在途 request、API/UI。
+
+## 2026-08-05 — Conversion 同事实双连接并发 GREEN
+
+新增真实文件 SQLite 测试 `TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce`。fixture 使用临时数据库文件、WAL、两个连接；两个 goroutine 各自进入 Confirm 事务，并在 `after_quote` hook 通过确定性 barrier 同时释放，从而真实竞争同一 source/key。
+
+首次命令：`go test ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`，现实现直接 GREEN，无生产修复。两个调用返回完全相同 conversion；恰好一个 `Replayed=false`、一个 `Replayed=true`；conversion、source、ledger、valuation state 各唯一，source 指向唯一 conversion。
+
+重复命令：`go test ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。
+
+窄竞态命令：`go test -race ./model -run TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce -count=1`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。`gofmt -w model/subscription_conversion_valuation_test.go` 与 `git diff --check` 均成功；未扩展不同 source、在途 request 或 API/UI。
+
+## 2026-08-05 — Conversion 并发安全点校准与在途 RED 启动
+
+- conversion 并发验证已提交为 `3d2baf4c7`（`test(issue-26): 验证转换并发幂等`）。
+- 提交后 `git status --short --branch` 观测 staged/unstaged/untracked 均为 0。
+- 当前阶段切换为 `INFLIGHT_REQUEST_RED`：仅创建一条 public reserve → conversion → final settle 的真实 SQLite 确定性交错 RED。
+- RED 必须断言 original subscription_id/request deduction snapshot 保持、不重定向 Credit、不重复扣减，以及 conversion 后新请求才进入 Credit；本阶段不实现 GREEN、refund/并发扩展或 API/UI。
+
+## 2026-08-05 — 在途 request 虚拟快照 RED
+
+新增真实 SQLite 行为 tracer `TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot`，仅通过 public `PreConsumeUserSubscriptionByUnits` → `ConfirmTimedSubscriptionConversion` → `SettleUserSubscriptionRequestTarget` 路径构造确定性交错。合同要求原 request 始终保留 timed source `subscription_id`，conversion 事务为它固化 reserve 时的虚拟 exact deduction snapshot，final settle 不重定向或重复扣减；conversion 后的新 request 才选择 Credit。
+
+命令：`go test ./model -run TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot -count=1`
+
+真实结果：`FAIL`（行为失败，非编译失败）。conversion 成功后重新读取原 `SubscriptionPreConsumeRecord`：`UserSubscriptionId` 仍为 source、`PreConsumed=10`，但第一个虚拟快照断言 `AppliedCredit` 期望 `10`、实际 `0`（`subscription_conversion_settlement_test.go:162`）。
+
+结论：现实现正确保留原 request attribution，但 conversion 尚未在同一事务内把 timed reserve 转换为不可变的虚拟 exact request deduction snapshot。后续 final settle 与新 request 断言因该首个行为失败未执行；下一步 GREEN 必须从此源头补齐，不得用匿名 delta 或改写原 `UserSubscriptionId`。
+
+范围说明：本 RED 未修改生产代码，未扩展 refund/并发，也未进入 API/UI。
+
+## 2026-08-05 — 在途 request 最窄 GREEN 交接
+
+根因：timed reserve 仅持久化 original source attribution 与 `PreConsumed`，conversion 事务未把未终态 request 固化为 request-aware settle 可识别的虚拟 exact snapshot，因此 RED 观测 `AppliedCredit=0`。
+
+最小实现仅修改 `model/subscription_conversion.go`：Confirm 在原事务、source 状态切换前，按 request ID 顺序锁定该 timed source 的未终态 reserve；保持 original `UserSubscriptionId` 不变，复用既有 record 字段写入 `AppliedCredit=PreConsumed`、目标 valuation subscription、按冻结 source plan/FX 整数 floor 计算的 exact cost、valuation rule 和 settlement version。未新增 schema、第二套 ledger 或匿名 delta。
+
+验证命令：`go test ./model -run TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot -count=10`
+
+真实结果：`ok github.com/QuantumNous/new-api/model`。行为证据：原 request attribution 保持 timed source；`AppliedCredit` 与 reserve 相同；final settle 保持 deduction snapshot、不向目标 Credit 写入旧 request 扣减且不重复扣 source；conversion 后的新 request 才选择目标 Credit。
+
+格式化与差异：`gofmt -w model/subscription_conversion.go`、`git diff --check` 均成功。
+
+诚实未完成项：reserve → conversion → refund，以及双连接 conversion/final 合法串行化尚未实现或验证；本安全点不得宣称整个在途 request 合同完成。
+
+
+## 2026-08-06 — 退款与双连接并发续作启动
+
+- 冻结现场复核：分支 `jiwangyihao/issue-26-conversion-fx`，clean HEAD `85660501ca95fae1fbcc6a1bff2fc07adf0424bd`，`fd4d4683bc3b3b2cdd78c8e5c851c58263e61971` 仍为祖先，Orca `parentWorktreeId` 严格指向 `credit-operational-value-integration`。
+- 已完成边界：FX 向量、同/跨币种 conversion、权威事实冲突、同 source 并发幂等和 reserve → conversion → final settle 均已提交。
+- 未完成边界：public reserve → conversion → refund RED/GREEN，以及 conversion ↔ final/refund 真实文件 SQLite 双连接 barrier。
+- 下一条行为命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`；必须先观察真实行为 RED，不得以编译失败冒充。
+
+## 2026-08-06 — 当前 Dispatch 恢复安全点
+
+- 当前有效 task/dispatch：`task_b6c2c840cda6` / `ctx_cdf46ee2f559`。
+- `git rev-parse HEAD`：`85660501ca95fae1fbcc6a1bff2fc07adf0424bd`；`git status --short` 无输出。
+- `git merge-base --is-ancestor fd4d4683bc3b3b2cdd78c8e5c851c58263e61971 HEAD` 返回成功。
+- Orca `parentWorktreeId`：`1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api/.workspaces/new-api/credit-operational-value-integration`。
+- 已完成：FX parser/向量、同币种与跨币种 conversion、权威事实冲突、同 source 双连接幂等、reserve → conversion → final settle 虚拟 exact snapshot。
+- 未完成：reserve → conversion → refund，以及 conversion ↔ final/refund 真实文件 SQLite 双连接确定性 barrier。
+- 下一条命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`；先新增 public-path tracer 并取得行为 RED。
+
+## 2026-08-06 — reserve → conversion → refund 行为 RED
+
+- 新增真实 SQLite public-path tracer `TestTimedReserveConversionRefundRestoresVirtualExactSnapshot`，完整调用 `PreConsumeUserSubscriptionByUnits → ConfirmTimedSubscriptionConversion → SettleUserSubscriptionRequestTarget(requestID, sourceID, 0, true)`；fixture 直接复制相邻 final-settle tracer，只把最终累计目标改为 `0`，并断言原 timed attribution、虚拟 exact snapshot、全退款舍入余数、目标 Credit 数量/价值恢复。
+- 首次运行因测试查询误用了不存在的 `credit_valuation_states.subscription_id` 而失败，不计作行为 RED；更正为真实字段 `user_subscription_id` 后重新执行同一 public-path tracer。
+- 命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 真实结果：`FAIL`（行为失败，非编译/fixture 失败）。reserve 与 conversion 成功，原 request 已冻结 `AppliedCredit=10`、`DeductedAvailableCredit=10`、`DeductedExactCostMicros=4,000,000`、目标 `ValuationSubscriptionId`；refund 调用精确返回 `type=*errors.errorString value="credit_valuation_state_mismatch"`（`subscription_conversion_settlement_test.go:278`）。
+- 结论：旧实现已能建立转换虚拟 exact snapshot，但 public target=0 恢复路径在写入前拒绝目标状态一致性，无法完成全退款；RED 对用户要求的具体行为敏感。此提交不含 GREEN、并发或生产代码修改。
+
+## 2026-08-06 — reserve → conversion → refund 最小 GREEN
+
+- 根因：通用 restore 假定 `AppliedCredit` 已真实增加目标 Credit 的 `token_used`；转换虚拟快照并未扣目标池，因此全退款把虚拟 reserve 当作目标真实用量撤销，在 `refund > target.TokenUsed` 处稳定返回 `credit_valuation_state_mismatch`。
+- 最小实现只扩展既有 `restoreCreditRequestTargetTx`：先锁 request record；当 original 与 valuation subscription 不同时，验证 source `converted` 状态及持久 conversion 映射；把退款拆成目标真实追加用量撤销与转换虚拟 reserve 恢复。虚拟份额增加目标 `token_limit`，不减少从未增加过的目标 `token_used`；成本仍完全复用请求 active exact snapshot 的比例/清空余数算法。
+- 单次命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。原 timed `subscription_id` 与 `token_used=10` 保持；request 进入 `refunded`，`AppliedCredit`、`DeductedAvailableCredit`、active exact snapshot 清零；目标 Credit 恢复 10 Credit 与 `4,000,000` exact micros。
+- 重复命令：`go test ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=10`。
+- 结果：PASS（`go test: 1 packages ok`）。
+- 窄竞态命令：`go test -race ./model -run TestTimedReserveConversionRefundRestoresVirtualExactSnapshot -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。
+- 本 GREEN 未编写双连接并发测试、未新增 helper/schema，也未进入 API/UI 或其他 Issue 范围。
+
+## 2026-08-06 — 退款纵切交接就绪
+
+- 协调器收敛退款纵切；生产实现与证据已由 clean commit `8255b62182d2289d423e0185d8bcb866ef57ce80`（`fix(issue-26): 恢复转换在途请求退款`）落地。
+- 单次、`-count=10` 与窄 `-race` 均 PASS；精确命令和结果见上一节。
+- 当前阶段固定为 `INFLIGHT_REFUND_HANDOFF_READY`。本安全点不读取 SQLite 并发设施、不编写双连接测试，等待协调器下一阶段指令。
+
+## 2026-08-06 — conversion ↔ final settle/refund 双连接直接 GREEN
+
+- 在既有 `model/subscription_conversion_valuation_test.go` 复用真实文件 SQLite/WAL 双连接 fixture 与 conversion hook，新增 `TestTimedConversionConcurrentWithFinalSettleUsesLegalSerialization`、`TestTimedConversionConcurrentWithFullRefundUsesLegalSerialization`。两个测试均显式确认两个独立 `*sql.DB` 连接池及双方 `PRAGMA journal_mode=wal`。
+- 确定性交错：conversion 在 `after_eligibility_guard` barrier 内保持事务；第二连接对同一在途 request 尝试 final target。合法序列观测为“转换前 target 稳定返回 `credit_valuation_state_mismatch` 且零写入 → conversion 原子提交 → 相同 target 重放成功”；未泄漏 `SQLITE_BUSY`、唯一约束或自由文本数据库错误。
+- final settle 合法结果：conversion 冻结 gross `185` Credit、`74,000,000` exact micros；request 保留 source attribution、目标 valuation mapping 与冻结事实，终态 `settled`、target `10`，目标池保持 `185` Credit / `74,000,000` micros，旧 reserve 不二次扣减。
+- full refund 合法结果：conversion 先冻结同一 `185` Credit / `74,000,000` micros；request 终态 `refunded`、target `0`，虚拟 exact snapshot 恢复 `10` Credit / `4,000,000` micros，目标池为 `195` Credit / `78,000,000` micros，全退款带走 request 活动快照余数。
+- 两类都断言 conversion/source/target/ledger/valuation/request 数量分别为 `1/1/1/1/1/2`；source conversion mapping、request 原 attribution、valuation target、price/basis/FX/rule/version 一致。另一 request 的 snapshot、settlement version 与终态完全不变；conversion 与 target 相同调用重放不增长实体、state version、settlement version 或 finalized_at。
+- 单次命令：`go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`；结果：PASS（现实现直接 GREEN）。
+- 重复命令：`go test ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=10`；结果：PASS。
+- 窄竞态命令：`go test -race ./model -run "TestTimedConversionConcurrentWith(FinalSettle|FullRefund)UsesLegalSerialization" -count=1`；结果：PASS。
+- 因现实现直接 GREEN，未修改生产代码，未设计事务重试，未进入 API/UI、#24/#25/#27/#28 或其他范围。
+
+## 2026-08-06 — 并发纵切 clean 安全点
+
+- 测试与进度提交：`0409df31d8b6723cdcafe6b7aba7e29c289fae92`（`test(issue-26): 验证转换结算双连接串行化`）。
+- `gofmt -w model/subscription_conversion_valuation_test.go` 成功；`git diff --check` 成功。
+- 提交后 `git status --short` 无输出：staged、unstaged、untracked 均为 0。
+- 阶段保持 `INFLIGHT_CONCURRENCY_HANDOFF_READY`；未修改生产代码，未进入 API/UI、#24/#25/#27/#28、MySQL/PostgreSQL、全仓测试或部署。
+
+## 2026-08-06 — 最终交付从 kernel_unavailable 原地恢复
+
+- Git 冻结起点：`git status --short --branch` 观测分支 `jiwangyihao/issue-26-conversion-fx`，staged/unstaged/untracked 均为 `0`；`git rev-parse HEAD` 为 `c709ccb2c375031eabf43703334dffd44b39856a`。
+- Orca 运行态：`orca status --json` 返回 runtime `ready`、Orca `1.4.170`；`orca worktree current --json` 返回同一 HEAD，`parentWorktreeId` 仍为 `credit-operational-value-integration` 工作树。
+- 可见 UI 判定为“存在”：`web/default/src/pages/wallet/index.tsx` 挂载 `TimedSubscriptionConversionQuotesCard`；`web/default/src/features/subscription-conversion/` 已实现 quote API、confirm API、31 日块 BigInt live quote、preview/confirm 与 conversion history；`web/default/src/features/admin-analytics/` 已实现 conversion summary/history 面板。后续只做现有路径必要验收/纵向补齐，禁止为 browser 另建 UI。
+- 后端现有入口：`GET /api/subscription/self/conversion-quotes`、`POST /api/subscription/self/conversions`、`GET /api/admin/analytics/subscription-conversion`，以及同页使用的 subscription drilldown/history。恢复时尚未宣称现有 DTO 已完整暴露冻结 price/currency/FX/micros/rule version；该项必须由真实 API tracer 与浏览器结果决定。
+- 当前有效 task/dispatch：`task_f80f4a22a9be` / `ctx_d834ee4a8128`。下一步先运行既有 quote/confirm route tracer，再对 history 与五个运营分析 API 做真实 SQLite 验收。
+
+## 2026-08-06 — 跨币种 quote → confirm → history/analytics 路由 tracer RED
+
+- 仅修改既有 `router/subscription_conversion_route_test.go`，新增真实 SQLite tracer `TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics`；主路径经认证 `GET /api/subscription/self/conversion-quotes` → `POST /api/subscription/self/conversions` → 再次 quote/history → 管理员 conversion analytics 与 subscription drilldown，并在同一幂等键换 source 时断言稳定错误 code。
+- fixture 使用 CNY timed source、USD Credit target、`USDExchangeRate=7.3`、valuation marker ready；quote 成功返回 `gross_credit="180"`，confirm 业务写入成功，随后把 source price 改为 `41,000,000` micros、FX 改为 `8.1` 后读取 history，确保下一 GREEN 可证明旧事实冻结而非动态重估。
+- 首次命令：`gofmt -w router/subscription_conversion_route_test.go && go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`。首次 fixture 编译失败：`ValuationCurrency` 需要 `*string`；修正测试 fixture 后重跑，不计作行为 RED。
+- 行为 RED 命令：`go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`。
+- 真实结果：`FAIL`。quote 与 confirm 均成功；confirm 响应中 `source_price_micros`、`source_currency`、`target_currency`、`valuation_credit_basis`、gross/net cost micros、未舍入 unit value numerator/denominator、rule version、FX numerator/denominator/captured_at/direction 全部缺失（字符串为空、version 为 `0`）。同幂等键换 source 的失败响应 `code` 也为空。
+- 结论：RED 到达真实 router/model 路径且只对已持久化冻结事实的 API 可观察缺口与稳定错误映射敏感；analytics 路由同一 tracer 已被调用，但测试因前述 confirm 字段断言使用 `assert` 收集全部缺口后继续完成。提交前无生产或 UI 修改。
+
+## 2026-08-06 — 跨币种 conversion API 可观察性最小 GREEN
+
+- 最小生产改动仅限既有 `controller/subscription_conversion.go` 响应 adapter：从已持久化 immutable `SubscriptionConversion` 返回字符串 price/cost micros、source/target currency、valuation credit basis、rule version、FX numerator/denominator/captured_at/direction，并按 `source_price × fx numerator / (credit basis × fx denominator)` 约分返回未舍入单位价值有理数。未新增 schema、端点、FX provider 或 UI。
+- 估值快照是否存在由 `valuation_currency != "" && fx_rate_denominator > 0` 判定；存在时所有 micros 使用 `strconv.FormatInt`，明确 `0` 不被 `omitempty` 丢弃；legacy 无估值 conversion 继续省略新增字段。
+- confirm 错误响应增加稳定 `code`，已覆盖 `subscription_conversion_idempotency_conflict`、FX sentinel、ineligible 与通用 fallback；message 保留既有行为。
+- GREEN 命令：`gofmt -w controller/subscription_conversion.go && go test ./router -run TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics -count=1`；结果：PASS（`go test: 1 packages ok`）。
+- 既有 quote/confirm/history 联合回归：`go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`；结果：PASS。
+- tracer 在 Option 从 `7.3` 更新到 `8.1`、source price 从 `40,000,000` 更新到 `41,000,000` 后，history 与 confirm 完整结构相等，证明返回的是原 conversion 冻结事实；同一 tracer 的管理员 conversion summary 与 converted subscription drilldown 请求均成功。
+
+## 2026-08-06 — Conversion state version API GREEN
+
+- route tracer 增加 `state_version_after` 字符串断言；初次执行返回空字符串形成真实 RED，而权威 conversion ledger 的 `valuation_state_version_after` 为 `1`。
+- 未新增持久 schema：`SubscriptionConversion.ValuationStateVersionAfter` 是只读、禁止 migration 的查询字段；Confirm 直接复用事务内已读取 ledger，replay/history 在既有 conversion 查询中联接 immutable ledger，返回同一权威版本。
+- 命令：`gofmt -w model/subscription_conversion.go model/subscription_conversion_quote.go controller/subscription_conversion.go router/subscription_conversion_route_test.go && go test ./router -run "TestSubscriptionConversion(QuotesRouteIsAuthenticatedLiveAndReadOnly|RouteCommitsLatestQuoteAtomicallyAndReplays|RoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)" -count=1`。
+- 结果：PASS（`go test: 1 packages ok`）。Confirm 与后续 history 返回相同 `state_version_after="1"`；既有 quote/confirm 回归同时通过。
+
+## 2026-08-06 — 既有钱包 conversion history 冻结事实 UI GREEN
+
+- 在既有 `TimedSubscriptionConversionQuotesCard` 的 history 结果内增加冻结估值详情；未新建页面、端点或抽象。显示 source price micros、source→target currency、valuation Credit basis、gross/net cost micros、未舍入单位价值有理数、rule/state version、FX numerator/denominator/direction/captured_at，并明确“基于规则的估值，不是新增收款”。
+- 所有原始整数保持 API 字符串原样展示；未用 `Number` 转换或紧凑格式重写 micros/FX。组件 RED 真实结果为 `14 pass / 1 fail`，缺失首个 `40000000`；GREEN 后 `15 pass / 0 fail`。
+- 六语言新增 12 个 UI 键；`bun run i18n:sync` 报告六语言 `missingCount=0`、`extrasCount=0`。报告既有 untranslated 基线仍为 fr=9、ja=204、ru=219、vi=12、zh=114，不冒充清零。
+- 完整前端门禁：`bun run i18n:sync && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx && bun run typecheck && bun run build`；结果全部 PASS，组件 15/15，`tsc -b` 成功，Rsbuild `ready built`。
+
+## 2026-08-07 — Analytics/API/UI 最终窄门禁
+
+### 恢复点与候选范围
+
+- `git rev-parse HEAD`：`8bd77ecdda6643326b5537933f9ec17c95e8b375`。
+- `git status --short --branch`：分支 `jiwangyihao/issue-26-replay-fallback-fix`，staged `0`、unstaged `7`、untracked `0`；文件精确为 `dto/admin_analytics.go`、`model/admin_analytics.go`、`model/credit_valuation_tracer_test.go`、`router/subscription_conversion_route_test.go` 与三个既有 admin analytics 前端文件。
+- 开工 `git diff --check`：PASS。
+
+### 后端行为 tracer
+
+- 协调器独立实跑并报告 PASS：`TestTimedConversionRealPathFeedsFiveAnalyticsWithoutNewPaymentAttribution`。真实 `ConfirmTimedSubscriptionConversion` 后，五个付费价值接口均只显示目标 Credit 混合池的当前剩余价值，conversion summary 返回确值 gross/net，且订单与邀请归因计数不增长。
+- 协调器独立实跑并报告 PASS：`TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics`。route tracer 使用项目 JSON wrapper 解析 API 响应并断言 conversion count、exact count、Credit 字符串、USD gross/net micros；改价和 FX 后历史仍使用冻结事实。
+- `gofmt -w dto/admin_analytics.go model/admin_analytics.go model/credit_valuation_tracer_test.go router/subscription_conversion_route_test.go`：PASS，无输出。
+
+### 六语言与前端
+
+- 新增七个键：`conversionCount`、`exactConversionCount`、`grossCredit`、`debtOffset`、`netAvailableCredit`、`grossConversionValue`、`netConversionValue`；en、zh、fr、ru、ja、vi 均为对应语言的真实翻译。
+- `bun run i18n:sync`：PASS；报告六语言 `missingCount=0`、`extrasCount=0`。既有 untranslated 基线保持 fr=9、ja=204、ru=219、vi=12、zh=114，不冒充清零。
+- 首次组件测试因本地 `node_modules` 缺 `happy-dom` 失败，属于依赖连接问题而非代码失败；取消安装并按协调器指定恢复到 `issue-26-conversion-fx/web/default/node_modules` 的 junction 后重跑。
+- `bun test src/features/admin-analytics/conversion-panel.test.tsx src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`：PASS，`20 pass / 0 fail`。ConversionPanel 同时展示 count、exact、gross/debt/net Credit、gross/net 按币种价值，并验证超过 JS 安全整数的 Credit 原字符串可见；钱包 conversion 组件回归同时通过。
+- `bun run typecheck`：PASS，`tsc -b` 无诊断，耗时 `70.46 s`。
+- `bun run build`：PASS，Rsbuild `ready built in 13.9 s`。
+
+### 浏览器与边界
+
+- 真实 Chromium quote → confirm → history、改 Plan/FX 后冻结事实不变的既有证据位于 `coordinator-browser-evidence.md`；本轮按协调器明确收敛指令未重复启动应用或新增 analytics UI 浏览器记录。
+- 未实现 #24/#25/#27/#28；未新增 migration、marker 或部署行为；未改变钱包布局/Credit 激活交互；未直接使用 `encoding/json` 编解码。
+- 最终提交前 `git diff --check`：PASS。

@@ -16,17 +16,30 @@ import (
 )
 
 type subscriptionConversionQuoteRouteItem struct {
-	SourceSubscriptionId   string   `json:"source_subscription_id"`
-	CreditBasis            string   `json:"credit_basis"`
-	CreditBasisSource      string   `json:"credit_basis_source"`
-	CurrentRemainingCredit string   `json:"current_remaining_credit"`
-	GrossCredit            string   `json:"gross_credit"`
-	CurrentDebt            string   `json:"current_debt"`
-	EstimatedDebtOffset    string   `json:"estimated_debt_offset"`
-	NetAvailableCredit     string   `json:"net_available_credit"`
-	Category               string   `json:"category"`
-	CanConfirm             bool     `json:"can_confirm"`
-	ReasonCodes            []string `json:"reason_codes"`
+	SourceSubscriptionId     string   `json:"source_subscription_id"`
+	CreditBasis              string   `json:"credit_basis"`
+	CreditBasisSource        string   `json:"credit_basis_source"`
+	CurrentRemainingCredit   string   `json:"current_remaining_credit"`
+	GrossCredit              string   `json:"gross_credit"`
+	CurrentDebt              string   `json:"current_debt"`
+	EstimatedDebtOffset      string   `json:"estimated_debt_offset"`
+	NetAvailableCredit       string   `json:"net_available_credit"`
+	Category                 string   `json:"category"`
+	CanConfirm               bool     `json:"can_confirm"`
+	ReasonCodes              []string `json:"reason_codes"`
+	SourcePriceMicros        string   `json:"source_price_micros"`
+	SourceCurrency           string   `json:"source_currency"`
+	TargetCurrency           string   `json:"target_currency"`
+	ValuationCreditBasis     string   `json:"valuation_credit_basis"`
+	GrossCostMicros          string   `json:"gross_cost_micros"`
+	NetCostMicros            string   `json:"net_cost_micros"`
+	UnitValueNumeratorMicros string   `json:"unit_value_numerator_micros"`
+	UnitValueDenominator     string   `json:"unit_value_denominator"`
+	RuleVersion              int      `json:"rule_version"`
+	FxNumerator              string   `json:"fx_numerator"`
+	FxDenominator            string   `json:"fx_denominator"`
+	FxCapturedAt             string   `json:"fx_captured_at"`
+	FxDirection              string   `json:"fx_direction"`
 }
 type subscriptionConversionHistoryRouteItem struct {
 	Id                     string `json:"id"`
@@ -62,6 +75,7 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 		&model.InvitationRewardEvent{},
 		&model.CreditBalanceLedger{},
 		&model.SubscriptionConversion{},
+		&model.CreditValuationMigration{},
 	))
 
 	const userID = 9951
@@ -71,6 +85,8 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	const futureSubscriptionID = 9956
 	const balanceSubscriptionID = 9955
 	accessToken := "conversion-quotes-route-token"
+	valuationCurrency := "CNY"
+	sourcePriceMicros := int64(40_000_000)
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "conversion-quotes-route", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}).Error)
 
 	creditCode := "conversion_quote_credit_balance"
@@ -82,6 +98,7 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 		BusinessCode:                   &creditCode,
 		CreditBalanceConfigured:        true,
 		CreditBalanceConversionEnabled: true,
+		ValuationCurrency:              &valuationCurrency,
 	}).Error)
 	timedCode := "conversion_quote_monthly"
 	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
@@ -95,6 +112,16 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 		QuotaResetPeriod:       model.SubscriptionResetMonthly,
 		MonthlyTokenLimit:      100,
 		TimedConversionEnabled: true,
+		PriceAmountMicros:      &sourcePriceMicros,
+		Currency:               valuationCurrency,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version:           model.CreditValuationRuleVersion,
+		Status:            model.CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      model.GetDBTimestamp(),
 	}).Error)
 
 	databaseNow := model.GetDBTimestamp()
@@ -157,6 +184,19 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	assert.Equal(t, "25", byID[strconv.Itoa(sourceSubscriptionID)].CurrentDebt)
 	assert.Equal(t, "25", byID[strconv.Itoa(sourceSubscriptionID)].EstimatedDebtOffset)
 	assert.Equal(t, "150", byID[strconv.Itoa(sourceSubscriptionID)].NetAvailableCredit)
+	assert.Equal(t, "40000000", byID[strconv.Itoa(sourceSubscriptionID)].SourcePriceMicros)
+	assert.Equal(t, "CNY", byID[strconv.Itoa(sourceSubscriptionID)].SourceCurrency)
+	assert.Equal(t, "CNY", byID[strconv.Itoa(sourceSubscriptionID)].TargetCurrency)
+	assert.Equal(t, "100", byID[strconv.Itoa(sourceSubscriptionID)].ValuationCreditBasis)
+	assert.Equal(t, "70000000", byID[strconv.Itoa(sourceSubscriptionID)].GrossCostMicros)
+	assert.Equal(t, "60000000", byID[strconv.Itoa(sourceSubscriptionID)].NetCostMicros)
+	assert.Equal(t, "400000", byID[strconv.Itoa(sourceSubscriptionID)].UnitValueNumeratorMicros)
+	assert.Equal(t, "1", byID[strconv.Itoa(sourceSubscriptionID)].UnitValueDenominator)
+	assert.Equal(t, model.CreditValuationRuleVersion, byID[strconv.Itoa(sourceSubscriptionID)].RuleVersion)
+	assert.Equal(t, "1", byID[strconv.Itoa(sourceSubscriptionID)].FxNumerator)
+	assert.Equal(t, "1", byID[strconv.Itoa(sourceSubscriptionID)].FxDenominator)
+	assert.NotEqual(t, "0", byID[strconv.Itoa(sourceSubscriptionID)].FxCapturedAt)
+	assert.Equal(t, model.CreditFXDirectionIdentity, byID[strconv.Itoa(sourceSubscriptionID)].FxDirection)
 	assert.Equal(t, model.ConversionQuoteCategoryGrace, byID[strconv.Itoa(expiredSubscriptionID)].Category)
 	assert.True(t, byID[strconv.Itoa(expiredSubscriptionID)].CanConfirm)
 	assert.Contains(t, byID[strconv.Itoa(excludedSubscriptionID)].ReasonCodes, model.ConversionQuoteReasonMonthlyInviteSource)

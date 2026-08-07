@@ -360,19 +360,17 @@ type AdminAnalyticsUserLifecycleItem struct {
 }
 
 type AdminAnalyticsSubscriptionConversionResponse struct {
-	Summary         AdminAnalyticsSubscriptionConversionSummary `json:"summary"`
-	TrialToPaid     []AdminAnalyticsConversionTrendPoint        `json:"trial_to_paid"`
-	Renewals        []AdminAnalyticsConversionTrendPoint        `json:"renewals"`
-	MigrationMatrix []AdminAnalyticsPlanMigrationItem           `json:"migration_matrix"`
+	Summary AdminAnalyticsSubscriptionConversionSummary `json:"summary"`
 }
 
 type AdminAnalyticsSubscriptionConversionSummary struct {
-	TrialUsers       int     `json:"trial_users"`
-	PaidUsers        int     `json:"paid_users"`
-	TrialToPaidUsers int     `json:"trial_to_paid_users"`
-	TrialToPaidRate  float64 `json:"trial_to_paid_rate"`
-	RenewalUsers     int     `json:"renewal_users"`
-	ChurnedUsers     int     `json:"churned_users"`
+	ConversionCount      int                            `json:"conversion_count"`
+	ExactConversionCount int                            `json:"exact_conversion_count"`
+	GrossCredit          int64                          `json:"gross_credit,string"`
+	DebtOffset           int64                          `json:"debt_offset,string"`
+	NetAvailableCredit   int64                          `json:"net_available_credit,string"`
+	GrossValueByCurrency []AdminAnalyticsMoneyBreakdown `json:"gross_value_by_currency"`
+	NetValueByCurrency   []AdminAnalyticsMoneyBreakdown `json:"net_value_by_currency"`
 }
 
 type AdminAnalyticsConversionTrendPoint struct {

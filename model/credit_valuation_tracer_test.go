@@ -376,6 +376,99 @@ func TestCreditValuationFiveAnalyticsPanelsReturnCurrentOnlyWarning(t *testing.T
 	}
 }
 
+func TestTimedConversionRealPathFeedsFiveAnalyticsWithoutNewPaymentAttribution(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	const (
+		userID       = 92_001
+		timedPlanID  = 92_002
+		creditPlanID = 92_003
+		sourceID     = 92_004
+		creditBasis  = int64(100)
+	)
+	require.NoError(t, db.AutoMigrate(&InvitationRewardEvent{}))
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	priceMicros := int64(40_000_000)
+	timedCode := "conversion-five-analytics-timed"
+	creditCode := "conversion-five-analytics-credit"
+	require.NoError(t, db.Create(&User{Id: userID, Username: "conversion-five-analytics", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: timedPlanID, Title: "40 CNY / 100 timed Credit", EntitlementType: SubscriptionEntitlementTimed,
+		Enabled: true, BusinessCode: &timedCode, DurationUnit: SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: SubscriptionResetMonthly, MonthlyTokenLimit: creditBasis, TimedConversionEnabled: true,
+		PriceAmountMicros: &priceMicros, PriceAmount: 40, Currency: "CNY",
+	}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: creditPlanID, Title: "Credit balance", EntitlementType: SubscriptionEntitlementCreditBalance,
+		Enabled: true, BusinessCode: &creditCode, CreditBalanceConfigured: true,
+		CreditBalanceConversionEnabled: true, ValuationCurrency: &valuationCurrency,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: sourceID, UserId: userID, PlanId: timedPlanID, EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit: creditBasis, TokenUsed: 20, GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime: now - 40*24*60*60, EndTime: now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status: SubscriptionStatusActive, LastGrantedAt: now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis), LastGrantTimeSource: SubscriptionGrantTimeSourceLive,
+		LastGrantSource: SubscriptionGrantOrder,
+	}).Error)
+
+	quote, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, quote.Quotes, 1)
+	require.Equal(t, int64(180), quote.Quotes[0].GrossCredit)
+	conversion, err := ConfirmTimedSubscriptionConversion(userID, sourceID, "conversion-five-analytics")
+	require.NoError(t, err)
+	require.False(t, conversion.Replayed)
+	targetID := conversion.Conversion.TargetSubscriptionId
+
+	query := AdminAnalyticsQuery{SnapshotAt: GetDBTimestamp(), EndTimestamp: GetDBTimestamp(), RangeMode: AdminAnalyticsRangeModeSnapshot, Currency: "CNY", Limit: 20}
+	summary, err := GetAdminPaidSubscriptionValueSummary(query)
+	require.NoError(t, err)
+	users, err := GetAdminPaidSubscriptionValueUsers(query)
+	require.NoError(t, err)
+	subscriptions, err := GetAdminPaidSubscriptionValueSubscriptions(query)
+	require.NoError(t, err)
+	plans, err := GetAdminPaidSubscriptionValuePlanBreakdown(query)
+	require.NoError(t, err)
+	sources, err := GetAdminPaidSubscriptionValueSourceBreakdown(query)
+	require.NoError(t, err)
+
+	require.Equal(t, 1, summary.Data.Summary.ActivePaidSubscriptionCount)
+	require.Equal(t, int64(72_000_000), moneyBreakdownMicros(summary.Data.Summary.RecognizedRemainingValueByCurrency, "CNY"))
+	require.Len(t, users.Data.Users.Items, 1)
+	require.Equal(t, int64(72_000_000), moneyBreakdownMicros(users.Data.Users.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
+	require.Len(t, subscriptions.Data.Subscriptions.Items, 1)
+	item := subscriptions.Data.Subscriptions.Items[0]
+	require.Equal(t, targetID, item.SubscriptionID)
+	require.Equal(t, SubscriptionEntitlementCreditBalance, item.EntitlementType)
+	require.Equal(t, int64(180), item.AvailableCredit)
+	require.Equal(t, "72000000", item.RecognizedRemainingValue.AmountMicros)
+	require.Equal(t, "credit_moving_weighted_average", item.ValuationBasis)
+	require.Equal(t, "credit_balance_pool", string(item.Source))
+	require.Equal(t, "moving_weighted_pool", item.SourceAttribution)
+	require.Len(t, plans.Data.Plans.Items, 1)
+	require.Equal(t, creditPlanID, plans.Data.Plans.Items[0].PlanID)
+	require.Len(t, sources.Data.Sources.Items, 1)
+	require.Equal(t, "credit_balance_pool", string(sources.Data.Sources.Items[0].Source))
+	require.Equal(t, int64(72_000_000), moneyBreakdownMicros(sources.Data.Sources.Items[0].RecognizedRemainingValueByCurrency, "CNY"))
+
+	var orderCount int64
+	require.NoError(t, db.Model(&SubscriptionOrder{}).Where("user_id = ?", userID).Count(&orderCount).Error)
+	require.Zero(t, orderCount, "conversion must not be represented as a new payment")
+	var rewardCount int64
+	require.NoError(t, db.Model(&InvitationRewardEvent{}).Where("invitee_id = ?", userID).Count(&rewardCount).Error)
+	require.Zero(t, rewardCount, "conversion must not enter invitation income")
+
+	conversionAnalytics, err := GetAdminAnalyticsSubscriptionConversion(query)
+	require.NoError(t, err)
+	require.Equal(t, 1, conversionAnalytics.Data.Summary.ConversionCount)
+	require.Equal(t, int64(180), conversionAnalytics.Data.Summary.GrossCredit)
+	require.Equal(t, int64(180), conversionAnalytics.Data.Summary.NetAvailableCredit)
+	require.Equal(t, int64(72_000_000), moneyBreakdownMicros(conversionAnalytics.Data.Summary.GrossValueByCurrency, "CNY"))
+	require.Equal(t, int64(72_000_000), moneyBreakdownMicros(conversionAnalytics.Data.Summary.NetValueByCurrency, "CNY"))
+	require.Equal(t, 1, conversionAnalytics.Data.Summary.ExactConversionCount)
+}
+
 func moneyBreakdownMicros(items []dto.AdminAnalyticsMoneyBreakdown, currency string) int64 {
 	for _, item := range items {
 		if item.Currency == currency {

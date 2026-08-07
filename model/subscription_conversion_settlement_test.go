@@ -89,6 +89,218 @@ func TestConvertedSubscriptionRedirectsInFlightSettlementAndRejectsNewPreConsume
 	assert.Equal(t, sourceID, originalRecord.UserSubscriptionId)
 }
 
+func TestTimedReserveConversionFinalSettlePreservesOriginalRequestSnapshot(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPreConsumeRecord{}))
+	require.NoError(t, migrateCreditValuationSchema(DB))
+	ClearPrimaryBillableSubscriptionCacheForTest()
+
+	const (
+		userID        = 10_171
+		sourceID      = 10_172
+		planID        = 10_173
+		creditBasis   = int64(100)
+		reserveCredit = int64(10)
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, DB.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+
+	user := User{Id: userID, Username: "conversion-inflight-snapshot", Status: common.UserStatusEnabled}
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = sourceID
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategySingleActive
+	user.SetSetting(setting)
+	require.NoError(t, DB.Create(&user).Error)
+	plan := seedConversionQuoteTimedPlan(t, planID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, DB.Save(plan).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id:                      sourceID,
+		UserId:                  userID,
+		PlanId:                  planID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              creditBasis,
+		TokenUsed:               0,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	const requestID = "conversion-inflight-original-request"
+	reserved, err := PreConsumeUserSubscriptionByUnits(requestID, userID, "gpt-4o", 0, 0, reserveCredit)
+	require.NoError(t, err)
+	require.Equal(t, sourceID, reserved.UserSubscriptionId)
+
+	converted, err := ConfirmTimedSubscriptionConversion(userID, sourceID, "conversion-inflight-snapshot")
+	require.NoError(t, err)
+	require.False(t, converted.Replayed)
+	targetID := converted.Conversion.TargetSubscriptionId
+	require.Positive(t, targetID)
+
+	var frozen SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", requestID).First(&frozen).Error)
+	require.Equal(t, sourceID, frozen.UserSubscriptionId, "request attribution must stay on the reserved timed source")
+	require.Equal(t, reserveCredit, frozen.PreConsumed)
+	require.Equal(t, reserveCredit, frozen.AppliedCredit)
+	require.Equal(t, targetID, frozen.ValuationSubscriptionId)
+	require.Equal(t, int64(4_000_000), frozen.DeductedExactCostMicros)
+	require.Equal(t, CreditValuationRuleVersion, frozen.ValuationRuleVersion)
+
+	require.NoError(t, SettleUserSubscriptionRequestTarget(requestID, sourceID, reserveCredit, true))
+
+	var settled SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", requestID).First(&settled).Error)
+	require.Equal(t, sourceID, settled.UserSubscriptionId)
+	require.Equal(t, frozen.ValuationSubscriptionId, settled.ValuationSubscriptionId)
+	require.Equal(t, frozen.AppliedCredit, settled.AppliedCredit)
+	require.Equal(t, frozen.DeductedExactCostMicros, settled.DeductedExactCostMicros)
+	require.Equal(t, "settled", settled.Status)
+	require.Positive(t, settled.FinalizedAt)
+
+	var source UserSubscription
+	require.NoError(t, DB.First(&source, sourceID).Error)
+	require.Equal(t, reserveCredit, source.TokenUsed, "final settle must not deduct the converted source twice")
+	var target UserSubscription
+	require.NoError(t, DB.First(&target, targetID).Error)
+	require.Zero(t, target.TokenUsed, "the reserved request must not be rewritten as a new Credit deduction")
+
+	const nextRequestID = "conversion-after-new-credit-request"
+	next, err := PreConsumeUserSubscriptionByUnits(nextRequestID, userID, "gpt-4o", 0, 0, 5)
+	require.NoError(t, err)
+	require.Equal(t, targetID, next.UserSubscriptionId, "requests started after conversion must use Credit")
+	var nextRecord SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", nextRequestID).First(&nextRecord).Error)
+	require.Equal(t, targetID, nextRecord.UserSubscriptionId)
+	require.Equal(t, targetID, nextRecord.ValuationSubscriptionId)
+}
+
+func TestTimedReserveConversionRefundRestoresVirtualExactSnapshot(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionPreConsumeRecord{}))
+	require.NoError(t, migrateCreditValuationSchema(DB))
+	ClearPrimaryBillableSubscriptionCacheForTest()
+
+	const (
+		userID        = 10_181
+		sourceID      = 10_182
+		planID        = 10_183
+		creditBasis   = int64(100)
+		reserveCredit = int64(10)
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, DB.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+
+	user := User{Id: userID, Username: "conversion-inflight-refund", Status: common.UserStatusEnabled}
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = sourceID
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategySingleActive
+	user.SetSetting(setting)
+	require.NoError(t, DB.Create(&user).Error)
+	plan := seedConversionQuoteTimedPlan(t, planID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, DB.Save(plan).Error)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id:                      sourceID,
+		UserId:                  userID,
+		PlanId:                  planID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              creditBasis,
+		TokenUsed:               0,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	const requestID = "conversion-inflight-refund-request"
+	reserved, err := PreConsumeUserSubscriptionByUnits(requestID, userID, "gpt-4o", 0, 0, reserveCredit)
+	require.NoError(t, err)
+	require.Equal(t, sourceID, reserved.UserSubscriptionId)
+
+	converted, err := ConfirmTimedSubscriptionConversion(userID, sourceID, "conversion-inflight-refund")
+	require.NoError(t, err)
+	require.False(t, converted.Replayed)
+	targetID := converted.Conversion.TargetSubscriptionId
+	require.Positive(t, targetID)
+
+	var frozen SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", requestID).First(&frozen).Error)
+	require.Equal(t, sourceID, frozen.UserSubscriptionId, "request attribution must stay on the reserved timed source")
+	require.Equal(t, reserveCredit, frozen.PreConsumed)
+	require.Equal(t, reserveCredit, frozen.AppliedCredit)
+	require.Equal(t, reserveCredit, frozen.DeductedAvailableCredit)
+	require.Equal(t, targetID, frozen.ValuationSubscriptionId)
+	require.Equal(t, int64(4_000_000), frozen.DeductedExactCostMicros)
+	require.Equal(t, CreditValuationRuleVersion, frozen.ValuationRuleVersion)
+
+	var targetBefore UserSubscription
+	require.NoError(t, DB.First(&targetBefore, targetID).Error)
+	var stateBefore CreditValuationState
+	require.NoError(t, DB.Where("user_subscription_id = ?", targetID).First(&stateBefore).Error)
+
+	err = SettleUserSubscriptionRequestTarget(requestID, sourceID, 0, true)
+	if err != nil {
+		t.Fatalf("refund settle returned type=%T value=%#v text=%q", err, err, err.Error())
+	}
+
+	var refunded SubscriptionPreConsumeRecord
+	require.NoError(t, DB.Where("request_id = ?", requestID).First(&refunded).Error)
+	require.Equal(t, sourceID, refunded.UserSubscriptionId)
+	require.Equal(t, frozen.ValuationSubscriptionId, refunded.ValuationSubscriptionId)
+	require.Zero(t, refunded.AppliedCredit)
+	require.Zero(t, refunded.DeductedAvailableCredit)
+	require.Zero(t, refunded.DeductedExactCostMicros, "full refund must consume the request snapshot rounding remainder")
+	require.Equal(t, "refunded", refunded.Status)
+	require.Positive(t, refunded.FinalizedAt)
+
+	var source UserSubscription
+	require.NoError(t, DB.First(&source, sourceID).Error)
+	require.Equal(t, reserveCredit, source.TokenUsed, "refund must not rewrite historical timed usage")
+	var target UserSubscription
+	require.NoError(t, DB.First(&target, targetID).Error)
+	require.Equal(t, targetBefore.TokenLimit+reserveCredit, target.TokenLimit)
+	require.Equal(t, targetBefore.TokenUsed, target.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, DB.Where("user_subscription_id = ?", targetID).First(&state).Error)
+	require.Equal(t, stateBefore.AvailableCredit+reserveCredit, state.AvailableCredit)
+	require.Equal(t, stateBefore.ExactCostMicros+frozen.DeductedExactCostMicros, state.ExactCostMicros)
+}
+
 func TestConvertedAmountSubscriptionRedirectsInFlightSettlement(t *testing.T) {
 	setupSubscriptionConversionQuoteTestDB(t)
 	require.NoError(t, DB.AutoMigrate(&User{}, &SubscriptionConversion{}))

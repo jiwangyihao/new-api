@@ -190,6 +190,7 @@ func TestListTimedSubscriptionConversionQuotesHandlesNullableLegacyEntitlement(t
 	)`).Error)
 	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}))
 	require.NoError(t, db.AutoMigrate(&SubscriptionConversion{}))
+	require.NoError(t, db.AutoMigrate(&CreditBalanceLedger{}))
 	seedConversionQuoteCreditBalancePlan(t)
 	seedConversionQuoteTimedPlan(t, 29_101, 100)
 	require.NoError(t, db.Exec(

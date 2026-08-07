@@ -45,6 +45,19 @@ type subscriptionConversionQuoteItemResponse struct {
 	ReasonCodes              []string                                    `json:"reason_codes"`
 	Reasons                  []subscriptionConversionQuoteReasonResponse `json:"reasons"`
 	CalculationErrorCode     string                                      `json:"calculation_error_code,omitempty"`
+	SourcePriceMicros        string                                      `json:"source_price_micros,omitempty"`
+	SourceCurrency           string                                      `json:"source_currency,omitempty"`
+	TargetCurrency           string                                      `json:"target_currency,omitempty"`
+	ValuationCreditBasis     string                                      `json:"valuation_credit_basis,omitempty"`
+	GrossCostMicros          string                                      `json:"gross_cost_micros,omitempty"`
+	NetCostMicros            string                                      `json:"net_cost_micros,omitempty"`
+	UnitValueNumeratorMicros string                                      `json:"unit_value_numerator_micros,omitempty"`
+	UnitValueDenominator     string                                      `json:"unit_value_denominator,omitempty"`
+	RuleVersion              int                                         `json:"rule_version,omitempty"`
+	FxNumerator              string                                      `json:"fx_numerator,omitempty"`
+	FxDenominator            string                                      `json:"fx_denominator,omitempty"`
+	FxCapturedAt             string                                      `json:"fx_captured_at,omitempty"`
+	FxDirection              string                                      `json:"fx_direction,omitempty"`
 }
 
 type subscriptionConversionQuoteListResponse struct {
@@ -73,7 +86,7 @@ func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionCon
 				Data: stringifyConversionQuoteReasonData(reason.Data),
 			})
 		}
-		response.Quotes = append(response.Quotes, subscriptionConversionQuoteItemResponse{
+		item := subscriptionConversionQuoteItemResponse{
 			SourceSubscriptionId:     strconv.FormatInt(int64(quote.SourceSubscriptionId), 10),
 			PlanId:                   strconv.FormatInt(int64(quote.PlanId), 10),
 			PlanTitle:                quote.PlanTitle,
@@ -107,7 +120,23 @@ func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionCon
 			ReasonCodes:              append([]string{}, quote.ReasonCodes...),
 			Reasons:                  reasons,
 			CalculationErrorCode:     quote.CalculationErrorCode,
-		})
+		}
+		if quote.ValuationCurrency != "" && quote.FxRateDenominator > 0 {
+			item.SourcePriceMicros = strconv.FormatInt(quote.ValuationSourcePriceMicros, 10)
+			item.SourceCurrency = quote.ValuationSourceCurrency
+			item.TargetCurrency = quote.ValuationCurrency
+			item.ValuationCreditBasis = strconv.FormatInt(quote.ValuationCreditBasis, 10)
+			item.GrossCostMicros = strconv.FormatInt(quote.ValuationGrossCostMicros, 10)
+			item.NetCostMicros = strconv.FormatInt(quote.ValuationNetCostMicros, 10)
+			item.UnitValueNumeratorMicros = strconv.FormatInt(quote.ValuationUnitValueNumeratorMicros, 10)
+			item.UnitValueDenominator = strconv.FormatInt(quote.ValuationUnitValueDenominator, 10)
+			item.RuleVersion = quote.ValuationRuleVersion
+			item.FxNumerator = strconv.FormatInt(quote.FxRateNumerator, 10)
+			item.FxDenominator = strconv.FormatInt(quote.FxRateDenominator, 10)
+			item.FxCapturedAt = strconv.FormatInt(quote.FxCapturedAt, 10)
+			item.FxDirection = quote.FxDirection
+		}
+		response.Quotes = append(response.Quotes, item)
 	}
 	response.Conversions = make([]subscriptionConversionHistoryResponse, 0, len(input.Conversions))
 	for i := range input.Conversions {

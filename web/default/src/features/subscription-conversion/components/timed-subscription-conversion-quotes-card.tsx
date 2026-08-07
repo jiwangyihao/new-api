@@ -447,6 +447,95 @@ function ConversionResultSummary({
           <dd>{formatCredit(BigInt(conversion.available_credit_after))}</dd>
         </div>
       </dl>
+      {conversion.source_price_micros &&
+        conversion.source_currency &&
+        conversion.target_currency &&
+        conversion.valuation_credit_basis &&
+        conversion.gross_cost_micros !== undefined &&
+        conversion.net_cost_micros !== undefined &&
+        conversion.unit_value_numerator_micros &&
+        conversion.unit_value_denominator &&
+        conversion.rule_version !== undefined &&
+        conversion.state_version_after &&
+        conversion.fx_numerator &&
+        conversion.fx_denominator &&
+        conversion.fx_captured_at &&
+        conversion.fx_direction && (
+          <div className='mt-3 rounded-md border p-3'>
+            <p className='font-medium'>
+              {t('This is a rules-based valuation, not a new payment.')}
+            </p>
+            <dl className='mt-2 grid gap-2 text-xs sm:grid-cols-2'>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Source price micros')}
+                </dt>
+                <dd>{conversion.source_price_micros}</dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Source → target currency')}
+                </dt>
+                <dd>
+                  {conversion.source_currency} → {conversion.target_currency}
+                </dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Valuation Credit basis')}
+                </dt>
+                <dd>{conversion.valuation_credit_basis}</dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Gross cost micros')}
+                </dt>
+                <dd>{conversion.gross_cost_micros}</dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Net cost micros')}
+                </dt>
+                <dd>{conversion.net_cost_micros}</dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>
+                  {t('Unrounded unit value')}
+                </dt>
+                <dd>
+                  {conversion.unit_value_numerator_micros} /{' '}
+                  {conversion.unit_value_denominator}
+                </dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>{t('Rule version')}</dt>
+                <dd>
+                  {t('Rule version')}: {conversion.rule_version}
+                </dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>{t('State version')}</dt>
+                <dd>
+                  {t('State version')}: {conversion.state_version_after}
+                </dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>{t('Frozen FX')}</dt>
+                <dd>
+                  {conversion.fx_numerator} / {conversion.fx_denominator}
+                </dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>{t('FX direction')}</dt>
+                <dd>{conversion.fx_direction}</dd>
+              </div>
+              <div>
+                <dt className='text-muted-foreground'>{t('FX captured at')}</dt>
+                <dd>{conversion.fx_captured_at}</dd>
+              </div>
+            </dl>
+          </div>
+        )}
     </article>
   )
 }
@@ -611,6 +700,92 @@ function ConversionPreviewDialog({
                 )}
               </code>
             </div>
+
+            {quote.source_price_micros &&
+              quote.source_currency &&
+              quote.target_currency &&
+              quote.valuation_credit_basis &&
+              quote.gross_cost_micros !== undefined &&
+              quote.net_cost_micros !== undefined &&
+              quote.unit_value_numerator_micros &&
+              quote.unit_value_denominator &&
+              quote.rule_version !== undefined &&
+              quote.fx_numerator &&
+              quote.fx_denominator &&
+              quote.fx_captured_at &&
+              quote.fx_direction && (
+                <Alert>
+                  <AlertTitle>
+                    {t('This is a rules-based valuation, not a new payment.')}
+                  </AlertTitle>
+                  <AlertDescription className='space-y-3'>
+                    <dl className='grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2'>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Source price micros')}
+                        </dt>
+                        <dd>{quote.source_price_micros}</dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Source → target currency')}
+                        </dt>
+                        <dd>
+                          {quote.source_currency} → {quote.target_currency}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Gross cost micros')}
+                        </dt>
+                        <dd>{quote.gross_cost_micros}</dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Net cost micros')}
+                        </dt>
+                        <dd>{quote.net_cost_micros}</dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Unrounded unit value')}
+                        </dt>
+                        <dd>
+                          {quote.unit_value_numerator_micros} /{' '}
+                          {quote.unit_value_denominator}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Frozen FX')}
+                        </dt>
+                        <dd>
+                          {quote.fx_numerator} / {quote.fx_denominator}
+                        </dd>
+                      </div>
+                    </dl>
+                    <dl className='grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2'>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('Rule version')}
+                        </dt>
+                        <dd>{quote.rule_version}</dd>
+                      </div>
+                      <div>
+                        <dt className='text-muted-foreground'>
+                          {t('FX captured at')}
+                        </dt>
+                        <dd>{quote.fx_captured_at}</dd>
+                      </div>
+                    </dl>
+                    <p>
+                      {t(
+                        'Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.'
+                      )}
+                    </p>
+                  </AlertDescription>
+                </Alert>
+              )}
 
             {reasons.length > 0 && (
               <Alert variant='destructive'>

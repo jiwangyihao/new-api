@@ -128,6 +128,19 @@ function makeQuote(
     can_confirm: true,
     reason_codes: [],
     reasons: [],
+    source_price_micros: '40000000',
+    source_currency: 'CNY',
+    target_currency: 'USD',
+    valuation_credit_basis: '100',
+    gross_cost_micros: '6849315',
+    net_cost_micros: '5753424',
+    unit_value_numerator_micros: '4000000',
+    unit_value_denominator: '73',
+    rule_version: 1,
+    fx_numerator: '10',
+    fx_denominator: '73',
+    fx_captured_at: '1800000000',
+    fx_direction: 'CNY_TO_USD',
     ...overrides,
   }
 }
@@ -171,6 +184,20 @@ function makeConversion(
     last_grant_time_source: 'live_grant',
     last_grant_source: 'order',
     converted_at: '1800000010',
+    source_price_micros: '40000000',
+    source_currency: 'CNY',
+    target_currency: 'USD',
+    valuation_credit_basis: '100',
+    gross_cost_micros: '9863013',
+    net_cost_micros: '9863013',
+    unit_value_numerator_micros: '4000000',
+    unit_value_denominator: '73',
+    rule_version: 1,
+    state_version_after: '1',
+    fx_numerator: '10',
+    fx_denominator: '73',
+    fx_captured_at: '1800000010',
+    fx_direction: 'CNY_TO_USD',
     ...overrides,
   }
 }
@@ -281,6 +308,34 @@ describe('timed subscription conversion quotes', () => {
     assert.ok(within(result).getByText('115'))
   })
 
+  test('shows quote valuation and the immutable confirmation boundary', async () => {
+    const view = await renderQuotesCard()
+    const dialog = await openConversionPreview(view)
+
+    assert.ok(
+      within(dialog).getByText(
+        'This is a rules-based valuation, not a new payment.'
+      )
+    )
+    assert.ok(within(dialog).getByText('40000000'))
+    assert.ok(within(dialog).getByText('CNY → USD'))
+    assert.ok(within(dialog).getByText('4000000 / 73'))
+    assert.ok(within(dialog).getByText('10 / 73'))
+    assert.equal(
+      within(dialog).getByText('Rule version').parentElement?.textContent,
+      'Rule version1'
+    )
+    assert.equal(
+      within(dialog).getByText('FX captured at').parentElement?.textContent,
+      'FX captured at1800000000'
+    )
+    assert.ok(
+      within(dialog).getByText(
+        'Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.'
+      )
+    )
+  })
+
   test('keeps the submit disabled while pending and prevents duplicate confirmation', async () => {
     let resolveConfirmation:
       | ((value: SubscriptionConversionConfirmResult) => void)
@@ -346,6 +401,26 @@ describe('timed subscription conversion quotes', () => {
     const history = view.getByLabelText('Converted subscription #7001')
     assert.ok(within(history).getByText('0 × 100 + 20 = 20'))
     assert.equal(view.queryByRole('button', { name: /restore/i }), null)
+  })
+
+  test('shows frozen valuation and FX facts without rounding source integers', async () => {
+    const view = await renderQuotesCard(makeQuoteList([], [makeConversion()]))
+    const history = view.getByLabelText('Converted subscription #7001')
+
+    assert.ok(within(history).getByText('40000000'))
+    assert.ok(within(history).getByText('CNY → USD'))
+    assert.equal(within(history).getAllByText('9863013').length, 2)
+    assert.ok(within(history).getByText('4000000 / 73'))
+    assert.ok(within(history).getByText('10 / 73'))
+    assert.ok(within(history).getByText('CNY_TO_USD'))
+    assert.ok(within(history).getByText('1800000010'))
+    assert.ok(within(history).getByText('Rule version: 1'))
+    assert.ok(within(history).getByText('State version: 1'))
+    assert.ok(
+      within(history).getByText(
+        'This is a rules-based valuation, not a new payment.'
+      )
+    )
   })
 
   test('collapses excluded subscriptions and exposes only their primary reason', async () => {

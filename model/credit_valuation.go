@@ -45,14 +45,21 @@ type CreditValuationSourceSnapshot struct {
 	SourceCurrency    string
 	ValuationCurrency string
 	RuleVersion       int
+	FXRateSnapshot    *CreditFXRateSnapshot
 }
 
 type creditValuationIngress struct {
-	grossCredit     int64
-	grossCostMicros int64
-	currency        string
-	confidence      string
-	ruleVersion     int
+	grossCredit              int64
+	grossCostMicros          int64
+	currency                 string
+	confidence               string
+	ruleVersion              int
+	fxSourceCurrency         string
+	fxRateNumerator          int64
+	fxRateDenominator        int64
+	fxCapturedAt             int64
+	unitValueNumeratorMicros int64
+	unitValueDenominator     int64
 }
 
 type CreditValuationMutationResult struct {
@@ -78,22 +85,77 @@ func newForwardCreditValuationIngress(source CreditValuationSourceSnapshot) (cre
 	if err != nil {
 		return creditValuationIngress{}, err
 	}
-	// Cross-currency runtime valuation is owned by Issue #26. Issue #22 only
-	// accepts authoritative source facts already expressed in the pool currency.
-	if sourceCurrency != valuationCurrency {
-		return creditValuationIngress{}, ErrCreditValuationUnsupportedCurrency
+	fxSnapshot := source.FXRateSnapshot
+	if fxSnapshot == nil {
+		if sourceCurrency != valuationCurrency {
+			return creditValuationIngress{}, ErrCreditValuationUnsupportedCurrency
+		}
+		identity, identityErr := ParseCreditFXRateSnapshot(CreditFXRateSnapshotInput{
+			SourceCurrency: sourceCurrency, ValuationCurrency: valuationCurrency,
+			Direction: CreditFXDirectionIdentity, CapturedAt: 1,
+		})
+		if identityErr != nil {
+			return creditValuationIngress{}, identityErr
+		}
+		fxSnapshot = &identity
 	}
-	grossCostMicros, err := mulDivFloor(source.SourcePriceMicros, source.GrossCredit, source.SourcePlanCredit)
+	if fxSnapshot.SourceCurrency != sourceCurrency || fxSnapshot.ValuationCurrency != valuationCurrency {
+		return creditValuationIngress{}, ErrCreditValuationSourceInvalid
+	}
+	unitValueNumeratorMicros, unitValueDenominator, err := creditValuationUnitValueRatio(
+		source.SourcePriceMicros,
+		source.SourcePlanCredit,
+		fxSnapshot.Numerator,
+		fxSnapshot.Denominator,
+	)
+	if err != nil {
+		return creditValuationIngress{}, err
+	}
+	sourceGrossCostMicros, err := mulDivFloor(source.SourcePriceMicros, source.GrossCredit, source.SourcePlanCredit)
+	if err != nil {
+		return creditValuationIngress{}, err
+	}
+	grossCostMicros, err := fxSnapshot.ConvertMicros(sourceGrossCostMicros)
 	if err != nil {
 		return creditValuationIngress{}, err
 	}
 	return creditValuationIngress{
-		grossCredit:     source.GrossCredit,
-		grossCostMicros: grossCostMicros,
-		currency:        valuationCurrency,
-		confidence:      CreditValuationConfidenceExact,
-		ruleVersion:     source.RuleVersion,
+		grossCredit:              source.GrossCredit,
+		grossCostMicros:          grossCostMicros,
+		currency:                 valuationCurrency,
+		confidence:               CreditValuationConfidenceExact,
+		ruleVersion:              source.RuleVersion,
+		fxSourceCurrency:         fxSnapshot.SourceCurrency,
+		fxRateNumerator:          fxSnapshot.Numerator,
+		fxRateDenominator:        fxSnapshot.Denominator,
+		fxCapturedAt:             fxSnapshot.CapturedAt,
+		unitValueNumeratorMicros: unitValueNumeratorMicros,
+		unitValueDenominator:     unitValueDenominator,
 	}, nil
+}
+
+func creditValuationUnitValueRatio(sourcePriceMicros int64, sourcePlanCredit int64, fxNumerator int64, fxDenominator int64) (int64, int64, error) {
+	if sourcePriceMicros <= 0 || sourcePlanCredit <= 0 || fxNumerator <= 0 || fxDenominator <= 0 {
+		return 0, 0, ErrCreditValuationSourceInvalid
+	}
+	priceDivisor := greatestCommonDivisor(sourcePriceMicros, sourcePlanCredit)
+	numerator := sourcePriceMicros / priceDivisor
+	denominator := sourcePlanCredit / priceDivisor
+	fxDivisor := greatestCommonDivisor(fxNumerator, denominator)
+	fxNumerator /= fxDivisor
+	denominator /= fxDivisor
+	rateDivisor := greatestCommonDivisor(numerator, fxDenominator)
+	numerator /= rateDivisor
+	fxDenominator /= rateDivisor
+	combinedNumerator, ok := checkedMulNonNegativeInt64(numerator, fxNumerator)
+	if !ok {
+		return 0, 0, ErrCreditValuationOverflow
+	}
+	combinedDenominator, ok := checkedMulNonNegativeInt64(denominator, fxDenominator)
+	if !ok || combinedNumerator <= 0 || combinedDenominator <= 0 {
+		return 0, 0, ErrCreditValuationOverflow
+	}
+	return combinedNumerator, combinedDenominator, nil
 }
 
 // CreditValuationRuntimeReadyTx only observes the existing marker. Marker
@@ -459,6 +521,49 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 }
 
 func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
+	var record SubscriptionPreConsumeRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
+		return err
+	}
+	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
+		return ErrCreditValuationTargetConflict
+	}
+	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
+		return ErrCreditValuationTargetConflict
+	}
+	if record.FinalizedAt > 0 && !final {
+		return ErrCreditValuationFinalizedConflict
+	}
+
+	convertedVirtual := record.UserSubscriptionId != record.ValuationSubscriptionId
+	if convertedVirtual {
+		if record.PreConsumed <= 0 {
+			return ErrCreditValuationMappingConflict
+		}
+		var source UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", record.UserSubscriptionId).First(&source).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCreditValuationMappingConflict
+			}
+			return err
+		}
+		if source.Status != SubscriptionStatusConverted || source.ConversionId <= 0 || source.ConvertedToSubscriptionId != record.ValuationSubscriptionId {
+			return ErrCreditValuationMappingConflict
+		}
+		var conversion SubscriptionConversion
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND source_subscription_id = ? AND target_subscription_id = ?", source.ConversionId, source.Id, record.ValuationSubscriptionId).
+			First(&conversion).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrCreditValuationMappingConflict
+			}
+			return err
+		}
+		if conversion.ValuationRuleVersion != record.ValuationRuleVersion {
+			return ErrCreditValuationMappingConflict
+		}
+	}
+
 	var subscription UserSubscription
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.ValuationSubscriptionId).First(&subscription).Error; err != nil {
 		return err
@@ -479,22 +584,16 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 		return err
 	}
 
-	var record SubscriptionPreConsumeRecord
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
-		return err
-	}
-	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
-		return ErrCreditValuationTargetConflict
-	}
-	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
-		return ErrCreditValuationTargetConflict
-	}
-	if record.FinalizedAt > 0 && !final {
-		return ErrCreditValuationFinalizedConflict
-	}
-
 	refund := record.AppliedCredit - targetCredit
-	if refund > subscription.TokenUsed {
+	targetUsedRefund := refund
+	virtualRefund := int64(0)
+	if convertedVirtual {
+		targetUsedBefore := maxInt64(record.AppliedCredit-record.PreConsumed, 0)
+		targetUsedAfter := maxInt64(targetCredit-record.PreConsumed, 0)
+		targetUsedRefund = targetUsedBefore - targetUsedAfter
+		virtualRefund = refund - targetUsedRefund
+	}
+	if targetUsedRefund > subscription.TokenUsed {
 		return ErrCreditValuationStateMismatch
 	}
 	debtRefund := minInt64(refund, record.DebtFormedCredit)
@@ -522,8 +621,12 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 	}
 
 	availableBefore := maxInt64(subscription.TokenLimit-subscription.TokenUsed, 0)
-	newTokenUsed := subscription.TokenUsed - refund
-	availableAfter := maxInt64(subscription.TokenLimit-newTokenUsed, 0)
+	newTokenLimit, ok := checkedAddInt64(subscription.TokenLimit, virtualRefund)
+	if !ok {
+		return ErrCreditValuationOverflow
+	}
+	newTokenUsed := subscription.TokenUsed - targetUsedRefund
+	availableAfter := maxInt64(newTokenLimit-newTokenUsed, 0)
 	newlyAvailable := availableAfter - availableBefore
 	restorableSnapshotCredit := minInt64(snapshotRefund, newlyAvailable)
 
@@ -592,11 +695,13 @@ func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeReco
 
 	now := getDBTimestampTx(tx)
 	if err := tx.Model(&UserSubscription{}).Where("id = ?", subscription.Id).Updates(map[string]any{
-		"token_used": newTokenUsed,
-		"updated_at": now,
+		"token_limit": newTokenLimit,
+		"token_used":  newTokenUsed,
+		"updated_at":  now,
 	}).Error; err != nil {
 		return err
 	}
+	subscription.TokenLimit = newTokenLimit
 	subscription.TokenUsed = newTokenUsed
 	subscription.UpdatedAt = now
 	state.AvailableCredit = availableAfter

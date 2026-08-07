@@ -50,6 +50,7 @@ import {
   formatCompactCredit as formatCredit,
   formatDurationSeconds,
 } from '@/features/subscriptions/lib'
+import { getSubscriptionConversionErrorMessage } from '../errors'
 import {
   useConfirmSubscriptionConversion,
   useSubscriptionConversionQuotes,
@@ -1008,11 +1009,7 @@ export function TimedSubscriptionConversionQuotesCard({
       setPreviewOpen(false)
       await quotesQuery.refetch()
     } catch (error) {
-      setConfirmationError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to convert subscription')
-      )
+      setConfirmationError(getSubscriptionConversionErrorMessage(error, t))
       const refreshed = await quotesQuery.refetch()
       const latest = refreshed.data?.quotes.find(
         (quote) =>

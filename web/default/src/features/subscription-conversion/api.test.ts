@@ -21,24 +21,31 @@ import { afterEach, describe, test } from 'node:test'
 import { api } from '@/lib/api'
 import {
   confirmSubscriptionConversion,
+  getSubscriptionConversionQuotes,
   SubscriptionConversionRequestError,
 } from './api'
 
+const originalGet = api.get
 const originalPost = api.post
 
 afterEach(() => {
+  api.get = originalGet
   api.post = originalPost
 })
 
 describe('subscription conversion API errors', () => {
   test('preserves a stable business code without exposing server text as the error contract', async () => {
-    api.post = (async () => ({
-      data: {
-        success: false,
-        code: 'subscription_conversion_quote_stale',
-        message: 'unsafe free-form server detail',
-      },
-    })) as typeof api.post
+    let requestConfig: unknown
+    api.post = (async (_url, _request, config) => {
+      requestConfig = config
+      return {
+        data: {
+          success: false,
+          code: 'subscription_conversion_quote_stale',
+          message: 'unsafe free-form server detail',
+        },
+      }
+    }) as typeof api.post
 
     await assert.rejects(
       () =>
@@ -54,5 +61,34 @@ describe('subscription conversion API errors', () => {
         return true
       }
     )
+    assert.deepEqual(requestConfig, { skipBusinessError: true })
+  })
+
+  test('suppresses free-form quote errors while retaining their stable code', async () => {
+    let requestConfig: unknown
+    api.get = (async (_url, config) => {
+      requestConfig = config
+      return {
+        data: {
+          success: false,
+          code: 'subscription_conversion_ineligible',
+          message: 'unsafe free-form quote detail',
+        },
+      }
+    }) as typeof api.get
+
+    await assert.rejects(
+      () => getSubscriptionConversionQuotes(),
+      (error: unknown) => {
+        assert.ok(error instanceof SubscriptionConversionRequestError)
+        assert.equal(error.code, 'subscription_conversion_ineligible')
+        assert.notEqual(error.message, 'unsafe free-form quote detail')
+        return true
+      }
+    )
+    assert.deepEqual(requestConfig, {
+      disableDuplicate: true,
+      skipBusinessError: true,
+    })
   })
 })

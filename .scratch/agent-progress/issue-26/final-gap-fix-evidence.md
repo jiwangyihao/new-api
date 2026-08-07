@@ -21,12 +21,14 @@
 
 ## Finding B：稳定错误 code 与六语言
 
-- RED 命令：`cd web/default && bun test src/features/subscription-conversion/api.test.ts`。
-- RED 结果：`0 pass / 1 fail`，模块缺少 `SubscriptionConversionRequestError`；既有 adapter 把 `{success:false, code, message}` 直接包装为普通 `Error(message)`，稳定 code 丢失且自由文本成为 UI 合同。
-- 根因：conversion feature 没有 typed request error，响应类型也未声明错误 `code`。
-- 第一条 GREEN：建立 feature 内最小 `SubscriptionConversionRequestError` 与成功/错误响应 union；adapter 只保留 `code`，不暴露服务端 message。`bun test` API + component 两文件结果 `19 pass / 0 fail`。
-- 后续 RED：已知 conversion/FX code 的本地化、unknown fallback 与 stale 再确认行为待补。
-- 提交：typed adapter RED/GREEN 待创建。
+- typed adapter RED：`cd web/default && bun test src/features/subscription-conversion/api.test.ts` 为 `0 pass / 1 fail`，模块缺少 `SubscriptionConversionRequestError`；既有 adapter 把 `{success:false, code, message}` 直接包装为普通 `Error(message)`。
+- typed adapter GREEN：建立 feature 内最小 `SubscriptionConversionRequestError` 与成功/错误响应 union；adapter 保留 `code` 且不把 `message` 作为错误合同。提交 `979c43af2 fix(subscription): 保留转换 API 稳定错误码`。
+- 稳定映射 RED：`bun test src/features/subscription-conversion/errors.test.ts` 为 `1 pass / 1 fail`；`subscription_conversion_ineligible` 实际落入通用 fallback。组件 stale RED 为 `18 pass / 1 fail`；stale code 未映射明确再次确认文案。
+- 根因：缺少集中稳定 code→i18n key 映射；全局 axios interceptor 在 conversion 请求未设置 `skipBusinessError` 时仍会 toast 服务端自由文本。
+- GREEN：集中穷举 conversion stale/ineligible/idempotency conflict 与 `credit_fx_rate_missing`、`credit_fx_rate_empty`、`credit_fx_invalid_decimal`、`credit_fx_precision_exceeded`、`credit_fx_non_positive`、`credit_fx_direction_mismatch`、`credit_fx_unsupported_currency`、`credit_fx_overflow`；unknown/untyped 只用本地化通用 fallback。quote/confirm 均显式 `skipBusinessError: true` 并由 API 行为测试断言。stale 只刷新预览，不自动发第二次 confirm。
+- GREEN 命令：`bun test src/features/subscription-conversion/api.test.ts src/features/subscription-conversion/errors.test.ts src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`；结果 `23 pass / 0 fail`。
+- 六语言：新增 5 个合并后的可见消息键并分别翻译 en/zh/fr/ja/ru/vi；`bun run i18n:sync` 成功，六语言 `missingCount=0`、`extrasCount=0`。既有全库 untranslated 计数未在本 Dispatch 清理。
+- stable-code/i18n RED/GREEN 提交：待创建。
 
 ## Finding C：轮询 quote 写放大
 
@@ -45,5 +47,5 @@
 
 ## 当前提交与下一动作
 
-- 安全文档提交：待创建。
-- 下一动作：提交本安全点，定位并执行 Finding A 的前端 RED。
+- 安全文档：`8b390a7fb`；quote identity RED/GREEN：`e984c1eb7`、`e10d4bbd8`、`27c3552cb`；typed adapter：`979c43af2`。
+- 下一动作：提交 stable-code/i18n GREEN，然后建立真实 SQLite quote 写放大 RED。

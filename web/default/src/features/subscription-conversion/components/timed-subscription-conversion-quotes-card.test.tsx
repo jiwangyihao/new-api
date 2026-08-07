@@ -31,6 +31,7 @@ import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
+import { SubscriptionConversionRequestError } from '../api'
 import { deriveLiveConversionQuote } from '../live-quote'
 import type {
   SubscriptionConversionConfirmRequest,
@@ -353,6 +354,29 @@ describe('timed subscription conversion quotes', () => {
       )
     )
   })
+  test('localizes a stale code and requires another explicit confirmation', async () => {
+    const view = await renderQuotesCard(makeQuoteList(), {
+      confirmConversion: async () => {
+        throw new SubscriptionConversionRequestError(
+          'subscription_conversion_quote_stale'
+        )
+      },
+    })
+    const dialog = await openConversionPreview(view)
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    await waitFor(() =>
+      within(dialog).getByText(
+        'The quote expired or authoritative facts changed. Review the refreshed quote and confirm again.'
+      )
+    )
+    await waitFor(() => assert.ok(view.getRequestCount() >= 4))
+    assert.equal(view.getConfirmRequests().length, 1)
+  })
 
   test('shows quote valuation and the immutable confirmation boundary', async () => {
     const view = await renderQuotesCard()
@@ -433,7 +457,13 @@ describe('timed subscription conversion quotes', () => {
       within(dialog).getByRole('button', { name: 'Submit conversion' })
     )
 
-    await waitFor(() => within(dialog).getByText('Conversion conflict'))
+    await waitFor(() =>
+      assert.equal(
+        within(dialog).getAllByText('Unable to convert subscription').length,
+        2
+      )
+    )
+    assert.equal(within(dialog).queryByText('Conversion conflict'), null)
     await waitFor(() =>
       within(dialog).getByText('Monthly Pro latest after conflict')
     )

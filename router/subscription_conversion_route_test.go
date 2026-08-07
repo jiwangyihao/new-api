@@ -319,6 +319,17 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	assert.NotEmpty(t, facts.FxCapturedAt)
 	assert.Equal(t, model.CreditFXDirectionCNYtoUSD, facts.FxDirection)
 
+	const committedUnitValueNumeratorMicros int64 = 1_234_567
+	const committedUnitValueDenominator int64 = 89
+	require.NoError(t, db.Exec(
+		"UPDATE subscription_conversions SET valuation_unit_value_numerator_micros = ?, valuation_unit_value_denominator = ? WHERE source_subscription_id = ?",
+		committedUnitValueNumeratorMicros,
+		committedUnitValueDenominator,
+		sourceID,
+	).Error)
+	facts.UnitValueNumeratorMicros = strconv.FormatInt(committedUnitValueNumeratorMicros, 10)
+	facts.UnitValueDenominator = strconv.FormatInt(committedUnitValueDenominator, 10)
+
 	require.NoError(t, model.UpdateOption("USDExchangeRate", "8.1"))
 	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
 		UpdateColumn("price_amount_micros", int64(41_000_000)).Error)

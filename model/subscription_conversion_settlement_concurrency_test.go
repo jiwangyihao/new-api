@@ -65,6 +65,7 @@ func TestConversionRejectsPlanDisabledByIndependentTransactionAfterQuote(t *test
 	result, err := confirmTimedSubscriptionConversion(userID, sourceID, "independent-plan-disable", hooks)
 	require.Nil(t, result)
 	require.ErrorContains(t, err, ConversionQuoteReasonPlanDisabled)
+	require.ErrorIs(t, err, ErrConversionIneligible)
 
 	var plan SubscriptionPlan
 	require.NoError(t, adminDB.First(&plan, planID).Error)

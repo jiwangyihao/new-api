@@ -17,9 +17,11 @@
 
 ## M2 RED/GREEN
 
-- RED：尚未运行。
+- RED 命令：`go test ./router -run '^(TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly|TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)$' -count=1`。
+- RED 结果：FAIL。quote-only route 的 `quote_id`、`created_at`、`expires_at`、`facts_fingerprint` 均为空；现有成功 quote→confirm SQLite fixture 同样没有 `quote_id`，因此 Plan 改价后的 stale 确认无法建立服务器可验证身份。
+- 夹具归因已收敛：quote-only 测试恢复原只读 schema；stale tracer 放入现有能成功 quote→confirm 的完整 SQLite route fixture，不再因缺表/缺 state 失败。
 - GREEN：尚未运行。
-- 下一行为：真实 SQLite API quote 必须返回非空 quote identity、created_at、expires_at、authoritative facts fingerprint；随后改变权威事实并携 quote confirm，必须返回 `subscription_conversion_quote_stale` 且 conversion/ledger/Credit/source 均零写入。
+- 下一动作：提交 RED 安全点，再最小实现 M2。
 - RED 必须独立提交，再做最小 GREEN。
 
 ## 未实测边界

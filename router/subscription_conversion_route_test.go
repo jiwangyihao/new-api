@@ -296,6 +296,19 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	require.Len(t, quote.Data.Quotes, 2)
 	quoteByID := conversionQuoteRouteItemsByID(quote.Data.Quotes)
 	require.Equal(t, "180", quoteByID[strconv.Itoa(sourceID)].GrossCredit)
+	staleQuote := quoteByID[strconv.Itoa(conflictID)]
+	require.NotEmpty(t, staleQuote.QuoteId)
+	require.NotEmpty(t, staleQuote.FactsFingerprint)
+	staleBefore := snapshotConversionQuoteRouteState(t, userID)
+	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
+		UpdateColumn("price_amount_micros", int64(41_000_000)).Error)
+	stale := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
+		`{"subscription_id":"26903","idempotency_key":"stale-plan-quote","quote_id":"`+staleQuote.QuoteId+`"}`)
+	require.False(t, stale.Success)
+	require.Equal(t, model.ErrConversionQuoteStale.Error(), stale.Code)
+	assertConversionQuoteRouteStateUnchanged(t, userID, staleBefore)
+	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
+		UpdateColumn("price_amount_micros", int64(40_000_000)).Error)
 
 	const idempotencyKey = "cross-currency-observable-facts"
 	confirmed := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,

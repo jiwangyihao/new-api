@@ -17,6 +17,10 @@ import (
 
 type subscriptionConversionQuoteRouteItem struct {
 	SourceSubscriptionId     string   `json:"source_subscription_id"`
+	QuoteId                  string   `json:"quote_id"`
+	CreatedAt                string   `json:"created_at"`
+	ExpiresAt                string   `json:"expires_at"`
+	FactsFingerprint         string   `json:"facts_fingerprint"`
 	CreditBasis              string   `json:"credit_basis"`
 	CreditBasisSource        string   `json:"credit_basis_source"`
 	CurrentRemainingCredit   string   `json:"current_remaining_credit"`
@@ -197,6 +201,18 @@ func TestSubscriptionConversionQuotesRouteIsAuthenticatedLiveAndReadOnly(t *test
 	assert.Equal(t, "1", byID[strconv.Itoa(sourceSubscriptionID)].FxDenominator)
 	assert.NotEqual(t, "0", byID[strconv.Itoa(sourceSubscriptionID)].FxCapturedAt)
 	assert.Equal(t, model.CreditFXDirectionIdentity, byID[strconv.Itoa(sourceSubscriptionID)].FxDirection)
+	quoted := byID[strconv.Itoa(sourceSubscriptionID)]
+	assert.NotEmpty(t, quoted.QuoteId)
+	assert.NotEmpty(t, quoted.CreatedAt)
+	assert.NotEmpty(t, quoted.ExpiresAt)
+	createdAt, createdAtErr := strconv.ParseInt(quoted.CreatedAt, 10, 64)
+	expiresAt, expiresAtErr := strconv.ParseInt(quoted.ExpiresAt, 10, 64)
+	assert.NoError(t, createdAtErr)
+	assert.NoError(t, expiresAtErr)
+	assert.Greater(t, expiresAt, createdAt)
+
+	assert.NotEmpty(t, quoted.FactsFingerprint)
+
 	assert.Equal(t, model.ConversionQuoteCategoryGrace, byID[strconv.Itoa(expiredSubscriptionID)].Category)
 	assert.True(t, byID[strconv.Itoa(expiredSubscriptionID)].CanConfirm)
 	assert.Contains(t, byID[strconv.Itoa(excludedSubscriptionID)].ReasonCodes, model.ConversionQuoteReasonMonthlyInviteSource)

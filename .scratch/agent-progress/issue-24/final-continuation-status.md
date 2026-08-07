@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-真实 HTTP RED 已固化：preview 路径缺失返回 404；commit 路径未转发 `plan_id`，返回 `credit_valuation_plan_required` 且零写入。等待在现有 router/controller/service adjustment 接缝做最小 GREEN。
+管理员 adjustment HTTP 最小 GREEN 已完成：commit DTO/forwarding 保留 `plan_id`，只读 preview 路由/controller/service 返回权威整数估值且零写入；两条真实 route 测试 `-count=10` 通过，准备独立 clean 提交。
 
 ## 已完成
 
@@ -13,12 +13,13 @@
 - 已读取 `diagnosing-bugs`、`tdd`、`codebase-design`、`shadcn-ui`、`i18n-translate`、`orca-cli` 及版本匹配指南。
 - 已完整读取父 PRD #19、Issue #24、`CONTEXT.md`、ADR 0001/0002、2026-08-02 spec/plan、执行协议、Issue #24 指令/acceptance、Wave 2 contract/acceptance、Issue #20/#22 合同及既有 Issue #24 contract/status/evidence。
 - 已确认领域 H2 已完整 GREEN；本续作只补 API、preview、UI/i18n/browser 和最终门禁，不扩展 analytics 设计。
+- preview/commit 真实 HTTP GREEN：40 CNY / 1,000 Credit × 800 返回 `32,000,000` micros CNY；preview 无 adjustment/ledger/subscription 写入，commit 原子写入一条 adjustment 与 ledger。
 
 ## 下一步
 
-1. 只给现有 adjustment HTTP DTO 增加 `plan_id` 并转发到既有 model 请求。
-2. 增加 preview 路由/controller 与调用既有估值 helper 的只读 service，使两条 RED 转绿。
-3. 后端 API GREEN 后立即独立 clean 提交，再进入 UI/六语言/browser。
+1. 提交后端 API GREEN clean 安全点。
+2. 继续用下一条 HTTP RED 冻结稳定错误码/幂等重放，不扩大现有 seam。
+3. 完成后端 API 阶段后再进入 UI/六语言/browser；不扩展 analytics 设计。
 
 ## 阻塞
 

@@ -47,3 +47,12 @@
 - preview 无写入合同尚未到达 handler，因 404 先失败；测试保留 adjustment/ledger/subscription 均为 0 的断言，供 GREEN 证明。
 - 夹具事实：9965 是 `40 CNY / 1,000 Credit` 的 source plan；9963 是全局 Credit 余额 plan，`valuation_currency=CNY` 正确属于 9963。不得把估值币种错误写入 source plan。
 - 本 RED 未修改任何生产代码、#26 parser/provider、migration 生命周期、analytics、UI、i18n 或 browser。
+
+## 管理员 preview/commit 真实 HTTP GREEN
+
+- 生产改动严格限于现有 adjustment seam：`model/credit_balance_adjustment.go` 增加只读 preview；service 仅做类型别名/转发；controller DTO 增加 `plan_id` 并转发；router 注册 preview POST。
+- preview 复用既有档位资格、`CreditValuationSourceSnapshot`、`newForwardCreditValuationIngress`、冻结 `CreditFXRateSnapshot` 与整数 `prorateFloor`；未修改 #26 parser/provider/Option 生命周期。
+- 命令：`gofmt -w model/credit_balance_adjustment.go controller/subscription.go service/subscription_financial_recovery.go router/api-router.go router/subscription_credit_adjustment_route_test.go && go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult)$' -count=10 -v`。
+- 结果：`go test: 1 packages ok`，约 15.86 秒；两条真实 Gin/AdminAuth/SQLite route 行为连续 10 次通过。
+- preview 可观察合同：`plan_id=9965`、gross Credit 800、gross/net `amount_micros="32000000"`、source/valuation currency CNY、confidence exact、`preview=true`；adjustment/ledger/subscription 计数均保持 0。
+- commit 可观察合同：请求中的 `plan_id=9965` 穿过 controller/service；响应含 gross Credit 800、gross/net `32000000`、`state_version_after=1`、`replayed=false`；数据库有且仅有一条对应 adjustment 与 ledger。

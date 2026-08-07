@@ -1041,8 +1041,26 @@ func AdminListUserSubscriptions(c *gin.Context) {
 type AdminCreditBalanceAdjustmentRequest struct {
 	Operation      string `json:"operation"`
 	Amount         int64  `json:"amount"`
+	PlanId         int    `json:"plan_id"`
 	IdempotencyKey string `json:"idempotency_key"`
 	Reason         string `json:"reason"`
+}
+
+func AdminPreviewUserCreditBalance(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	var req AdminCreditBalanceAdjustmentRequest
+	if userId <= 0 || c.ShouldBindJSON(&req) != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := service.PreviewCreditBalanceAdjustment(service.CreditBalanceAdjustmentPreviewRequest{
+		UserId: userId, Operation: req.Operation, Amount: req.Amount, PlanId: req.PlanId,
+	})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
 }
 
 func AdminAdjustUserCreditBalance(c *gin.Context) {
@@ -1053,7 +1071,7 @@ func AdminAdjustUserCreditBalance(c *gin.Context) {
 		return
 	}
 	result, err := service.AdjustCreditBalance(service.CreditBalanceAdjustmentRequest{
-		UserId: userId, Operation: req.Operation, Amount: req.Amount,
+		UserId: userId, Operation: req.Operation, Amount: req.Amount, PlanId: req.PlanId,
 		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {

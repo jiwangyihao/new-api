@@ -55,6 +55,124 @@ type CreditBalanceAdjustmentResult struct {
 	DebtFormed    int64                     `json:"debt_formed"`
 	Replayed      bool                      `json:"replayed"`
 }
+type CreditBalanceAdjustmentPreviewRequest struct {
+	UserId    int
+	Operation string
+	Amount    int64
+	PlanId    int
+}
+
+type CreditBalanceAdjustmentPreviewResult struct {
+	PlanId        int                       `json:"plan_id"`
+	CreditBalance *CreditBalanceGrantResult `json:"credit_balance"`
+	Preview       bool                      `json:"preview"`
+}
+
+func PreviewCreditBalanceAdjustment(request CreditBalanceAdjustmentPreviewRequest) (*CreditBalanceAdjustmentPreviewResult, error) {
+	request.Operation = strings.TrimSpace(request.Operation)
+	if request.UserId <= 0 || request.Amount <= 0 || request.Amount > MaxCreditBalanceAdjustmentAmount {
+		return nil, errors.New("invalid or out-of-range Credit balance adjustment preview request")
+	}
+	if request.Operation != CreditBalanceAdjustmentIncrease {
+		return nil, ErrCreditValuationPlanIneligible
+	}
+	if request.PlanId <= 0 {
+		return nil, ErrCreditValuationPlanRequired
+	}
+	creditPlan, err := GetCreditBalancePlanTx(DB)
+	if err != nil {
+		return nil, err
+	}
+	var sourcePlan SubscriptionPlan
+	if err := DB.Where("id = ?", request.PlanId).First(&sourcePlan).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrCreditValuationPlanIneligible
+		}
+		return nil, err
+	}
+	var user User
+	if err := DB.Select("id").Where("id = ?", request.UserId).First(&user).Error; err != nil {
+		return nil, err
+	}
+	facts := creditBalanceAdjustmentFacts(&sourcePlan, creditPlan)
+	sourceCurrency, valuationCurrency, err := validateCreditBalanceAdjustmentPlanFacts(&sourcePlan, facts)
+	if err != nil {
+		return nil, err
+	}
+	capturedAt, err := getDBTimestampStrictTx(DB)
+	if err != nil {
+		return nil, err
+	}
+	frozenFX, err := captureCreditPositiveIngressFXRateSnapshot(sourceCurrency, valuationCurrency, capturedAt)
+	if err != nil {
+		return nil, err
+	}
+	ingress, err := newForwardCreditValuationIngress(CreditValuationSourceSnapshot{
+		SourcePriceMicros: *facts.SourcePriceMicros,
+		SourcePlanCredit:  facts.SourcePlanCredit,
+		GrossCredit:       request.Amount,
+		SourceCurrency:    sourceCurrency,
+		ValuationCurrency: valuationCurrency,
+		RuleVersion:       facts.ValuationRuleVersion,
+		FXRateSnapshot:    frozenFX,
+	})
+	if err != nil {
+		return nil, creditBalanceAdjustmentIngressError(err)
+	}
+	balanceBefore := int64(0)
+	stateVersionAfter := int64(1)
+	var balance UserSubscription
+	query := DB.Where("user_id = ? AND entitlement_type = ?", request.UserId, SubscriptionEntitlementCreditBalance).Limit(1).Find(&balance)
+	if query.Error != nil {
+		return nil, query.Error
+	}
+	if query.RowsAffected > 0 {
+		if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
+			return nil, ErrCreditValuationStateMismatch
+		}
+		balanceBefore = balance.TokenLimit - balance.TokenUsed
+		var state CreditValuationState
+		if err := DB.Where("user_subscription_id = ?", balance.Id).First(&state).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, ErrCreditValuationStateMissing
+			}
+			return nil, err
+		}
+		if err := validateCreditValuationState(&balance, &state); err != nil {
+			return nil, err
+		}
+		if !strings.EqualFold(state.Currency, valuationCurrency) {
+			return nil, ErrCreditValuationStateMismatch
+		}
+		stateVersionAfter, _ = checkedAddInt64(state.StateVersion, 1)
+	}
+	debtOffset := minInt64(request.Amount, maxInt64(-balanceBefore, 0))
+	netCredit := request.Amount - debtOffset
+	netCostMicros, err := prorateFloor(ingress.grossCostMicros, netCredit, request.Amount)
+	if err != nil {
+		return nil, err
+	}
+	balanceAfter, ok := checkedAddInt64(balanceBefore, request.Amount)
+	if !ok {
+		return nil, ErrCreditValuationOverflow
+	}
+	return &CreditBalanceAdjustmentPreviewResult{
+		PlanId: request.PlanId,
+		CreditBalance: &CreditBalanceGrantResult{
+			PlanId: creditPlan.Id, GrossCredit: request.Amount, NetCredit: netCredit,
+			GrossAmountMicros: ingress.grossCostMicros, NetAmountMicros: netCostMicros,
+			ValuationCurrency: valuationCurrency, SourceCurrency: sourceCurrency,
+			ValuationConfidence: ingress.confidence, FxRateNumerator: frozenFX.Numerator,
+			FxRateDenominator: frozenFX.Denominator, FxCapturedAt: frozenFX.CapturedAt,
+			FxDirection: frozenFX.Direction, ValuationRuleVersion: ingress.ruleVersion,
+			ValuationStateVersionAfter: stateVersionAfter, DebtOffset: debtOffset,
+			AvailableCredit: maxInt64(balanceAfter, 0), SettlementDebt: maxInt64(-balanceAfter, 0),
+			BalanceBefore: balanceBefore, BalanceAfter: balanceAfter, Status: creditBalanceStatus(balanceAfter),
+		},
+		Preview: true,
+	}, nil
+}
+
 type creditBalanceAdjustmentValuationFacts struct {
 	PlanId               int    `json:"plan_id"`
 	SourcePriceMicros    *int64 `json:"source_price_micros"`

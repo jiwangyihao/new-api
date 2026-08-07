@@ -219,6 +219,7 @@ func SetApiRouter(router *gin.Engine) {
 			// User subscription management (admin)
 			subscriptionAdminRoute.GET("/users/:id/subscriptions", controller.AdminListUserSubscriptions)
 			subscriptionAdminRoute.GET("/users/:id/credit-balance/ledger", controller.AdminGetUserCreditBalanceLedger)
+			subscriptionAdminRoute.POST("/users/:id/credit-balance/adjustments/preview", controller.AdminPreviewUserCreditBalance)
 			subscriptionAdminRoute.POST("/users/:id/credit-balance/adjustments", middleware.CriticalRateLimit(), controller.AdminAdjustUserCreditBalance)
 			subscriptionAdminRoute.GET("/users/:id/orders/:trade_no/recovery-preview", controller.AdminGetSubscriptionOrderRecoveryPreview)
 			subscriptionAdminRoute.POST("/users/:id/orders/:trade_no/recovery", middleware.CriticalRateLimit(), controller.AdminRecoverSubscriptionOrder)

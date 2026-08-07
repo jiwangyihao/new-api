@@ -34,6 +34,10 @@ export interface SubscriptionConversionQuoteReason {
 }
 
 export interface SubscriptionConversionQuote {
+  quote_id: string
+  created_at: string
+  expires_at: string
+  facts_fingerprint: string
   source_subscription_id: string
   plan_id: string
   plan_title: string
@@ -129,6 +133,7 @@ export interface SubscriptionConversionHistory {
 
 export interface SubscriptionConversionConfirmRequest {
   subscription_id: string
+  quote_id: string
   idempotency_key: string
 }
 

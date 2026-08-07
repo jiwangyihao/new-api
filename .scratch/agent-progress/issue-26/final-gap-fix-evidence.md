@@ -15,8 +15,9 @@
 - 首次 RED：`15 pass / 1 fail`，证明 confirm payload 丢失服务端 `quote_id`。审查随后指出首次测试错误允许最终刷新切换到新 identity 后直接确认，因此未以该错误合同进入 GREEN。
 - 修正后 RED：`15 pass / 2 fail`。同 identity/fingerprint 的最终刷新实际 payload 缺少 `quote_id=quote-stable`；identity/fingerprint 变化时实际 confirm 请求数为 1，期望为 0。
 - 根因：前端 `SubscriptionConversionQuote` 与 `SubscriptionConversionConfirmRequest` 未声明服务端 identity 字符串；`handleConfirm` 未传 `latest.quote_id`，也未在最终刷新发现重新报价时停下要求用户再次确认。
-- GREEN：待实现。
-- RED 提交：`e984c1eb7 test(subscription): 固化前端报价身份失败合同`；修正后的重新报价 RED 提交待创建。
+- GREEN：报价 DTO 精确保留 `quote_id`、`created_at`、`expires_at`、`facts_fingerprint`；confirm request 必须携 `quote_id`。最终刷新 identity/fingerprint 未变时提交 `latest.quote_id`；变化时只刷新预览并显示再次确认提示，confirm 请求数为 0。受控失败对同一 quote/fingerprint 复用 key，重新报价后第二次显式确认轮换 key，成功后清除该 source 的 attempt。
+- GREEN 命令：`cd web/default && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`；结果 `18 pass / 0 fail`。
+- RED 提交：`e984c1eb7 test(subscription): 固化前端报价身份失败合同`、`e10d4bbd8 test(subscription): 拒绝自动确认刷新报价`；GREEN 提交待创建。
 
 ## Finding B：稳定错误 code 与六语言
 

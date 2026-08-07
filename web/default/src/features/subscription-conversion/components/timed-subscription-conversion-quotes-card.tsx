@@ -875,7 +875,12 @@ export function TimedSubscriptionConversionQuotesCard({
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewingId, setPreviewingId] = useState<string | null>(null)
   const previewRequestId = useRef(0)
-  const idempotencyKeys = useRef(new Map<string, string>())
+  const idempotencyAttempts = useRef(
+    new Map<
+      string,
+      { quoteId: string; factsFingerprint: string; key: string }
+    >()
+  )
   const confirmationInFlight = useRef(false)
   const [confirmationError, setConfirmationError] = useState<string | null>(
     null
@@ -963,24 +968,42 @@ export function TimedSubscriptionConversionQuotesCard({
       setReceivedAtMs(refreshedAt)
       setClockMs(refreshedAt)
       setPreviewSelection({ quote: latest, receivedAtMs: refreshedAt })
+      if (
+        latest.quote_id !== selected.quote_id ||
+        latest.facts_fingerprint !== selected.facts_fingerprint
+      ) {
+        setConfirmationError(
+          t(
+            'The quote expired or authoritative facts changed. Review the refreshed quote and confirm again.'
+          )
+        )
+        return
+      }
       if (!latest.can_confirm) {
         setConfirmationError(t('The latest quote cannot be confirmed'))
         return
       }
-      let idempotencyKey = idempotencyKeys.current.get(
-        selected.source_subscription_id
+      let attempt = idempotencyAttempts.current.get(
+        latest.source_subscription_id
       )
-      if (!idempotencyKey) {
-        idempotencyKey = createIdempotencyKey()
-        idempotencyKeys.current.set(
-          selected.source_subscription_id,
-          idempotencyKey
-        )
+      if (
+        !attempt ||
+        attempt.quoteId !== latest.quote_id ||
+        attempt.factsFingerprint !== latest.facts_fingerprint
+      ) {
+        attempt = {
+          quoteId: latest.quote_id,
+          factsFingerprint: latest.facts_fingerprint,
+          key: createIdempotencyKey(),
+        }
+        idempotencyAttempts.current.set(latest.source_subscription_id, attempt)
       }
       const result = await confirmMutation.mutateAsync({
-        subscription_id: selected.source_subscription_id,
-        idempotency_key: idempotencyKey,
+        subscription_id: latest.source_subscription_id,
+        quote_id: latest.quote_id,
+        idempotency_key: attempt.key,
       })
+      idempotencyAttempts.current.delete(latest.source_subscription_id)
       setLatestConversion(result.conversion)
       setPreviewOpen(false)
       await quotesQuery.refetch()

@@ -429,3 +429,32 @@ Confirm 在既有事务中从锁定 source plan 和 target valuation currency �
 - 所有原始整数保持 API 字符串原样展示；未用 `Number` 转换或紧凑格式重写 micros/FX。组件 RED 真实结果为 `14 pass / 1 fail`，缺失首个 `40000000`；GREEN 后 `15 pass / 0 fail`。
 - 六语言新增 12 个 UI 键；`bun run i18n:sync` 报告六语言 `missingCount=0`、`extrasCount=0`。报告既有 untranslated 基线仍为 fr=9、ja=204、ru=219、vi=12、zh=114，不冒充清零。
 - 完整前端门禁：`bun run i18n:sync && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx && bun run typecheck && bun run build`；结果全部 PASS，组件 15/15，`tsc -b` 成功，Rsbuild `ready built`。
+
+## 2026-08-07 — Analytics/API/UI 最终窄门禁
+
+### 恢复点与候选范围
+
+- `git rev-parse HEAD`：`8bd77ecdda6643326b5537933f9ec17c95e8b375`。
+- `git status --short --branch`：分支 `jiwangyihao/issue-26-replay-fallback-fix`，staged `0`、unstaged `7`、untracked `0`；文件精确为 `dto/admin_analytics.go`、`model/admin_analytics.go`、`model/credit_valuation_tracer_test.go`、`router/subscription_conversion_route_test.go` 与三个既有 admin analytics 前端文件。
+- 开工 `git diff --check`：PASS。
+
+### 后端行为 tracer
+
+- 协调器独立实跑并报告 PASS：`TestTimedConversionRealPathFeedsFiveAnalyticsWithoutNewPaymentAttribution`。真实 `ConfirmTimedSubscriptionConversion` 后，五个付费价值接口均只显示目标 Credit 混合池的当前剩余价值，conversion summary 返回确值 gross/net，且订单与邀请归因计数不增长。
+- 协调器独立实跑并报告 PASS：`TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics`。route tracer 使用项目 JSON wrapper 解析 API 响应并断言 conversion count、exact count、Credit 字符串、USD gross/net micros；改价和 FX 后历史仍使用冻结事实。
+- `gofmt -w dto/admin_analytics.go model/admin_analytics.go model/credit_valuation_tracer_test.go router/subscription_conversion_route_test.go`：PASS，无输出。
+
+### 六语言与前端
+
+- 新增七个键：`conversionCount`、`exactConversionCount`、`grossCredit`、`debtOffset`、`netAvailableCredit`、`grossConversionValue`、`netConversionValue`；en、zh、fr、ru、ja、vi 均为对应语言的真实翻译。
+- `bun run i18n:sync`：PASS；报告六语言 `missingCount=0`、`extrasCount=0`。既有 untranslated 基线保持 fr=9、ja=204、ru=219、vi=12、zh=114，不冒充清零。
+- 首次组件测试因本地 `node_modules` 缺 `happy-dom` 失败，属于依赖连接问题而非代码失败；取消安装并按协调器指定恢复到 `issue-26-conversion-fx/web/default/node_modules` 的 junction 后重跑。
+- `bun test src/features/admin-analytics/conversion-panel.test.tsx src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`：PASS，`20 pass / 0 fail`。ConversionPanel 同时展示 count、exact、gross/debt/net Credit、gross/net 按币种价值，并验证超过 JS 安全整数的 Credit 原字符串可见；钱包 conversion 组件回归同时通过。
+- `bun run typecheck`：PASS，`tsc -b` 无诊断，耗时 `70.46 s`。
+- `bun run build`：PASS，Rsbuild `ready built in 13.9 s`。
+
+### 浏览器与边界
+
+- 真实 Chromium quote → confirm → history、改 Plan/FX 后冻结事实不变的既有证据位于 `coordinator-browser-evidence.md`；本轮按协调器明确收敛指令未重复启动应用或新增 analytics UI 浏览器记录。
+- 未实现 #24/#25/#27/#28；未新增 migration、marker 或部署行为；未改变钱包布局/Credit 激活交互；未直接使用 `encoding/json` 编解码。
+- 最终提交前 `git diff --check`：PASS。

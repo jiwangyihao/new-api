@@ -726,31 +726,55 @@ func GetAdminAnalyticsUserLifecycle(query AdminAnalyticsQuery) (dto.AdminAnalyti
 
 func GetAdminAnalyticsSubscriptionConversion(query AdminAnalyticsQuery) (dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse], error) {
 	query = normalizeAdminAnalyticsQuery(query)
-	rows, err := loadAdminActiveSubscriptions(query)
-	if err != nil {
+	db := DB.Model(&SubscriptionConversion{})
+	if query.StartTimestamp > 0 {
+		db = db.Where("converted_at >= ?", query.StartTimestamp)
+	}
+	if query.EndTimestamp > 0 {
+		db = db.Where("converted_at <= ?", query.EndTimestamp)
+	}
+	if len(query.UserIDs) > 0 {
+		db = db.Where("user_id IN ?", query.UserIDs)
+	}
+	if len(query.PlanIDs) > 0 {
+		db = db.Where("source_plan_id IN ? OR target_plan_id IN ?", query.PlanIDs, query.PlanIDs)
+	}
+	if query.SubscriptionID > 0 {
+		db = db.Where("source_subscription_id = ? OR target_subscription_id = ?", query.SubscriptionID, query.SubscriptionID)
+	}
+	var conversions []SubscriptionConversion
+	if err := db.Order("converted_at asc, id asc").Find(&conversions).Error; err != nil {
 		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{}, err
 	}
-	trialUsers := map[int]struct{}{}
-	paidUsers := map[int]struct{}{}
-	for i := range rows {
-		switch rows[i].Source {
-		case dto.AdminAnalyticsSourceTrialCode, dto.AdminAnalyticsSourceInviteTrial:
-			trialUsers[rows[i].Subscription.UserId] = struct{}{}
-		case dto.AdminAnalyticsSourceOrder:
-			paidUsers[rows[i].Subscription.UserId] = struct{}{}
+
+	var grossValues, netValues adminMoneyAccumulator
+	summary := dto.AdminAnalyticsSubscriptionConversionSummary{}
+	for i := range conversions {
+		conversion := &conversions[i]
+		summary.ConversionCount++
+		if conversion.ValuationConfidence == CreditValuationConfidenceExact &&
+			conversion.ValuationRuleVersion == CreditValuationRuleVersion {
+			summary.ExactConversionCount++
 		}
-	}
-	trialToPaid := 0
-	for userID := range trialUsers {
-		if _, ok := paidUsers[userID]; ok {
-			trialToPaid++
+		var ok bool
+		if summary.GrossCredit, ok = checkedAddInt64(summary.GrossCredit, conversion.GrossCredit); !ok {
+			return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{}, ErrCreditValuationOverflow
 		}
+		if summary.DebtOffset, ok = checkedAddInt64(summary.DebtOffset, conversion.DebtOffset); !ok {
+			return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{}, ErrCreditValuationOverflow
+		}
+		if summary.NetAvailableCredit, ok = checkedAddInt64(summary.NetAvailableCredit, conversion.NetAvailableCredit); !ok {
+			return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{}, ErrCreditValuationOverflow
+		}
+		grossValues.addMicros(conversion.ValuationCurrency, conversion.ValuationGrossCostMicros)
+		netValues.addMicros(conversion.ValuationCurrency, conversion.ValuationNetCostMicros)
 	}
-	rate := 0.0
-	if len(trialUsers) > 0 {
-		rate = float64(trialToPaid) / float64(len(trialUsers))
+	if grossValues.overflow || netValues.overflow {
+		return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{}, ErrCreditValuationOverflow
 	}
-	data := dto.AdminAnalyticsSubscriptionConversionResponse{Summary: dto.AdminAnalyticsSubscriptionConversionSummary{TrialUsers: len(trialUsers), PaidUsers: len(paidUsers), TrialToPaidUsers: trialToPaid, TrialToPaidRate: rate}}
+	summary.GrossValueByCurrency = grossValues.breakdownWithPreferredCurrency(query.Currency)
+	summary.NetValueByCurrency = netValues.breakdownWithPreferredCurrency(query.Currency)
+	data := dto.AdminAnalyticsSubscriptionConversionResponse{Summary: summary}
 	return dto.AdminAnalyticsPanelResponse[dto.AdminAnalyticsSubscriptionConversionResponse]{Range: adminAnalyticsRangeMeta(query), Data: data}, nil
 }
 

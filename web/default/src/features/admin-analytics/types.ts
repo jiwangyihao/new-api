@@ -380,33 +380,17 @@ export interface AdminAnalyticsUserLifecycleResponse {
 }
 
 export interface AdminAnalyticsSubscriptionConversionSummary {
-  trial_users: number
-  paid_users: number
-  trial_to_paid_users: number
-  trial_to_paid_rate: number
-  renewal_users: number
-  churned_users: number
-}
-
-export interface AdminAnalyticsConversionTrendPoint {
-  timestamp: number
-  users: number
-  rate: number
-}
-
-export interface AdminAnalyticsPlanMigrationItem {
-  from_plan_id: number
-  from_plan_title: string
-  to_plan_id: number
-  to_plan_title: string
-  user_count: number
+  conversion_count: number
+  exact_conversion_count: number
+  gross_credit: string
+  debt_offset: string
+  net_available_credit: string
+  gross_value_by_currency: MoneyBreakdown[]
+  net_value_by_currency: MoneyBreakdown[]
 }
 
 export interface AdminAnalyticsSubscriptionConversionResponse {
   summary: AdminAnalyticsSubscriptionConversionSummary
-  trial_to_paid: AdminAnalyticsConversionTrendPoint[]
-  renewals: AdminAnalyticsConversionTrendPoint[]
-  migration_matrix: AdminAnalyticsPlanMigrationItem[]
 }
 
 export type AdminAnalyticsSubscriptionLifecycleState =

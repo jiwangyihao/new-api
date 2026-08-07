@@ -62,6 +62,29 @@ type subscriptionConversionObservableListResponse struct {
 	} `json:"data"`
 }
 
+type subscriptionConversionAnalyticsRouteResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Data struct {
+			Summary struct {
+				ConversionCount      int    `json:"conversion_count"`
+				ExactConversionCount int    `json:"exact_conversion_count"`
+				GrossCredit          string `json:"gross_credit"`
+				DebtOffset           string `json:"debt_offset"`
+				NetAvailableCredit   string `json:"net_available_credit"`
+				GrossValueByCurrency []struct {
+					AmountMicros string `json:"amount_micros"`
+					Currency     string `json:"currency"`
+				} `json:"gross_value_by_currency"`
+				NetValueByCurrency []struct {
+					AmountMicros string `json:"amount_micros"`
+					Currency     string `json:"currency"`
+				} `json:"net_value_by_currency"`
+			} `json:"summary"`
+		} `json:"data"`
+	} `json:"data"`
+}
+
 func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	db := setupSubscriptionPublicPlansRouteTestDB(t)
@@ -317,7 +340,18 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	analyticsRequest.Header.Set("New-Api-User", strconv.Itoa(userID))
 	engine.ServeHTTP(analyticsRecorder, analyticsRequest)
 	require.Equal(t, http.StatusOK, analyticsRecorder.Code)
-	assert.Contains(t, analyticsRecorder.Body.String(), `"success":true`)
+	var analytics subscriptionConversionAnalyticsRouteResponse
+	require.NoError(t, common.Unmarshal(analyticsRecorder.Body.Bytes(), &analytics))
+	require.True(t, analytics.Success)
+	require.Equal(t, 1, analytics.Data.Data.Summary.ConversionCount)
+	require.Equal(t, 1, analytics.Data.Data.Summary.ExactConversionCount)
+	require.Equal(t, "180", analytics.Data.Data.Summary.GrossCredit)
+	require.Equal(t, "0", analytics.Data.Data.Summary.DebtOffset)
+	require.Equal(t, "180", analytics.Data.Data.Summary.NetAvailableCredit)
+	require.Len(t, analytics.Data.Data.Summary.GrossValueByCurrency, 1)
+	require.Equal(t, "USD", analytics.Data.Data.Summary.GrossValueByCurrency[0].Currency)
+	require.Equal(t, "9863013", analytics.Data.Data.Summary.GrossValueByCurrency[0].AmountMicros)
+	require.Equal(t, analytics.Data.Data.Summary.GrossValueByCurrency, analytics.Data.Data.Summary.NetValueByCurrency)
 
 	drilldownRecorder := httptest.NewRecorder()
 	drilldownRequest := httptest.NewRequest(http.MethodGet, "/api/admin-analytics/drilldown/subscriptions?subscription_statuses=converted&limit=20", nil)

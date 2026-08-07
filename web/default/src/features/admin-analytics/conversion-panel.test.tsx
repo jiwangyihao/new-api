@@ -7,25 +7,26 @@ import assert from 'node:assert/strict'
 import { afterEach, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
 import { api } from '@/lib/api'
+import { AdminAnalyticsPage, ConversionPanel } from './index'
+import { buildAdminAnalyticsCanonicalFilters } from './lib/filters'
 import type {
   AdminAnalyticsDrilldownSubscriptionsResponse,
   AdminAnalyticsPanelResponse,
   AdminAnalyticsSubscriptionConversionResponse,
   ApiResponse,
 } from './types'
-import { buildAdminAnalyticsCanonicalFilters } from './lib/filters'
-import { AdminAnalyticsPage, ConversionPanel } from './index'
 
 const translations = {
   'adminAnalytics.conversion.summary': 'Conversion summary',
-  'adminAnalytics.conversion.summaryFailed':
-    'Conversion summary unavailable',
-  'adminAnalytics.conversion.historyFailed':
-    'Conversion history unavailable',
-  'adminAnalytics.metrics.trialUsers': 'Trial users',
-  'adminAnalytics.metrics.paidUsers': 'Paid users',
-  'adminAnalytics.metrics.trialToPaidRate': 'Trial-to-paid rate',
-  'adminAnalytics.metrics.renewalUsers': 'Renewal users',
+  'adminAnalytics.conversion.summaryFailed': 'Conversion summary unavailable',
+  'adminAnalytics.conversion.historyFailed': 'Conversion history unavailable',
+  'adminAnalytics.metrics.conversionCount': 'Conversions',
+  'adminAnalytics.metrics.exactConversionCount': 'Exact conversions',
+  'adminAnalytics.metrics.grossCredit': 'Gross Credit',
+  'adminAnalytics.metrics.debtOffset': 'Debt offset',
+  'adminAnalytics.metrics.netAvailableCredit': 'Net available Credit',
+  'adminAnalytics.metrics.grossConversionValue': 'Gross conversion value',
+  'adminAnalytics.metrics.netConversionValue': 'Net conversion value',
   'adminAnalytics.rankings.subscriptionConversionHistory':
     'Subscription conversion history',
   'adminAnalytics.lifecycle.converted': 'Converted',
@@ -69,16 +70,18 @@ function panel<T>(data: T): ApiResponse<AdminAnalyticsPanelResponse<T>> {
 
 const summaryResponse: SummaryResponse = panel({
   summary: {
-    trial_users: 12,
-    paid_users: 8,
-    trial_to_paid_users: 6,
-    trial_to_paid_rate: 0.5,
-    renewal_users: 4,
-    churned_users: 2,
+    conversion_count: 12,
+    exact_conversion_count: 12,
+    gross_credit: '9007199254740993',
+    debt_offset: '5',
+    net_available_credit: '9007199254740988',
+    gross_value_by_currency: [
+      { amount: 0, amount_micros: '32000000', currency: 'CNY' },
+    ],
+    net_value_by_currency: [
+      { amount: 0, amount_micros: '31000000', currency: 'CNY' },
+    ],
   },
-  trial_to_paid: [],
-  renewals: [],
-  migration_matrix: [],
 })
 
 const historyResponse: HistoryResponse = panel({
@@ -201,7 +204,7 @@ test('page preserves summary when the default conversion history request fails',
     </I18nextProvider>
   )
 
-  await waitFor(() => assert.ok(view.getByText('Trial users')))
+  await waitFor(() => assert.ok(view.getByText('Conversions')))
   await waitFor(() =>
     assert.ok(view.getByText('Conversion history unavailable'))
   )
@@ -214,7 +217,9 @@ test('page preserves summary when the default conversion history request fails',
     'converted',
     'expired',
   ])
-  assert.ok(requestURLs.some((url) => url.includes('/subscription-conversion?')))
+  assert.ok(
+    requestURLs.some((url) => url.includes('/subscription-conversion?'))
+  )
   queryClient.clear()
 })
 
@@ -229,13 +234,10 @@ describe('admin analytics conversion query states', () => {
     const history = view.getByRole('region', {
       name: 'Subscription conversion history',
     })
-    assert.ok(within(summary).getByText('Trial users'))
-    assert.ok(within(summary).getByText('12'))
+    assert.ok(within(summary).getByText('Conversions'))
+    assert.equal(within(summary).getAllByText('12').length, 2)
     assert.ok(within(history).getByText('Conversion history unavailable'))
-    assert.equal(
-      view.queryByText('Conversion summary unavailable'),
-      null
-    )
+    assert.equal(view.queryByText('Conversion summary unavailable'), null)
   })
 
   test('keeps successful history visible when the summary fails', async () => {
@@ -251,10 +253,7 @@ describe('admin analytics conversion query states', () => {
     assert.ok(within(summary).getByText('Conversion summary unavailable'))
     assert.ok(within(history).getByText('converted-user · Timed Pro'))
     assert.ok(within(history).getByText('Converted'))
-    assert.equal(
-      view.queryByText('Conversion history unavailable'),
-      null
-    )
+    assert.equal(view.queryByText('Conversion history unavailable'), null)
   })
 
   test('renders both successful query results together', async () => {
@@ -263,8 +262,10 @@ describe('admin analytics conversion query states', () => {
       history: historyResponse,
     })
 
-    assert.ok(view.getByText('Trial users'))
-    assert.ok(view.getByText('12'))
+    assert.ok(view.getByText('Conversions'))
+    assert.ok(view.getByText('¥32.00'))
+    assert.ok(view.getByText('¥31.00'))
+    assert.ok(view.getByText('9007199254740993'))
     assert.ok(view.getByText('converted-user · Timed Pro'))
     assert.equal(view.queryAllByRole('alert').length, 0)
   })

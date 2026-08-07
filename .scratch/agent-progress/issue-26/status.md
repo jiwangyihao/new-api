@@ -33,3 +33,13 @@
 2. 读取本目录 `contract.md`、`status.md`、`evidence.md`；不要重新探索规范。
 3. 现有产品路径已判定为钱包 conversion quote/confirm/history 与管理员 conversion analytics；不得新建第二套 UI。
 4. 下一步从真实 SQLite route tracer 开始，按本文件“下一条命令”执行。
+
+## 2026-08-07 — Analytics/API/UI 收敛候选
+
+- 恢复点：`8bd77ecdda6643326b5537933f9ec17c95e8b375`；开工时 staged `0`、unstaged `7`、untracked `0`，`git diff --check` 通过。
+- 现有七文件候选已收敛：conversion summary 只聚合 committed `SubscriptionConversion` 冻结事实；五个付费价值接口只展示目标 Credit 混合池；route tracer 解析真实 JSON；前端仅改既有 `ConversionPanel`。
+- 协调器独立实跑 `TestTimedConversionRealPathFeedsFiveAnalyticsWithoutNewPaymentAttribution` 与 `TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics`，两项均 PASS。
+- 本工作树前端门禁：受影响组件测试 `20 pass / 0 fail`；`bun run typecheck` 的 `tsc -b` 无诊断；`bun run i18n:sync` 六语言 missing/extras 均为 `0`；`bun run build` 为 `ready built in 13.9 s`。
+- 六语言新增七个 conversion analytics 指标键，均为真实本地化文本；所有 Credit/micros 字段继续以十进制字符串传递，金额格式化沿用 `BigInt` 路径。
+- 浏览器主路径与历史冻结证据继续由 `coordinator-browser-evidence.md` 提供；本轮按协调器收敛指令未另起服务或重复 Chromium smoke。
+- 提交前候选共修改 13 个受控文件：原七文件加 en、zh、fr、ru、ja、vi 六个 locale；无 migration、marker、部署或其他 Issue 范围改动。

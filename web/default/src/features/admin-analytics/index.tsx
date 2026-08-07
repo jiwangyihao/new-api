@@ -1190,20 +1190,36 @@ export function ConversionPanel(props: {
         ) : summary ? (
           <MetricGrid>
             <Metric
-              labelKey='adminAnalytics.metrics.trialUsers'
-              value={summary.summary.trial_users}
+              labelKey='adminAnalytics.metrics.conversionCount'
+              value={summary.summary.conversion_count}
             />
             <Metric
-              labelKey='adminAnalytics.metrics.paidUsers'
-              value={summary.summary.paid_users}
+              labelKey='adminAnalytics.metrics.exactConversionCount'
+              value={summary.summary.exact_conversion_count}
             />
             <Metric
-              labelKey='adminAnalytics.metrics.trialToPaidRate'
-              value={formatAdminPercent(summary.summary.trial_to_paid_rate)}
+              labelKey='adminAnalytics.metrics.grossCredit'
+              value={summary.summary.gross_credit}
             />
             <Metric
-              labelKey='adminAnalytics.metrics.renewalUsers'
-              value={summary.summary.renewal_users}
+              labelKey='adminAnalytics.metrics.debtOffset'
+              value={summary.summary.debt_offset}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.netAvailableCredit'
+              value={summary.summary.net_available_credit}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.grossConversionValue'
+              value={formatAdminMoneyBreakdown(
+                summary.summary.gross_value_by_currency
+              )}
+            />
+            <Metric
+              labelKey='adminAnalytics.metrics.netConversionValue'
+              value={formatAdminMoneyBreakdown(
+                summary.summary.net_value_by_currency
+              )}
             />
           </MetricGrid>
         ) : (

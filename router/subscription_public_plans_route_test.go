@@ -174,7 +174,7 @@ func setupSubscriptionPublicPlansRouteTestDB(t *testing.T) *gorm.DB {
 	require.NoError(t, err)
 	model.DB = db
 	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.Channel{}, &model.ChannelGroup{}, &model.ChannelGroupChannel{}))
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.TimedSubscriptionValuationGrant{}, &model.Channel{}, &model.ChannelGroup{}, &model.ChannelGroupChannel{}))
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()

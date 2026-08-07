@@ -63,6 +63,8 @@ type creditBalanceAdjustmentValuationFacts struct {
 	ValuationCurrency    string `json:"valuation_currency"`
 	FxRateNumerator      int64  `json:"fx_rate_numerator"`
 	FxRateDenominator    int64  `json:"fx_rate_denominator"`
+	FxCapturedAt         int64  `json:"fx_captured_at"`
+	FxDirection          string `json:"fx_direction"`
 	ValuationRuleVersion int    `json:"valuation_rule_version"`
 }
 
@@ -72,7 +74,6 @@ type creditBalanceAdjustmentSourceSnapshot struct {
 	OperatorUserId int                                   `json:"operator_user_id"`
 	Reason         string                                `json:"reason"`
 	IdempotencyKey string                                `json:"idempotency_key"`
-	FxCapturedAt   int64                                 `json:"fx_captured_at"`
 	Valuation      creditBalanceAdjustmentValuationFacts `json:"valuation"`
 }
 
@@ -110,10 +111,6 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			}
 			facts = creditBalanceAdjustmentFacts(sourcePlan, creditPlan)
 		}
-		fingerprint, err = creditBalanceAdjustmentFingerprint(request, facts)
-		if err != nil {
-			return err
-		}
 
 		var existing CreditBalanceAdjustment
 		lookup := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("idempotency_key = ?", request.IdempotencyKey).Limit(1).Find(&existing)
@@ -121,6 +118,17 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			return lookup.Error
 		}
 		if lookup.RowsAffected > 0 {
+			if request.Operation == CreditBalanceAdjustmentIncrease {
+				frozenFX, err := creditBalanceAdjustmentFXSnapshotTx(tx, &existing)
+				if err != nil {
+					return err
+				}
+				applyCreditBalanceAdjustmentFXFacts(&facts, frozenFX)
+			}
+			fingerprint, err = creditBalanceAdjustmentFingerprint(request, facts)
+			if err != nil {
+				return err
+			}
 			if existing.ParameterFingerprint != fingerprint {
 				return ErrCreditValuationIdempotencyMismatch
 			}
@@ -132,19 +140,37 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			return nil
 		}
 
+		now, err := getDBTimestampStrictTx(tx)
+		if err != nil {
+			return err
+		}
 		var valuationSource *CreditValuationSourceSnapshot
 		if request.Operation == CreditBalanceAdjustmentIncrease {
-			valuationSource, err = validateCreditBalanceAdjustmentFacts(sourcePlan, facts, request.Amount)
+			sourceCurrency, valuationCurrency, err := validateCreditBalanceAdjustmentPlanFacts(sourcePlan, facts)
 			if err != nil {
 				return err
 			}
+			frozenFX, err := captureCreditPositiveIngressFXRateSnapshot(sourceCurrency, valuationCurrency, now)
+			if err != nil {
+				return err
+			}
+			applyCreditBalanceAdjustmentFXFacts(&facts, frozenFX)
+			valuationSource = &CreditValuationSourceSnapshot{
+				SourcePriceMicros: *facts.SourcePriceMicros,
+				SourcePlanCredit:  facts.SourcePlanCredit,
+				GrossCredit:       request.Amount,
+				SourceCurrency:    sourceCurrency,
+				ValuationCurrency: valuationCurrency,
+				RuleVersion:       facts.ValuationRuleVersion,
+				FXRateSnapshot:    frozenFX,
+			}
+		}
+		fingerprint, err = creditBalanceAdjustmentFingerprint(request, facts)
+		if err != nil {
+			return err
 		}
 		var user User
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select("id").Where("id = ?", request.UserId).First(&user).Error; err != nil {
-			return err
-		}
-		now, err := getDBTimestampStrictTx(tx)
-		if err != nil {
 			return err
 		}
 		adjustment := &CreditBalanceAdjustment{
@@ -157,7 +183,7 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 		}
 		snapshotBytes, err := common.Marshal(creditBalanceAdjustmentSourceSnapshot{
 			Operation: request.Operation, Amount: request.Amount, OperatorUserId: request.OperatorUserId,
-			Reason: request.Reason, IdempotencyKey: request.IdempotencyKey, FxCapturedAt: now, Valuation: facts,
+			Reason: request.Reason, IdempotencyKey: request.IdempotencyKey, Valuation: facts,
 		})
 		if err != nil {
 			return err
@@ -174,7 +200,7 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 				ValuationSource: valuationSource,
 			})
 			if err != nil {
-				return err
+				return creditBalanceAdjustmentIngressError(err)
 			}
 			adjustment.LedgerId = grant.LedgerId
 			result = &CreditBalanceAdjustmentResult{Adjustment: adjustment, CreditBalance: grant}
@@ -260,9 +286,7 @@ func lockCreditBalanceAdjustmentPlanTx(tx *gorm.DB, planId int) (*SubscriptionPl
 }
 
 func creditBalanceAdjustmentFacts(sourcePlan *SubscriptionPlan, creditPlan *SubscriptionPlan) creditBalanceAdjustmentValuationFacts {
-	facts := creditBalanceAdjustmentValuationFacts{
-		FxRateNumerator: 1, FxRateDenominator: 1, ValuationRuleVersion: CreditValuationRuleVersion,
-	}
+	facts := creditBalanceAdjustmentValuationFacts{ValuationRuleVersion: CreditValuationRuleVersion}
 	if sourcePlan != nil {
 		facts.PlanId = sourcePlan.Id
 		facts.SourcePriceMicros = sourcePlan.PriceAmountMicros
@@ -275,26 +299,65 @@ func creditBalanceAdjustmentFacts(sourcePlan *SubscriptionPlan, creditPlan *Subs
 	return facts
 }
 
-func validateCreditBalanceAdjustmentFacts(sourcePlan *SubscriptionPlan, facts creditBalanceAdjustmentValuationFacts, amount int64) (*CreditValuationSourceSnapshot, error) {
+func validateCreditBalanceAdjustmentPlanFacts(sourcePlan *SubscriptionPlan, facts creditBalanceAdjustmentValuationFacts) (string, string, error) {
 	if sourcePlan == nil || sourcePlan.Id != facts.PlanId || !sourcePlan.Enabled || sourcePlan.EntitlementType != SubscriptionEntitlementTimed || sourcePlan.IsTrial || sourcePlan.InviteTrial || !sourcePlan.UnlimitedPurchaseEnabled || facts.SourcePriceMicros == nil || *facts.SourcePriceMicros <= 0 || facts.SourcePlanCredit <= 0 {
-		return nil, ErrCreditValuationPlanIneligible
+		return "", "", ErrCreditValuationPlanIneligible
 	}
 	sourceCurrency, err := NormalizeCreditValuationCurrency(facts.SourceCurrency)
 	if err != nil {
-		return nil, err
+		return "", "", err
 	}
 	valuationCurrency, err := NormalizeCreditValuationCurrency(facts.ValuationCurrency)
 	if err != nil {
+		return "", "", err
+	}
+	return sourceCurrency, valuationCurrency, nil
+}
+
+func applyCreditBalanceAdjustmentFXFacts(facts *creditBalanceAdjustmentValuationFacts, snapshot *CreditFXRateSnapshot) {
+	if facts == nil || snapshot == nil {
+		return
+	}
+	facts.FxRateNumerator = snapshot.Numerator
+	facts.FxRateDenominator = snapshot.Denominator
+	facts.FxCapturedAt = snapshot.CapturedAt
+	facts.FxDirection = snapshot.Direction
+}
+
+func creditBalanceAdjustmentFXSnapshotTx(tx *gorm.DB, adjustment *CreditBalanceAdjustment) (*CreditFXRateSnapshot, error) {
+	if tx == nil || adjustment == nil || adjustment.Id <= 0 || adjustment.LedgerId <= 0 {
+		return nil, ErrCreditValuationInvalidFX
+	}
+	var ledger CreditBalanceLedger
+	if err := tx.Where("id = ? AND source_type = ? AND source_id = ?", adjustment.LedgerId, CreditBalanceLedgerSourceAdminAdjustment, adjustment.Id).First(&ledger).Error; err != nil {
 		return nil, err
 	}
-	if sourceCurrency != valuationCurrency {
-		return nil, ErrCreditValuationUnsupportedCurrency
+	snapshot := &CreditFXRateSnapshot{
+		SourceCurrency: ledger.FxSourceCurrency, ValuationCurrency: ledger.ValuationCurrency,
+		Numerator: ledger.FxRateNumerator, Denominator: ledger.FxRateDenominator,
+		CapturedAt: ledger.FxCapturedAt, Direction: ledger.FxDirection,
 	}
-	return &CreditValuationSourceSnapshot{
-		SourcePriceMicros: *facts.SourcePriceMicros, SourcePlanCredit: facts.SourcePlanCredit,
-		GrossCredit: amount, SourceCurrency: sourceCurrency, ValuationCurrency: valuationCurrency,
-		RuleVersion: facts.ValuationRuleVersion,
-	}, nil
+	if err := validateCreditPositiveIngressFXRateSnapshot(snapshot, snapshot.SourceCurrency, snapshot.ValuationCurrency); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func creditBalanceAdjustmentIngressError(err error) error {
+	switch {
+	case errors.Is(err, ErrCreditFXOverflow), errors.Is(err, ErrCreditValuationOverflow):
+		return ErrCreditValuationOverflow
+	case errors.Is(err, ErrCreditFXRateInvalid),
+		errors.Is(err, ErrCreditFXRateMissing),
+		errors.Is(err, ErrCreditFXRateEmpty),
+		errors.Is(err, ErrCreditFXInvalidDecimal),
+		errors.Is(err, ErrCreditFXPrecisionExceeded),
+		errors.Is(err, ErrCreditFXNonPositive),
+		errors.Is(err, ErrCreditFXDirectionMismatch):
+		return ErrCreditValuationInvalidFX
+	default:
+		return err
+	}
 }
 
 func creditBalanceAdjustmentResultTx(tx *gorm.DB, adjustment *CreditBalanceAdjustment, replayed bool) (*CreditBalanceAdjustmentResult, error) {
@@ -310,6 +373,7 @@ func creditBalanceAdjustmentResultTx(tx *gorm.DB, adjustment *CreditBalanceAdjus
 		return nil, err
 	}
 	grant := creditBalanceGrantResult(&ledger, balance.PlanId, false)
+	grant.Replayed = replayed
 	return &CreditBalanceAdjustmentResult{Adjustment: adjustment, CreditBalance: grant, DebtFormed: ledger.DebtFormed, Replayed: replayed}, nil
 }
 

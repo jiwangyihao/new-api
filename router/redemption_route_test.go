@@ -46,7 +46,7 @@ func TestTopUpSubscriptionRequiresExplicitRedemptionMode(t *testing.T) {
 	plan := model.SubscriptionPlan{Id: 9962, Title: "Explicit mode", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetDaily}
 	require.NoError(t, model.DB.Create(&plan).Error)
 	redemption := model.Redemption{Id: 9963, Key: "explicit-mode-redemption", Type: model.RedemptionTypeSubscription, PlanId: plan.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-route-secret"))))
@@ -117,7 +117,7 @@ func TestTopUpSubscriptionCreditBalanceModeGrantsCreditAndWritesRedemptionLedger
 	}
 	require.NoError(t, model.DB.Create(&option).Error)
 	redemption := model.Redemption{Id: 9974, Key: "credit-balance-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-credit-route-secret"))))
@@ -194,10 +194,17 @@ func TestTopUpUsedSubscriptionStillRejectsMissingOrInvalidRedemptionMode(t *test
 	accessToken := "redemption-replay-mode-token"
 	user := model.User{Id: 9981, Username: "redemption-replay-mode", Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AccessToken: &accessToken}
 	require.NoError(t, model.DB.Create(&user).Error)
-	plan := model.SubscriptionPlan{Id: 9982, Title: "Replay mode", Enabled: true, PublicVisible: true, DurationUnit: model.SubscriptionDurationDay, DurationValue: 7, MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetDaily}
+	priceMicros := int64(10_000_000)
+	plan := model.SubscriptionPlan{
+		Id: 9982, Title: "Replay mode", Enabled: true, PublicVisible: true,
+		EntitlementType: model.SubscriptionEntitlementTimed,
+		PriceAmount:     10, PriceAmountMicros: &priceMicros, Currency: "CNY",
+		DurationUnit: model.SubscriptionDurationDay, DurationValue: 7,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetDaily,
+	}
 	require.NoError(t, model.DB.Create(&plan).Error)
 	redemption := model.Redemption{Id: 9983, Key: "replay-mode-redemption", Type: model.RedemptionTypeSubscription, PlanId: plan.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-replay-mode-secret"))))
@@ -255,7 +262,7 @@ func TestTopUpConcurrentSameCodeReturnsOneFulfillmentAndOneReplay(t *testing.T) 
 	option := model.SubscriptionPlan{Id: 9993, Title: "Concurrent option", Enabled: true, EntitlementType: model.SubscriptionEntitlementTimed, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2500, QuotaResetPeriod: model.SubscriptionResetMonthly, UnlimitedPurchaseEnabled: true}
 	require.NoError(t, model.DB.Create(&option).Error)
 	redemption := model.Redemption{Id: 9994, Key: "concurrent-credit-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-concurrent-secret"))))
@@ -360,7 +367,7 @@ func TestTopUpCreditBalanceUsesLatestPlanCreditAndReplaysFrozenResult(t *testing
 	option := model.SubscriptionPlan{Id: 10013, Title: "Latest monthly option", Enabled: true, EntitlementType: model.SubscriptionEntitlementTimed, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetMonthly, UnlimitedPurchaseEnabled: true}
 	require.NoError(t, model.DB.Create(&option).Error)
 	redemption := model.Redemption{Id: 10014, Key: "latest-credit-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	_, err := model.GetSubscriptionPlanById(option.Id)
 	require.NoError(t, err)
@@ -386,25 +393,33 @@ func TestTopUpCreditBalanceUsesLatestPlanCreditAndReplaysFrozenResult(t *testing
 	first := post(model.RedemptionModeCreditBalance)
 	require.True(t, first.Success, first.Message)
 	require.NotNil(t, first.Result.CreditBalance)
-	assert.Equal(t, int64(3500), first.Result.CreditBalance.GrossCredit)
+	assert.Equal(t, int64(1000), first.Result.CreditBalance.GrossCredit)
 	assert.False(t, first.Result.Replayed)
 	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", option.Id).Update("monthly_token_limit", 9000).Error)
 
-	replay := post(model.RedemptionModeTimed)
+	conflict := post(model.RedemptionModeTimed)
+	require.False(t, conflict.Success)
+	assert.Equal(t, "redemption_already_used", conflict.Code)
+	require.NotNil(t, conflict.Result)
+	assert.True(t, conflict.Result.Replayed)
+	assert.Equal(t, model.RedemptionModeCreditBalance, conflict.Result.RedemptionMode)
+
+	replay := post(model.RedemptionModeCreditBalance)
 	require.True(t, replay.Success, replay.Message)
+	require.NotNil(t, replay.Result)
 	assert.True(t, replay.Result.Replayed)
 	assert.Equal(t, model.RedemptionModeCreditBalance, replay.Result.RedemptionMode)
 	require.NotNil(t, replay.Result.CreditBalance)
-	assert.Equal(t, int64(3500), replay.Result.CreditBalance.GrossCredit)
+	assert.Equal(t, int64(1000), replay.Result.CreditBalance.GrossCredit)
 	assert.Equal(t, first.Result.CreditBalance.LedgerId, replay.Result.CreditBalance.LedgerId)
 
 	var saved model.Redemption
 	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
 	assert.Equal(t, model.RedemptionModeCreditBalance, saved.FulfillmentMode)
-	assert.Contains(t, saved.FulfillmentSnapshot, `"monthly_token_limit":3500`)
+	assert.Contains(t, saved.FulfillmentSnapshot, `"monthly_token_limit":1000`)
 	var balance model.UserSubscription
 	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", user.Id, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
-	assert.Equal(t, int64(3500), balance.TokenLimit)
+	assert.Equal(t, int64(1000), balance.TokenLimit)
 	var ledgerCount int64
 	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceRedemption, redemption.Id).Count(&ledgerCount).Error)
 	assert.Equal(t, int64(1), ledgerCount)
@@ -431,7 +446,7 @@ func TestTopUpCreditBalanceRejectsClosedGlobalRedemptionEntryWithoutConsumingCod
 	option := model.SubscriptionPlan{Id: 10023, Title: "Eligible monthly option", Enabled: true, EntitlementType: model.SubscriptionEntitlementTimed, DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 2000, QuotaResetPeriod: model.SubscriptionResetMonthly, UnlimitedPurchaseEnabled: true}
 	require.NoError(t, model.DB.Create(&option).Error)
 	redemption := model.Redemption{Id: 10024, Key: "closed-entry-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-closed-entry-secret"))))
@@ -452,7 +467,7 @@ func TestTopUpCreditBalanceRejectsClosedGlobalRedemptionEntryWithoutConsumingCod
 	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)
 	assert.Empty(t, saved.FulfillmentMode)
-	assert.Empty(t, saved.FulfillmentSnapshot)
+	assert.Contains(t, saved.FulfillmentSnapshot, `"monthly_token_limit":2000`)
 	var subscriptionCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", user.Id).Count(&subscriptionCount).Error)
 	assert.Zero(t, subscriptionCount)
@@ -522,7 +537,7 @@ func TestTopUpCreditBalanceRejectsEveryIneligiblePlanShape(t *testing.T) {
 				require.NoError(t, model.DB.Exec("UPDATE subscription_plans SET entitlement_type = ?, singleton_key = NULL WHERE id = ?", test.rawOptionType, option.Id).Error)
 			}
 			redemption := model.Redemption{Id: 10034, Key: "ineligible-credit-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-			require.NoError(t, model.DB.Create(&redemption).Error)
+			require.NoError(t, redemption.Insert())
 
 			engine := gin.New()
 			engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-ineligible-secret"))))
@@ -581,7 +596,7 @@ func TestTopUpCreditBalanceKeepsExistingActivityAndBillingStrategy(t *testing.T)
 	existing := model.UserSubscription{Id: 10044, UserId: user.Id, PlanId: option.Id, EntitlementType: model.SubscriptionEntitlementTimed, Status: "active", StartTime: common.GetTimestamp() - 60, EndTime: common.GetTimestamp() + 86400, TokenLimit: 100, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder}
 	require.NoError(t, model.DB.Create(&existing).Error)
 	redemption := model.Redemption{Id: 10045, Key: "existing-active-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-existing-active-secret"))))
@@ -628,7 +643,7 @@ func TestTopUpCreditBalanceOffsetsSettlementDebtAndReturnsReceipt(t *testing.T) 
 	balance := model.UserSubscription{Id: 10054, UserId: user.Id, PlanId: creditPlan.Id, EntitlementType: model.SubscriptionEntitlementCreditBalance, Status: "active", TokenLimit: 200, TokenUsed: 500, GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder}
 	require.NoError(t, model.DB.Create(&balance).Error)
 	redemption := model.Redemption{Id: 10055, Key: "debt-offset-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("redemption-debt-offset-secret"))))
@@ -685,7 +700,7 @@ func TestTopUpCreditBalanceRollsBackWhenLedgerWriteFails(t *testing.T) {
 	require.NoError(t, model.DB.Create(&creditPlan).Error)
 	require.NoError(t, model.DB.Create(&option).Error)
 	redemption := model.Redemption{Id: 10064, Key: "ledger-failure-redemption", Type: model.RedemptionTypeSubscription, PlanId: option.Id, Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp()}
-	require.NoError(t, model.DB.Create(&redemption).Error)
+	require.NoError(t, redemption.Insert())
 
 	triggerName := "fail_redemption_ledger_10064"
 	require.NoError(t, model.DB.Exec("CREATE TRIGGER "+triggerName+" BEFORE INSERT ON credit_balance_ledgers WHEN NEW.source_type = 'redemption' AND NEW.source_id = 10064 BEGIN SELECT RAISE(ABORT, 'injected redemption ledger failure'); END").Error)
@@ -708,7 +723,7 @@ func TestTopUpCreditBalanceRollsBackWhenLedgerWriteFails(t *testing.T) {
 	require.NoError(t, model.DB.First(&saved, redemption.Id).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)
 	assert.Empty(t, saved.FulfillmentMode)
-	assert.Empty(t, saved.FulfillmentSnapshot)
+	assert.Contains(t, saved.FulfillmentSnapshot, `"monthly_token_limit":1600`)
 	var subscriptionCount int64
 	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", user.Id).Count(&subscriptionCount).Error)
 	assert.Zero(t, subscriptionCount)

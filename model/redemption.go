@@ -205,10 +205,11 @@ func normalizeRedemptionType(redemptionType string) string {
 }
 
 type RedemptionFulfillmentSnapshot struct {
-	Entitlement    SubscriptionEntitlementSnapshot `json:"entitlement"`
-	CreditBalance  *CreditBalanceGrantResult       `json:"credit_balance,omitempty"`
-	EventStartTime int64                           `json:"event_start_time,omitempty"`
-	EventEndTime   int64                           `json:"event_end_time,omitempty"`
+	Entitlement          SubscriptionEntitlementSnapshot `json:"entitlement"`
+	CreditFXRateSnapshot *CreditFXRateSnapshot           `json:"credit_fx_rate_snapshot,omitempty"`
+	CreditBalance        *CreditBalanceGrantResult       `json:"credit_balance,omitempty"`
+	EventStartTime       int64                           `json:"event_start_time,omitempty"`
+	EventEndTime         int64                           `json:"event_end_time,omitempty"`
 }
 type creditBalanceRedemptionFingerprint struct {
 	UserId               int    `json:"user_id"`
@@ -222,9 +223,13 @@ type creditBalanceRedemptionFingerprint struct {
 	SourceCurrency       string `json:"source_currency"`
 	ValuationCurrency    string `json:"valuation_currency"`
 	ValuationRuleVersion int    `json:"valuation_rule_version"`
+	FxRateNumerator      int64  `json:"fx_rate_numerator"`
+	FxRateDenominator    int64  `json:"fx_rate_denominator"`
+	FxCapturedAt         int64  `json:"fx_captured_at"`
+	FxDirection          string `json:"fx_direction"`
 }
 
-func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnapshot, userId int, redemptionId int) (*CreditValuationSourceSnapshot, string, error) {
+func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnapshot, fxSnapshot *CreditFXRateSnapshot, userId int, redemptionId int) (*CreditValuationSourceSnapshot, string, error) {
 	if userId <= 0 || redemptionId <= 0 || snapshot.PlanID <= 0 || snapshot.TargetCreditBalancePlanID <= 0 || snapshot.MonthlyTokenLimit <= 0 {
 		return nil, "", ErrRedemptionPlanIneligible
 	}
@@ -234,13 +239,21 @@ func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnap
 	}
 	sourceCurrency := strings.ToUpper(strings.TrimSpace(snapshot.ListPriceCurrency))
 	valuationCurrency := strings.ToUpper(strings.TrimSpace(snapshot.TargetCreditBalanceValuationCurrency))
-	fingerprintPayload, err := common.Marshal(creditBalanceRedemptionFingerprint{
+	frozenFX := fxSnapshot
+	fingerprintFacts := creditBalanceRedemptionFingerprint{
 		UserId: userId, RedemptionId: redemptionId, RedemptionMode: RedemptionModeCreditBalance,
 		SourcePlanId: snapshot.PlanID, TargetPlanId: snapshot.TargetCreditBalancePlanID,
 		GrossCredit: snapshot.MonthlyTokenLimit, SourcePriceMicros: priceMicros,
 		SourcePlanCredit: snapshot.MonthlyTokenLimit, SourceCurrency: sourceCurrency,
 		ValuationCurrency: valuationCurrency, ValuationRuleVersion: snapshot.ValuationRuleVersion,
-	})
+	}
+	if frozenFX != nil {
+		fingerprintFacts.FxRateNumerator = frozenFX.Numerator
+		fingerprintFacts.FxRateDenominator = frozenFX.Denominator
+		fingerprintFacts.FxCapturedAt = frozenFX.CapturedAt
+		fingerprintFacts.FxDirection = frozenFX.Direction
+	}
+	fingerprintPayload, err := common.Marshal(fingerprintFacts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -259,8 +272,8 @@ func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnap
 	if err != nil {
 		return nil, "", err
 	}
-	if sourceCurrency != valuationCurrency {
-		return nil, "", ErrCreditValuationUnsupportedCurrency
+	if err := validateCreditPositiveIngressFXRateSnapshot(frozenFX, sourceCurrency, valuationCurrency); err != nil {
+		return nil, "", err
 	}
 	return &CreditValuationSourceSnapshot{
 		SourcePriceMicros: priceMicros,
@@ -269,6 +282,7 @@ func creditBalanceRedemptionValuationSource(snapshot SubscriptionEntitlementSnap
 		SourceCurrency:    sourceCurrency,
 		ValuationCurrency: valuationCurrency,
 		RuleVersion:       snapshot.ValuationRuleVersion,
+		FXRateSnapshot:    frozenFX,
 	}, fingerprint, nil
 }
 
@@ -406,11 +420,25 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 				return err
 			}
 			fulfillment.Entitlement.SetTargetCreditBalancePlanSnapshot(creditPlan)
-			sourceSnapshot, err := MarshalSubscriptionEntitlementSnapshot(fulfillment.Entitlement)
+			if fulfillment.Entitlement.ListPriceMicros != nil && *fulfillment.Entitlement.ListPriceMicros > 0 &&
+				strings.TrimSpace(fulfillment.Entitlement.ListPriceCurrency) != "" &&
+				strings.TrimSpace(fulfillment.Entitlement.TargetCreditBalanceValuationCurrency) != "" &&
+				fulfillment.Entitlement.ValuationRuleVersion == CreditValuationRuleVersion {
+				fxSnapshot, err := captureCreditPositiveIngressFXRateSnapshot(
+					fulfillment.Entitlement.ListPriceCurrency,
+					fulfillment.Entitlement.TargetCreditBalanceValuationCurrency,
+					redeemedTime,
+				)
+				if err != nil {
+					return err
+				}
+				fulfillment.CreditFXRateSnapshot = fxSnapshot
+			}
+			sourceSnapshotBytes, err := common.Marshal(fulfillment)
 			if err != nil {
 				return err
 			}
-			valuationSource, fingerprint, err := creditBalanceRedemptionValuationSource(fulfillment.Entitlement, userId, redemption.Id)
+			valuationSource, fingerprint, err := creditBalanceRedemptionValuationSource(fulfillment.Entitlement, fulfillment.CreditFXRateSnapshot, userId, redemption.Id)
 			if err != nil {
 				return err
 			}
@@ -420,7 +448,7 @@ func Redeem(key string, userId int, redemptionMode string) (*RedemptionResult, e
 				SourceType: CreditBalanceLedgerSourceRedemption, SourceId: redemption.Id,
 				SourceKey: idempotencyKey, SourceStatus: "completed", SourcePlanId: plan.Id,
 				ParameterFingerprint: fingerprint, Type: CreditBalanceLedgerTypeRedemption,
-				SourceSnapshot: sourceSnapshot, TargetPlanId: creditPlan.Id,
+				SourceSnapshot: string(sourceSnapshotBytes), TargetPlanId: creditPlan.Id,
 				Reason: "兑换码兑换 Credit 余额", ValuationSource: valuationSource,
 			})
 			if err != nil {
@@ -573,6 +601,9 @@ func redemptionResultFromFulfillment(redemption *Redemption, userId int, request
 	}
 	result.Plan = plan
 	result.CreditBalance = fulfillment.CreditBalance
+	if result.CreditBalance != nil {
+		result.CreditBalance.Replayed = true
+	}
 	result.FulfillmentSubscriptionId = redemption.FulfillmentSubscriptionId
 	return result, nil
 }
@@ -583,6 +614,9 @@ func isPublicRedemptionError(err error) bool {
 		errors.Is(err, ErrCreditBalanceRedemptionUnavailable) ||
 		errors.Is(err, ErrRedemptionPlanIneligible) ||
 		errors.Is(err, ErrRedemptionAlreadyUsed) ||
+		errors.Is(err, ErrCreditValuationInvalidFX) ||
+		errors.Is(err, ErrCreditValuationUnsupportedCurrency) ||
+		errors.Is(err, ErrCreditValuationOverflow) ||
 		errors.Is(err, ErrCreditValuationIdempotencyMismatch)
 }
 

@@ -31,6 +31,54 @@ const (
 	CreditBalanceStatusDebt      = "debt"
 )
 
+func captureCreditPositiveIngressFXRateSnapshot(sourceCurrency string, valuationCurrency string, capturedAt int64) (*CreditFXRateSnapshot, error) {
+	snapshot, err := CurrentCreditFXRateSnapshot(sourceCurrency, valuationCurrency, capturedAt)
+	if err != nil {
+		return nil, creditPositiveIngressFXError(err)
+	}
+	if err := validateCreditPositiveIngressFXRateSnapshot(&snapshot, sourceCurrency, valuationCurrency); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
+}
+
+func validateCreditPositiveIngressFXRateSnapshot(snapshot *CreditFXRateSnapshot, sourceCurrency string, valuationCurrency string) error {
+	sourceCurrency, err := NormalizeCreditValuationCurrency(sourceCurrency)
+	if err != nil {
+		return err
+	}
+	valuationCurrency, err = NormalizeCreditValuationCurrency(valuationCurrency)
+	if err != nil {
+		return err
+	}
+	if snapshot == nil || snapshot.SourceCurrency != sourceCurrency || snapshot.ValuationCurrency != valuationCurrency || snapshot.Numerator <= 0 || snapshot.Denominator <= 0 || snapshot.CapturedAt <= 0 {
+		return ErrCreditValuationInvalidFX
+	}
+	expectedDirection := CreditFXDirectionIdentity
+	if sourceCurrency == "CNY" && valuationCurrency == "USD" {
+		expectedDirection = CreditFXDirectionCNYtoUSD
+	} else if sourceCurrency == "USD" && valuationCurrency == "CNY" {
+		expectedDirection = CreditFXDirectionUSDtoCNY
+	} else if sourceCurrency != valuationCurrency {
+		return ErrCreditValuationUnsupportedCurrency
+	}
+	if snapshot.Direction != expectedDirection || (expectedDirection == CreditFXDirectionIdentity && (snapshot.Numerator != 1 || snapshot.Denominator != 1)) {
+		return ErrCreditValuationInvalidFX
+	}
+	return nil
+}
+
+func creditPositiveIngressFXError(err error) error {
+	switch {
+	case errors.Is(err, ErrCreditFXOverflow), errors.Is(err, ErrCreditValuationOverflow):
+		return ErrCreditValuationOverflow
+	case errors.Is(err, ErrCreditFXUnsupportedCurrency), errors.Is(err, ErrCreditValuationUnsupportedCurrency):
+		return ErrCreditValuationUnsupportedCurrency
+	default:
+		return ErrCreditValuationInvalidFX
+	}
+}
+
 type CreditBalanceLedger struct {
 	Id                                int    `json:"id"`
 	UserId                            int    `json:"user_id" gorm:"not null;index;uniqueIndex:idx_credit_balance_ledger_user_key,priority:1"`
@@ -88,6 +136,7 @@ type CreditBalanceLedger struct {
 	FxRateNumerator                   int64  `json:"fx_rate_numerator,string" gorm:"type:bigint;not null;default:0"`
 	FxRateDenominator                 int64  `json:"fx_rate_denominator,string" gorm:"type:bigint;not null;default:0"`
 	FxCapturedAt                      int64  `json:"fx_captured_at" gorm:"type:bigint;not null;default:0"`
+	FxDirection                       string `json:"fx_direction" gorm:"type:varchar(16);not null;default:''"`
 	CreatedAt                         int64  `json:"created_at" gorm:"type:bigint;not null;index"`
 }
 
@@ -240,6 +289,7 @@ type CreditBalanceGrantResult struct {
 	FxRateNumerator            int64  `json:"fx_rate_numerator,string"`
 	FxRateDenominator          int64  `json:"fx_rate_denominator,string"`
 	FxCapturedAt               int64  `json:"fx_captured_at"`
+	FxDirection                string `json:"fx_direction"`
 	ValuationRuleVersion       int    `json:"rule_version"`
 	ValuationStateVersionAfter int64  `json:"state_version_after"`
 	DebtOffset                 int64  `json:"debt_offset"`
@@ -250,6 +300,7 @@ type CreditBalanceGrantResult struct {
 	Active                     bool   `json:"active"`
 	LedgerId                   int    `json:"ledger_id"`
 	Status                     string `json:"status"`
+	Replayed                   bool   `json:"replayed"`
 }
 
 func NormalizeSubscriptionPurchaseMode(value string) (string, error) {
@@ -526,6 +577,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		ledger.FxRateNumerator = 1
 		ledger.FxRateDenominator = 1
 		ledger.FxCapturedAt = ledger.CreatedAt
+		ledger.FxDirection = CreditFXDirectionIdentity
 	}
 	if valuationReady {
 		ledger.ValuationCurrency = valuationIngress.currency
@@ -534,6 +586,15 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 		ledger.ValuationConfidence = valuationIngress.confidence
 		ledger.ValuationRuleVersion = valuationIngress.ruleVersion
 		ledger.ValuationStateVersionAfter = valuationMutation.StateVersionAfter
+		ledger.FxSourceCurrency = valuationIngress.fxSourceCurrency
+		ledger.FxRateNumerator = valuationIngress.fxRateNumerator
+		ledger.FxRateDenominator = valuationIngress.fxRateDenominator
+		ledger.FxCapturedAt = valuationIngress.fxCapturedAt
+		if request.ValuationSource != nil && request.ValuationSource.FXRateSnapshot != nil {
+			ledger.FxDirection = request.ValuationSource.FXRateSnapshot.Direction
+		} else if strings.EqualFold(ledger.FxSourceCurrency, ledger.ValuationCurrency) {
+			ledger.FxDirection = CreditFXDirectionIdentity
+		}
 	}
 	if request.SourceType == CreditBalanceLedgerSourceSubscriptionConversion {
 		source := request.ConversionSource
@@ -557,10 +618,6 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 			ledger.ValuationCreditBasis = request.ValuationSource.SourcePlanCredit
 			ledger.ValuationUnitValueNumeratorMicros = valuationIngress.unitValueNumeratorMicros
 			ledger.ValuationUnitValueDenominator = valuationIngress.unitValueDenominator
-			ledger.FxSourceCurrency = valuationIngress.fxSourceCurrency
-			ledger.FxRateNumerator = valuationIngress.fxRateNumerator
-			ledger.FxRateDenominator = valuationIngress.fxRateDenominator
-			ledger.FxCapturedAt = valuationIngress.fxCapturedAt
 		}
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
@@ -595,7 +652,9 @@ func findCreditBalanceGrantResultTx(tx *gorm.DB, request CreditBalanceGrantReque
 	if err := tx.Select("setting").Where("id = ?", request.UserId).First(&user).Error; err != nil {
 		return nil, false, err
 	}
-	return creditBalanceGrantResult(&ledger, balance.PlanId, user.GetSetting().ActiveSubscriptionId == balance.Id), true, nil
+	result := creditBalanceGrantResult(&ledger, balance.PlanId, user.GetSetting().ActiveSubscriptionId == balance.Id)
+	result.Replayed = true
+	return result, true, nil
 }
 
 func FindCreditBalanceGrantBySourceTx(tx *gorm.DB, sourceType string, sourceId int) (*CreditBalanceGrantResult, error) {
@@ -770,6 +829,7 @@ func creditBalanceGrantResult(ledger *CreditBalanceLedger, planId int, active bo
 		FxRateNumerator:            ledger.FxRateNumerator,
 		FxRateDenominator:          ledger.FxRateDenominator,
 		FxCapturedAt:               ledger.FxCapturedAt,
+		FxDirection:                ledger.FxDirection,
 		ValuationRuleVersion:       ledger.ValuationRuleVersion,
 		ValuationStateVersionAfter: ledger.ValuationStateVersionAfter,
 		DebtOffset:                 ledger.DebtOffset,

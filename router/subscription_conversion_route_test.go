@@ -202,7 +202,7 @@ func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *te
 	differentKey := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
 		`{"subscription_id":"9972","idempotency_key":"different-key"}`)
 	assert.False(t, differentKey.Success)
-	assert.Contains(t, differentKey.Message, "already converted")
+	assert.Equal(t, "subscription_conversion_idempotency_conflict", differentKey.Code)
 
 	require.NoError(t, db.Model(&model.SubscriptionConversion{}).Where("source_subscription_id = ?", sourceID).Count(&conversionCount).Error)
 	assert.Equal(t, int64(1), conversionCount)

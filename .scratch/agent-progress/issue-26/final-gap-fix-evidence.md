@@ -10,11 +10,12 @@
 
 ## Finding A：前端 quote identity
 
-- RED 命令：待定位现有 conversion card 测试后记录。
-- RED 结果：待运行。
-- 根因：待 RED 后确认，不先凭源码猜测。
+- RED 命令：`cd web/default && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`。
+- 环境准备：子工作树初始缺少 `node_modules`，先运行 `bun install --frozen-lockfile`；锁文件未改变。依赖安装完成后同一命令进入行为断言。
+- RED 结果：`15 pass / 1 fail`。最终确认前刷新返回 `quote_id=quote-final-refresh`，实际 confirm payload 只有 `subscription_id=7001` 与 `idempotency_key=conversion-client-key`；期望的服务端 `quote_id` 缺失。
+- 根因：前端 `SubscriptionConversionQuote` 与 `SubscriptionConversionConfirmRequest` 未声明服务端 identity 字符串，`handleConfirm` 虽使用最终刷新结果，却未把 `latest.quote_id` 传给 confirm mutation。
 - GREEN：待实现。
-- 提交：待创建。
+- RED 提交：待创建。
 
 ## Finding B：稳定错误 code 与六语言
 

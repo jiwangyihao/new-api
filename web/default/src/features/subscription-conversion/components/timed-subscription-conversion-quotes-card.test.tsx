@@ -284,9 +284,27 @@ function runCapturedInterval(delay: number) {
 }
 
 describe('timed subscription conversion quotes', () => {
-  test('refreshes before confirmation and submits only source identity plus a client idempotency key', async () => {
-    const view = await renderQuotesCard()
+  test('submits the server quote identity from the final pre-confirmation refresh', async () => {
+    const previewQuote = {
+      ...makeQuote(),
+      quote_id: 'quote-preview',
+      created_at: '1800000000',
+      expires_at: '1800000300',
+      facts_fingerprint: 'fingerprint-preview',
+    } as SubscriptionConversionQuote
+    const view = await renderQuotesCard(makeQuoteList([previewQuote]))
     const dialog = await openConversionPreview(view)
+    view.setResponse(
+      makeQuoteList([
+        {
+          ...previewQuote,
+          quote_id: 'quote-final-refresh',
+          created_at: '1800000001',
+          expires_at: '1800000301',
+          facts_fingerprint: 'fingerprint-final-refresh',
+        } as SubscriptionConversionQuote,
+      ])
+    )
 
     fireEvent.click(
       within(dialog).getByRole('button', { name: 'Submit conversion' })
@@ -296,6 +314,7 @@ describe('timed subscription conversion quotes', () => {
     await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
     assert.deepEqual(view.getConfirmRequests()[0], {
       subscription_id: '7001',
+      quote_id: 'quote-final-refresh',
       idempotency_key: 'conversion-client-key',
     })
     const result = await waitFor(() =>

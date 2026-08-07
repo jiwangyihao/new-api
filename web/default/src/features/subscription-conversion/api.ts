@@ -24,6 +24,15 @@ import type {
   SubscriptionConversionQuoteList,
   SubscriptionConversionQuoteResponse,
 } from './types'
+export class SubscriptionConversionRequestError extends Error {
+  readonly code?: string
+
+  constructor(code?: string) {
+    super('Subscription conversion request failed')
+    this.name = 'SubscriptionConversionRequestError'
+    this.code = code
+  }
+}
 
 export async function getSubscriptionConversionQuotes(): Promise<SubscriptionConversionQuoteList> {
   const response = await api.get<SubscriptionConversionQuoteResponse>(
@@ -44,7 +53,7 @@ export async function confirmSubscriptionConversion(
     request
   )
   if (!response.data.success || !response.data.data) {
-    throw new Error(response.data.message || 'Unable to convert subscription')
+    throw new SubscriptionConversionRequestError(response.data.code)
   }
   return response.data.data
 }

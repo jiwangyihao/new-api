@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ApiResponse } from '@/features/subscriptions/types'
+
 
 export type ConversionQuoteCategory =
   | 'convertible'
@@ -148,11 +148,26 @@ export interface SubscriptionConversionQuoteList {
   conversions: SubscriptionConversionHistory[]
 }
 
+export interface SubscriptionConversionSuccessResponse<T> {
+  success: true
+  data: T
+  message?: string
+}
+
+export interface SubscriptionConversionErrorResponse {
+  success: false
+  code?: string
+  message?: string
+  data?: never
+}
+
 export type SubscriptionConversionQuoteResponse =
-  ApiResponse<SubscriptionConversionQuoteList>
+  | SubscriptionConversionSuccessResponse<SubscriptionConversionQuoteList>
+  | SubscriptionConversionErrorResponse
 
 export type SubscriptionConversionConfirmResponse =
-  ApiResponse<SubscriptionConversionConfirmResult>
+  | SubscriptionConversionSuccessResponse<SubscriptionConversionConfirmResult>
+  | SubscriptionConversionErrorResponse
 
 export interface LiveSubscriptionConversionQuote {
   sourceSubscriptionId: string

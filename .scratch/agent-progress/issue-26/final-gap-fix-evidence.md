@@ -17,15 +17,16 @@
 - 根因：前端 `SubscriptionConversionQuote` 与 `SubscriptionConversionConfirmRequest` 未声明服务端 identity 字符串；`handleConfirm` 未传 `latest.quote_id`，也未在最终刷新发现重新报价时停下要求用户再次确认。
 - GREEN：报价 DTO 精确保留 `quote_id`、`created_at`、`expires_at`、`facts_fingerprint`；confirm request 必须携 `quote_id`。最终刷新 identity/fingerprint 未变时提交 `latest.quote_id`；变化时只刷新预览并显示再次确认提示，confirm 请求数为 0。受控失败对同一 quote/fingerprint 复用 key，重新报价后第二次显式确认轮换 key，成功后清除该 source 的 attempt。
 - GREEN 命令：`cd web/default && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`；结果 `18 pass / 0 fail`。
-- RED 提交：`e984c1eb7 test(subscription): 固化前端报价身份失败合同`、`e10d4bbd8 test(subscription): 拒绝自动确认刷新报价`；GREEN 提交待创建。
+- RED 提交：`e984c1eb7 test(subscription): 固化前端报价身份失败合同`、`e10d4bbd8 test(subscription): 拒绝自动确认刷新报价`；GREEN 提交：`27c3552cb fix(subscription): 提交服务端转换报价身份`。
 
 ## Finding B：稳定错误 code 与六语言
 
-- RED 命令：待 Finding A GREEN 后按垂直切片记录。
-- RED 结果：待运行。
-- 根因：待 RED 后确认。
-- GREEN：待实现。
-- 提交：待创建。
+- RED 命令：`cd web/default && bun test src/features/subscription-conversion/api.test.ts`。
+- RED 结果：`0 pass / 1 fail`，模块缺少 `SubscriptionConversionRequestError`；既有 adapter 把 `{success:false, code, message}` 直接包装为普通 `Error(message)`，稳定 code 丢失且自由文本成为 UI 合同。
+- 根因：conversion feature 没有 typed request error，响应类型也未声明错误 `code`。
+- 第一条 GREEN：建立 feature 内最小 `SubscriptionConversionRequestError` 与成功/错误响应 union；adapter 只保留 `code`，不暴露服务端 message。`bun test` API + component 两文件结果 `19 pass / 0 fail`。
+- 后续 RED：已知 conversion/FX code 的本地化、unknown fallback 与 stale 再确认行为待补。
+- 提交：typed adapter RED/GREEN 待创建。
 
 ## Finding C：轮询 quote 写放大
 

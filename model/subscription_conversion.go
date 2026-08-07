@@ -391,18 +391,179 @@ func validateSubscriptionConversionReplayFactsTx(tx *gorm.DB, conversion *Subscr
 	if conversion.ValuationRuleVersion == 0 {
 		return nil
 	}
+	if conversion.ValuationRuleVersion != CreditValuationRuleVersion || conversion.ParameterFingerprint == "" {
+		return ErrConversionIdempotencyConflict
+	}
+
+	var source UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND user_id = ?", conversion.SourceSubscriptionId, conversion.UserId).
+		First(&source).Error; err != nil {
+		return ErrConversionIdempotencyConflict
+	}
+	if source.PlanId != conversion.SourcePlanId ||
+		source.Status != SubscriptionStatusConverted ||
+		source.ConversionId != conversion.Id ||
+		source.ConvertedToSubscriptionId != conversion.TargetSubscriptionId ||
+		source.TokenLimit != conversion.SourceTokenLimit ||
+		source.TokenUsed != conversion.SourceTokenUsed ||
+		source.StartTime != conversion.SourceStartTime ||
+		source.EndTime != conversion.SourceEndTime {
+		return ErrConversionIdempotencyConflict
+	}
+
 	var sourcePlan SubscriptionPlan
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", conversion.SourcePlanId).First(&sourcePlan).Error; err != nil {
 		return ErrConversionIdempotencyConflict
 	}
-	if sourcePlan.PriceAmountMicros == nil || *sourcePlan.PriceAmountMicros != conversion.ValuationSourcePriceMicros {
+	if sourcePlan.PriceAmountMicros == nil ||
+		*sourcePlan.PriceAmountMicros != conversion.ValuationSourcePriceMicros ||
+		sourcePlan.DurationUnit != conversion.SourceDurationUnit ||
+		sourcePlan.DurationValue != conversion.SourceDurationValue ||
+		sourcePlan.CustomSeconds != conversion.SourceCustomSeconds ||
+		NormalizeResetPeriod(sourcePlan.QuotaResetPeriod) != conversion.SourceQuotaResetPeriod ||
+		sourcePlan.QuotaResetCustomSeconds != conversion.SourceQuotaResetCustomSeconds {
 		return ErrConversionIdempotencyConflict
 	}
 	sourceCurrency, err := NormalizeCreditValuationCurrency(sourcePlan.Currency)
 	if err != nil || sourceCurrency != conversion.FxSourceCurrency {
 		return ErrConversionIdempotencyConflict
 	}
-	if conversion.ValuationCreditBasis != conversion.CreditBasis || conversion.GrossCredit <= 0 {
+
+	creditBasis := sourcePlan.MonthlyTokenLimit
+	creditBasisSource := ConversionCreditBasisCurrentPlan
+	if source.LastGrantCreditSnapshot != nil {
+		creditBasis = *source.LastGrantCreditSnapshot
+		creditBasisSource = ConversionCreditBasisGrantSnapshot
+	}
+	currentRemaining, ok := checkedNonNegativeDifference(source.TokenLimit, source.TokenUsed)
+	if !ok {
+		return ErrConversionIdempotencyConflict
+	}
+	remainingSeconds, ok := checkedNonNegativeDifference(source.EndTime, conversion.DatabaseNow)
+	if !ok {
+		return ErrConversionIdempotencyConflict
+	}
+	full31DayBlocks := remainingSeconds / TimedSubscriptionConversionBlockSeconds
+	blockCredit, ok := checkedMulNonNegativeInt64(full31DayBlocks, creditBasis)
+	if !ok {
+		return ErrConversionIdempotencyConflict
+	}
+	grossCredit, ok := checkedAddInt64(blockCredit, currentRemaining)
+	if !ok || grossCredit <= 0 ||
+		creditBasis != conversion.CreditBasis ||
+		creditBasis != conversion.ValuationCreditBasis ||
+		creditBasisSource != conversion.CreditBasisSource ||
+		currentRemaining != conversion.CurrentRemainingCredit ||
+		remainingSeconds != conversion.RemainingSeconds ||
+		full31DayBlocks != conversion.Full31DayBlocks ||
+		grossCredit != conversion.GrossCredit {
+		return ErrConversionIdempotencyConflict
+	}
+
+	var target UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("id = ? AND user_id = ?", conversion.TargetSubscriptionId, conversion.UserId).
+		First(&target).Error; err != nil {
+		return ErrConversionIdempotencyConflict
+	}
+	if target.PlanId != conversion.TargetPlanId || target.EntitlementType != SubscriptionEntitlementCreditBalance {
+		return ErrConversionIdempotencyConflict
+	}
+
+	var ledger CreditBalanceLedger
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", conversion.LedgerId).First(&ledger).Error; err != nil {
+		return ErrConversionIdempotencyConflict
+	}
+	if ledger.UserId != conversion.UserId ||
+		ledger.UserSubscriptionId != conversion.TargetSubscriptionId ||
+		ledger.SourceType != CreditBalanceLedgerSourceSubscriptionConversion ||
+		ledger.SourceId != conversion.SourceSubscriptionId ||
+		ledger.Type != CreditBalanceLedgerTypeSubscriptionConversion ||
+		ledger.SourcePlanId != conversion.SourcePlanId ||
+		ledger.TargetPlanId != conversion.TargetPlanId ||
+		ledger.SourceTokenLimit != conversion.SourceTokenLimit ||
+		ledger.SourceTokenUsed != conversion.SourceTokenUsed ||
+		ledger.SourceStatus != conversion.SourceStatus ||
+		ledger.SourceStartTime != conversion.SourceStartTime ||
+		ledger.SourceEndTime != conversion.SourceEndTime ||
+		ledger.Full31DayBlocks != conversion.Full31DayBlocks ||
+		ledger.CurrentRemainingCredit != conversion.CurrentRemainingCredit ||
+		ledger.CreditBasisSource != conversion.CreditBasisSource ||
+		ledger.SourceDurationUnit != conversion.SourceDurationUnit ||
+		ledger.SourceDurationValue != conversion.SourceDurationValue ||
+		ledger.SourceCustomSeconds != conversion.SourceCustomSeconds ||
+		ledger.SourceQuotaResetPeriod != conversion.SourceQuotaResetPeriod ||
+		ledger.SourceQuotaResetCustomSeconds != conversion.SourceQuotaResetCustomSeconds ||
+		ledger.GrossCredit != conversion.GrossCredit ||
+		ledger.DebtOffset != conversion.DebtOffset ||
+		ledger.NetGrantedCredit != conversion.NetAvailableCredit ||
+		ledger.ValuationSourcePriceMicros != conversion.ValuationSourcePriceMicros ||
+		ledger.ValuationCreditBasis != conversion.ValuationCreditBasis ||
+		ledger.ValuationUnitValueNumeratorMicros != conversion.ValuationUnitValueNumeratorMicros ||
+		ledger.ValuationUnitValueDenominator != conversion.ValuationUnitValueDenominator ||
+		ledger.ValuationCurrency != conversion.ValuationCurrency ||
+		ledger.ValuationGrossCostMicros != conversion.ValuationGrossCostMicros ||
+		ledger.ValuationNetCostMicros != conversion.ValuationNetCostMicros ||
+		ledger.ValuationConfidence != conversion.ValuationConfidence ||
+		ledger.ValuationRuleVersion != conversion.ValuationRuleVersion ||
+		ledger.FxSourceCurrency != conversion.FxSourceCurrency ||
+		ledger.FxRateNumerator != conversion.FxRateNumerator ||
+		ledger.FxRateDenominator != conversion.FxRateDenominator ||
+		ledger.FxCapturedAt != conversion.FxCapturedAt ||
+		ledger.ParameterFingerprint != conversion.ParameterFingerprint {
+		return ErrConversionIdempotencyConflict
+	}
+	unitValueNumerator, unitValueDenominator, err := creditValuationUnitValueRatio(
+		*sourcePlan.PriceAmountMicros,
+		creditBasis,
+		conversion.FxRateNumerator,
+		conversion.FxRateDenominator,
+	)
+	if err != nil ||
+		unitValueNumerator != conversion.ValuationUnitValueNumeratorMicros ||
+		unitValueDenominator != conversion.ValuationUnitValueDenominator {
+		return ErrConversionIdempotencyConflict
+	}
+
+	fingerprint, err := creditBalanceConversionParameterFingerprint(CreditBalanceGrantRequest{
+		UserId:       conversion.UserId,
+		GrossCredit:  grossCredit,
+		SourceId:     conversion.SourceSubscriptionId,
+		TargetPlanId: conversion.TargetPlanId,
+		ValuationSource: &CreditValuationSourceSnapshot{
+			SourcePriceMicros: *sourcePlan.PriceAmountMicros,
+			SourcePlanCredit:  creditBasis,
+			GrossCredit:       grossCredit,
+		},
+		ConversionSource: &CreditBalanceConversionSourceFacts{
+			ConversionIdempotencyKey: conversion.IdempotencyKey,
+			SourcePlanId:             conversion.SourcePlanId,
+			SourceTokenLimit:         source.TokenLimit,
+			SourceTokenUsed:          source.TokenUsed,
+			SourceStatus:             conversion.SourceStatus,
+			SourceStartTime:          source.StartTime,
+			SourceEndTime:            source.EndTime,
+			Full31DayBlocks:          full31DayBlocks,
+			CurrentRemainingCredit:   currentRemaining,
+			CreditBasisSource:        creditBasisSource,
+			DurationUnit:             sourcePlan.DurationUnit,
+			DurationValue:            sourcePlan.DurationValue,
+			CustomSeconds:            sourcePlan.CustomSeconds,
+			QuotaResetPeriod:         sourcePlan.QuotaResetPeriod,
+			QuotaResetCustomSeconds:  sourcePlan.QuotaResetCustomSeconds,
+		},
+	}, creditValuationIngress{
+		currency:                 conversion.ValuationCurrency,
+		ruleVersion:              conversion.ValuationRuleVersion,
+		fxSourceCurrency:         conversion.FxSourceCurrency,
+		fxRateNumerator:          conversion.FxRateNumerator,
+		fxRateDenominator:        conversion.FxRateDenominator,
+		fxCapturedAt:             conversion.FxCapturedAt,
+		unitValueNumeratorMicros: unitValueNumerator,
+		unitValueDenominator:     unitValueDenominator,
+	})
+	if err != nil || fingerprint != conversion.ParameterFingerprint {
 		return ErrConversionIdempotencyConflict
 	}
 	return nil

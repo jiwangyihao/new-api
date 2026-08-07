@@ -83,39 +83,52 @@ type TimedSubscriptionConversionQuoteReason struct {
 }
 
 type TimedSubscriptionConversionQuote struct {
-	SourceSubscriptionId     int                                      `json:"source_subscription_id"`
-	PlanId                   int                                      `json:"plan_id"`
-	PlanTitle                string                                   `json:"plan_title"`
-	EntitlementType          string                                   `json:"entitlement_type"`
-	GrantSource              string                                   `json:"grant_source"`
-	Status                   string                                   `json:"status"`
-	Category                 string                                   `json:"category"`
-	DatabaseNow              int64                                    `json:"database_now"`
-	StartTime                int64                                    `json:"start_time"`
-	EndTime                  int64                                    `json:"end_time"`
-	RemainingSeconds         int64                                    `json:"remaining_seconds"`
-	Full31DayBlocks          int64                                    `json:"full_31_day_blocks"`
-	CreditBasis              int64                                    `json:"credit_basis"`
-	CreditBasisSource        string                                   `json:"credit_basis_source"`
-	CurrentRemainingCredit   int64                                    `json:"current_remaining_credit"`
-	GrossCredit              int64                                    `json:"gross_credit"`
-	CurrentDebt              int64                                    `json:"current_debt"`
-	EstimatedDebtOffset      int64                                    `json:"estimated_debt_offset"`
-	NetAvailableCredit       int64                                    `json:"net_available_credit"`
-	LastGrantedAt            int64                                    `json:"last_granted_at"`
-	LastGrantTimeSource      string                                   `json:"last_grant_time_source"`
-	LastGrantSource          string                                   `json:"last_grant_source"`
-	CooldownStatus           string                                   `json:"cooldown_status"`
-	CooldownRemainingSeconds int64                                    `json:"cooldown_remaining_seconds"`
-	GraceStatus              string                                   `json:"grace_status"`
-	GraceRemainingSeconds    int64                                    `json:"grace_remaining_seconds"`
-	Expired                  bool                                     `json:"expired"`
-	WithinGrace              bool                                     `json:"within_grace"`
-	Eligible                 bool                                     `json:"eligible"`
-	CanConfirm               bool                                     `json:"can_confirm"`
-	ReasonCodes              []string                                 `json:"reason_codes"`
-	Reasons                  []TimedSubscriptionConversionQuoteReason `json:"reasons"`
-	CalculationErrorCode     string                                   `json:"calculation_error_code,omitempty"`
+	SourceSubscriptionId              int                                      `json:"source_subscription_id"`
+	PlanId                            int                                      `json:"plan_id"`
+	PlanTitle                         string                                   `json:"plan_title"`
+	EntitlementType                   string                                   `json:"entitlement_type"`
+	GrantSource                       string                                   `json:"grant_source"`
+	Status                            string                                   `json:"status"`
+	Category                          string                                   `json:"category"`
+	DatabaseNow                       int64                                    `json:"database_now"`
+	StartTime                         int64                                    `json:"start_time"`
+	EndTime                           int64                                    `json:"end_time"`
+	RemainingSeconds                  int64                                    `json:"remaining_seconds"`
+	Full31DayBlocks                   int64                                    `json:"full_31_day_blocks"`
+	CreditBasis                       int64                                    `json:"credit_basis"`
+	CreditBasisSource                 string                                   `json:"credit_basis_source"`
+	CurrentRemainingCredit            int64                                    `json:"current_remaining_credit"`
+	GrossCredit                       int64                                    `json:"gross_credit"`
+	CurrentDebt                       int64                                    `json:"current_debt"`
+	EstimatedDebtOffset               int64                                    `json:"estimated_debt_offset"`
+	NetAvailableCredit                int64                                    `json:"net_available_credit"`
+	LastGrantedAt                     int64                                    `json:"last_granted_at"`
+	LastGrantTimeSource               string                                   `json:"last_grant_time_source"`
+	LastGrantSource                   string                                   `json:"last_grant_source"`
+	CooldownStatus                    string                                   `json:"cooldown_status"`
+	CooldownRemainingSeconds          int64                                    `json:"cooldown_remaining_seconds"`
+	GraceStatus                       string                                   `json:"grace_status"`
+	GraceRemainingSeconds             int64                                    `json:"grace_remaining_seconds"`
+	Expired                           bool                                     `json:"expired"`
+	WithinGrace                       bool                                     `json:"within_grace"`
+	Eligible                          bool                                     `json:"eligible"`
+	CanConfirm                        bool                                     `json:"can_confirm"`
+	ReasonCodes                       []string                                 `json:"reason_codes"`
+	Reasons                           []TimedSubscriptionConversionQuoteReason `json:"reasons"`
+	CalculationErrorCode              string                                   `json:"calculation_error_code,omitempty"`
+	ValuationSourcePriceMicros        int64                                    `json:"valuation_source_price_micros"`
+	ValuationSourceCurrency           string                                   `json:"valuation_source_currency"`
+	ValuationCurrency                 string                                   `json:"valuation_currency"`
+	ValuationCreditBasis              int64                                    `json:"valuation_credit_basis"`
+	ValuationGrossCostMicros          int64                                    `json:"valuation_gross_cost_micros"`
+	ValuationNetCostMicros            int64                                    `json:"valuation_net_cost_micros"`
+	ValuationUnitValueNumeratorMicros int64                                    `json:"valuation_unit_value_numerator_micros"`
+	ValuationUnitValueDenominator     int64                                    `json:"valuation_unit_value_denominator"`
+	ValuationRuleVersion              int                                      `json:"valuation_rule_version"`
+	FxRateNumerator                   int64                                    `json:"fx_rate_numerator"`
+	FxRateDenominator                 int64                                    `json:"fx_rate_denominator"`
+	FxCapturedAt                      int64                                    `json:"fx_captured_at"`
+	FxDirection                       string                                   `json:"fx_direction"`
 }
 
 type TimedSubscriptionConversionQuoteList struct {
@@ -402,6 +415,11 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 			quote.NetAvailableCredit = net
 		}
 	}
+	if quote.CalculationErrorCode == "" && quote.GrossCredit > 0 && planFound && creditPlan != nil {
+		if err := populateTimedSubscriptionConversionQuoteValuationTx(tx, quote, &plan, creditPlan, dbNow); err != nil {
+			quote.setCalculationError(conversionQuoteValuationErrorCode(err))
+		}
+	}
 
 	if quote.GrossCredit <= 0 && quote.CalculationErrorCode == "" {
 		quote.addReason(ConversionQuoteReasonGrossNotPositive, map[string]any{"gross_credit": quote.GrossCredit})
@@ -416,6 +434,90 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		quote.Category = ConversionQuoteCategoryExcluded
 	}
 	return quote, nil
+}
+
+func populateTimedSubscriptionConversionQuoteValuationTx(tx *gorm.DB, quote *TimedSubscriptionConversionQuote, sourcePlan *SubscriptionPlan, creditPlan *SubscriptionPlan, dbNow int64) error {
+	ready, err := CreditValuationRuntimeReadyTx(tx)
+	if err != nil || !ready {
+		return err
+	}
+	if quote == nil || sourcePlan == nil || creditPlan == nil || sourcePlan.PriceAmountMicros == nil {
+		return ErrSubscriptionPlanPriceRequired
+	}
+	if *sourcePlan.PriceAmountMicros <= 0 || quote.CreditBasis <= 0 || quote.GrossCredit <= 0 {
+		return ErrCreditValuationSourceInvalid
+	}
+	sourceCurrency, err := NormalizeCreditValuationCurrency(sourcePlan.Currency)
+	if err != nil {
+		return err
+	}
+	if creditPlan.ValuationCurrency == nil {
+		return ErrCreditValuationCurrencyRequired
+	}
+	valuationCurrency, err := NormalizeCreditValuationCurrency(*creditPlan.ValuationCurrency)
+	if err != nil {
+		return err
+	}
+	fxSnapshot, err := CurrentCreditFXRateSnapshot(sourceCurrency, valuationCurrency, dbNow)
+	if err != nil {
+		return err
+	}
+	ingress, err := newForwardCreditValuationIngress(CreditValuationSourceSnapshot{
+		SourcePriceMicros: *sourcePlan.PriceAmountMicros,
+		SourcePlanCredit:  quote.CreditBasis,
+		GrossCredit:       quote.GrossCredit,
+		SourceCurrency:    sourceCurrency,
+		ValuationCurrency: valuationCurrency,
+		RuleVersion:       CreditValuationRuleVersion,
+		FXRateSnapshot:    &fxSnapshot,
+	})
+	if err != nil {
+		return err
+	}
+	netCostMicros, err := prorateFloor(ingress.grossCostMicros, quote.NetAvailableCredit, quote.GrossCredit)
+	if err != nil {
+		return err
+	}
+	quote.ValuationSourcePriceMicros = *sourcePlan.PriceAmountMicros
+	quote.ValuationSourceCurrency = sourceCurrency
+	quote.ValuationCurrency = valuationCurrency
+	quote.ValuationCreditBasis = quote.CreditBasis
+	quote.ValuationGrossCostMicros = ingress.grossCostMicros
+	quote.ValuationNetCostMicros = netCostMicros
+	quote.ValuationUnitValueNumeratorMicros = ingress.unitValueNumeratorMicros
+	quote.ValuationUnitValueDenominator = ingress.unitValueDenominator
+	quote.ValuationRuleVersion = ingress.ruleVersion
+	quote.FxRateNumerator = ingress.fxRateNumerator
+	quote.FxRateDenominator = ingress.fxRateDenominator
+	quote.FxCapturedAt = ingress.fxCapturedAt
+	quote.FxDirection = creditFXDirection(sourceCurrency, valuationCurrency)
+	return nil
+}
+
+func conversionQuoteValuationErrorCode(err error) string {
+	if err == nil {
+		return ""
+	}
+	for _, stable := range []error{
+		ErrSubscriptionPlanPriceRequired,
+		ErrCreditValuationSourceInvalid,
+		ErrCreditValuationCurrencyRequired,
+		ErrCreditValuationUnsupportedCurrency,
+		ErrCreditValuationOverflow,
+		ErrCreditFXRateMissing,
+		ErrCreditFXRateEmpty,
+		ErrCreditFXInvalidDecimal,
+		ErrCreditFXPrecisionExceeded,
+		ErrCreditFXNonPositive,
+		ErrCreditFXUnsupportedCurrency,
+		ErrCreditFXDirectionMismatch,
+		ErrCreditFXOverflow,
+	} {
+		if errors.Is(err, stable) {
+			return stable.Error()
+		}
+	}
+	return ConversionQuoteCalculationInvalidData
 }
 
 func (quote *TimedSubscriptionConversionQuote) addReason(code string, data map[string]any) {

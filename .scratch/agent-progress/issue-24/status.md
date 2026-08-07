@@ -27,6 +27,7 @@ IN_PROGRESS：复评确认唯一 blocker 为 H2；严格只在管理员 increase
 - 已保留跨币种最小可执行合同：CNY 来源、USD 估值必须消费冻结的有理数 FX 快照并返回结构化 FX；当前因 #22 仅支持同币种而真实 RED，未在 #24 实现 parser/provider/Option。
 - H2 兑换跨币种已 GREEN：CNY→USD、USD→CNY 均在已锁定兑换事务内消费 `CurrentCreditFXRateSnapshot`，冻结 FX 进入 fulfillment、完整指纹、结构化 ledger 与重放响应；Option 变化后重放仍观察首次快照。
 - 缺失 FX 返回稳定 `credit_valuation_invalid_fx` 且整笔无写入；跨币种 ledger 故障证明兑换状态、fulfillment FX、Credit、估值状态与 ledger 同事务回滚。
+- redemption H2 安全提交：`49b1ece48`（`feat(subscription): 冻结兑换跨币种估值快照`）；提交后定向复验再次 PASS，`gofmt`、`git diff --check` 通过且工作树 clean。
 
 ## 下一步
 

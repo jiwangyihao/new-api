@@ -380,6 +380,18 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 	if tx == nil || route == nil || route.Id <= 0 || strings.TrimSpace(route.RequestId) == "" || targetCredit < 0 {
 		return ErrCreditValuationTargetConflict
 	}
+	expectedRoute := *route
+	var record SubscriptionPreConsumeRecord
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", expectedRoute.RequestId).First(&record).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrCreditValuationRequestNotFound
+		}
+		return err
+	}
+	if record.Id != expectedRoute.Id || record.RequestId != expectedRoute.RequestId || record.UserId != expectedRoute.UserId || record.UserSubscriptionId != expectedRoute.UserSubscriptionId || record.ValuationSubscriptionId != expectedRoute.ValuationSubscriptionId {
+		return ErrCreditValuationMappingConflict
+	}
+	*route = record
 	if route.ValuationSubscriptionId <= 0 || route.ValuationRuleVersion != CreditValuationRuleVersion {
 		return ErrCreditValuationStateMismatch
 	}
@@ -389,13 +401,6 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 
 	delta := targetCredit - route.AppliedCredit
 	if delta == 0 {
-		var record SubscriptionPreConsumeRecord
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
-			return err
-		}
-		if record.RequestId != route.RequestId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.AppliedCredit != targetCredit {
-			return ErrCreditValuationTargetConflict
-		}
 		if record.FinalizedAt > 0 {
 			if final && ((targetCredit == 0 && record.Status == "refunded") || (targetCredit > 0 && record.Status == "settled")) {
 				return nil
@@ -448,13 +453,6 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 		return err
 	}
 
-	var record SubscriptionPreConsumeRecord
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
-		return err
-	}
-	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.AppliedCredit != route.AppliedCredit || record.FinalizedAt > 0 {
-		return ErrCreditValuationTargetConflict
-	}
 	newDeductedAvailable, ok := checkedAddInt64(record.DeductedAvailableCredit, deductedAvailable)
 	if !ok {
 		return ErrCreditValuationOverflow
@@ -521,13 +519,7 @@ func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecor
 }
 
 func restoreCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
-	var record SubscriptionPreConsumeRecord
-	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", route.Id).First(&record).Error; err != nil {
-		return err
-	}
-	if record.RequestId != route.RequestId || record.UserSubscriptionId != route.UserSubscriptionId || record.ValuationSubscriptionId != route.ValuationSubscriptionId || record.ValuationRuleVersion != CreditValuationRuleVersion {
-		return ErrCreditValuationTargetConflict
-	}
+	record := *route
 	if targetCredit < 0 || targetCredit >= record.AppliedCredit {
 		return ErrCreditValuationTargetConflict
 	}
@@ -891,13 +883,13 @@ func SettleUserSubscriptionRequestTarget(requestId string, originalSubscriptionI
 func settleUserSubscriptionRequestTargetDirect(requestId string, originalSubscriptionId int, targetCredit int64, final bool) error {
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var route SubscriptionPreConsumeRecord
-		if err := tx.Where("request_id = ?", requestId).First(&route).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).First(&route).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrCreditValuationRequestNotFound
 			}
 			return err
 		}
-		if route.UserSubscriptionId != originalSubscriptionId {
+		if route.RequestId != requestId || route.UserSubscriptionId != originalSubscriptionId {
 			return ErrCreditValuationMappingConflict
 		}
 		return SettleCreditRequestTargetTx(tx, &route, targetCredit, final)

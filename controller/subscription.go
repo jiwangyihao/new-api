@@ -1039,11 +1039,15 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreditBalanceAdjustmentRequest struct {
-	Operation      string `json:"operation"`
-	Amount         int64  `json:"amount"`
-	PlanId         int    `json:"plan_id"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Reason         string `json:"reason"`
+	Operation      string          `json:"operation"`
+	Amount         dto.StringValue `json:"amount"`
+	PlanId         int             `json:"plan_id"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Reason         string          `json:"reason"`
+}
+
+func (r AdminCreditBalanceAdjustmentRequest) amountInt64() (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(string(r.Amount)), 10, 64)
 }
 
 func AdminPreviewUserCreditBalance(c *gin.Context) {
@@ -1053,8 +1057,13 @@ func AdminPreviewUserCreditBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	amount, amountErr := req.amountInt64()
+	if amountErr != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
 	result, err := service.PreviewCreditBalanceAdjustment(service.CreditBalanceAdjustmentPreviewRequest{
-		UserId: userId, Operation: req.Operation, Amount: req.Amount, PlanId: req.PlanId,
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
 	})
 	if err != nil {
 		writeAdminCreditBalanceAdjustmentError(c, err)
@@ -1102,8 +1111,13 @@ func AdminAdjustUserCreditBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	amount, amountErr := req.amountInt64()
+	if amountErr != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
 	result, err := service.AdjustCreditBalance(service.CreditBalanceAdjustmentRequest{
-		UserId: userId, Operation: req.Operation, Amount: req.Amount, PlanId: req.PlanId,
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
 		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {

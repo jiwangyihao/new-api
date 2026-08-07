@@ -40,6 +40,8 @@ import type {
   SubscriptionOrderStatus,
   SubscriptionBillingStrategy,
   CreditBalanceAdjustmentRequest,
+  CreditBalanceAdjustmentPreviewRequest,
+  CreditBalanceAdjustmentPreviewResult,
   CreditBalanceAdjustmentResult,
   CreditBalanceLedgerEntry,
   CreditBalanceLedgerFilters,
@@ -166,13 +168,31 @@ export async function getAdminCreditBalanceLedger(
   return res.data
 }
 
+const creditBalanceAdjustmentRequestConfig = {
+  skipBusinessError: true,
+  skipErrorHandler: true,
+} as Record<string, unknown>
+
+export async function previewUserCreditBalanceAdjustment(
+  userId: number,
+  data: CreditBalanceAdjustmentPreviewRequest
+): Promise<ApiResponse<CreditBalanceAdjustmentPreviewResult>> {
+  const res = await api.post(
+    `/api/subscription/admin/users/${userId}/credit-balance/adjustments/preview`,
+    data,
+    creditBalanceAdjustmentRequestConfig
+  )
+  return res.data
+}
+
 export async function adjustUserCreditBalance(
   userId: number,
   data: CreditBalanceAdjustmentRequest
 ): Promise<ApiResponse<CreditBalanceAdjustmentResult>> {
   const res = await api.post(
     `/api/subscription/admin/users/${userId}/credit-balance/adjustments`,
-    data
+    data,
+    creditBalanceAdjustmentRequestConfig
   )
   return res.data
 }

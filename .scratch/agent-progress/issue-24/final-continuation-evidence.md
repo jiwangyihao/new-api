@@ -85,3 +85,20 @@
 - `go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult|RoutesExposeStableCodesAndReplayCommittedResult|ReplayUsesFrozenFactsAfterPlanChanges|PreviewRequiresReadyValuationMarker)$' -count=10` → package PASS。
 - `git diff --check` → 无输出。
 - 未运行 UI、i18n、browser、analytics 扩展或最终包级全量；这些明确交给新续作 Worker。
+
+
+## 管理员售后授予 UI、六语言与真实浏览器安全点
+
+- 开工核对：`git rev-parse HEAD` 为 `c4a056227ddd7d782163bf435765f076674da187`；本轮所有生产改动均建立在已交付 API 安全点之上，未修改 #26 FX parser/provider 或并行创建 API client/估值器。
+- `AdminCreditBalancePanel` 复用 `UserSubscriptionsDialog` 已有 `getAdminPlans()` 结果；increase 仅展示 enabled、timed、非 trial/invite-trial、精确正微单位价格、正 Credit 且 `unlimited_purchase_enabled=true` 的档位，全局零价 Credit 余额套餐未进入列表。
+- increase 要求档位、正整数 Credit 与非空原因；preview/commit 都保留原始十进制字符串。decrease 请求不携 `plan_id`。operation、plan、amount、reason 变化清空旧 preview 并换 key；失败保留 key，成功清空表单并换 key。
+- UI 只消费服务端稳定 `code`，覆盖 plan required/ineligible、unsupported currency、invalid FX、overflow、state missing/mismatch、migration not ready、idempotency mismatch 与安全通用回退；不解析服务端 `message`。
+- 组件定向测试已实际通过，覆盖：无合格档位不可提交；40 CNY / 1,000 Credit × 800 的权威 preview 显示 ¥32.00 与 `32,000,000 micros`；increase payload 含 `plan_id`；失败重试复用 key；amount/plan/operation/success 后换 key并清 preview；decrease 不含 `plan_id`；原始整数字符串不受显示格式污染。
+- `bun run typecheck`、`bun run i18n:sync`、`bun run build` 已实际通过；同步报告显示 en/zh/fr/ja/ru/vi 六语言 `missingCount=0`、`extrasCount=0`。报告中的既有 untranslated 计数不属于缺键或多余键，本轮新增 UI 文案均已提供六语言自然翻译。
+- Issue #24 model/controller/router 定向门禁及五条 adjustment route `-count=10` 已实际通过；`git diff --check` 无输出。
+- 真实现场：后端 `127.0.0.1:3024`、default 前端 `127.0.0.1:3025`、SQLite `.scratch/agent-progress/issue-24/vertical-e2e.db`，均为真实运行服务与真实 Chromium，不是 mock 或静态 HTML。
+- Chromium 对 `issue24user` 观察到 increase 档位列表只有 `40 CNY / 1,000 Credit`；提交 preview 的真实 payload 为 `{"operation":"increase","amount":"800","plan_id":2}`。
+- Chromium 权威 preview 实际显示：档位标价 ¥40.00、档位 Credit 1000、source/valuation currency CNY、gross/net Credit 800、gross/net ¥32.00（`32,000,000 micros`）、debt offset 0、FX `1/1 IDENTITY`、confidence exact、rule/state version `1/1`。
+- 首次计划作为“可控失败”的提交实际由服务端成功提交，因此没有冒充失败证据：网络捕获 payload 含 `plan_id=2`、原始 `amount="800"` 与 key `admin-credit-2-aef43c1d-49e2-40a4-8724-aa50ee024dbe`；SQLite 仅有一条 adjustment、ledger 与一份 800 Credit 余额。
+- 临时根目录 Cookie 文件 `.scratchagent-progressissue-24vertical-e2e.cookies` 已删除且不会进入提交。
+- 此安全点之后仍需完成：独立用户上的真实失败→同 key 成功重试、成功后新事实换 key、operation 清理、CNY↔USD 冻结展示、ledger 与五个运营分析接口及邀请/commission/paid-referral 零增长核对。

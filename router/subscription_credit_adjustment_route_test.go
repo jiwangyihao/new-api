@@ -68,15 +68,21 @@ func performSubscriptionOrderRecoveryPreviewRouteRequest(engine *gin.Engine, tok
 
 func TestAdminCreditAdjustmentRouteCreatesDebtThenIncreaseOffsetsIt(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
 	decrease := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":300,"idempotency_key":"admin-decrease-empty","reason":"manual correction"}`)
 	require.Equal(t, http.StatusOK, decrease.Code, decrease.Body.String())
 	assert.Contains(t, decrease.Body.String(), `"settlement_debt":300`)
 	var balance model.UserSubscription
 	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: balance.Id, UserId: userID, Currency: "CNY",
+		RuleVersion: model.CreditValuationRuleVersion, CreatedAt: now, UpdatedAt: now,
+	}).Error)
 	assert.Equal(t, int64(0), balance.TokenLimit)
 	assert.Equal(t, int64(300), balance.TokenUsed)
 
-	increase := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":500,"idempotency_key":"admin-increase-offset","reason":"approved correction"}`)
+	increase := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":500,"plan_id":%d,"idempotency_key":"admin-increase-offset","reason":"approved correction"}`, planID))
 	require.Equal(t, http.StatusOK, increase.Code, increase.Body.String())
 	assert.Contains(t, increase.Body.String(), `"debt_offset":300`)
 	assert.Contains(t, increase.Body.String(), `"available_credit":200`)
@@ -87,17 +93,17 @@ func TestAdminCreditAdjustmentRouteCreatesDebtThenIncreaseOffsetsIt(t *testing.T
 
 func TestAdminCreditAdjustmentRouteValidatesReasonBoundsAndIdempotency(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
-	missingReason := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":1,"idempotency_key":"missing-reason","reason":""}`)
+	missingReason := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":1,"idempotency_key":"missing-reason","reason":""}`)
 	assert.Contains(t, missingReason.Body.String(), `"success":false`)
-	zero := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"increase","amount":0,"idempotency_key":"zero","reason":"reason"}`)
+	zero := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":0,"idempotency_key":"zero","reason":"reason"}`)
 	assert.Contains(t, zero.Body.String(), `"success":false`)
 	negative := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":-1,"idempotency_key":"negative","reason":"reason"}`)
 	assert.Contains(t, negative.Body.String(), `"success":false`)
-	maxAllowed := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"max-allowed","reason":"boundary"}`, model.MaxCreditBalanceAdjustmentAmount))
+	maxAllowed := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"decrease","amount":%d,"idempotency_key":"max-allowed","reason":"boundary"}`, model.MaxCreditBalanceAdjustmentAmount))
 	assert.Contains(t, maxAllowed.Body.String(), `"success":true`)
-	overflow := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"too-large","reason":"overflow"}`, model.MaxCreditBalanceAdjustmentAmount+1))
+	overflow := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"decrease","amount":%d,"idempotency_key":"too-large","reason":"overflow"}`, model.MaxCreditBalanceAdjustmentAmount+1))
 	assert.Contains(t, overflow.Body.String(), `"success":false`)
-	maxInt := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"increase","amount":%d,"idempotency_key":"max-int","reason":"overflow"}`, int64(math.MaxInt64)))
+	maxInt := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(`{"operation":"decrease","amount":%d,"idempotency_key":"max-int","reason":"overflow"}`, int64(math.MaxInt64)))
 	assert.Contains(t, maxInt.Body.String(), `"success":false`)
 
 	first := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":25,"idempotency_key":"replay-key","reason":"same"}`)
@@ -110,12 +116,22 @@ func TestAdminCreditAdjustmentRouteValidatesReasonBoundsAndIdempotency(t *testin
 	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Where("idempotency_key = ?", "replay-key").Count(&adjustmentCount).Error)
 	assert.Equal(t, int64(1), adjustmentCount)
 }
+func TestAdminCreditAdjustmentRouteAcceptsExactStringAmount(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+
+	response := performCreditAdjustmentRouteRequest(engine, token, userID, `{"operation":"decrease","amount":"800","idempotency_key":"exact-string-amount","reason":"preserve UI integer text"}`)
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"amount":800`)
+	assert.Contains(t, response.Body.String(), `"success":true`)
+}
 
 func TestCreditBalanceAdjustmentIdempotencyKeyRejectsDifferentOperator(t *testing.T) {
 	_, _, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
 	request := model.CreditBalanceAdjustmentRequest{
 		UserId: userID, Operation: model.CreditBalanceAdjustmentIncrease, Amount: 25,
-		IdempotencyKey: "operator-bound-adjustment", OperatorUserId: 9961, Reason: "verified correction",
+		PlanId: planID, IdempotencyKey: "operator-bound-adjustment", OperatorUserId: 9961, Reason: "verified correction",
 	}
 	first, err := model.AdjustCreditBalance(request)
 	require.NoError(t, err)
@@ -124,7 +140,7 @@ func TestCreditBalanceAdjustmentIdempotencyKeyRejectsDifferentOperator(t *testin
 	request.OperatorUserId = 9971
 	second, err := model.AdjustCreditBalance(request)
 	require.Nil(t, second)
-	require.ErrorContains(t, err, "idempotency key parameter mismatch")
+	require.ErrorIs(t, err, model.ErrCreditValuationIdempotencyMismatch)
 
 	var adjustmentCount int64
 	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).

@@ -571,6 +571,7 @@ export function UserSubscriptionsDialog(props: Props) {
               {props.user?.id ? (
                 <AdminCreditBalancePanel
                   userId={props.user.id}
+                  plans={plans}
                   onSuccess={props.onSuccess}
                 />
               ) : null}

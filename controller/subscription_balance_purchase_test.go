@@ -508,7 +508,7 @@ func TestCreditBalanceGrantRejectsReplayWithMismatchedIdentity(t *testing.T) {
 		_, grantErr := model.GrantCreditBalanceTx(tx, request)
 		return grantErr
 	})
-	require.ErrorContains(t, err, "idempotency key mismatch")
+	require.ErrorIs(t, err, model.ErrCreditValuationIdempotencyMismatch)
 
 	request.IdempotencyKey = "credit-target-replay"
 	request.TargetPlanId++

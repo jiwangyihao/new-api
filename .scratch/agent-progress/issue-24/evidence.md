@@ -19,6 +19,7 @@
 - GREEN：`go test ./model -run 'TestRedemptionCreditBalance(CrossCurrencyRequiresFrozenFXSnapshot|SupportsUSDtoCNYFrozenFXSnapshot|RejectsInvalidFXAtomically)$' -count=1` → package PASS（约 14.82 秒）。覆盖 CNY→USD `10/73`、USD→CNY `73/10`、`captured_at`/direction、Option 变化冻结重放与缺失 FX 原子拒绝。
 - GREEN：`go test ./model -run 'TestRedemptionCreditBalance(CrossCurrencyRequiresFrozenFXSnapshot|SupportsUSDtoCNYFrozenFXSnapshot|RejectsInvalidFXAtomically|LedgerFailureRollsBackEverything)$' -count=1` → package PASS（约 21.88 秒）。跨币种 SQLite trigger 故障后兑换恢复 enabled，fulfillment 不残留 `credit_fx_rate_snapshot`，subscription/state/ledger/log 均为零。
 - `git diff -- model/credit_fx_rate.go model/credit_valuation.go` → 无输出，确认未修改 #26 parser/provider、Option 或 ingress 深模块。
+- 安全提交：`49b1ece48`（`feat(subscription): 冻结兑换跨币种估值快照`）。提交后再次运行同一 redemption H2 四用例分组 → package PASS（约 8.38 秒）；`gofmt -w model/credit_balance.go model/credit_positive_ingress_test.go model/redemption.go && git diff --check` 无输出，`git status --short` 无输出。
 
 ## 已核验实现事实
 

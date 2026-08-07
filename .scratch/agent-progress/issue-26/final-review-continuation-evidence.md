@@ -20,11 +20,11 @@
 - M1 model RED：现有资格漂移真实 SQLite 测试新增 `require.ErrorIs(t, err, ErrConversionIneligible)`；运行时编译失败 `undefined: ErrConversionIneligible`，证明领域 sentinel 缺失。
 - M1 controller RED：新增 table test，以 `%w` 包装 ineligible/stale sentinel 后要求稳定 code；运行时编译失败，证明两个导出 sentinel 均缺失。
 - M3 route/history RED：确认真实跨币种 conversion 后，仅把 committed conversion 的 unit-value 字段改为 `1234567/89`，再改当前 Option/Plan 并经真实 history route 读取。实际响应仍为从其他 operand 重算的 `4000000/73`，测试按预期失败。
-- GREEN：尚未运行。
-- 最后安全提交：`791103093`。
-- 当前未提交：三处最小 RED 测试与本状态/证据校准。
-- 阻塞：无。
-- 下一条命令：提交 RED 安全点；随后只修改 `model/errors.go`、`model/subscription_conversion.go`、`controller/subscription_conversion.go` 实现最小 GREEN。
+- GREEN 实现：`model/errors.go` 导出 `ErrConversionIneligible`/`ErrConversionQuoteStale`；model 资格拒绝以 `%w` 包装；controller 用 `errors.Is` 映射稳定 code；unit value 直读 committed conversion 字段且非法字段 fail closed 为空。
+- GREEN 单次：`go test ./model ./controller ./router -run '^(TestConversionRejectsPlanDisabledByIndependentTransactionAfterQuote|TestSubscriptionConversionErrorCodeUsesStableSentinels|TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics)$' -count=1`，3 packages ok。
+- GREEN 重复：同一命令 `-count=10`，3 packages ok。
+- 最近安全提交：`9ffade1ac`（RED）；当前未提交为三个最小 GREEN 实现文件与本状态/证据校准。
+- 阻塞：无；下一动作提交 M1/M3 clean 安全点。
 
 ## 未实测边界
 

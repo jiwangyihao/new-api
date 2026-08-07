@@ -133,7 +133,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 				result = &SubscriptionConversionResult{Conversion: existing, Replayed: true}
 				return nil
 			}
-			return errors.New("source subscription already converted")
+			return fmt.Errorf("%w: source subscription already converted", ErrConversionIdempotencyConflict)
 		}
 
 		var source UserSubscription
@@ -377,7 +377,7 @@ func guardSubscriptionConversionPlansTx(tx *gorm.DB, sourcePlanId int, targetPla
 		return sourceGuard.Error
 	}
 	if sourceGuard.RowsAffected != 1 {
-		return fmt.Errorf("subscription conversion rejected: %s", ConversionQuoteReasonPlanDisabled)
+		return fmt.Errorf("%w: %s", ErrConversionIneligible, ConversionQuoteReasonPlanDisabled)
 	}
 	targetGuard := tx.Model(&SubscriptionPlan{}).
 		Where("id = ? AND enabled = ? AND credit_balance_configured = ? AND credit_balance_conversion_enabled = ?", targetPlanId, true, true, true).
@@ -386,7 +386,7 @@ func guardSubscriptionConversionPlansTx(tx *gorm.DB, sourcePlanId int, targetPla
 		return targetGuard.Error
 	}
 	if targetGuard.RowsAffected != 1 {
-		return fmt.Errorf("subscription conversion rejected: %s", ConversionQuoteReasonGlobalDisabled)
+		return fmt.Errorf("%w: %s", ErrConversionIneligible, ConversionQuoteReasonGlobalDisabled)
 	}
 	return nil
 }
@@ -650,12 +650,12 @@ func applyTimedConversionInFlightRequestsTx(tx *gorm.DB, requests []timedConvers
 
 func subscriptionConversionRejection(quote *TimedSubscriptionConversionQuote) error {
 	if quote == nil {
-		return errors.New("subscription conversion rejected")
+		return ErrConversionIneligible
 	}
 	if quote.CalculationErrorCode != "" {
-		return fmt.Errorf("subscription conversion rejected: %s", quote.CalculationErrorCode)
+		return fmt.Errorf("%w: %s", ErrConversionIneligible, quote.CalculationErrorCode)
 	}
-	return fmt.Errorf("subscription conversion rejected: %s", strings.Join(quote.ReasonCodes, ","))
+	return fmt.Errorf("%w: %s", ErrConversionIneligible, strings.Join(quote.ReasonCodes, ","))
 }
 
 func findSubscriptionConversionByIdempotencyTx(tx *gorm.DB, userId int, idempotencyKey string) (*SubscriptionConversion, bool, error) {

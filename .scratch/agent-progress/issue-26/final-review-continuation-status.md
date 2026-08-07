@@ -1,15 +1,14 @@
 # Issue #26 最终复评续作状态
 
 - 冻结 HEAD：`44009213cb8e4a582de34f884deecd5a8d687b2c`。
-- 当前 phase：M1/M3 RED 已复现，待提交 RED 安全点。
-- 最近安全提交：`791103093`（三份 continuation 恢复文档）。
-- 未提交文件：`model/subscription_conversion_settlement_concurrency_test.go`、`controller/subscription_conversion_test.go`、`router/subscription_conversion_route_test.go` 与本状态/证据校准。
-- 已确认：工作树开工时 clean；Orca parent 严格为 `credit-operational-value-integration`；`b8598f4b7...` 与 H1 `3feb09115...` 均为祖先；父树 #24 H2 已存在。
-- RED 1：model/controller 定向测试按预期编译失败，分别缺少 `ErrConversionIneligible` 与 `ErrConversionQuoteStale`。
-- RED 2：真实 SQLite route/history 测试按预期失败；history 返回重算值 `4000000/73`，而 committed conversion 字段为 `1234567/89`。
-- GREEN：尚未运行。
+- 当前 phase：M1/M3 GREEN 已通过，待提交 clean 安全点。
+- 最近安全提交：`9ffade1ac`（M1/M3 RED 安全点）。
+- 未提交文件：`model/errors.go`、`model/subscription_conversion.go`、`controller/subscription_conversion.go` 与本状态/证据校准。
+- M1 GREEN：导出 ineligible/stale sentinel；资格拒绝路径用 `%w` 包装；controller 仅以 `errors.Is` 映射稳定 code，已删除文本前缀分支。
+- M3 GREEN：history/confirm 直接格式化 committed conversion numerator/denominator，已删除响应层 `math/big` 重算。
+- 验证：model/controller/router 三个定向合同单次 PASS、`-count=10` PASS；gofmt 与 `git diff --check` PASS。
 - 阻塞：无。
-- 下一动作：提交 M1/M3 RED 安全点，再最小实现 sentinel 包装、controller code 映射及 committed unit-value 直读。
+- 下一动作：提交 M1/M3 clean 安全点；按最新收敛指令不开始 M2 或前端扩展。
 
 ## 阶段边界
 

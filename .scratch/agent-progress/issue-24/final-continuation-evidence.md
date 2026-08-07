@@ -36,3 +36,14 @@
 - 当前尚未运行新的 API、analytics、frontend 或 browser 验收。
 - MySQL/PostgreSQL 实机验收不属于 #24，完整矩阵归 #27；本轮只做跨库静态兼容与真实 SQLite。
 - 所有后续命令、关键请求/响应、RED/GREEN、浏览器观察、提交 SHA 与清理结果将持续追加到本文件。
+
+## 管理员 preview/commit 真实 HTTP RED
+
+- 命令：`go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult)$' -count=1 -v`。
+- 结果：FAIL，`github.com/QuantumNous/new-api/router`，约 5.59 秒；两条测试均通过真实 Gin router、AdminAuth 与内存 SQLite。
+- preview 精确失败：`POST /api/subscription/admin/users/9962/credit-balance/adjustments/preview` 得 HTTP `404`，而合同要求 HTTP `200` 与 `success:true`；证明 preview 路由/controller/service 尚不存在。
+- commit 精确失败：`POST /api/subscription/admin/users/9962/credit-balance/adjustments` 得 HTTP `200`、响应 `{"message":"credit_valuation_plan_required","success":false}`；请求已包含 `plan_id=9965`，证明现有 controller DTO/转发丢失 `plan_id`。
+- commit 零写入：断言 `plan_id=9965` 的 `CreditBalanceAdjustment` 与 `CreditBalanceLedger` 均为 `0`；失败未留下半提交状态。
+- preview 无写入合同尚未到达 handler，因 404 先失败；测试保留 adjustment/ledger/subscription 均为 0 的断言，供 GREEN 证明。
+- 夹具事实：9965 是 `40 CNY / 1,000 Credit` 的 source plan；9963 是全局 Credit 余额 plan，`valuation_currency=CNY` 正确属于 9963。不得把估值币种错误写入 source plan。
+- 本 RED 未修改任何生产代码、#26 parser/provider、migration 生命周期、analytics、UI、i18n 或 browser。

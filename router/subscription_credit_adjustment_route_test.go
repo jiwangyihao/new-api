@@ -270,3 +270,81 @@ func TestCreditBalanceLedgerRoutesApplyAuthenticatedSourceTypeAndTimeFilters(t *
 	require.Len(t, userResponse.Data, 1)
 	assert.Equal(t, "ledger-route-match", userResponse.Data[0].IdempotencyKey)
 }
+func seedAdminCreditAdjustmentValuationRoute(t *testing.T) int {
+	t.Helper()
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationMigration{}, &model.CreditValuationState{}))
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady,
+		ValuationCurrency: "CNY",
+	}).Error)
+	priceMicros := int64(40_000_000)
+	optionCode := "admin-preview-option"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: 9965, Title: "40 CNY / 1,000 Credit", PriceAmount: 40,
+		PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementTimed,
+		DurationUnit:    model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod:  model.SubscriptionResetMonthly,
+		MonthlyTokenLimit: 1_000, UnlimitedPurchaseEnabled: true,
+		BusinessCode: &optionCode,
+	}).Error)
+	valuationCurrency := "CNY"
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 9963).Update("valuation_currency", valuationCurrency).Error)
+	return 9965
+}
+
+func TestAdminCreditAdjustmentPreviewRouteReturnsAuthoritativeMicrosWithoutWrites(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost,
+		fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/adjustments/preview", userID),
+		bytes.NewBufferString(fmt.Sprintf(`{"operation":"increase","amount":800,"plan_id":%d}`, planID)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	assert.Contains(t, recorder.Body.String(), `"plan_id":9965`)
+	assert.Contains(t, recorder.Body.String(), `"gross_credit":800`)
+	assert.Contains(t, recorder.Body.String(), `"gross_amount_micros":"32000000"`)
+	assert.Contains(t, recorder.Body.String(), `"net_amount_micros":"32000000"`)
+	assert.Contains(t, recorder.Body.String(), `"valuation_currency":"CNY"`)
+	assert.Contains(t, recorder.Body.String(), `"source_currency":"CNY"`)
+	assert.Contains(t, recorder.Body.String(), `"confidence":"exact"`)
+	assert.Contains(t, recorder.Body.String(), `"preview":true`)
+
+	var adjustments, ledgers, balances int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Count(&adjustments).Error)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Count(&ledgers).Error)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ?", userID).Count(&balances).Error)
+	assert.Zero(t, adjustments)
+	assert.Zero(t, ledgers)
+	assert.Zero(t, balances)
+}
+
+func TestAdminCreditAdjustmentCommitRouteForwardsPlanAndReturnsAuthoritativeResult(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
+	response := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":800,"plan_id":%d,"idempotency_key":"admin-http-commit-800","reason":"after-sales grant"}`,
+		planID,
+	))
+
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"success":true`)
+	assert.Contains(t, response.Body.String(), `"plan_id":9965`)
+	assert.Contains(t, response.Body.String(), `"gross_credit":800`)
+	assert.Contains(t, response.Body.String(), `"gross_amount_micros":"32000000"`)
+	assert.Contains(t, response.Body.String(), `"net_amount_micros":"32000000"`)
+	assert.Contains(t, response.Body.String(), `"state_version_after":1`)
+	assert.Contains(t, response.Body.String(), `"replayed":false`)
+
+	var adjustments, ledgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Where("plan_id = ?", planID).Count(&adjustments).Error)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("plan_id = ?", planID).Count(&ledgers).Error)
+	assert.Equal(t, int64(1), adjustments)
+	assert.Equal(t, int64(1), ledgers)
+}

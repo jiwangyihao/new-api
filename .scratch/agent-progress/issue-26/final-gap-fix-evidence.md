@@ -12,10 +12,11 @@
 
 - RED 命令：`cd web/default && bun test src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`。
 - 环境准备：子工作树初始缺少 `node_modules`，先运行 `bun install --frozen-lockfile`；锁文件未改变。依赖安装完成后同一命令进入行为断言。
-- RED 结果：`15 pass / 1 fail`。最终确认前刷新返回 `quote_id=quote-final-refresh`，实际 confirm payload 只有 `subscription_id=7001` 与 `idempotency_key=conversion-client-key`；期望的服务端 `quote_id` 缺失。
-- 根因：前端 `SubscriptionConversionQuote` 与 `SubscriptionConversionConfirmRequest` 未声明服务端 identity 字符串，`handleConfirm` 虽使用最终刷新结果，却未把 `latest.quote_id` 传给 confirm mutation。
+- 首次 RED：`15 pass / 1 fail`，证明 confirm payload 丢失服务端 `quote_id`。审查随后指出首次测试错误允许最终刷新切换到新 identity 后直接确认，因此未以该错误合同进入 GREEN。
+- 修正后 RED：`15 pass / 2 fail`。同 identity/fingerprint 的最终刷新实际 payload 缺少 `quote_id=quote-stable`；identity/fingerprint 变化时实际 confirm 请求数为 1，期望为 0。
+- 根因：前端 `SubscriptionConversionQuote` 与 `SubscriptionConversionConfirmRequest` 未声明服务端 identity 字符串；`handleConfirm` 未传 `latest.quote_id`，也未在最终刷新发现重新报价时停下要求用户再次确认。
 - GREEN：待实现。
-- RED 提交：待创建。
+- RED 提交：`e984c1eb7 test(subscription): 固化前端报价身份失败合同`；修正后的重新报价 RED 提交待创建。
 
 ## Finding B：稳定错误 code 与六语言
 

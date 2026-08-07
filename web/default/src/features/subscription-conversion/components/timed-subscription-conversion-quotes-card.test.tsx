@@ -284,7 +284,35 @@ function runCapturedInterval(delay: number) {
 }
 
 describe('timed subscription conversion quotes', () => {
-  test('submits the server quote identity from the final pre-confirmation refresh', async () => {
+  test('submits the unchanged server quote identity from the final refresh', async () => {
+    const stableQuote = {
+      ...makeQuote(),
+      quote_id: 'quote-stable',
+      created_at: '1800000000',
+      expires_at: '1800000300',
+      facts_fingerprint: 'fingerprint-stable',
+    } as SubscriptionConversionQuote
+    const view = await renderQuotesCard(makeQuoteList([stableQuote]))
+    const dialog = await openConversionPreview(view)
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => assert.ok(view.getRequestCount() >= 3))
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    assert.deepEqual(view.getConfirmRequests()[0], {
+      subscription_id: '7001',
+      quote_id: 'quote-stable',
+      idempotency_key: 'conversion-client-key',
+    })
+    const result = await waitFor(() =>
+      view.getByRole('status', { name: 'Latest conversion result' })
+    )
+    assert.ok(within(result).getByText('Monthly Pro'))
+  })
+
+  test('requires review instead of confirming when the final refresh requotes', async () => {
     const previewQuote = {
       ...makeQuote(),
       quote_id: 'quote-preview',
@@ -298,10 +326,11 @@ describe('timed subscription conversion quotes', () => {
       makeQuoteList([
         {
           ...previewQuote,
-          quote_id: 'quote-final-refresh',
+          quote_id: 'quote-refreshed',
           created_at: '1800000001',
           expires_at: '1800000301',
-          facts_fingerprint: 'fingerprint-final-refresh',
+          facts_fingerprint: 'fingerprint-refreshed',
+          plan_title: 'Monthly Pro refreshed',
         } as SubscriptionConversionQuote,
       ])
     )
@@ -311,20 +340,13 @@ describe('timed subscription conversion quotes', () => {
     )
 
     await waitFor(() => assert.ok(view.getRequestCount() >= 3))
-    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
-    assert.deepEqual(view.getConfirmRequests()[0], {
-      subscription_id: '7001',
-      quote_id: 'quote-final-refresh',
-      idempotency_key: 'conversion-client-key',
-    })
-    const result = await waitFor(() =>
-      view.getByRole('status', { name: 'Latest conversion result' })
+    assert.equal(view.getConfirmRequests().length, 0)
+    assert.ok(within(dialog).getByText('Monthly Pro refreshed'))
+    assert.ok(
+      within(dialog).getByText(
+        'The quote expired or authoritative facts changed. Review the refreshed quote and confirm again.'
+      )
     )
-    assert.ok(within(result).getByText('Monthly Pro'))
-    assert.ok(within(result).getByText('20'))
-    assert.ok(within(result).getByText('5'))
-    assert.ok(within(result).getByText('15'))
-    assert.ok(within(result).getByText('115'))
   })
 
   test('shows quote valuation and the immutable confirmation boundary', async () => {

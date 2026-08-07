@@ -235,8 +235,11 @@ func TestAdminCreditBalanceIncreaseIdempotencyBindsCompleteSnapshot(t *testing.T
 	priceMicros := int64(41_000_000)
 	require.NoError(t, db.Model(&SubscriptionPlan{}).Where("id = ?", optionPlanID).Update("price_amount_micros", priceMicros).Error)
 	changedPrice, err := AdjustCreditBalance(request)
-	require.Nil(t, changedPrice)
-	require.ErrorIs(t, err, ErrCreditValuationIdempotencyMismatch)
+	require.NoError(t, err)
+	require.NotNil(t, changedPrice)
+	require.True(t, changedPrice.Replayed)
+	require.Equal(t, first.CreditBalance.GrossAmountMicros, changedPrice.CreditBalance.GrossAmountMicros)
+	require.Equal(t, first.CreditBalance.ValuationStateVersionAfter, changedPrice.CreditBalance.ValuationStateVersionAfter)
 
 	var balance UserSubscription
 	require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", userID, SubscriptionEntitlementCreditBalance).First(&balance).Error)

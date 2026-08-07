@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func setupCreditAdjustmentRoute(t *testing.T) (*gin.Engine, string, int) {
@@ -296,6 +298,24 @@ func seedAdminCreditAdjustmentValuationRoute(t *testing.T) int {
 func TestAdminCreditAdjustmentPreviewRouteReturnsAuthoritativeMicrosWithoutWrites(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
 	planID := seedAdminCreditAdjustmentValuationRoute(t)
+	var writeCallbacks atomic.Int64
+	const createCallback = "issue24:preview-create-guard"
+	const updateCallback = "issue24:preview-update-guard"
+	const deleteCallback = "issue24:preview-delete-guard"
+	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register(createCallback, func(_ *gorm.DB) {
+		writeCallbacks.Add(1)
+	}))
+	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register(updateCallback, func(_ *gorm.DB) {
+		writeCallbacks.Add(1)
+	}))
+	require.NoError(t, model.DB.Callback().Delete().Before("gorm:delete").Register(deleteCallback, func(_ *gorm.DB) {
+		writeCallbacks.Add(1)
+	}))
+	t.Cleanup(func() {
+		_ = model.DB.Callback().Create().Remove(createCallback)
+		_ = model.DB.Callback().Update().Remove(updateCallback)
+		_ = model.DB.Callback().Delete().Remove(deleteCallback)
+	})
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/adjustments/preview", userID),
@@ -323,6 +343,7 @@ func TestAdminCreditAdjustmentPreviewRouteReturnsAuthoritativeMicrosWithoutWrite
 	assert.Zero(t, adjustments)
 	assert.Zero(t, ledgers)
 	assert.Zero(t, balances)
+	assert.Zero(t, writeCallbacks.Load(), "preview must not execute create, update, or delete callbacks")
 }
 
 func TestAdminCreditAdjustmentCommitRouteForwardsPlanAndReturnsAuthoritativeResult(t *testing.T) {
@@ -393,4 +414,125 @@ func TestAdminCreditAdjustmentRoutesExposeStableCodesAndReplayCommittedResult(t 
 	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("idempotency_key = ?", "admin-http-replay-800").Count(&ledgers).Error)
 	assert.Equal(t, int64(1), adjustments)
 	assert.Equal(t, int64(1), ledgers)
+}
+
+type adminCreditAdjustmentAuthoritativeRouteResponse struct {
+	Success bool   `json:"success"`
+	Code    string `json:"code"`
+	Data    struct {
+		PlanId            int    `json:"plan_id"`
+		GrossCredit       int64  `json:"gross_credit"`
+		NetCredit         int64  `json:"net_credit"`
+		GrossAmountMicros int64  `json:"gross_amount_micros,string"`
+		NetAmountMicros   int64  `json:"net_amount_micros,string"`
+		ValuationCurrency string `json:"valuation_currency"`
+		SourceCurrency    string `json:"source_currency"`
+		Confidence        string `json:"confidence"`
+		FxRateNumerator   int64  `json:"fx_rate_numerator,string"`
+		FxRateDenominator int64  `json:"fx_rate_denominator,string"`
+		FxCapturedAt      int64  `json:"fx_captured_at"`
+		FxDirection       string `json:"fx_direction"`
+		RuleVersion       int    `json:"rule_version"`
+		StateVersionAfter int64  `json:"state_version_after"`
+		DebtOffset        int64  `json:"debt_offset"`
+		AvailableCredit   int64  `json:"available_credit"`
+		SettlementDebt    int64  `json:"settlement_debt"`
+		BalanceBefore     int64  `json:"balance_before"`
+		BalanceAfter      int64  `json:"balance_after"`
+		Replayed          bool   `json:"replayed"`
+		Preview           bool   `json:"preview"`
+	} `json:"data"`
+}
+
+func decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t *testing.T, recorder *httptest.ResponseRecorder) adminCreditAdjustmentAuthoritativeRouteResponse {
+	t.Helper()
+	var response adminCreditAdjustmentAuthoritativeRouteResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
+	return response
+}
+
+func TestAdminCreditAdjustmentReplayUsesFrozenFactsAfterPlanChanges(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
+	requestBody := fmt.Sprintf(
+		`{"operation":"increase","amount":800,"plan_id":%d,"idempotency_key":"admin-http-frozen-replay","reason":"after-sales grant"}`,
+		planID,
+	)
+	firstRecorder := performCreditAdjustmentRouteRequest(engine, token, userID, requestBody)
+	require.Equal(t, http.StatusOK, firstRecorder.Code, firstRecorder.Body.String())
+	first := decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t, firstRecorder)
+	require.True(t, first.Success, firstRecorder.Body.String())
+	require.False(t, first.Data.Replayed)
+	require.Equal(t, int64(32_000_000), first.Data.GrossAmountMicros)
+	require.Equal(t, "CNY", first.Data.SourceCurrency)
+	require.Equal(t, "CNY", first.Data.ValuationCurrency)
+	require.Equal(t, int64(1), first.Data.StateVersionAfter)
+
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", planID).Updates(map[string]any{
+		"enabled":             false,
+		"price_amount_micros": int64(80_000_000),
+		"monthly_token_limit": int64(2_000),
+		"currency":            "USD",
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 9963).Update("valuation_currency", "USD").Error)
+
+	replayRecorder := performCreditAdjustmentRouteRequest(engine, token, userID, requestBody)
+	require.Equal(t, http.StatusOK, replayRecorder.Code, replayRecorder.Body.String())
+	replay := decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t, replayRecorder)
+	require.True(t, replay.Success, replayRecorder.Body.String())
+	wantReplay := first.Data
+	wantReplay.Replayed = true
+	assert.Equal(t, wantReplay, replay.Data, "replay must return every authoritative field from the frozen committed ledger")
+
+	conflictRecorder := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":801,"plan_id":%d,"idempotency_key":"admin-http-frozen-replay","reason":"after-sales grant"}`,
+		planID,
+	))
+	require.Equal(t, http.StatusOK, conflictRecorder.Code, conflictRecorder.Body.String())
+	conflict := decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t, conflictRecorder)
+	assert.False(t, conflict.Success)
+	assert.Equal(t, "credit_valuation_idempotency_mismatch", conflict.Code)
+
+	var adjustments, ledgers int64
+	require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Where("idempotency_key = ?", "admin-http-frozen-replay").Count(&adjustments).Error)
+	require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Where("idempotency_key = ?", "admin-http-frozen-replay").Count(&ledgers).Error)
+	assert.Equal(t, int64(1), adjustments)
+	assert.Equal(t, int64(1), ledgers)
+}
+
+func TestAdminCreditAdjustmentPreviewRequiresReadyValuationMarker(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T)
+	}{
+		{
+			name: "missing marker",
+			mutate: func(t *testing.T) {
+				require.NoError(t, model.DB.Where("version = ?", model.CreditValuationRuleVersion).Delete(&model.CreditValuationMigration{}).Error)
+			},
+		},
+		{
+			name: "pending marker",
+			mutate: func(t *testing.T) {
+				require.NoError(t, model.DB.Model(&model.CreditValuationMigration{}).Where("version = ?", model.CreditValuationRuleVersion).Update("status", model.CreditValuationMigrationPending).Error)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, token, userID := setupCreditAdjustmentRoute(t)
+			planID := seedAdminCreditAdjustmentValuationRoute(t)
+			test.mutate(t)
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost,
+				fmt.Sprintf("/api/subscription/admin/users/%d/credit-balance/adjustments/preview", userID),
+				bytes.NewBufferString(fmt.Sprintf(`{"operation":"increase","amount":800,"plan_id":%d}`, planID)))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+token)
+			request.Header.Set("New-Api-User", "9961")
+			engine.ServeHTTP(response, request)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assert.Contains(t, response.Body.String(), `"success":false`)
+			assert.Contains(t, response.Body.String(), `"code":"credit_valuation_migration_not_ready"`)
+		})
+	}
 }

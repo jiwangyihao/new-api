@@ -64,3 +64,24 @@
 - 稳定验证：`gofmt -w controller/subscription.go router/subscription_credit_adjustment_route_test.go && go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult|RoutesExposeStableCodesAndReplayCommittedResult)$' -count=10 -v && git diff --check` → `go test: 1 packages ok`，约 10.62 秒，diff-check 无输出。
 - 行为：missing plan preview 返回 HTTP 200、`success=false`、`code=credit_valuation_plan_required`；首次提交 `replayed=false`；同 key/同事实重放 `replayed=true`、`gross_amount_micros="32000000"`、`state_version_after=1`；同 key/amount 801 返回 `code=credit_valuation_idempotency_mismatch`。
 - 原子性：重放与冲突后对应 idempotency key 的 adjustment/ledger 仍各一条。
+
+## 后端合同修复：事务快照、只读 preview、稳定 code、冻结 replay
+
+- 修复范围：`model/credit_balance_adjustment.go`、`model/errors.go`、`controller/subscription.go`、`router/subscription_credit_adjustment_route_test.go`；未修改 #26 parser/provider/Option 生命周期、analytics、UI、i18n 或 browser。
+- preview 现在在同一个 `DB.Transaction` 内先调用 `CreditValuationRuntimeReadyTx(tx)`；缺失 marker 或非 `ready` 返回 `credit_valuation_migration_not_ready`。
+- preview 的 SQLite 查询只做事务内一致读取，不执行 `AcquireCreditBalancePlanGuardTx` 的 SQLite guard UPDATE；MySQL/PostgreSQL 读取使用 `FOR UPDATE`。余额与估值 state 读取同一事务，非 SQLite 使用锁读。
+- preview route 测试注册 GORM create/update/delete callbacks；请求成功后三个 callback 计数均为 0，证明 preview 没有 INSERT/UPDATE/DELETE，而非仅业务表计数未变。
+- 结果 DTO 共享 `CreditBalanceAdjustmentAuthoritativeResult`；preview 与 commit 均返回 plan、gross/net Credit、gross/net micros、source/valuation currency、confidence、FX、rule、state version、debt offset、余额和 replay/preview 标志。
+- controller sentinel 映射固定 code：plan required/ineligible、unsupported currency、invalid FX、overflow、state missing/mismatch、idempotency mismatch、migration not ready；未知错误统一 `internal_error`，不再把任意 `err.Error()` 暴露为 machine code。
+- replay lookup 先按 idempotency key 锁定既有 adjustment，再从已提交 ledger 的 `source_snapshot` 重建完整 valuation facts；不先读取、资格校验或锁定当前 source Plan。后续 Plan 改价、禁用、改 Credit、改币种及 Credit valuation currency 后，同 key replay 仍返回首次冻结字段。
+- 定向命令：`gofmt -w model/credit_balance_adjustment.go model/errors.go controller/subscription.go router/subscription_credit_adjustment_route_test.go && go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult|RoutesExposeStableCodesAndReplayCommittedResult|ReplayUsesFrozenFactsAfterPlanChanges|PreviewRequiresReadyValuationMarker)$' -count=10 -v && git diff --check`。
+- 结果：`go test: 1 packages ok`，约 10.67 秒；五条 route 行为每条连续 10 次通过，包含 SQL write callback 断言、missing/pending marker 稳定 code、冻结 replay 逐字段比较和冲突零重复写入。
+
+## API_HANDOFF_READY 最终门禁
+
+- `idempotency_key` 已作为规范化请求字段进入 `creditBalanceAdjustmentFingerprint` payload；指纹同时绑定 user、operation、amount、plan、operator、reason 与完整 valuation/FX/rule facts。
+- `gofmt -w controller/subscription.go model/credit_balance_adjustment.go model/errors.go model/credit_positive_ingress_test.go router/subscription_credit_adjustment_route_test.go` 完成。
+- `go test ./model -run '^TestAdminCreditBalanceIncrease' -count=1` → package PASS。
+- `go test ./router -run 'TestAdminCreditAdjustment(PreviewRouteReturnsAuthoritativeMicrosWithoutWrites|CommitRouteForwardsPlanAndReturnsAuthoritativeResult|RoutesExposeStableCodesAndReplayCommittedResult|ReplayUsesFrozenFactsAfterPlanChanges|PreviewRequiresReadyValuationMarker)$' -count=10` → package PASS。
+- `git diff --check` → 无输出。
+- 未运行 UI、i18n、browser、analytics 扩展或最终包级全量；这些明确交给新续作 Worker。

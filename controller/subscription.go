@@ -1066,8 +1066,33 @@ func writeAdminCreditBalanceAdjustmentError(c *gin.Context, err error) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
 		"message": err.Error(),
-		"code":    err.Error(),
+		"code":    adminCreditBalanceAdjustmentErrorCode(err),
 	})
+}
+
+func adminCreditBalanceAdjustmentErrorCode(err error) string {
+	switch {
+	case errors.Is(err, model.ErrCreditValuationPlanRequired):
+		return "credit_valuation_plan_required"
+	case errors.Is(err, model.ErrCreditValuationPlanIneligible):
+		return "credit_valuation_plan_ineligible"
+	case errors.Is(err, model.ErrCreditValuationUnsupportedCurrency):
+		return "credit_valuation_unsupported_currency"
+	case errors.Is(err, model.ErrCreditValuationInvalidFX):
+		return "credit_valuation_invalid_fx"
+	case errors.Is(err, model.ErrCreditValuationOverflow):
+		return "credit_valuation_overflow"
+	case errors.Is(err, model.ErrCreditValuationStateMissing):
+		return "credit_valuation_state_missing"
+	case errors.Is(err, model.ErrCreditValuationStateMismatch):
+		return "credit_valuation_state_mismatch"
+	case errors.Is(err, model.ErrCreditValuationIdempotencyMismatch):
+		return "credit_valuation_idempotency_mismatch"
+	case errors.Is(err, model.ErrCreditValuationMigrationNotReady):
+		return "credit_valuation_migration_not_ready"
+	default:
+		return "internal_error"
+	}
 }
 
 func AdminAdjustUserCreditBalance(c *gin.Context) {

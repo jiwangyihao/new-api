@@ -49,12 +49,37 @@ type CreditBalanceAdjustmentRequest struct {
 	Reason         string
 }
 
+type CreditBalanceAdjustmentAuthoritativeResult struct {
+	PlanId            int    `json:"plan_id"`
+	GrossCredit       int64  `json:"gross_credit"`
+	NetCredit         int64  `json:"net_credit"`
+	GrossAmountMicros int64  `json:"gross_amount_micros,string"`
+	NetAmountMicros   int64  `json:"net_amount_micros,string"`
+	ValuationCurrency string `json:"valuation_currency"`
+	SourceCurrency    string `json:"source_currency"`
+	Confidence        string `json:"confidence"`
+	FxRateNumerator   int64  `json:"fx_rate_numerator,string"`
+	FxRateDenominator int64  `json:"fx_rate_denominator,string"`
+	FxCapturedAt      int64  `json:"fx_captured_at"`
+	FxDirection       string `json:"fx_direction"`
+	RuleVersion       int    `json:"rule_version"`
+	StateVersionAfter int64  `json:"state_version_after"`
+	DebtOffset        int64  `json:"debt_offset"`
+	AvailableCredit   int64  `json:"available_credit"`
+	SettlementDebt    int64  `json:"settlement_debt"`
+	BalanceBefore     int64  `json:"balance_before"`
+	BalanceAfter      int64  `json:"balance_after"`
+	Replayed          bool   `json:"replayed"`
+	Preview           bool   `json:"preview"`
+}
+
 type CreditBalanceAdjustmentResult struct {
+	CreditBalanceAdjustmentAuthoritativeResult
 	Adjustment    *CreditBalanceAdjustment  `json:"adjustment"`
 	CreditBalance *CreditBalanceGrantResult `json:"credit_balance"`
 	DebtFormed    int64                     `json:"debt_formed"`
-	Replayed      bool                      `json:"replayed"`
 }
+
 type CreditBalanceAdjustmentPreviewRequest struct {
 	UserId    int
 	Operation string
@@ -63,9 +88,34 @@ type CreditBalanceAdjustmentPreviewRequest struct {
 }
 
 type CreditBalanceAdjustmentPreviewResult struct {
-	PlanId        int                       `json:"plan_id"`
+	CreditBalanceAdjustmentAuthoritativeResult
 	CreditBalance *CreditBalanceGrantResult `json:"credit_balance"`
-	Preview       bool                      `json:"preview"`
+}
+
+func creditBalanceAdjustmentAuthoritativeResult(planId int, balance *CreditBalanceGrantResult, preview bool, replayed bool) CreditBalanceAdjustmentAuthoritativeResult {
+	result := CreditBalanceAdjustmentAuthoritativeResult{PlanId: planId, Preview: preview, Replayed: replayed}
+	if balance == nil {
+		return result
+	}
+	result.GrossCredit = balance.GrossCredit
+	result.NetCredit = balance.NetCredit
+	result.GrossAmountMicros = balance.GrossAmountMicros
+	result.NetAmountMicros = balance.NetAmountMicros
+	result.ValuationCurrency = balance.ValuationCurrency
+	result.SourceCurrency = balance.SourceCurrency
+	result.Confidence = balance.ValuationConfidence
+	result.FxRateNumerator = balance.FxRateNumerator
+	result.FxRateDenominator = balance.FxRateDenominator
+	result.FxCapturedAt = balance.FxCapturedAt
+	result.FxDirection = balance.FxDirection
+	result.RuleVersion = balance.ValuationRuleVersion
+	result.StateVersionAfter = balance.ValuationStateVersionAfter
+	result.DebtOffset = balance.DebtOffset
+	result.AvailableCredit = balance.AvailableCredit
+	result.SettlementDebt = balance.SettlementDebt
+	result.BalanceBefore = balance.BalanceBefore
+	result.BalanceAfter = balance.BalanceAfter
+	return result
 }
 
 func PreviewCreditBalanceAdjustment(request CreditBalanceAdjustmentPreviewRequest) (*CreditBalanceAdjustmentPreviewResult, error) {
@@ -79,86 +129,108 @@ func PreviewCreditBalanceAdjustment(request CreditBalanceAdjustmentPreviewReques
 	if request.PlanId <= 0 {
 		return nil, ErrCreditValuationPlanRequired
 	}
-	creditPlan, err := GetCreditBalancePlanTx(DB)
-	if err != nil {
-		return nil, err
-	}
-	var sourcePlan SubscriptionPlan
-	if err := DB.Where("id = ?", request.PlanId).First(&sourcePlan).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrCreditValuationPlanIneligible
+
+	var result *CreditBalanceAdjustmentPreviewResult
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		ready, err := CreditValuationRuntimeReadyTx(tx)
+		if err != nil {
+			return err
 		}
-		return nil, err
-	}
-	var user User
-	if err := DB.Select("id").Where("id = ?", request.UserId).First(&user).Error; err != nil {
-		return nil, err
-	}
-	facts := creditBalanceAdjustmentFacts(&sourcePlan, creditPlan)
-	sourceCurrency, valuationCurrency, err := validateCreditBalanceAdjustmentPlanFacts(&sourcePlan, facts)
-	if err != nil {
-		return nil, err
-	}
-	capturedAt, err := getDBTimestampStrictTx(DB)
-	if err != nil {
-		return nil, err
-	}
-	frozenFX, err := captureCreditPositiveIngressFXRateSnapshot(sourceCurrency, valuationCurrency, capturedAt)
-	if err != nil {
-		return nil, err
-	}
-	ingress, err := newForwardCreditValuationIngress(CreditValuationSourceSnapshot{
-		SourcePriceMicros: *facts.SourcePriceMicros,
-		SourcePlanCredit:  facts.SourcePlanCredit,
-		GrossCredit:       request.Amount,
-		SourceCurrency:    sourceCurrency,
-		ValuationCurrency: valuationCurrency,
-		RuleVersion:       facts.ValuationRuleVersion,
-		FXRateSnapshot:    frozenFX,
-	})
-	if err != nil {
-		return nil, creditBalanceAdjustmentIngressError(err)
-	}
-	balanceBefore := int64(0)
-	stateVersionAfter := int64(1)
-	var balance UserSubscription
-	query := DB.Where("user_id = ? AND entitlement_type = ?", request.UserId, SubscriptionEntitlementCreditBalance).Limit(1).Find(&balance)
-	if query.Error != nil {
-		return nil, query.Error
-	}
-	if query.RowsAffected > 0 {
-		if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
-			return nil, ErrCreditValuationStateMismatch
+		if !ready {
+			return ErrCreditValuationMigrationNotReady
 		}
-		balanceBefore = balance.TokenLimit - balance.TokenUsed
-		var state CreditValuationState
-		if err := DB.Where("user_subscription_id = ?", balance.Id).First(&state).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, ErrCreditValuationStateMissing
+		creditPlan, err := lockCreditBalancePlanPreviewTx(tx)
+		if err != nil {
+			return err
+		}
+		sourcePlan, err := lockCreditBalanceAdjustmentPlanPreviewTx(tx, request.PlanId)
+		if err != nil {
+			return err
+		}
+		var user User
+		userQuery := tx.Select("id").Where("id = ?", request.UserId)
+		if tx.Dialector != nil && tx.Dialector.Name() != "sqlite" && tx.Dialector.Name() != "sqlite3" {
+			userQuery = userQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		if err := userQuery.First(&user).Error; err != nil {
+			return err
+		}
+		facts := creditBalanceAdjustmentFacts(sourcePlan, creditPlan)
+		sourceCurrency, valuationCurrency, err := validateCreditBalanceAdjustmentPlanFacts(sourcePlan, facts)
+		if err != nil {
+			return err
+		}
+		capturedAt, err := getDBTimestampStrictTx(tx)
+		if err != nil {
+			return err
+		}
+		frozenFX, err := captureCreditPositiveIngressFXRateSnapshot(sourceCurrency, valuationCurrency, capturedAt)
+		if err != nil {
+			return err
+		}
+		ingress, err := newForwardCreditValuationIngress(CreditValuationSourceSnapshot{
+			SourcePriceMicros: *facts.SourcePriceMicros,
+			SourcePlanCredit:  facts.SourcePlanCredit,
+			GrossCredit:       request.Amount,
+			SourceCurrency:    sourceCurrency,
+			ValuationCurrency: valuationCurrency,
+			RuleVersion:       facts.ValuationRuleVersion,
+			FXRateSnapshot:    frozenFX,
+		})
+		if err != nil {
+			return creditBalanceAdjustmentIngressError(err)
+		}
+
+		balanceBefore := int64(0)
+		stateVersionAfter := int64(1)
+		var balance UserSubscription
+		balanceQuery := tx.Where("user_id = ? AND entitlement_type = ?", request.UserId, SubscriptionEntitlementCreditBalance).Limit(1)
+		if tx.Dialector != nil && tx.Dialector.Name() != "sqlite" && tx.Dialector.Name() != "sqlite3" {
+			balanceQuery = balanceQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+		}
+		query := balanceQuery.Find(&balance)
+		if query.Error != nil {
+			return query.Error
+		}
+		if query.RowsAffected > 0 {
+			if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
+				return ErrCreditValuationStateMismatch
 			}
-			return nil, err
+			balanceBefore = balance.TokenLimit - balance.TokenUsed
+			var state CreditValuationState
+			stateQuery := tx.Where("user_subscription_id = ?", balance.Id)
+			if tx.Dialector != nil && tx.Dialector.Name() != "sqlite" && tx.Dialector.Name() != "sqlite3" {
+				stateQuery = stateQuery.Clauses(clause.Locking{Strength: "UPDATE"})
+			}
+			if err := stateQuery.First(&state).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrCreditValuationStateMissing
+				}
+				return err
+			}
+			if err := validateCreditValuationState(&balance, &state); err != nil {
+				return err
+			}
+			if !strings.EqualFold(state.Currency, valuationCurrency) {
+				return ErrCreditValuationStateMismatch
+			}
+			var ok bool
+			stateVersionAfter, ok = checkedAddInt64(state.StateVersion, 1)
+			if !ok {
+				return ErrCreditValuationOverflow
+			}
 		}
-		if err := validateCreditValuationState(&balance, &state); err != nil {
-			return nil, err
+		debtOffset := minInt64(request.Amount, maxInt64(-balanceBefore, 0))
+		netCredit := request.Amount - debtOffset
+		netCostMicros, err := prorateFloor(ingress.grossCostMicros, netCredit, request.Amount)
+		if err != nil {
+			return err
 		}
-		if !strings.EqualFold(state.Currency, valuationCurrency) {
-			return nil, ErrCreditValuationStateMismatch
+		balanceAfter, ok := checkedAddInt64(balanceBefore, request.Amount)
+		if !ok {
+			return ErrCreditValuationOverflow
 		}
-		stateVersionAfter, _ = checkedAddInt64(state.StateVersion, 1)
-	}
-	debtOffset := minInt64(request.Amount, maxInt64(-balanceBefore, 0))
-	netCredit := request.Amount - debtOffset
-	netCostMicros, err := prorateFloor(ingress.grossCostMicros, netCredit, request.Amount)
-	if err != nil {
-		return nil, err
-	}
-	balanceAfter, ok := checkedAddInt64(balanceBefore, request.Amount)
-	if !ok {
-		return nil, ErrCreditValuationOverflow
-	}
-	return &CreditBalanceAdjustmentPreviewResult{
-		PlanId: request.PlanId,
-		CreditBalance: &CreditBalanceGrantResult{
+		previewBalance := &CreditBalanceGrantResult{
 			PlanId: creditPlan.Id, GrossCredit: request.Amount, NetCredit: netCredit,
 			GrossAmountMicros: ingress.grossCostMicros, NetAmountMicros: netCostMicros,
 			ValuationCurrency: valuationCurrency, SourceCurrency: sourceCurrency,
@@ -168,9 +240,49 @@ func PreviewCreditBalanceAdjustment(request CreditBalanceAdjustmentPreviewReques
 			ValuationStateVersionAfter: stateVersionAfter, DebtOffset: debtOffset,
 			AvailableCredit: maxInt64(balanceAfter, 0), SettlementDebt: maxInt64(-balanceAfter, 0),
 			BalanceBefore: balanceBefore, BalanceAfter: balanceAfter, Status: creditBalanceStatus(balanceAfter),
-		},
-		Preview: true,
-	}, nil
+		}
+		result = &CreditBalanceAdjustmentPreviewResult{
+			CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(request.PlanId, previewBalance, true, false),
+			CreditBalance: previewBalance,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+func lockCreditBalancePlanPreviewTx(tx *gorm.DB) (*SubscriptionPlan, error) {
+	if tx == nil {
+		return nil, ErrDatabase
+	}
+	query := tx.Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance)
+	if tx.Dialector != nil && tx.Dialector.Name() != "sqlite" && tx.Dialector.Name() != "sqlite3" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var plan SubscriptionPlan
+	if err := query.First(&plan).Error; err != nil {
+		return nil, err
+	}
+	return &plan, nil
+}
+
+func lockCreditBalanceAdjustmentPlanPreviewTx(tx *gorm.DB, planId int) (*SubscriptionPlan, error) {
+	if tx == nil || planId <= 0 {
+		return nil, ErrCreditValuationPlanRequired
+	}
+	query := tx.Where("id = ?", planId)
+	if tx.Dialector != nil && tx.Dialector.Name() != "sqlite" && tx.Dialector.Name() != "sqlite3" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+	var plan SubscriptionPlan
+	if err := query.First(&plan).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrCreditValuationPlanIneligible
+		}
+		return nil, err
+	}
+	return &plan, nil
 }
 
 type creditBalanceAdjustmentValuationFacts struct {
@@ -216,32 +328,15 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 	var fingerprint string
 	run := func(tx *gorm.DB) error {
 		result = nil
-		creditPlan, err := AcquireCreditBalancePlanGuardTx(tx)
-		if err != nil {
-			return err
-		}
-		var sourcePlan *SubscriptionPlan
-		facts := creditBalanceAdjustmentValuationFacts{}
-		if request.Operation == CreditBalanceAdjustmentIncrease {
-			sourcePlan, err = lockCreditBalanceAdjustmentPlanTx(tx, request.PlanId)
-			if err != nil {
-				return err
-			}
-			facts = creditBalanceAdjustmentFacts(sourcePlan, creditPlan)
-		}
-
 		var existing CreditBalanceAdjustment
 		lookup := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("idempotency_key = ?", request.IdempotencyKey).Limit(1).Find(&existing)
 		if lookup.Error != nil {
 			return lookup.Error
 		}
 		if lookup.RowsAffected > 0 {
-			if request.Operation == CreditBalanceAdjustmentIncrease {
-				frozenFX, err := creditBalanceAdjustmentFXSnapshotTx(tx, &existing)
-				if err != nil {
-					return err
-				}
-				applyCreditBalanceAdjustmentFXFacts(&facts, frozenFX)
+			facts, err := creditBalanceAdjustmentFrozenFactsTx(tx, &existing)
+			if err != nil {
+				return err
 			}
 			fingerprint, err = creditBalanceAdjustmentFingerprint(request, facts)
 			if err != nil {
@@ -256,6 +351,20 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			}
 			result = loaded
 			return nil
+		}
+
+		creditPlan, err := AcquireCreditBalancePlanGuardTx(tx)
+		if err != nil {
+			return err
+		}
+		var sourcePlan *SubscriptionPlan
+		facts := creditBalanceAdjustmentValuationFacts{}
+		if request.Operation == CreditBalanceAdjustmentIncrease {
+			sourcePlan, err = lockCreditBalanceAdjustmentPlanTx(tx, request.PlanId)
+			if err != nil {
+				return err
+			}
+			facts = creditBalanceAdjustmentFacts(sourcePlan, creditPlan)
 		}
 
 		now, err := getDBTimestampStrictTx(tx)
@@ -321,7 +430,11 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 				return creditBalanceAdjustmentIngressError(err)
 			}
 			adjustment.LedgerId = grant.LedgerId
-			result = &CreditBalanceAdjustmentResult{Adjustment: adjustment, CreditBalance: grant}
+			result = &CreditBalanceAdjustmentResult{
+				CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(request.PlanId, grant, false, false),
+				Adjustment:    adjustment,
+				CreditBalance: grant,
+			}
 		} else {
 			ledgerKey := fmt.Sprintf("admin_adjustment:%d", adjustment.Id)
 			if _, _, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, creditPlan); err != nil {
@@ -337,15 +450,17 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 				return err
 			}
 			adjustment.LedgerId = recovery.LedgerId
+			decreaseBalance := &CreditBalanceGrantResult{
+				UserSubscriptionId: recovery.UserSubscriptionId, PlanId: recovery.PlanId,
+				GrossCredit: -recovery.GrossCredit, AvailableCredit: recovery.AvailableCredit,
+				SettlementDebt: recovery.SettlementDebt, BalanceBefore: recovery.BalanceBefore,
+				BalanceAfter: recovery.BalanceAfter, LedgerId: recovery.LedgerId, Status: recovery.Status,
+			}
 			result = &CreditBalanceAdjustmentResult{
-				Adjustment: adjustment,
-				CreditBalance: &CreditBalanceGrantResult{
-					UserSubscriptionId: recovery.UserSubscriptionId, PlanId: recovery.PlanId,
-					GrossCredit: -recovery.GrossCredit, AvailableCredit: recovery.AvailableCredit,
-					SettlementDebt: recovery.SettlementDebt, BalanceBefore: recovery.BalanceBefore,
-					BalanceAfter: recovery.BalanceAfter, LedgerId: recovery.LedgerId, Status: recovery.Status,
-				},
-				DebtFormed: recovery.DebtFormed,
+				CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(request.PlanId, decreaseBalance, false, false),
+				Adjustment:    adjustment,
+				CreditBalance: decreaseBalance,
+				DebtFormed:    recovery.DebtFormed,
 			}
 		}
 		if err := tx.Model(&CreditBalanceAdjustment{}).Where("id = ?", adjustment.Id).UpdateColumn("ledger_id", adjustment.LedgerId).Error; err != nil {
@@ -376,12 +491,14 @@ func creditBalanceAdjustmentFingerprint(request CreditBalanceAdjustmentRequest, 
 		Operation      string                                `json:"operation"`
 		Amount         int64                                 `json:"amount"`
 		PlanId         int                                   `json:"plan_id"`
+		IdempotencyKey string                                `json:"idempotency_key"`
 		OperatorUserId int                                   `json:"operator_user_id"`
 		Reason         string                                `json:"reason"`
 		Valuation      creditBalanceAdjustmentValuationFacts `json:"valuation"`
 	}{
 		UserId: request.UserId, Operation: request.Operation, Amount: request.Amount,
-		PlanId: request.PlanId, OperatorUserId: request.OperatorUserId, Reason: request.Reason,
+		PlanId: request.PlanId, IdempotencyKey: request.IdempotencyKey,
+		OperatorUserId: request.OperatorUserId, Reason: request.Reason,
 		Valuation: facts,
 	})
 	if err != nil {
@@ -461,6 +578,34 @@ func creditBalanceAdjustmentFXSnapshotTx(tx *gorm.DB, adjustment *CreditBalanceA
 	return snapshot, nil
 }
 
+func creditBalanceAdjustmentFrozenFactsTx(tx *gorm.DB, adjustment *CreditBalanceAdjustment) (creditBalanceAdjustmentValuationFacts, error) {
+	if tx == nil || adjustment == nil || adjustment.Id <= 0 || adjustment.LedgerId <= 0 {
+		return creditBalanceAdjustmentValuationFacts{}, ErrCreditValuationIdempotencyMismatch
+	}
+	var ledger CreditBalanceLedger
+	if err := tx.Select("source_snapshot").Where(
+		"id = ? AND source_type = ? AND source_id = ?",
+		adjustment.LedgerId,
+		CreditBalanceLedgerSourceAdminAdjustment,
+		adjustment.Id,
+	).First(&ledger).Error; err != nil {
+		return creditBalanceAdjustmentValuationFacts{}, err
+	}
+	var snapshot creditBalanceAdjustmentSourceSnapshot
+	if strings.TrimSpace(ledger.SourceSnapshot) == "" || common.UnmarshalJsonStr(ledger.SourceSnapshot, &snapshot) != nil {
+		return creditBalanceAdjustmentValuationFacts{}, ErrCreditValuationIdempotencyMismatch
+	}
+	if snapshot.Operation != adjustment.Operation ||
+		snapshot.Amount != adjustment.Amount ||
+		snapshot.OperatorUserId != adjustment.OperatorUserId ||
+		snapshot.Reason != adjustment.Reason ||
+		snapshot.IdempotencyKey != adjustment.IdempotencyKey ||
+		snapshot.Valuation.PlanId != adjustment.PlanId {
+		return creditBalanceAdjustmentValuationFacts{}, ErrCreditValuationIdempotencyMismatch
+	}
+	return snapshot.Valuation, nil
+}
+
 func creditBalanceAdjustmentIngressError(err error) error {
 	switch {
 	case errors.Is(err, ErrCreditFXOverflow), errors.Is(err, ErrCreditValuationOverflow):
@@ -492,7 +637,12 @@ func creditBalanceAdjustmentResultTx(tx *gorm.DB, adjustment *CreditBalanceAdjus
 	}
 	grant := creditBalanceGrantResult(&ledger, balance.PlanId, false)
 	grant.Replayed = replayed
-	return &CreditBalanceAdjustmentResult{Adjustment: adjustment, CreditBalance: grant, DebtFormed: ledger.DebtFormed, Replayed: replayed}, nil
+	return &CreditBalanceAdjustmentResult{
+		CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(adjustment.PlanId, grant, false, replayed),
+		Adjustment:    adjustment,
+		CreditBalance: grant,
+		DebtFormed:    ledger.DebtFormed,
+	}, nil
 }
 
 func findCommittedCreditBalanceAdjustment(idempotencyKey string, fingerprint string) (*CreditBalanceAdjustmentResult, error) {

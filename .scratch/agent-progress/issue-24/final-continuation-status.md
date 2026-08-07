@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-管理员 adjustment HTTP 阶段完整 GREEN：plan_id commit、只读 preview、稳定 machine code、同 key 重放与事实冲突均通过真实 route `-count=10`；准备 API 阶段 clean 提交。
+API_HANDOFF_READY：管理员 adjustment API、权威只读 preview、共享响应 DTO、稳定 machine code、完整幂等指纹、冻结 Plan/FX replay 均已 GREEN；UI/i18n/browser 未开始，交由新续作 Worker。
 
 ## 已完成
 
@@ -18,16 +18,15 @@
 
 ## 下一步
 
-1. 提交管理员 API 完整合同 clean 安全点。
-2. 后端 API 阶段完成后进入现有管理面板 UI 与六语言，不扩展 analytics 设计。
-3. UI 通过后再做真实浏览器与最终门禁。
+1. 新续作 Worker 从本文件所在 clean 提交继续管理员 UI、六语言与真实浏览器。
+2. 复用现有 `POST .../adjustments/preview` 与 `POST .../adjustments`，不得重写后端估值或 #26 FX seam。
+3. 不扩展 analytics 设计；只完成原 Issue #24 已冻结的 UI/browser/final gates。
 
 ## 阻塞
 
 无外部阻塞。严格禁止从旧 `issue-24-positive-ingress` 继续开发，禁止触碰 #25/#27/#28 或复制 #26 FX 生命周期。
 
-## 最近安全提交
-
-- 开工提交：`c7c983d02f2161f52a9a815a452dc7d950f692fc`。
+- API 阶段提交：`40f9b4686`（稳定错误码与幂等 HTTP 合同）。
+- 后端合同修复提交：待提交。
 - 本续作 progress 安全提交：`b11244d3d`（`docs(agents): 固化 Issue 24 最终续作合同`）。
 - HTTP preview/commit RED 安全提交：待提交。

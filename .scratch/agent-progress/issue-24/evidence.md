@@ -7,6 +7,19 @@
 - `.scratch/agent-progress/issue-20/contract.md`：确认 `price_amount_micros`、Credit 估值币种和整数比例合同存在。
 - `.scratch/agent-progress/issue-22/contract.md`：确认窄 ingress、固定锁序、同事务数量/状态/ledger 与五接口 Credit 分流存在。
 
+## 最终集成基线核验（2026-08-07）
+
+- `git rev-parse HEAD` → `6f865feca3cd517a3dd744e67ea1240d5001d2ed`。
+- `git status --porcelain=v1` → 无输出，开工工作树干净。
+- `git merge-base HEAD 6f865feca3cd517a3dd744e67ea1240d5001d2ed` → `6f865feca3cd517a3dd744e67ea1240d5001d2ed`。
+- `orca worktree current --json` → `baseRef` 与 `git.head` 均为 `6f865feca3cd517a3dd744e67ea1240d5001d2ed`；`parentWorktreeId` 为 `1bd24578-ec8b-4492-961c-108ab229f4e7::C:/Users/34404/source/repos/new-api`，lineage capture source 为 `explicit-cli-flag`。
+- 父工作树核对时 HEAD 为 `73c658daa8e7954cb6f229348aac80287253391c`；本子工作树保持协调器冻结的较早集成基线，不从旧 `issue-24-positive-ingress` 工作树继续开发。
+- 复评裁决：#24 唯一 blocker 为 H2。实现边界收敛为管理员 increase 与 redemption 消费 #26 唯一 FX seam；后端分组 GREEN 后必须先创建安全提交。
+- RED：`go test ./model -run TestRedemptionCreditBalanceCrossCurrencyRequiresFrozenFXSnapshot -count=1` 编译失败，缺少 `fx_direction`、grant 级 `replayed` 与 fulfillment 冻结 FX 快照字段，证明 H2 公开合同未完整接通。
+- GREEN：`go test ./model -run 'TestRedemptionCreditBalance(CrossCurrencyRequiresFrozenFXSnapshot|SupportsUSDtoCNYFrozenFXSnapshot|RejectsInvalidFXAtomically)$' -count=1` → package PASS（约 14.82 秒）。覆盖 CNY→USD `10/73`、USD→CNY `73/10`、`captured_at`/direction、Option 变化冻结重放与缺失 FX 原子拒绝。
+- GREEN：`go test ./model -run 'TestRedemptionCreditBalance(CrossCurrencyRequiresFrozenFXSnapshot|SupportsUSDtoCNYFrozenFXSnapshot|RejectsInvalidFXAtomically|LedgerFailureRollsBackEverything)$' -count=1` → package PASS（约 21.88 秒）。跨币种 SQLite trigger 故障后兑换恢复 enabled，fulfillment 不残留 `credit_fx_rate_snapshot`，subscription/state/ledger/log 均为零。
+- `git diff -- model/credit_fx_rate.go model/credit_valuation.go` → 无输出，确认未修改 #26 parser/provider、Option 或 ingress 深模块。
+
 ## 已核验实现事实
 
 - #22 提供 `CreditValuationSourceSnapshot`、`newForwardCreditValuationIngress`、`ApplyCreditValuationIngressTx`。

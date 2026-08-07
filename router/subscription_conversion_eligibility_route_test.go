@@ -173,6 +173,10 @@ func TestSubscriptionConversionRouteRejectsEveryIneligibleStateWithoutSideEffect
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			db, engine, accessToken, now := seedSubscriptionConversionEligibilityRouteTest(t)
+			quote := performConversionQuoteRouteRequest(t, engine, conversionEligibilityUserID, accessToken)
+			require.Len(t, quote.Data.Quotes, 1)
+			quoteID := quote.Data.Quotes[0].QuoteId
+			require.NotEmpty(t, quoteID)
 			test.mutate(t, db, now)
 
 			var sourceBefore model.UserSubscription
@@ -183,9 +187,9 @@ func TestSubscriptionConversionRouteRejectsEveryIneligibleStateWithoutSideEffect
 			require.NoError(t, db.Model(&model.UserSubscription{}).Count(&subscriptionCountBefore).Error)
 
 			response := performSubscriptionConversionRouteRequest(t, engine, conversionEligibilityUserID, accessToken,
-				`{"subscription_id":"9952","idempotency_key":"reject-ineligible"}`)
+				`{"subscription_id":"9952","idempotency_key":"reject-ineligible","quote_id":"`+quoteID+`"}`)
 			assert.False(t, response.Success)
-			assert.Contains(t, response.Message, test.wantReason)
+			assert.Equal(t, model.ErrConversionQuoteStale.Error(), response.Code)
 
 			var sourceAfter model.UserSubscription
 			require.NoError(t, db.First(&sourceAfter, conversionEligibilitySourceID).Error)

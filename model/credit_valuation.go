@@ -907,5 +907,6 @@ func migrateCreditValuationSchema(db *gorm.DB) error {
 		&SubscriptionPreConsumeRecord{},
 		&CreditBalanceLedger{},
 		&SubscriptionConversion{},
+		&SubscriptionConversionQuote{},
 	)
 }

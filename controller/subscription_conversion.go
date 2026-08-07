@@ -2,7 +2,6 @@ package controller
 
 import (
 	"errors"
-	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,6 +14,7 @@ import (
 type subscriptionConversionConfirmRequest struct {
 	SubscriptionId string `json:"subscription_id"`
 	IdempotencyKey string `json:"idempotency_key"`
+	QuoteId        string `json:"quote_id"`
 }
 
 type subscriptionConversionConfirmDataResponse struct {
@@ -78,7 +78,7 @@ func ConfirmSubscriptionConversion(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	result, err := model.ConfirmTimedSubscriptionConversion(c.GetInt("id"), int(subscriptionId), request.IdempotencyKey)
+	result, err := model.ConfirmTimedSubscriptionConversionQuote(c.GetInt("id"), int(subscriptionId), request.IdempotencyKey, request.QuoteId)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -146,20 +146,11 @@ func toSubscriptionConversionHistoryResponse(conversion *model.SubscriptionConve
 }
 
 func subscriptionConversionUnitValue(conversion *model.SubscriptionConversion) (string, string) {
-	if conversion.ValuationSourcePriceMicros <= 0 || conversion.ValuationCreditBasis <= 0 ||
-		conversion.FxRateNumerator <= 0 || conversion.FxRateDenominator <= 0 {
+	if conversion.ValuationUnitValueNumeratorMicros <= 0 || conversion.ValuationUnitValueDenominator <= 0 {
 		return "", ""
 	}
-	numerator := new(big.Int).Mul(
-		big.NewInt(conversion.ValuationSourcePriceMicros),
-		big.NewInt(conversion.FxRateNumerator),
-	)
-	denominator := new(big.Int).Mul(
-		big.NewInt(conversion.ValuationCreditBasis),
-		big.NewInt(conversion.FxRateDenominator),
-	)
-	unitValue := new(big.Rat).SetFrac(numerator, denominator)
-	return unitValue.Num().String(), unitValue.Denom().String()
+	return strconv.FormatInt(conversion.ValuationUnitValueNumeratorMicros, 10),
+		strconv.FormatInt(conversion.ValuationUnitValueDenominator, 10)
 }
 
 func subscriptionConversionFXDirection(sourceCurrency string, targetCurrency string) string {
@@ -179,6 +170,10 @@ func subscriptionConversionFXDirection(sourceCurrency string, targetCurrency str
 
 func subscriptionConversionErrorCode(err error) string {
 	switch {
+	case errors.Is(err, model.ErrConversionIneligible):
+		return model.ErrConversionIneligible.Error()
+	case errors.Is(err, model.ErrConversionQuoteStale):
+		return model.ErrConversionQuoteStale.Error()
 	case errors.Is(err, model.ErrConversionIdempotencyConflict):
 		return model.ErrConversionIdempotencyConflict.Error()
 	case errors.Is(err, model.ErrCreditFXRateMissing):
@@ -197,8 +192,6 @@ func subscriptionConversionErrorCode(err error) string {
 		return model.ErrCreditFXDirectionMismatch.Error()
 	case errors.Is(err, model.ErrCreditFXOverflow):
 		return model.ErrCreditFXOverflow.Error()
-	case strings.HasPrefix(err.Error(), "subscription conversion rejected:"):
-		return "subscription_conversion_ineligible"
 	default:
 		return "subscription_conversion_failed"
 	}

@@ -150,9 +150,13 @@ func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *te
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
 	SetApiRouter(engine)
 
+	quote := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
+	require.Len(t, quote.Data.Quotes, 1)
+	quoteID := quote.Data.Quotes[0].QuoteId
+	require.NotEmpty(t, quoteID)
 	idempotencyKey := strings.Repeat("k", 128)
 	first := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"9972","idempotency_key":"`+idempotencyKey+`","gross_credit":"999999999"}`)
+		`{"subscription_id":"9972","idempotency_key":"`+idempotencyKey+`","quote_id":"`+quoteID+`","gross_credit":"999999999"}`)
 	require.True(t, first.Success)
 	assert.False(t, first.Data.Replayed)
 	assert.Equal(t, strconv.Itoa(sourceID), first.Data.Conversion.SourceSubscriptionId)
@@ -195,12 +199,12 @@ func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *te
 	assert.LessOrEqual(t, len(ledger.IdempotencyKey), 128)
 
 	replay := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"9972","idempotency_key":"`+idempotencyKey+`"}`)
+		`{"subscription_id":"9972","idempotency_key":"`+idempotencyKey+`","quote_id":"`+quoteID+`"}`)
 	require.True(t, replay.Success)
 	assert.True(t, replay.Data.Replayed)
 	assert.Equal(t, first.Data.Conversion, replay.Data.Conversion)
 	differentKey := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"9972","idempotency_key":"different-key"}`)
+		`{"subscription_id":"9972","idempotency_key":"different-key","quote_id":"`+quoteID+`"}`)
 	assert.False(t, differentKey.Success)
 	assert.Equal(t, "subscription_conversion_idempotency_conflict", differentKey.Code)
 
@@ -210,6 +214,65 @@ func TestSubscriptionConversionRouteCommitsLatestQuoteAtomicallyAndReplays(t *te
 		Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionConversion, sourceID).
 		Count(&ledgerCount).Error)
 	assert.Equal(t, int64(1), ledgerCount)
+}
+
+func TestSubscriptionConversionRouteRejectsExpiredQuoteWithoutWrites(t *testing.T) {
+	db, engine, accessToken, now := seedSubscriptionConversionEligibilityRouteTest(t)
+	quote := performConversionQuoteRouteRequest(t, engine, conversionEligibilityUserID, accessToken)
+	require.Len(t, quote.Data.Quotes, 1)
+	quoteID := quote.Data.Quotes[0].QuoteId
+	require.NotEmpty(t, quoteID)
+	require.NoError(t, db.Model(&model.SubscriptionConversionQuote{}).
+		Where("quote_id = ?", quoteID).
+		Updates(map[string]any{"created_at": now - 600, "expires_at": now - 1}).Error)
+
+	before := snapshotConversionQuoteRouteState(t, conversionEligibilityUserID)
+	response := performSubscriptionConversionRouteRequest(t, engine, conversionEligibilityUserID, accessToken,
+		`{"subscription_id":"9952","idempotency_key":"expired-quote","quote_id":"`+quoteID+`"}`)
+	require.False(t, response.Success)
+	require.Equal(t, model.ErrConversionQuoteStale.Error(), response.Code)
+	assertConversionQuoteRouteStateUnchanged(t, conversionEligibilityUserID, before)
+	assertSubscriptionConversionSideEffectCounts(t, db, 0, 0, 0)
+}
+
+func TestSubscriptionConversionRouteRejectsAuthoritativeFactDriftWithoutWrites(t *testing.T) {
+	tests := []struct {
+		name           string
+		idempotencyKey string
+		updates        map[string]any
+	}{
+		{
+			name:           "remaining credit",
+			idempotencyKey: "stale-remaining-credit",
+			updates:        map[string]any{"token_used": int64(26)},
+		},
+		{
+			name:           "credit basis",
+			idempotencyKey: "stale-credit-basis",
+			updates:        map[string]any{"last_grant_credit_snapshot": int64(125)},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, engine, accessToken, _ := seedSubscriptionConversionEligibilityRouteTest(t)
+			quote := performConversionQuoteRouteRequest(t, engine, conversionEligibilityUserID, accessToken)
+			require.Len(t, quote.Data.Quotes, 1)
+			quoteID := quote.Data.Quotes[0].QuoteId
+			require.NotEmpty(t, quoteID)
+			require.NoError(t, db.Model(&model.UserSubscription{}).
+				Where("id = ?", conversionEligibilitySourceID).
+				Updates(test.updates).Error)
+
+			before := snapshotConversionQuoteRouteState(t, conversionEligibilityUserID)
+			response := performSubscriptionConversionRouteRequest(t, engine, conversionEligibilityUserID, accessToken,
+				`{"subscription_id":"9952","idempotency_key":"`+test.idempotencyKey+`","quote_id":"`+quoteID+`"}`)
+			require.False(t, response.Success)
+			require.Equal(t, model.ErrConversionQuoteStale.Error(), response.Code)
+			assertConversionQuoteRouteStateUnchanged(t, conversionEligibilityUserID, before)
+			assertSubscriptionConversionSideEffectCounts(t, db, 0, 0, 0)
+		})
+	}
 }
 
 func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistoryAndAnalytics(t *testing.T) {
@@ -296,10 +359,24 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	require.Len(t, quote.Data.Quotes, 2)
 	quoteByID := conversionQuoteRouteItemsByID(quote.Data.Quotes)
 	require.Equal(t, "180", quoteByID[strconv.Itoa(sourceID)].GrossCredit)
+	staleQuote := quoteByID[strconv.Itoa(conflictID)]
+	require.NotEmpty(t, staleQuote.QuoteId)
+	require.NotEmpty(t, staleQuote.FactsFingerprint)
+	staleBefore := snapshotConversionQuoteRouteState(t, userID)
+	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
+		UpdateColumn("price_amount_micros", int64(41_000_000)).Error)
+	stale := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
+		`{"subscription_id":"26903","idempotency_key":"stale-plan-quote","quote_id":"`+staleQuote.QuoteId+`"}`)
+	require.False(t, stale.Success)
+	require.Equal(t, model.ErrConversionQuoteStale.Error(), stale.Code)
+	assertConversionQuoteRouteStateUnchanged(t, userID, staleBefore)
+	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
+		UpdateColumn("price_amount_micros", int64(40_000_000)).Error)
 
 	const idempotencyKey = "cross-currency-observable-facts"
+	sourceQuote := quoteByID[strconv.Itoa(sourceID)]
 	confirmed := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"26902","idempotency_key":"`+idempotencyKey+`"}`)
+		`{"subscription_id":"26902","idempotency_key":"`+idempotencyKey+`","quote_id":"`+sourceQuote.QuoteId+`"}`)
 	require.True(t, confirmed.Success, confirmed.Message)
 	facts := confirmed.Data.Conversion
 	assert.Equal(t, "40000000", facts.SourcePriceMicros)
@@ -318,6 +395,17 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	assert.Equal(t, "73", facts.FxDenominator)
 	assert.NotEmpty(t, facts.FxCapturedAt)
 	assert.Equal(t, model.CreditFXDirectionCNYtoUSD, facts.FxDirection)
+
+	const committedUnitValueNumeratorMicros int64 = 1_234_567
+	const committedUnitValueDenominator int64 = 89
+	require.NoError(t, db.Exec(
+		"UPDATE subscription_conversions SET valuation_unit_value_numerator_micros = ?, valuation_unit_value_denominator = ? WHERE source_subscription_id = ?",
+		committedUnitValueNumeratorMicros,
+		committedUnitValueDenominator,
+		sourceID,
+	).Error)
+	facts.UnitValueNumeratorMicros = strconv.FormatInt(committedUnitValueNumeratorMicros, 10)
+	facts.UnitValueDenominator = strconv.FormatInt(committedUnitValueDenominator, 10)
 
 	require.NoError(t, model.UpdateOption("USDExchangeRate", "8.1"))
 	require.NoError(t, db.Model(&model.SubscriptionPlan{}).Where("id = ?", timedPlanID).
@@ -363,7 +451,7 @@ func TestSubscriptionConversionRoutesExposeFrozenCrossCurrencyFactsAcrossHistory
 	assert.Contains(t, drilldownRecorder.Body.String(), facts.TargetSubscriptionId)
 
 	conflict := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"26903","idempotency_key":"`+idempotencyKey+`"}`)
+		`{"subscription_id":"26903","idempotency_key":"`+idempotencyKey+`","quote_id":"`+staleQuote.QuoteId+`"}`)
 	require.False(t, conflict.Success)
 	assert.Equal(t, "subscription_conversion_idempotency_conflict", conflict.Code)
 }
@@ -431,8 +519,12 @@ func TestSubscriptionConversionRoutePreservesNonActiveSelectionAndCreatesSingleC
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
 	SetApiRouter(engine)
+	quote := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
+	require.Len(t, quote.Data.Quotes, 2)
+	quoteID := conversionQuoteRouteItemsByID(quote.Data.Quotes)[strconv.Itoa(sourceID)].QuoteId
+	require.NotEmpty(t, quoteID)
 	response := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"9983","idempotency_key":"convert-non-active"}`)
+		`{"subscription_id":"9983","idempotency_key":"convert-non-active","quote_id":"`+quoteID+`"}`)
 	require.True(t, response.Success, response.Message)
 
 	var user model.User
@@ -511,8 +603,12 @@ func TestSubscriptionConversionRouteRollsBackEveryEffectWhenLedgerInsertFails(t 
 	engine := gin.New()
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
 	SetApiRouter(engine)
+	quote := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
+	require.Len(t, quote.Data.Quotes, 1)
+	quoteID := quote.Data.Quotes[0].QuoteId
+	require.NotEmpty(t, quoteID)
 	response := performSubscriptionConversionRouteRequest(t, engine, userID, accessToken,
-		`{"subscription_id":"9962","idempotency_key":"rollback-key"}`)
+		`{"subscription_id":"9962","idempotency_key":"rollback-key","quote_id":"`+quoteID+`"}`)
 	assert.False(t, response.Success)
 	assert.Contains(t, response.Message, "forced conversion ledger failure")
 

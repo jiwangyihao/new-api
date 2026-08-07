@@ -36,7 +36,11 @@ var (
 	ErrSubscriptionPlanPriceMismatch      = errors.New("subscription_plan_price_mismatch")
 )
 
-var ErrConversionIdempotencyConflict = errors.New("subscription_conversion_idempotency_conflict")
+var (
+	ErrConversionIneligible          = errors.New("subscription_conversion_ineligible")
+	ErrConversionQuoteStale          = errors.New("subscription_conversion_quote_stale")
+	ErrConversionIdempotencyConflict = errors.New("subscription_conversion_idempotency_conflict")
+)
 
 // User auth errors
 var (

@@ -5851,6 +5851,7 @@
     "Frozen FX": "固定 FX",
     "FX direction": "FX 方向",
     "FX captured at": "FX 取得時刻",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "確認時にこれらの評価情報が固定されます。その後のプラン価格、Credit 基準、または FX の変更によって、変換記録、台帳、ターゲット Credit のコストが書き換えられることはありません。",
     "Zoom": "ズーム"
   }
 }

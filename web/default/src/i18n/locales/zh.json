@@ -5851,6 +5851,7 @@
     "Frozen FX": "冻结 FX",
     "FX direction": "FX 方向",
     "FX captured at": "FX 快照时间",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "确认后会冻结这些估值事实。后续套餐价格、Credit 基数或 FX 变化不会回写转换记录、账本或目标 Credit 成本。",
     "Zoom": "缩放"
   }
 }

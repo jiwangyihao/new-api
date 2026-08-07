@@ -5851,6 +5851,7 @@
     "Frozen FX": "FX figé",
     "FX direction": "Direction du FX",
     "FX captured at": "Horodatage de capture du FX",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "La confirmation fige ces données de valorisation. Les modifications ultérieures du prix du forfait, de la base de Credit ou du FX ne réécrivent ni la conversion, ni le registre, ni le coût du Credit cible.",
     "Zoom": "Zoom"
   }
 }

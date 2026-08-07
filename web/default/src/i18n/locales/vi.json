@@ -5851,6 +5851,7 @@
     "Frozen FX": "FX đã đóng băng",
     "FX direction": "Hướng FX",
     "FX captured at": "Thời điểm ghi nhận FX",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "Khi xác nhận, các dữ kiện định giá này sẽ được đóng băng. Những thay đổi sau đó về giá gói, cơ sở Credit hoặc FX không ghi đè giao dịch chuyển đổi, sổ cái hay chi phí Credit đích.",
     "Zoom": "Zoom"
   }
 }

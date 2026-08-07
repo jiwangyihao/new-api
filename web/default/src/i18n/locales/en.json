@@ -5851,6 +5851,7 @@
     "Frozen FX": "Frozen FX",
     "FX direction": "FX direction",
     "FX captured at": "FX captured at",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.",
     "Zoom": "Zoom"
   }
 }

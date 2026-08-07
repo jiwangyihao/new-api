@@ -5851,6 +5851,7 @@
     "Frozen FX": "Зафиксированный FX",
     "FX direction": "Направление FX",
     "FX captured at": "Время фиксации FX",
+    "Confirmation freezes these valuation facts. Later plan-price, Credit-basis, or FX changes do not rewrite the conversion, ledger, or target Credit cost.": "При подтверждении эти данные оценки фиксируются. Последующие изменения цены плана, базы Credit или FX не перезаписывают конвертацию, реестр или стоимость целевого Credit.",
     "Zoom": "Zoom"
   }
 }

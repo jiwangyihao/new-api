@@ -556,6 +556,150 @@ func TestConfirmTimedSubscriptionConversionConcurrentSameFactsWritesOnce(t *test
 	require.Equal(t, results[0].Conversion.Id, source.ConversionId)
 }
 
+func TestConfirmTimedSubscriptionConversionLocksInFlightRequestsBeforeTargetIngress(t *testing.T) {
+	db, observerDB := setupSubscriptionConversionEligibilityConcurrencyTestDB(t)
+	require.NoError(t, migrateCreditValuationSchema(db))
+	primarySQL, err := db.DB()
+	require.NoError(t, err)
+	observerSQL, err := observerDB.DB()
+	require.NoError(t, err)
+	require.NotSame(t, primarySQL, observerSQL)
+	var journalMode string
+	require.NoError(t, observerDB.Raw("PRAGMA journal_mode").Scan(&journalMode).Error)
+	require.Equal(t, "wal", journalMode)
+
+	const (
+		userID        = 26_451
+		sourcePlanID  = 26_452
+		sourceID      = 26_453
+		creditBasis   = int64(100)
+		requestID     = "conversion-lock-order-request"
+		reserveCredit = int64(10)
+	)
+	now := GetDBTimestamp()
+	valuationCurrency := "CNY"
+	require.NoError(t, db.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).
+		UpdateColumn("valuation_currency", valuationCurrency).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version:           CreditValuationRuleVersion,
+		Status:            CreditValuationMigrationReady,
+		ValuationCurrency: valuationCurrency,
+		FxRateNumerator:   1,
+		FxRateDenominator: 1,
+		FxCapturedAt:      now,
+	}).Error)
+	user := User{Id: userID, Username: "conversion-lock-order", Status: common.UserStatusEnabled}
+	setting := user.GetSetting()
+	setting.ActiveSubscriptionId = sourceID
+	setting.SubscriptionBillingStrategy = SubscriptionBillingStrategySingleActive
+	user.SetSetting(setting)
+	require.NoError(t, db.Create(&user).Error)
+	plan := seedConversionQuoteTimedPlan(t, sourcePlanID, creditBasis)
+	plan.PriceAmountMicros = pointerToInt64(40_000_000)
+	plan.Currency = valuationCurrency
+	require.NoError(t, db.Save(plan).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id:                      sourceID,
+		UserId:                  userID,
+		PlanId:                  sourcePlanID,
+		EntitlementType:         SubscriptionEntitlementTimed,
+		TokenLimit:              creditBasis,
+		GrantReason:             SubscriptionGrantOrder,
+		Source:                  SubscriptionGrantOrder,
+		StartTime:               now - 40*24*60*60,
+		EndTime:                 now + TimedSubscriptionConversionBlockSeconds + 60,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           now - TimedSubscriptionConversionCooldownSeconds - 60,
+		LastGrantCreditSnapshot: pointerToInt64(creditBasis),
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+	reserved, err := PreConsumeUserSubscriptionByUnits(requestID, userID, "gpt-4o", 0, 0, reserveCredit)
+	require.NoError(t, err)
+	require.Equal(t, sourceID, reserved.UserSubscriptionId)
+
+	var observationMu sync.Mutex
+	requestRowsSelected := false
+	firstTargetMutationBeforeRequest := ""
+	targetMutationAttempted := make(chan struct{})
+	releaseTargetMutation := make(chan struct{})
+	var targetSignalOnce sync.Once
+
+	const requestQueryCallback = "issue26:observe_request_before_target_query"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(requestQueryCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "SubscriptionPreConsumeRecord" || tx.Error != nil || tx.RowsAffected == 0 {
+			return
+		}
+		observationMu.Lock()
+		requestRowsSelected = true
+		observationMu.Unlock()
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(requestQueryCallback) })
+
+	observeTargetMutation := func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil {
+			return
+		}
+		schemaName := tx.Statement.Schema.Name
+		switch schemaName {
+		case "UserSubscription", "CreditValuationState", "CreditBalanceLedger", "SubscriptionConversion":
+		default:
+			return
+		}
+		observationMu.Lock()
+		beforeRequest := !requestRowsSelected
+		if beforeRequest && firstTargetMutationBeforeRequest == "" {
+			firstTargetMutationBeforeRequest = schemaName
+		}
+		observationMu.Unlock()
+		if beforeRequest {
+			targetSignalOnce.Do(func() { close(targetMutationAttempted) })
+			<-releaseTargetMutation
+		}
+	}
+	const targetCreateCallback = "issue26:observe_target_before_request_create"
+	const targetUpdateCallback = "issue26:observe_target_before_request_update"
+	require.NoError(t, db.Callback().Create().Before("gorm:create").Register(targetCreateCallback, observeTargetMutation))
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(targetUpdateCallback, observeTargetMutation))
+	t.Cleanup(func() {
+		_ = db.Callback().Create().Remove(targetCreateCallback)
+		_ = db.Callback().Update().Remove(targetUpdateCallback)
+	})
+
+	type conversionOutcome struct {
+		result *SubscriptionConversionResult
+		err    error
+	}
+	done := make(chan conversionOutcome, 1)
+	go func() {
+		result, conversionErr := ConfirmTimedSubscriptionConversion(userID, sourceID, "conversion-lock-order")
+		done <- conversionOutcome{result: result, err: conversionErr}
+	}()
+
+	var outcome conversionOutcome
+	select {
+	case <-targetMutationAttempted:
+		var observedRequest SubscriptionPreConsumeRecord
+		require.NoError(t, observerDB.Where("request_id = ?", requestID).First(&observedRequest).Error)
+		require.Zero(t, observedRequest.ValuationSubscriptionId, "independent WAL reader must still observe an unfrozen request when target ingress starts early")
+		require.Zero(t, observedRequest.AppliedCredit)
+		close(releaseTargetMutation)
+		outcome = <-done
+	case outcome = <-done:
+		close(releaseTargetMutation)
+	}
+	require.NoError(t, outcome.err)
+	require.NotNil(t, outcome.result)
+
+	observationMu.Lock()
+	prematureTarget := firstTargetMutationBeforeRequest
+	selected := requestRowsSelected
+	observationMu.Unlock()
+	require.True(t, selected, "Confirm must execute the in-flight request selection")
+	require.Empty(t, prematureTarget, "target mutation %s started before Confirm selected and validated its in-flight requests", prematureTarget)
+}
+
 func TestTimedConversionConcurrentWithFinalSettleUsesLegalSerialization(t *testing.T) {
 	testTimedConversionConcurrentRequestTarget(t, 10, "settled", 185, 74_000_000)
 }

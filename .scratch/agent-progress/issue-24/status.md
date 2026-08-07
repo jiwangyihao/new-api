@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-IN_PROGRESS：复评确认唯一 blocker 为 H2；严格只在管理员 increase 与 redemption 的既有事务中消费 #26 `CurrentCreditFXRateSnapshot`/`ParseCreditFXRateSnapshot` seam，先完成后端分组 GREEN 安全提交，再进入 API/UI/六语言/browser。
+HANDOFF_READY：H2 后端完整 GREEN。redemption 与管理员 increase 均只在各自既有锁定事务内消费 #26 唯一 `CurrentCreditFXRateSnapshot`/`CreditFXRateSnapshot` seam；独立 increase 安全提交完成后交回协调器，不进入 API/UI。
 
 ## 已完成
 
@@ -28,11 +28,12 @@ IN_PROGRESS：复评确认唯一 blocker 为 H2；严格只在管理员 increase
 - H2 兑换跨币种已 GREEN：CNY→USD、USD→CNY 均在已锁定兑换事务内消费 `CurrentCreditFXRateSnapshot`，冻结 FX 进入 fulfillment、完整指纹、结构化 ledger 与重放响应；Option 变化后重放仍观察首次快照。
 - 缺失 FX 返回稳定 `credit_valuation_invalid_fx` 且整笔无写入；跨币种 ledger 故障证明兑换状态、fulfillment FX、Credit、估值状态与 ledger 同事务回滚。
 - redemption H2 安全提交：`49b1ece48`（`feat(subscription): 冻结兑换跨币种估值快照`）；提交后定向复验再次 PASS，`gofmt`、`git diff --check` 通过且工作树 clean。
+- 管理员 increase H2 已 GREEN：CNY→USD、USD→CNY、Option 变化后的冻结重放、缺失 FX 稳定拒绝与跨币种 ledger 故障整笔回滚均通过；FX/currency/captured_at/direction 进入完整指纹、source snapshot、结构化 ledger 和 grant replay。
 
 ## 下一步
 
-1. 完成 H2 后端：双向 FX 冻结、完整指纹、结构化 ledger/API/replay、invalid FX 与故障回滚。
-2. 运行后端分组测试并创建安全提交；之后接通 API/UI、六语言与真实 browser 验收。
+1. 协调器验收并集成 H2 后端安全提交。
+2. API/UI/六语言/browser 由后续 dispatch 按合同继续；本 dispatch 未进入这些范围。
 ## 阻塞
 
 - 无外部阻塞；禁止修改或复制 #26 parser/provider、Option 生命周期及 H1/M1/M2/M3，也不触碰 #25/#27/#28。
@@ -48,4 +49,7 @@ IN_PROGRESS：复评确认唯一 blocker 为 H2；严格只在管理员 increase
 - 兑换 debt offset 安全提交：`a33f6f012`。
 - 兑换回滚/邀请隔离安全提交：`9345fd18a`。
 - 跨币种最小 RED/接口需求安全提交：`91b5a8384`。
+- 兑换 H2 安全提交：`49b1ece48`。
+- 兑换证据安全提交：`03e9f4968`。
+- 管理员 increase H2 安全提交：见本轮最终提交。
 - 最终验证记录：本文件所在 HANDOFF_READY 提交。

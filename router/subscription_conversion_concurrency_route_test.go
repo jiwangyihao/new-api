@@ -64,6 +64,11 @@ func TestSubscriptionConversionRouteConcurrentDifferentKeysConvertsSourceOnce(t 
 	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("secret"))))
 	SetApiRouter(engine)
 
+	quote := performConversionQuoteRouteRequest(t, engine, userID, accessToken)
+	require.Len(t, quote.Data.Quotes, 1)
+	quoteID := quote.Data.Quotes[0].QuoteId
+	require.NotEmpty(t, quoteID)
+
 	type outcome struct {
 		response subscriptionConversionRouteResponse
 		err      error
@@ -76,7 +81,7 @@ func TestSubscriptionConversionRouteConcurrentDifferentKeysConvertsSourceOnce(t 
 		go func(idempotencyKey string) {
 			defer waitGroup.Done()
 			<-start
-			body := fmt.Sprintf(`{"subscription_id":"%d","idempotency_key":"%s"}`, sourceID, idempotencyKey)
+			body := fmt.Sprintf(`{"subscription_id":"%d","idempotency_key":"%s","quote_id":"%s"}`, sourceID, idempotencyKey, quoteID)
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodPost, "/api/subscription/self/conversions", bytes.NewBufferString(body))
 			request.Header.Set("Content-Type", "application/json")
@@ -164,6 +169,7 @@ func setupSubscriptionConversionConcurrentRouteTestDB(t *testing.T) *gorm.DB {
 		&model.SubscriptionOrder{},
 		&model.Redemption{},
 		&model.InvitationRewardEvent{},
+		&model.SubscriptionConversionQuote{},
 		&model.CreditBalanceLedger{},
 		&model.SubscriptionConversion{},
 	))

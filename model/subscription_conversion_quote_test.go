@@ -705,7 +705,7 @@ func setupSubscriptionConversionQuoteTestDB(t *testing.T) {
 	require.NoError(t, err)
 	DB = db
 	LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &Redemption{}, &InvitationRewardEvent{}, &CreditBalanceLedger{}, &SubscriptionConversion{}))
+	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{}, &Redemption{}, &InvitationRewardEvent{}, &CreditBalanceLedger{}, &SubscriptionConversion{}, &SubscriptionConversionQuote{}))
 	seedConversionQuoteCreditBalancePlan(t)
 
 	t.Cleanup(func() {

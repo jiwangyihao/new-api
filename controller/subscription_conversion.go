@@ -14,6 +14,7 @@ import (
 type subscriptionConversionConfirmRequest struct {
 	SubscriptionId string `json:"subscription_id"`
 	IdempotencyKey string `json:"idempotency_key"`
+	QuoteId        string `json:"quote_id"`
 }
 
 type subscriptionConversionConfirmDataResponse struct {
@@ -77,7 +78,7 @@ func ConfirmSubscriptionConversion(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	result, err := model.ConfirmTimedSubscriptionConversion(c.GetInt("id"), int(subscriptionId), request.IdempotencyKey)
+	result, err := model.ConfirmTimedSubscriptionConversionQuote(c.GetInt("id"), int(subscriptionId), request.IdempotencyKey, request.QuoteId)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

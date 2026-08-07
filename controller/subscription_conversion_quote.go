@@ -13,6 +13,10 @@ type subscriptionConversionQuoteReasonResponse struct {
 
 type subscriptionConversionQuoteItemResponse struct {
 	SourceSubscriptionId     string                                      `json:"source_subscription_id"`
+	QuoteId                  string                                      `json:"quote_id"`
+	CreatedAt                string                                      `json:"created_at"`
+	ExpiresAt                string                                      `json:"expires_at"`
+	FactsFingerprint         string                                      `json:"facts_fingerprint"`
 	PlanId                   string                                      `json:"plan_id"`
 	PlanTitle                string                                      `json:"plan_title"`
 	EntitlementType          string                                      `json:"entitlement_type"`
@@ -87,6 +91,10 @@ func toSubscriptionConversionQuoteListResponse(input *model.TimedSubscriptionCon
 			})
 		}
 		item := subscriptionConversionQuoteItemResponse{
+			QuoteId:                  quote.QuoteId,
+			CreatedAt:                strconv.FormatInt(quote.CreatedAt, 10),
+			ExpiresAt:                strconv.FormatInt(quote.ExpiresAt, 10),
+			FactsFingerprint:         quote.FactsFingerprint,
 			SourceSubscriptionId:     strconv.FormatInt(int64(quote.SourceSubscriptionId), 10),
 			PlanId:                   strconv.FormatInt(int64(quote.PlanId), 10),
 			PlanTitle:                quote.PlanTitle,

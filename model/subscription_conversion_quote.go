@@ -1,7 +1,6 @@
 package model
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -91,6 +90,10 @@ type TimedSubscriptionConversionQuote struct {
 	Status                            string                                   `json:"status"`
 	Category                          string                                   `json:"category"`
 	DatabaseNow                       int64                                    `json:"database_now"`
+	QuoteId                           string                                   `json:"quote_id"`
+	CreatedAt                         int64                                    `json:"created_at"`
+	ExpiresAt                         int64                                    `json:"expires_at"`
+	FactsFingerprint                  string                                   `json:"facts_fingerprint"`
 	StartTime                         int64                                    `json:"start_time"`
 	EndTime                           int64                                    `json:"end_time"`
 	RemainingSeconds                  int64                                    `json:"remaining_seconds"`
@@ -185,6 +188,9 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 			if err != nil {
 				return err
 			}
+			if err := issueTimedSubscriptionConversionQuoteTx(tx, quote, &subscriptions[i]); err != nil {
+				return err
+			}
 			result.Quotes = append(result.Quotes, *quote)
 		}
 		if err := tx.Model(&SubscriptionConversion{}).
@@ -195,7 +201,7 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 			return err
 		}
 		return nil
-	}, &sql.TxOptions{ReadOnly: true})
+	})
 	if err != nil {
 		return nil, err
 	}

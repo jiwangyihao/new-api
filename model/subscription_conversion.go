@@ -55,6 +55,7 @@ type SubscriptionConversion struct {
 	AvailableCreditAfter              int64  `json:"available_credit_after" gorm:"type:bigint;not null"`
 	SettlementDebtAfter               int64  `json:"settlement_debt_after" gorm:"type:bigint;not null"`
 	BalanceBefore                     int64  `json:"balance_before" gorm:"type:bigint;not null"`
+	QuoteId                           string `json:"quote_id" gorm:"type:varchar(64);not null;default:'';index"`
 	BalanceAfter                      int64  `json:"balance_after" gorm:"type:bigint;not null"`
 	LastGrantedAt                     int64  `json:"last_granted_at" gorm:"type:bigint;not null"`
 	LastGrantTimeSource               string `json:"last_grant_time_source" gorm:"type:varchar(64);not null"`
@@ -91,10 +92,22 @@ type SubscriptionConversionResult struct {
 }
 
 func ConfirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string) (*SubscriptionConversionResult, error) {
-	return confirmTimedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey, nil)
+	return confirmTimedSubscriptionConversionWithQuote(userId, sourceSubscriptionId, idempotencyKey, "", nil)
+}
+
+func ConfirmTimedSubscriptionConversionQuote(userId int, sourceSubscriptionId int, idempotencyKey string, quoteId string) (*SubscriptionConversionResult, error) {
+	quoteId = strings.TrimSpace(quoteId)
+	if quoteId == "" {
+		return nil, ErrConversionQuoteStale
+	}
+	return confirmTimedSubscriptionConversionWithQuote(userId, sourceSubscriptionId, idempotencyKey, quoteId, nil)
 }
 
 func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, idempotencyKey string, hooks *subscriptionConversionHooks) (*SubscriptionConversionResult, error) {
+	return confirmTimedSubscriptionConversionWithQuote(userId, sourceSubscriptionId, idempotencyKey, "", hooks)
+}
+
+func confirmTimedSubscriptionConversionWithQuote(userId int, sourceSubscriptionId int, idempotencyKey string, quoteId string, hooks *subscriptionConversionHooks) (*SubscriptionConversionResult, error) {
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if userId <= 0 || sourceSubscriptionId <= 0 || idempotencyKey == "" || len(idempotencyKey) > 128 {
 		return nil, errors.New("invalid subscription conversion request")
@@ -117,6 +130,9 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			if replay.SourceSubscriptionId != sourceSubscriptionId {
 				return ErrConversionIdempotencyConflict
 			}
+			if quoteId != "" && replay.QuoteId != quoteId {
+				return ErrConversionIdempotencyConflict
+			}
 			if err := validateSubscriptionConversionReplayFactsTx(tx, replay); err != nil {
 				return err
 			}
@@ -127,6 +143,9 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			return err
 		} else if found {
 			if existing.UserId == userId && existing.IdempotencyKey == idempotencyKey {
+				if quoteId != "" && existing.QuoteId != quoteId {
+					return ErrConversionIdempotencyConflict
+				}
 				if err := validateSubscriptionConversionReplayFactsTx(tx, existing); err != nil {
 					return err
 				}
@@ -134,6 +153,15 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 				return nil
 			}
 			return fmt.Errorf("%w: source subscription already converted", ErrConversionIdempotencyConflict)
+		}
+
+		var quoteRecord *SubscriptionConversionQuote
+		if quoteId != "" {
+			var quoteErr error
+			quoteRecord, quoteErr = lockTimedSubscriptionConversionQuoteTx(tx, quoteId, userId, sourceSubscriptionId)
+			if quoteErr != nil {
+				return quoteErr
+			}
 		}
 
 		var source UserSubscription
@@ -144,23 +172,38 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		if err != nil {
 			return err
 		}
+		creditPlan, err := GetCreditBalancePlanTx(tx)
+		if err != nil {
+			return err
+		}
+		var sourcePlan SubscriptionPlan
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", source.PlanId).First(&sourcePlan).Error; err != nil {
+			if quoteRecord != nil {
+				return ErrConversionQuoteStale
+			}
+			return err
+		}
 		quote, err := RecalculateTimedSubscriptionConversionQuoteTx(tx, userId, sourceSubscriptionId, dbNow)
 		if err != nil {
 			return err
+		}
+		if quoteRecord != nil {
+			if !quote.CanConfirm {
+				return ErrConversionQuoteStale
+			}
+			if err := validateTimedSubscriptionConversionQuoteFactsTx(tx, quoteRecord, dbNow, quote, &source, &sourcePlan, creditPlan); err != nil {
+				return err
+			}
 		}
 		if hooks != nil && hooks.at != nil {
 			if err := hooks.at(subscriptionConversionAfterQuotePhase); err != nil {
 				return err
 			}
 		}
-		if !quote.CanConfirm {
+		if quoteRecord == nil && !quote.CanConfirm {
 			return subscriptionConversionRejection(quote)
 		}
 
-		creditPlan, err := GetCreditBalancePlanTx(tx)
-		if err != nil {
-			return err
-		}
 		if err := guardSubscriptionConversionPlansTx(tx, quote.PlanId, creditPlan.Id); err != nil {
 			return err
 		}
@@ -173,12 +216,15 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 		if err != nil {
 			return err
 		}
-		if !quote.CanConfirm {
+		if quoteRecord != nil {
+			if !quote.CanConfirm {
+				return ErrConversionQuoteStale
+			}
+			if err := validateTimedSubscriptionConversionQuoteFactsTx(tx, quoteRecord, dbNow, quote, &source, &sourcePlan, creditPlan); err != nil {
+				return err
+			}
+		} else if !quote.CanConfirm {
 			return subscriptionConversionRejection(quote)
-		}
-		var sourcePlan SubscriptionPlan
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", quote.PlanId).First(&sourcePlan).Error; err != nil {
-			return err
 		}
 		var valuationSource *CreditValuationSourceSnapshot
 		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
@@ -292,6 +338,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 			DebtOffset: grant.DebtOffset, NetAvailableCredit: quote.GrossCredit - grant.DebtOffset,
 			AvailableCreditAfter: grant.AvailableCredit, SettlementDebtAfter: grant.SettlementDebt,
 			BalanceBefore: grant.BalanceBefore, BalanceAfter: grant.BalanceAfter,
+			QuoteId:       quoteId,
 			LastGrantedAt: quote.LastGrantedAt, LastGrantTimeSource: quote.LastGrantTimeSource, LastGrantSource: quote.LastGrantSource,
 			ConvertedAt: dbNow, CreatedAt: dbNow,
 		}
@@ -347,7 +394,7 @@ func confirmTimedSubscriptionConversion(userId int, sourceSubscriptionId int, id
 
 	err := transactionWithUserSettingCASRetry(run)
 	if err != nil {
-		if errors.Is(err, ErrConversionIdempotencyConflict) {
+		if errors.Is(err, ErrConversionIdempotencyConflict) || errors.Is(err, ErrConversionQuoteStale) {
 			return nil, err
 		}
 		replay, replayErr := findCommittedSubscriptionConversion(userId, sourceSubscriptionId, idempotencyKey)

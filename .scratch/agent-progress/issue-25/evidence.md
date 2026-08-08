@@ -150,3 +150,11 @@
 - CDE / A/B / Issue #23 / Issue #24 代表性联合回归：`go test ./model -run '^(TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption|TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward|TestConcurrent(RefundAndChargebackRecoverCreditOnceWithChargebackPrecedence|RefundAndAdminDecreaseUseLegalSerializations|LowFrequencyOutflowAndRequest(FinalSettle|Refund)UseLegalSerializations)|TestCreditRequestTarget(InjectedFailureRollsBackAtomically|PersistentSQLiteLockReturnsStableConflictWithoutWrites)|TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)|TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay|TestCreditValuationRequestTargetDecrease(RestoresOriginalSnapshot|AuditsRestoreAbsorbedByOtherDebt|MarksReopenedDebtUnknown)|TestAdminCreditBalanceIncreaseOffsetsDebtBeforeExactValue|TestRedemptionCreditBalanceOffsetsDebtBeforeExactValue)$' -count=1` → PASS。
 - request coalescer 相邻回归：`go test ./model -run '^TestCreditRequestTargetCoalescer' -count=10` → PASS。
 - MySQL 5.7 / PostgreSQL 9.6 未运行，归 Issue #27；API/UI/i18n/browser 与 Issue #28 未进入。
+
+## 最终 API/UI/分析续作恢复现场
+
+- `git rev-parse HEAD && git status --porcelain=v1 --branch && git merge-base HEAD fe1901aaf7a769fe7057c6483e30b7b1491adcdc`：HEAD 为 `a65399f1586952f2895080442c026924fc90c633`，staged / unstaged / untracked 均为 0，merge-base 为 `fe1901aaf7a769fe7057c6483e30b7b1491adcdc`。
+- `orca status --json && orca worktree current --json && orca orchestration dispatch-show --task task_0ed0f6664988 --json`：runtime ready；`baseRef=jiwangyihao/credit-operational-value-integration`；parent 严格为 `credit-operational-value-integration`；Dispatch `ctx_228d9b692759`、failure_count=0。
+- 已核对 A–E 提交链：`92482861f`、`90e6f3c80`、`d6fdcd45c`、`e3e7f4e60`、`e86fe7ba3`、`845758872`、`19c6440dd`、`a65399f15`；不重做核心算法。
+- 已读取父 PRD #19、Issue #25、执行/Wave 3/Issue #25/验收文档、历史提交 `5cec2213b` 中的 C/D/E 续作合同、`CONTEXT.md`、ADR 0002、2026-08-02 specification/plan 相关章节，以及 `skill://tdd` 与 Orca CLI 运行时指南。当前 HEAD 不含题述路径 `docs/agents/credit-operational-value-issue-25-cde-continuation.md`，其合同已从 Git 历史原文核验。
+- 下一条 RED：从已注册的真实管理员 adjustment 路由发起 decrease，锁定 plan_id 拒绝、稳定 code、结构化 ledger 响应与幂等重放合同。

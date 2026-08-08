@@ -59,7 +59,7 @@
 - 安全文档：`8b390a7fb docs(issue-26): 固化最终缺口修复合同`。
 - 前端 quote identity RED/GREEN：`e984c1eb7`、`e10d4bbd8`、`27c3552cb`。
 - 前端 stable-code/i18n GREEN：`979c43af2`、`c8aaf557f`。
-- 后端 quote reuse RED/GREEN：`3a2d081b8`、`913c5c930`。
+- 后端 quote reuse 与原子性 RED/GREEN：`3a2d081b8`、`913c5c930`、`a8aee625f`、`c4e89aabf`。
 - 每个小步均使用 Conventional Commit，英文 `type(scope)`、简体中文 subject。
 
 ## 交接

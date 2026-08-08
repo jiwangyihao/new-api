@@ -42,20 +42,30 @@
 - 清理边界：每次按 `(user_id, expires_at, quote_id)` 稳定选择并删除至多 32 条已过期 identity；不删除未过期报价。并发 Confirm 仍按主键锁 quote，MySQL/PostgreSQL 删除等待锁的语义留给 #27 实机验证。
 - GREEN 提交：`913c5c930 fix(subscription): 复用有效转换报价`。
 
+## Finding D：报价 facts 与批量持久化原子性
+
+- RED 提交：`a8aee625f test(subscription): 固化报价事实原子性`。
+- RED 1：在旧读事务结束、identity 写入开始前把 source `token_used` 从 25 改为 26；接口仍返回/持久化 75 remaining 与旧 source facts，证明报价生成即 stale。
+- RED 2：两条报价在第二条持久化前注入错误；旧实现返回失败但数据库已遗留第一条 quote，证明批量部分写。
+- GREEN：`c4e89aabf fix(subscription): 原子持久化转换报价事实`。候选读取、facts 计算、测试接缝触发后的同事务重读、所有 quote identity 写入、过期清理和 conversion history 读取同属一个 GORM 事务；失败统一回滚。
+- SQLite 并发：只识别实际 `github.com/glebarez/go-sqlite.Error` 的 `SQLITE_BUSY/SQLITE_LOCKED` 基础码，在完整事务边界最多 8 次有界重试；不解析错误文本，不吞掉业务/约束错误，不为 MySQL/PostgreSQL 添加方言重试。
+- GREEN 结果：事实变化测试返回并持久化 `source_token_used=26`、`current_remaining_credit=74`；第二条注入失败后该 user quote count 为 0。
+- 语义边界：提交后外部事实继续允许变化；Confirm 对变化返回 stale 是正确合同。本修复保证的是提交时返回计算与持久化 facts 一致，以及批量全成或全回滚，不扩展全局 Option/FX/计划锁图。
+
 ## 最终验证
 
-- `go test ./model -run '^TestListTimedSubscriptionConversionQuotes' -count=10 -timeout=600s`：通过。
+- `go test ./model -run '^TestListTimedSubscriptionConversionQuotes' -count=10 -timeout=600s`：通过，包含事实变化与批量回滚用例。
 - `go test ./model -run '^(TestListTimedSubscriptionConversionQuotes|TestRecalculateTimedSubscriptionConversionQuote|TestTimedSubscriptionConversionQuote|TestConfirmTimedSubscriptionConversion)' -count=10 -timeout=600s`：通过。
 - `go test -race ./model -run '^TestListTimedSubscriptionConversionQuotesConcurrentSameFactsWritesOnce$' -count=1 -timeout=300s`：通过。
 - `go test ./controller ./router -run 'SubscriptionConversion|TimedConversion' -count=1 -timeout=300s`：两个包通过。
 - `bun test src/features/subscription-conversion/api.test.ts src/features/subscription-conversion/errors.test.ts src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`：23 pass / 0 fail。
 - `bun run typecheck && bun run i18n:sync && bun run build`：通过；i18n 报告生成，Rsbuild production build 成功。
 - `go test ./model ./service ./controller -count=1 -timeout=1200s`：model、service 通过；controller 仅 `TestCreditBalanceGrantRejectsReplayWithMismatchedIdentity` 失败，其旧断言要求自由文本 `idempotency key mismatch`，实际稳定 code 为 `credit_valuation_idempotency_mismatch`。未将该组合命令误报为通过；父集成需校准旧断言并重跑。
-- `git diff --check`：通过；代码提交 `913c5c930` 后工作树 clean。
+- `git diff --check`：通过；最新代码提交为 `c4e89aabf`。
 
 ## 验证边界与交接
 
 - 本 Dispatch 使用真实 SQLite；MySQL 5.7/PostgreSQL 9.6 未运行，三库零 SKIP 归 Issue #27。
 - 未修改 #24 管理员正向入账、#25 destructive recovery、#27 migration/ready 或 #28 release。
-- 安全文档与实现链：`8b390a7fb`、`e984c1eb7`、`e10d4bbd8`、`27c3552cb`、`979c43af2`、`c8aaf557f`、`3a2d081b8`、`913c5c930`。
+- 安全文档与实现链：`8b390a7fb`、`e984c1eb7`、`e10d4bbd8`、`27c3552cb`、`979c43af2`、`c8aaf557f`、`3a2d081b8`、`913c5c930`、`a8aee625f`、`c4e89aabf`。
 - 父协调器下一步：集成本分支，校准一个既有 controller 文本断言，执行组合门禁；不得把 MySQL/PostgreSQL 标记为已实测。

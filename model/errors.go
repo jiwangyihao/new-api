@@ -29,6 +29,7 @@ var (
 	ErrCreditValuationPlanIneligible      = errors.New("credit_valuation_plan_ineligible")
 	ErrCreditValuationInvalidFX           = errors.New("credit_valuation_invalid_fx")
 	ErrCreditValuationIdempotencyMismatch = errors.New("credit_valuation_idempotency_mismatch")
+	ErrCreditValuationMigrationNotReady   = errors.New("credit_valuation_migration_not_ready")
 	ErrSubscriptionPlanPriceInvalid       = errors.New("subscription_plan_price_invalid")
 	ErrSubscriptionPlanPriceNegative      = errors.New("subscription_plan_price_negative")
 	ErrSubscriptionPlanPricePrecision     = errors.New("subscription_plan_price_precision")

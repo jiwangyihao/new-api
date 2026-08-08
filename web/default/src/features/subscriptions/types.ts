@@ -351,6 +351,7 @@ export interface UserSubscriptionRecord {
 export interface ApiResponse<T = unknown> {
   success: boolean
   message?: string
+  code?: string
   data?: T
 }
 
@@ -482,12 +483,49 @@ export type CreditBalanceAdjustmentOperation = 'increase' | 'decrease'
 
 export interface CreditBalanceAdjustmentRequest {
   operation: CreditBalanceAdjustmentOperation
-  amount: number
+  amount: string
+  plan_id?: number
   idempotency_key: string
   reason: string
 }
 
-export interface CreditBalanceAdjustmentResult {
+export interface CreditBalanceAdjustmentPreviewRequest {
+  operation: CreditBalanceAdjustmentOperation
+  amount: string
+  plan_id?: number
+}
+
+export interface CreditBalanceAdjustmentAuthoritativeResult {
+  plan_id: number
+  gross_credit: number
+  net_credit: number
+  gross_amount_micros: string
+  net_amount_micros: string
+  valuation_currency: string
+  source_currency: string
+  confidence: string
+  fx_rate_numerator: string
+  fx_rate_denominator: string
+  fx_captured_at: number
+  fx_direction: string
+  rule_version: number
+  state_version_after: number
+  debt_offset: number
+  available_credit: number
+  settlement_debt: number
+  balance_before: number
+  balance_after: number
+  replayed: boolean
+  preview: boolean
+}
+
+export interface CreditBalanceAdjustmentPreviewResult
+  extends CreditBalanceAdjustmentAuthoritativeResult {
+  credit_balance: CreditBalanceGrantResult
+}
+
+export interface CreditBalanceAdjustmentResult
+  extends CreditBalanceAdjustmentAuthoritativeResult {
   adjustment: {
     id: number
     idempotency_key: string
@@ -501,7 +539,6 @@ export interface CreditBalanceAdjustmentResult {
   }
   credit_balance: CreditBalanceGrantResult
   debt_formed: number
-  replayed: boolean
 }
 
 export interface SubscriptionOrderRecoveryPreview {

@@ -1039,10 +1039,69 @@ func AdminListUserSubscriptions(c *gin.Context) {
 }
 
 type AdminCreditBalanceAdjustmentRequest struct {
-	Operation      string `json:"operation"`
-	Amount         int64  `json:"amount"`
-	IdempotencyKey string `json:"idempotency_key"`
-	Reason         string `json:"reason"`
+	Operation      string          `json:"operation"`
+	Amount         dto.StringValue `json:"amount"`
+	PlanId         int             `json:"plan_id"`
+	IdempotencyKey string          `json:"idempotency_key"`
+	Reason         string          `json:"reason"`
+}
+
+func (r AdminCreditBalanceAdjustmentRequest) amountInt64() (int64, error) {
+	return strconv.ParseInt(strings.TrimSpace(string(r.Amount)), 10, 64)
+}
+
+func AdminPreviewUserCreditBalance(c *gin.Context) {
+	userId, _ := strconv.Atoi(c.Param("id"))
+	var req AdminCreditBalanceAdjustmentRequest
+	if userId <= 0 || c.ShouldBindJSON(&req) != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	amount, amountErr := req.amountInt64()
+	if amountErr != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	result, err := service.PreviewCreditBalanceAdjustment(service.CreditBalanceAdjustmentPreviewRequest{
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
+	})
+	if err != nil {
+		writeAdminCreditBalanceAdjustmentError(c, err)
+		return
+	}
+	common.ApiSuccess(c, result)
+}
+func writeAdminCreditBalanceAdjustmentError(c *gin.Context, err error) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": err.Error(),
+		"code":    adminCreditBalanceAdjustmentErrorCode(err),
+	})
+}
+
+func adminCreditBalanceAdjustmentErrorCode(err error) string {
+	switch {
+	case errors.Is(err, model.ErrCreditValuationPlanRequired):
+		return "credit_valuation_plan_required"
+	case errors.Is(err, model.ErrCreditValuationPlanIneligible):
+		return "credit_valuation_plan_ineligible"
+	case errors.Is(err, model.ErrCreditValuationUnsupportedCurrency):
+		return "credit_valuation_unsupported_currency"
+	case errors.Is(err, model.ErrCreditValuationInvalidFX):
+		return "credit_valuation_invalid_fx"
+	case errors.Is(err, model.ErrCreditValuationOverflow):
+		return "credit_valuation_overflow"
+	case errors.Is(err, model.ErrCreditValuationStateMissing):
+		return "credit_valuation_state_missing"
+	case errors.Is(err, model.ErrCreditValuationStateMismatch):
+		return "credit_valuation_state_mismatch"
+	case errors.Is(err, model.ErrCreditValuationIdempotencyMismatch):
+		return "credit_valuation_idempotency_mismatch"
+	case errors.Is(err, model.ErrCreditValuationMigrationNotReady):
+		return "credit_valuation_migration_not_ready"
+	default:
+		return "internal_error"
+	}
 }
 
 func AdminAdjustUserCreditBalance(c *gin.Context) {
@@ -1052,12 +1111,17 @@ func AdminAdjustUserCreditBalance(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
+	amount, amountErr := req.amountInt64()
+	if amountErr != nil {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
 	result, err := service.AdjustCreditBalance(service.CreditBalanceAdjustmentRequest{
-		UserId: userId, Operation: req.Operation, Amount: req.Amount,
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
 		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		writeAdminCreditBalanceAdjustmentError(c, err)
 		return
 	}
 	common.ApiSuccess(c, result)

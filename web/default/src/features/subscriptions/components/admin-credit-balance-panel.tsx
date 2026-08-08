@@ -16,9 +16,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { formatAdminMoneyAmount } from '@/features/admin-analytics/lib/format'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -49,17 +50,21 @@ import {
   adjustUserCreditBalance,
   getAdminCreditBalanceLedger,
   getSubscriptionOrderRecoveryPreview,
+  previewUserCreditBalanceAdjustment,
   recoverSubscriptionOrder,
 } from '../api'
 import type {
   CreditBalanceAdjustmentOperation,
+  CreditBalanceAdjustmentPreviewResult,
   CreditBalanceLedgerFilters,
+  PlanRecord,
   SubscriptionOrderRecoveryPreview,
 } from '../types'
 import { CreditBalanceLedger } from './credit-balance-ledger'
 
 interface AdminCreditBalancePanelProps {
   userId: number
+  plans?: readonly PlanRecord[]
   onSuccess?: () => void
 }
 
@@ -71,16 +76,78 @@ function newIdempotencyKey(userId: number): string {
   return `admin-credit-${userId}-${random}`
 }
 
+function isEligibleAfterSalesPlan(record: PlanRecord): boolean {
+  const plan = record.plan
+  const priceMicros = plan.price_amount_micros?.trim()
+  return Boolean(
+    plan.enabled &&
+      (plan.entitlement_type ?? 'timed') === 'timed' &&
+      !plan.is_trial &&
+      !plan.invite_trial &&
+      priceMicros &&
+      /^\d+$/.test(priceMicros) &&
+      BigInt(priceMicros) > 0n &&
+      Number.isSafeInteger(plan.monthly_token_limit) &&
+      Number(plan.monthly_token_limit) > 0 &&
+      plan.unlimited_purchase_enabled === true &&
+      plan.currency?.trim()
+  )
+}
+
+const maximumAdjustmentAmount = 1_000_000_000_000n
+
+function isValidAdjustmentAmount(value: string): boolean {
+  return /^[1-9]\d*$/.test(value) && BigInt(value) <= maximumAdjustmentAmount
+}
+
+function adjustmentErrorKey(code: string | undefined): string {
+  switch (code) {
+    case 'credit_valuation_plan_required':
+      return 'Select an eligible after-sales grant plan.'
+    case 'credit_valuation_plan_ineligible':
+      return 'The selected plan is not eligible for an after-sales grant.'
+    case 'credit_valuation_unsupported_currency':
+      return 'The selected plan currency is not supported for operational valuation.'
+    case 'credit_valuation_invalid_fx':
+      return 'The frozen FX snapshot is unavailable or invalid.'
+    case 'credit_valuation_overflow':
+      return 'The Credit amount is too large to value safely.'
+    case 'credit_valuation_state_missing':
+    case 'credit_valuation_state_mismatch':
+      return 'The Credit valuation state changed. Refresh and try again.'
+    case 'credit_valuation_idempotency_mismatch':
+      return 'This after-sales grant no longer matches its retry key. Change a fact and try again.'
+    case 'credit_valuation_migration_not_ready':
+      return 'Credit operational valuation is not ready yet.'
+    default:
+      return 'The after-sales grant could not be completed safely.'
+  }
+}
+
+function formatMicrosCount(value: string): string {
+  if (!/^-?\d+$/.test(value)) return value
+  return new Intl.NumberFormat().format(BigInt(value))
+}
 export function AdminCreditBalancePanel({
   userId,
+  plans = [],
   onSuccess,
 }: AdminCreditBalancePanelProps) {
   const { t } = useTranslation()
   const [operation, setOperation] =
     useState<CreditBalanceAdjustmentOperation>('increase')
+  const [selectedPlanId, setSelectedPlanId] = useState('')
+  const eligiblePlans = useMemo(
+    () => plans.filter(isEligibleAfterSalesPlan),
+    [plans]
+  )
   const [amount, setAmount] = useState('')
   const [adjustmentReason, setAdjustmentReason] = useState('')
   const [adjusting, setAdjusting] = useState(false)
+  const [previewingAdjustment, setPreviewingAdjustment] = useState(false)
+  const [adjustmentPreview, setAdjustmentPreview] =
+    useState<CreditBalanceAdjustmentPreviewResult | null>(null)
+  const adjustmentFactsVersion = useRef(0)
   const adjustmentIdempotency = useRef({
     userId,
     key: newIdempotencyKey(userId),
@@ -109,43 +176,120 @@ export function AdminCreditBalancePanel({
     [userId]
   )
 
+  const selectedPlan = useMemo(
+    () =>
+      eligiblePlans.find(({ plan }) => String(plan.id) === selectedPlanId)
+        ?.plan ?? null,
+    [eligiblePlans, selectedPlanId]
+  )
+
+  const invalidateAdjustmentAttempt = () => {
+    adjustmentFactsVersion.current += 1
+    adjustmentIdempotency.current.key = newIdempotencyKey(userId)
+    setAdjustmentPreview(null)
+    setPreviewingAdjustment(false)
+  }
+
+  const changeOperation = (value: string | null) => {
+    if (value === null || value === operation) return
+    setOperation(value as CreditBalanceAdjustmentOperation)
+    setSelectedPlanId('')
+    invalidateAdjustmentAttempt()
+  }
+
+  const changePlan = (value: string | null) => {
+    if (value === null || value === selectedPlanId) return
+    setSelectedPlanId(value)
+    invalidateAdjustmentAttempt()
+  }
+
+  const changeAmount = (value: string) => {
+    setAmount(value)
+    invalidateAdjustmentAttempt()
+  }
+
+  const changeAdjustmentReason = (value: string) => {
+    setAdjustmentReason(value)
+    invalidateAdjustmentAttempt()
+  }
+
+  const previewAdjustment = async () => {
+    if (
+      operation !== 'increase' ||
+      !selectedPlan ||
+      !isValidAdjustmentAmount(amount)
+    ) {
+      toast.error(t('Select a plan and enter a positive whole Credit amount.'))
+      return
+    }
+    const factsVersion = adjustmentFactsVersion.current
+    setPreviewingAdjustment(true)
+    setAdjustmentPreview(null)
+    try {
+      const response = await previewUserCreditBalanceAdjustment(userId, {
+        operation,
+        amount,
+        plan_id: selectedPlan.id,
+      })
+      if (factsVersion !== adjustmentFactsVersion.current) return
+      if (!response.success || !response.data) {
+        toast.error(t(adjustmentErrorKey(response.code)))
+        return
+      }
+      setAdjustmentPreview(response.data)
+    } catch {
+      if (factsVersion === adjustmentFactsVersion.current) {
+        toast.error(t('Request failed'))
+      }
+    } finally {
+      if (factsVersion === adjustmentFactsVersion.current) {
+        setPreviewingAdjustment(false)
+      }
+    }
+  }
+
   const submitAdjustment = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const numericAmount = Number(amount)
     if (
-      !Number.isSafeInteger(numericAmount) ||
-      numericAmount <= 0 ||
-      numericAmount > 1_000_000_000_000 ||
-      !adjustmentReason.trim()
+      !isValidAdjustmentAmount(amount) ||
+      !adjustmentReason.trim() ||
+      (operation === 'increase' && !selectedPlan)
     ) {
-      toast.error(t('Enter a valid non-zero Credit amount and reason.'))
+      toast.error(
+        t('Select a plan and enter a positive whole Credit amount and reason.')
+      )
       return
     }
     setAdjusting(true)
     try {
       const response = await adjustUserCreditBalance(userId, {
         operation,
-        amount: numericAmount,
+        amount,
+        ...(operation === 'increase' && selectedPlan
+          ? { plan_id: selectedPlan.id }
+          : {}),
         idempotency_key: adjustmentIdempotency.current.key,
         reason: adjustmentReason.trim(),
       })
       if (!response.success || !response.data) {
-        toast.error(response.message || t('Request failed'))
+        toast.error(t(adjustmentErrorKey(response.code)))
         return
       }
       const balance = response.data.credit_balance
-      const message = t(
-        'Credit adjustment completed. Available: {{available}}, debt: {{debt}}.',
-        {
-          available: balance.available_credit,
-          debt: balance.settlement_debt,
-        }
-      )
+      const message = response.data.replayed
+        ? t('The after-sales grant was safely replayed without adding Credit again.')
+        : t(
+            'After-sales grant completed. Available: {{available}}, debt offset: {{debtOffset}}.',
+            {
+              available: balance.available_credit,
+              debtOffset: response.data.debt_offset,
+            }
+          )
       setStatusMessage(message)
       toast.success(message)
       setAmount('')
       setAdjustmentReason('')
-      adjustmentIdempotency.current.key = newIdempotencyKey(userId)
+      invalidateAdjustmentAttempt()
       setRefreshKey((value) => value + 1)
       onSuccess?.()
     } catch {
@@ -250,13 +394,7 @@ export function AdminCreditBalancePanel({
           <FieldGroup className='grid grid-cols-1 gap-3 sm:grid-cols-2'>
             <Field>
               <FieldLabel>{t('Operation')}</FieldLabel>
-              <Select
-                value={operation}
-                onValueChange={(value) =>
-                  value !== null &&
-                  setOperation(value as CreditBalanceAdjustmentOperation)
-                }
-              >
+              <Select value={operation} onValueChange={changeOperation}>
                 <SelectTrigger aria-label={t('Credit adjustment operation')}>
                   <SelectValue />
                 </SelectTrigger>
@@ -272,6 +410,30 @@ export function AdminCreditBalancePanel({
                 </SelectContent>
               </Select>
             </Field>
+            {operation === 'increase' ? (
+              <Field>
+                <FieldLabel>{t('After-sales grant plan')}</FieldLabel>
+                <Select value={selectedPlanId} onValueChange={changePlan}>
+                  <SelectTrigger aria-label={t('After-sales grant plan')}>
+                    <SelectValue placeholder={t('Select a plan')} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {eligiblePlans.map(({ plan }) => (
+                        <SelectItem key={plan.id} value={String(plan.id)}>
+                          {plan.title || `#${plan.id}`}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                {eligiblePlans.length === 0 ? (
+                  <FieldDescription>
+                    {t('No eligible after-sales grant plans are available.')}
+                  </FieldDescription>
+                ) : null}
+              </Field>
+            ) : null}
             <Field>
               <FieldLabel htmlFor='admin-credit-amount'>
                 {t('Credit amount')}
@@ -283,7 +445,7 @@ export function AdminCreditBalancePanel({
                 max={1_000_000_000_000}
                 step={1}
                 value={amount}
-                onChange={(event) => setAmount(event.target.value)}
+                onChange={(event) => changeAmount(event.target.value)}
                 required
               />
             </Field>
@@ -295,12 +457,112 @@ export function AdminCreditBalancePanel({
                 id='admin-credit-reason'
                 value={adjustmentReason}
                 maxLength={255}
-                onChange={(event) => setAdjustmentReason(event.target.value)}
+                onChange={(event) => changeAdjustmentReason(event.target.value)}
                 required
               />
             </Field>
-            <Field className='sm:col-span-2'>
-              <Button type='submit' disabled={adjusting}>
+            {operation === 'increase' && selectedPlan ? (
+              <Alert className='sm:col-span-2'>
+                <AlertTitle>{t('Selected after-sales grant plan')}</AlertTitle>
+                <AlertDescription className='grid grid-cols-1 gap-1 sm:grid-cols-2'>
+                  <span>
+                    {t('Plan price')}:{' '}
+                    {formatAdminMoneyAmount({
+                      amount: selectedPlan.price_amount,
+                      amount_micros: selectedPlan.price_amount_micros ?? undefined,
+                      currency: selectedPlan.currency,
+                    })}
+                  </span>
+                  <span>
+                    {t('Plan Credit')}: {selectedPlan.monthly_token_limit}
+                  </span>
+                  <span>
+                    {t('Source currency')}: {selectedPlan.currency}
+                  </span>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {adjustmentPreview ? (
+              <Alert className='sm:col-span-2'>
+                <AlertTitle>{t('Authoritative operational value preview')}</AlertTitle>
+                <AlertDescription className='grid grid-cols-1 gap-1 sm:grid-cols-2'>
+                  <span>
+                    {t('Gross Credit')}: {adjustmentPreview.gross_credit}
+                  </span>
+                  <span>
+                    {t('Net Credit')}: {adjustmentPreview.net_credit}
+                  </span>
+                  <span>
+                    {t('Gross operational value')}:{' '}
+                    {formatAdminMoneyAmount({
+                      amount: 0,
+                      amount_micros: adjustmentPreview.gross_amount_micros,
+                      currency: adjustmentPreview.valuation_currency,
+                    })}{' '}
+                    ({formatMicrosCount(adjustmentPreview.gross_amount_micros)}{' '}
+                    {t('micros')})
+                  </span>
+                  <span>
+                    {t('Net operational value')}:{' '}
+                    {formatAdminMoneyAmount({
+                      amount: 0,
+                      amount_micros: adjustmentPreview.net_amount_micros,
+                      currency: adjustmentPreview.valuation_currency,
+                    })}{' '}
+                    ({formatMicrosCount(adjustmentPreview.net_amount_micros)}{' '}
+                    {t('micros')})
+                  </span>
+                  <span>
+                    {t('Debt offset')}: {adjustmentPreview.debt_offset}
+                  </span>
+                  <span>
+                    {t('Source currency')}: {adjustmentPreview.source_currency}
+                  </span>
+                  <span>
+                    {t('Valuation currency')}: {adjustmentPreview.valuation_currency}
+                  </span>
+                  <span>
+                    {t('FX snapshot')}: {adjustmentPreview.fx_rate_numerator}/
+                    {adjustmentPreview.fx_rate_denominator}{' '}
+                    {adjustmentPreview.fx_direction || '-'} @{' '}
+                    {adjustmentPreview.fx_captured_at || '-'}
+                  </span>
+                  <span>
+                    {t('Valuation confidence')}: {adjustmentPreview.confidence}
+                  </span>
+                  <span>
+                    {t('Rule and state version')}: {adjustmentPreview.rule_version}/
+                    {adjustmentPreview.state_version_after}
+                  </span>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            <Field className='sm:col-span-2' orientation='horizontal'>
+              {operation === 'increase' ? (
+                <Button
+                  type='button'
+                  variant='outline'
+                  onClick={previewAdjustment}
+                  disabled={
+                    previewingAdjustment ||
+                    !selectedPlan ||
+                    !isValidAdjustmentAmount(amount)
+                  }
+                >
+                  {previewingAdjustment
+                    ? t('Loading...')
+                    : t('Preview operational value')}
+                </Button>
+              ) : null}
+              <Button
+                type='submit'
+                disabled={
+                  adjusting ||
+                  !isValidAdjustmentAmount(amount) ||
+                  !adjustmentReason.trim() ||
+                  (operation === 'increase' && !selectedPlan)
+                }
+              >
                 {adjusting ? t('Saving...') : t('Submit Credit adjustment')}
               </Button>
             </Field>

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -367,6 +368,510 @@ func TestConcurrentRefundAndAdminDecreaseUseLegalSerializations(t *testing.T) {
 	assert.NotContains(t, conflictErr.Error(), "database is locked")
 	assert.NotContains(t, conflictErr.Error(), "UNIQUE constraint")
 	require.Equal(t, beforeConflict, capture(), "the conflicting admin replay must write nothing")
+}
+
+func TestConcurrentLowFrequencyOutflowAndRequestFinalSettleUseLegalSerializations(t *testing.T) {
+	db := setupSubscriptionRecoveryConcurrencyTestDB(t)
+	order := seedRecoverableConcurrentCreditOrder(t, db, 10_501, "concurrent-outflow-request-final")
+	require.NoError(t, db.AutoMigrate(&CreditBalanceAdjustment{}))
+	require.NoError(t, migrateCreditValuationSchema(db))
+
+	var balance UserSubscription
+	require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", order.UserId, SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id,
+		UserId:             order.UserId,
+		AvailableCredit:    500,
+		ExactCostMicros:    30_000_000,
+		Currency:           "CNY",
+		RuleVersion:        CreditValuationRuleVersion,
+		StateVersion:       1,
+		LastMutationType:   CreditValuationMutationGrant,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady,
+		ValuationCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+	}).Error)
+
+	const targetRequestID = "concurrent-outflow-request-final-target"
+	target, err := PreConsumeUserSubscriptionByUnits(targetRequestID, order.UserId, "gpt-4o", 0, 0, 100)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, target.UserSubscriptionId)
+	const activeRequestID = "concurrent-outflow-request-final-active"
+	active, err := PreConsumeUserSubscriptionByUnits(activeRequestID, order.UserId, "gpt-4o", 0, 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, active.UserSubscriptionId)
+	var targetBefore SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", targetRequestID).First(&targetBefore).Error)
+	require.Equal(t, int64(100), targetBefore.DeductedAvailableCredit)
+	require.Equal(t, int64(6_000_000), targetBefore.DeductedExactCostMicros)
+	var activeBefore SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeBefore).Error)
+	require.Equal(t, int64(3_000_000), activeBefore.DeductedExactCostMicros)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	var journalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode").Scan(&journalMode).Error)
+	require.Equal(t, "wal", journalMode)
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	var barrierMu sync.Mutex
+	barrierEntries := 0
+	const barrierCallback = "issue25:outflow_request_final_after_balance_read"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(barrierCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" || tx.Error != nil || tx.RowsAffected != 1 {
+			return
+		}
+		barrierMu.Lock()
+		if barrierEntries >= 2 {
+			barrierMu.Unlock()
+			return
+		}
+		barrierEntries++
+		barrierMu.Unlock()
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(barrierCallback) })
+
+	type settleOutcome struct{ err error }
+	type outflowOutcome struct {
+		result *CreditBalanceAdjustmentResult
+		err    error
+	}
+	settleDone := make(chan settleOutcome, 1)
+	outflowDone := make(chan outflowOutcome, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		settleDone <- settleOutcome{err: SettleUserSubscriptionRequestTarget(targetRequestID, balance.Id, 200, true)}
+	}()
+	go func() {
+		<-start
+		result, outflowErr := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: order.UserId, Operation: CreditBalanceAdjustmentDecrease, Amount: 400,
+			IdempotencyKey: "concurrent-outflow-request-final", OperatorUserId: 10_599,
+			Reason: "concurrent low-frequency outflow",
+		})
+		outflowDone <- outflowOutcome{result: result, err: outflowErr}
+	}()
+	close(start)
+	<-arrived
+	<-arrived
+	require.GreaterOrEqual(t, sqlDB.Stats().InUse, 2, "the barrier must hold two independent SQLite connections")
+	releaseOnce.Do(func() { close(release) })
+	settled := <-settleDone
+	outflow := <-outflowDone
+	require.NoError(t, settled.err)
+	require.NoError(t, outflow.err)
+	require.NotNil(t, outflow.result)
+	require.False(t, outflow.result.Replayed)
+
+	require.NoError(t, db.First(&balance, balance.Id).Error)
+	require.Equal(t, int64(500), balance.TokenLimit)
+	require.Equal(t, int64(650), balance.TokenUsed)
+	require.Equal(t, int64(150), maxInt64(balance.TokenUsed-balance.TokenLimit, 0))
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, balance.Id).Error)
+	require.Zero(t, state.AvailableCredit)
+	require.Zero(t, state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+	require.Equal(t, int64(5), state.StateVersion)
+
+	var terminal SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", targetRequestID).First(&terminal).Error)
+	require.Equal(t, int64(200), terminal.AppliedCredit)
+	require.Equal(t, "settled", terminal.Status)
+	require.Positive(t, terminal.FinalizedAt)
+	require.Equal(t, targetBefore.UserSubscriptionId, terminal.UserSubscriptionId)
+	require.Equal(t, targetBefore.ValuationSubscriptionId, terminal.ValuationSubscriptionId)
+	var activeAfter SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeAfter).Error)
+	require.Equal(t, activeBefore, activeAfter, "low-frequency outflow must not rewrite another active request snapshot")
+
+	var adminLedgers []CreditBalanceLedger
+	require.NoError(t, db.Where("source_type = ? AND type = ?", CreditBalanceLedgerSourceAdminAdjustment, CreditBalanceLedgerTypeAdminDecrease).Find(&adminLedgers).Error)
+	require.Len(t, adminLedgers, 1)
+	require.Equal(t, int64(-400), adminLedgers[0].GrossCredit)
+	type legalSerialization struct {
+		AdminCostMicros        int64
+		AdminStateVersion      int64
+		TargetAvailableCredit  int64
+		TargetDebtFormedCredit int64
+		TargetExactCostMicros  int64
+	}
+	actual := legalSerialization{
+		AdminCostMicros:        adminLedgers[0].ValuationGrossCostMicros,
+		AdminStateVersion:      adminLedgers[0].ValuationStateVersionAfter,
+		TargetAvailableCredit:  terminal.DeductedAvailableCredit,
+		TargetDebtFormedCredit: terminal.DebtFormedCredit,
+		TargetExactCostMicros:  terminal.DeductedExactCostMicros,
+	}
+	require.Contains(t, []legalSerialization{
+		{AdminCostMicros: 15_000_000, AdminStateVersion: 5, TargetAvailableCredit: 200, TargetExactCostMicros: 12_000_000},
+		{AdminCostMicros: 21_000_000, AdminStateVersion: 4, TargetAvailableCredit: 100, TargetDebtFormedCredit: 100, TargetExactCostMicros: 6_000_000},
+	}, actual)
+	require.Equal(t, int64(21_000_000), adminLedgers[0].ValuationGrossCostMicros+(terminal.DeductedExactCostMicros-targetBefore.DeductedExactCostMicros))
+
+	type failureSnapshot struct {
+		Balance     UserSubscription
+		State       CreditValuationState
+		Terminal    SubscriptionPreConsumeRecord
+		Active      SubscriptionPreConsumeRecord
+		Ledgers     []CreditBalanceLedger
+		Adjustments []CreditBalanceAdjustment
+	}
+	capture := func() failureSnapshot {
+		var snapshot failureSnapshot
+		require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+		require.NoError(t, db.First(&snapshot.State, balance.Id).Error)
+		require.NoError(t, db.Where("request_id = ?", targetRequestID).First(&snapshot.Terminal).Error)
+		require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&snapshot.Active).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Ledgers).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Adjustments).Error)
+		return snapshot
+	}
+	beforeConflict := capture()
+	conflictErr := SettleUserSubscriptionRequestTarget(targetRequestID, balance.Id, 201, true)
+	require.ErrorIs(t, conflictErr, ErrCreditValuationFinalizedConflict)
+	assert.NotContains(t, conflictErr.Error(), "SQLITE")
+	assert.NotContains(t, conflictErr.Error(), "database is locked")
+	assert.NotContains(t, conflictErr.Error(), "UNIQUE constraint")
+	require.Equal(t, beforeConflict, capture(), "the conflicting final settle must write nothing")
+}
+
+func TestConcurrentLowFrequencyOutflowAndRequestRefundUseLegalSerializations(t *testing.T) {
+	db := setupSubscriptionRecoveryConcurrencyTestDB(t)
+	order := seedRecoverableConcurrentCreditOrder(t, db, 10_601, "concurrent-outflow-request-refund")
+	require.NoError(t, db.AutoMigrate(&CreditBalanceAdjustment{}))
+	require.NoError(t, migrateCreditValuationSchema(db))
+
+	var balance UserSubscription
+	require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", order.UserId, SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id,
+		UserId:             order.UserId,
+		AvailableCredit:    500,
+		ExactCostMicros:    30_000_000,
+		Currency:           "CNY",
+		RuleVersion:        CreditValuationRuleVersion,
+		StateVersion:       1,
+		LastMutationType:   CreditValuationMutationGrant,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady,
+		ValuationCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+	}).Error)
+
+	const refundedRequestID = "concurrent-outflow-request-refund-target"
+	refunded, err := PreConsumeUserSubscriptionByUnits(refundedRequestID, order.UserId, "gpt-4o", 0, 0, 100)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, refunded.UserSubscriptionId)
+	const activeRequestID = "concurrent-outflow-request-refund-active"
+	active, err := PreConsumeUserSubscriptionByUnits(activeRequestID, order.UserId, "gpt-4o", 0, 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, active.UserSubscriptionId)
+	var refundedBefore SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", refundedRequestID).First(&refundedBefore).Error)
+	require.Equal(t, int64(100), refundedBefore.DeductedAvailableCredit)
+	require.Equal(t, int64(6_000_000), refundedBefore.DeductedExactCostMicros)
+	var activeBefore SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeBefore).Error)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	var journalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode").Scan(&journalMode).Error)
+	require.Equal(t, "wal", journalMode)
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	var barrierMu sync.Mutex
+	barrierEntries := 0
+	const barrierCallback = "issue25:outflow_request_refund_after_balance_read"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(barrierCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" || tx.Error != nil || tx.RowsAffected != 1 {
+			return
+		}
+		barrierMu.Lock()
+		if barrierEntries >= 2 {
+			barrierMu.Unlock()
+			return
+		}
+		barrierEntries++
+		barrierMu.Unlock()
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(barrierCallback) })
+
+	type refundOutcome struct{ err error }
+	type outflowOutcome struct {
+		result *CreditBalanceAdjustmentResult
+		err    error
+	}
+	refundDone := make(chan refundOutcome, 1)
+	outflowDone := make(chan outflowOutcome, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		refundDone <- refundOutcome{err: SettleUserSubscriptionRequestTarget(refundedRequestID, balance.Id, 0, true)}
+	}()
+	go func() {
+		<-start
+		result, outflowErr := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: order.UserId, Operation: CreditBalanceAdjustmentDecrease, Amount: 400,
+			IdempotencyKey: "concurrent-outflow-request-refund", OperatorUserId: 10_699,
+			Reason: "concurrent low-frequency outflow",
+		})
+		outflowDone <- outflowOutcome{result: result, err: outflowErr}
+	}()
+	close(start)
+	<-arrived
+	<-arrived
+	require.GreaterOrEqual(t, sqlDB.Stats().InUse, 2, "the barrier must hold two independent SQLite connections")
+	releaseOnce.Do(func() { close(release) })
+	refundResult := <-refundDone
+	outflow := <-outflowDone
+	require.NoError(t, refundResult.err)
+	require.NoError(t, outflow.err)
+	require.NotNil(t, outflow.result)
+	require.False(t, outflow.result.Replayed)
+
+	require.NoError(t, db.First(&balance, balance.Id).Error)
+	require.Equal(t, int64(500), balance.TokenLimit)
+	require.Equal(t, int64(450), balance.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, balance.Id).Error)
+	require.Equal(t, int64(50), state.AvailableCredit)
+	require.Equal(t, int64(3_000_000), state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+	require.Equal(t, int64(5), state.StateVersion)
+
+	var terminal SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", refundedRequestID).First(&terminal).Error)
+	require.Zero(t, terminal.AppliedCredit)
+	require.Zero(t, terminal.DeductedAvailableCredit)
+	require.Zero(t, terminal.DeductedExactCostMicros)
+	require.Equal(t, "refunded", terminal.Status)
+	require.Positive(t, terminal.FinalizedAt)
+	require.Equal(t, refundedBefore.UserSubscriptionId, terminal.UserSubscriptionId)
+	require.Equal(t, refundedBefore.ValuationSubscriptionId, terminal.ValuationSubscriptionId)
+	var activeAfter SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeAfter).Error)
+	require.Equal(t, activeBefore, activeAfter, "low-frequency outflow must not rewrite another active request snapshot")
+
+	var adminLedgers []CreditBalanceLedger
+	require.NoError(t, db.Where("source_type = ? AND type = ?", CreditBalanceLedgerSourceAdminAdjustment, CreditBalanceLedgerTypeAdminDecrease).Find(&adminLedgers).Error)
+	require.Len(t, adminLedgers, 1)
+	require.Equal(t, int64(-400), adminLedgers[0].GrossCredit)
+	type legalSerialization struct {
+		AdminCostMicros          int64
+		AdminStateVersion        int64
+		AbsorbedRestoreExactCost int64
+	}
+	require.Contains(t, []legalSerialization{
+		{AdminCostMicros: 24_000_000, AdminStateVersion: 5},
+		{AdminCostMicros: 21_000_000, AdminStateVersion: 4, AbsorbedRestoreExactCost: 3_000_000},
+	}, legalSerialization{
+		AdminCostMicros:          adminLedgers[0].ValuationGrossCostMicros,
+		AdminStateVersion:        adminLedgers[0].ValuationStateVersionAfter,
+		AbsorbedRestoreExactCost: terminal.AbsorbedRestoreExactCostMicros,
+	})
+	require.Equal(t, int64(30_000_000), adminLedgers[0].ValuationGrossCostMicros+state.ExactCostMicros+activeAfter.DeductedExactCostMicros+terminal.AbsorbedRestoreExactCostMicros)
+
+	type failureSnapshot struct {
+		Balance     UserSubscription
+		State       CreditValuationState
+		Terminal    SubscriptionPreConsumeRecord
+		Active      SubscriptionPreConsumeRecord
+		Ledgers     []CreditBalanceLedger
+		Adjustments []CreditBalanceAdjustment
+	}
+	capture := func() failureSnapshot {
+		var snapshot failureSnapshot
+		require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+		require.NoError(t, db.First(&snapshot.State, balance.Id).Error)
+		require.NoError(t, db.Where("request_id = ?", refundedRequestID).First(&snapshot.Terminal).Error)
+		require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&snapshot.Active).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Ledgers).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Adjustments).Error)
+		return snapshot
+	}
+	beforeConflict := capture()
+	conflictErr := SettleUserSubscriptionRequestTarget(refundedRequestID, balance.Id, 1, true)
+	require.ErrorIs(t, conflictErr, ErrCreditValuationFinalizedConflict)
+	assert.NotContains(t, conflictErr.Error(), "SQLITE")
+	assert.NotContains(t, conflictErr.Error(), "database is locked")
+	assert.NotContains(t, conflictErr.Error(), "UNIQUE constraint")
+	require.Equal(t, beforeConflict, capture(), "the conflicting refund replay must write nothing")
+}
+
+func TestCreditRequestTargetInjectedFailureRollsBackAtomically(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		target int64
+	}{
+		{name: "final settle", target: 200},
+		{name: "refund", target: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupSubscriptionRecoveryConcurrencyTestDB(t)
+			order := seedRecoverableConcurrentCreditOrder(t, db, 10_701, "request-target-injected-failure")
+			require.NoError(t, migrateCreditValuationSchema(db))
+
+			var balance UserSubscription
+			require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", order.UserId, SubscriptionEntitlementCreditBalance).First(&balance).Error)
+			now := GetDBTimestamp()
+			require.NoError(t, db.Create(&CreditValuationState{
+				UserSubscriptionId: balance.Id,
+				UserId:             order.UserId,
+				AvailableCredit:    500,
+				ExactCostMicros:    30_000_000,
+				Currency:           "CNY",
+				RuleVersion:        CreditValuationRuleVersion,
+				StateVersion:       1,
+				LastMutationType:   CreditValuationMutationGrant,
+				CreatedAt:          now,
+				UpdatedAt:          now,
+			}).Error)
+			require.NoError(t, db.Create(&CreditValuationMigration{
+				Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady,
+				ValuationCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+			}).Error)
+
+			const targetRequestID = "request-target-injected-failure-target"
+			target, err := PreConsumeUserSubscriptionByUnits(targetRequestID, order.UserId, "gpt-4o", 0, 0, 100)
+			require.NoError(t, err)
+			require.Equal(t, balance.Id, target.UserSubscriptionId)
+			const activeRequestID = "request-target-injected-failure-active"
+			active, err := PreConsumeUserSubscriptionByUnits(activeRequestID, order.UserId, "gpt-4o", 0, 0, 50)
+			require.NoError(t, err)
+			require.Equal(t, balance.Id, active.UserSubscriptionId)
+
+			type transactionSnapshot struct {
+				Balance UserSubscription
+				State   CreditValuationState
+				Target  SubscriptionPreConsumeRecord
+				Active  SubscriptionPreConsumeRecord
+				Ledgers []CreditBalanceLedger
+			}
+			capture := func() transactionSnapshot {
+				var snapshot transactionSnapshot
+				require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+				require.NoError(t, db.First(&snapshot.State, balance.Id).Error)
+				require.NoError(t, db.Where("request_id = ?", targetRequestID).First(&snapshot.Target).Error)
+				require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&snapshot.Active).Error)
+				require.NoError(t, db.Order("id asc").Find(&snapshot.Ledgers).Error)
+				return snapshot
+			}
+			before := capture()
+
+			injectedErr := errors.New("injected request target transaction failure")
+			injected := false
+			callbackName := "issue25:inject_request_target_failure_" + test.name
+			require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callbackName, func(tx *gorm.DB) {
+				if injected || tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "SubscriptionPreConsumeRecord" {
+					return
+				}
+				injected = true
+				tx.AddError(injectedErr)
+			}))
+			t.Cleanup(func() { _ = db.Callback().Update().Remove(callbackName) })
+
+			err = SettleUserSubscriptionRequestTarget(targetRequestID, balance.Id, test.target, true)
+			require.ErrorIs(t, err, injectedErr)
+			require.True(t, injected)
+			require.Equal(t, before, capture(), "the injected middle failure must roll back the whole request transaction")
+		})
+	}
+}
+
+func TestCreditRequestTargetPersistentSQLiteLockReturnsStableConflictWithoutWrites(t *testing.T) {
+	db := setupSubscriptionRecoveryConcurrencyTestDB(t)
+	order := seedRecoverableConcurrentCreditOrder(t, db, 10_801, "request-target-persistent-lock")
+	require.NoError(t, migrateCreditValuationSchema(db))
+
+	var balance UserSubscription
+	require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", order.UserId, SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id,
+		UserId:             order.UserId,
+		AvailableCredit:    500,
+		ExactCostMicros:    30_000_000,
+		Currency:           "CNY",
+		RuleVersion:        CreditValuationRuleVersion,
+		StateVersion:       1,
+		LastMutationType:   CreditValuationMutationGrant,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady,
+		ValuationCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+	}).Error)
+
+	const targetRequestID = "request-target-persistent-lock-target"
+	target, err := PreConsumeUserSubscriptionByUnits(targetRequestID, order.UserId, "gpt-4o", 0, 0, 100)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, target.UserSubscriptionId)
+	const activeRequestID = "request-target-persistent-lock-active"
+	active, err := PreConsumeUserSubscriptionByUnits(activeRequestID, order.UserId, "gpt-4o", 0, 0, 50)
+	require.NoError(t, err)
+	require.Equal(t, balance.Id, active.UserSubscriptionId)
+
+	type transactionSnapshot struct {
+		User    User
+		Balance UserSubscription
+		State   CreditValuationState
+		Target  SubscriptionPreConsumeRecord
+		Active  SubscriptionPreConsumeRecord
+		Ledgers []CreditBalanceLedger
+	}
+	capture := func() transactionSnapshot {
+		var snapshot transactionSnapshot
+		require.NoError(t, db.First(&snapshot.User, order.UserId).Error)
+		require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+		require.NoError(t, db.First(&snapshot.State, balance.Id).Error)
+		require.NoError(t, db.Where("request_id = ?", targetRequestID).First(&snapshot.Target).Error)
+		require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&snapshot.Active).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Ledgers).Error)
+		return snapshot
+	}
+	before := capture()
+
+	locker := db.Begin()
+	require.NoError(t, locker.Error)
+	lockerClosed := false
+	defer func() {
+		if !lockerClosed {
+			_ = locker.Rollback().Error
+		}
+	}()
+	require.NoError(t, locker.Model(&User{}).Where("id = ?", order.UserId).UpdateColumn("username", "request-target-lock-holder").Error)
+
+	err = SettleUserSubscriptionRequestTarget(targetRequestID, balance.Id, 200, true)
+	require.ErrorIs(t, err, ErrCreditValuationStateMismatch)
+	require.Equal(t, ErrCreditValuationStateMismatch.Error(), err.Error())
+	assert.NotContains(t, err.Error(), "SQLITE")
+	assert.NotContains(t, err.Error(), "database is locked")
+	assert.NotContains(t, err.Error(), "UNIQUE constraint")
+	require.NoError(t, locker.Rollback().Error)
+	lockerClosed = true
+	require.Equal(t, before, capture(), "retry exhaustion and the rolled-back lock holder must leave no writes")
 }
 
 func seedRecoverableConcurrentCreditOrder(t *testing.T, db *gorm.DB, userID int, tradeNo string) *SubscriptionOrder {

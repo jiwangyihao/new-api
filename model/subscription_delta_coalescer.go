@@ -192,7 +192,11 @@ func flushSubscriptionRequestTargets(requests []*subscriptionRequestTarget) []er
 		return leftID < rightID
 	})
 	failureIndex := -1
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+		failureIndex = -1
+		for index := range results {
+			results[index] = nil
+		}
 		lockedRoutes := make([]SubscriptionPreConsumeRecord, len(ordered))
 		for orderedIndex, indexed := range ordered {
 			request := indexed.request
@@ -222,6 +226,9 @@ func flushSubscriptionRequestTargets(requests []*subscriptionRequestTarget) []er
 		}
 		return nil
 	})
+	if isRetryableUserSettingMutationError(err) && failureIndex >= 0 {
+		results[failureIndex] = ErrCreditValuationStateMismatch
+	}
 	if err == nil {
 		return results
 	}

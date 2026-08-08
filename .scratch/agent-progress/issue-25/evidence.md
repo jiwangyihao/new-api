@@ -121,3 +121,32 @@
 - 账本不变量：恰好一条 `subscription_order_recovery` ledger（-500）和一条 `admin_decrease` ledger（-100）；两条 ledger 的 valuation gross cost 合计恒为 30,000,000 micros。admin 先执行时撤值 6,000,000 micros，refund 先执行时 admin 撤值 0，均属于合法串行集合；最大 ledger state version 为 3。
 - 错误合同与零写入：使用相同 idempotency key 但 amount=101 的 admin replay 返回 `ErrCreditValuationIdempotencyMismatch`，错误不含 `SQLITE`、`database is locked` 或 `UNIQUE constraint`；订单、余额、估值、全部 ledger 与 adjustment 全量快照不变。
 - 边界：按协调器裁决停在第二场；第三、四场及生产修改均未进入。
+
+## E 第三场：low-frequency outflow + request final settle
+
+- 新增 `TestConcurrentLowFrequencyOutflowAndRequestFinalSettleUseLegalSerializations`：真实文件 SQLite WAL、两个独立连接、确定性 `UserSubscription` query barrier；另一个 active request 全结构保持不变。
+- RED：`go test ./model -run '^TestConcurrentLowFrequencyOutflowAndRequestFinalSettleUseLegalSerializations$' -count=1` 泄漏 `database is locked (5) (SQLITE_BUSY)`，定位于 request target 批事务与管理员低频 outflow 同时从读事务升级为写事务。
+- 最小 GREEN：`flushSubscriptionRequestTargets` 复用既有 `transactionWithUserSettingCASRetry`；每次 attempt 清空 `failureIndex` 和 `results`，避免成功 retry 返回首轮失败残留。未新增公开接口或数据库特例。
+- GREEN：相同命令 PASS。最终 token limit=500 / used=650 / debt=150，valuation 池清零、state_version=5；request 终态 `settled`，一条 admin outflow ledger。两种合法串行结果分别冻结 request available/exact 为 200/12,000,000 或 100/6,000,000，并保持总撤值 21,000,000 micros，不重复撤值。
+- 终态异参 settle 返回 `ErrCreditValuationFinalizedConflict`，全量快照零写入且不泄漏 SQLite/唯一约束文本。
+
+## E 第四场：low-frequency outflow + request refund
+
+- 新增 `TestConcurrentLowFrequencyOutflowAndRequestRefundUseLegalSerializations`：同一真实 WAL 双连接 barrier；原 request 全退款，另一 active request 的 original attribution / snapshot 不变。
+- 单次 GREEN：`go test ./model -run '^TestConcurrentLowFrequencyOutflowAndRequestRefundUseLegalSerializations$' -count=1` → PASS。
+- 最终 token limit=500 / used=450 / available=50，exact=3,000,000、state_version=5；request `refunded` 且 deduction snapshot 余数清零。合法串行集合为 admin 撤值 24,000,000（refund 先）或 21,000,000 + absorbed restore exact 3,000,000（outflow 先）；连同剩余 state 与 active request snapshot，总成本恒守恒 30,000,000 micros。
+- 终态异参 refund 返回 `ErrCreditValuationFinalizedConflict`，全量快照零写入且无数据库文本泄漏。
+
+## E 可控失败与重试耗尽
+
+- `TestCreditRequestTargetInjectedFailureRollsBackAtomically` 表驱动覆盖 final settle 与 full refund；在 request 中间 update 注入错误后，subscription、valuation、目标/另一 active request、ledger 全量快照不变。
+- `TestCreditRequestTargetPersistentSQLiteLockReturnsStableConflictWithoutWrites` 使用独立写事务确定性持锁至重试耗尽。RED 为原始 `SQLITE_BUSY` 泄漏；GREEN 为 `ErrCreditValuationStateMismatch` 精确错误文本，持锁事务回滚后全量快照不变。
+- 通用事务重试 helper 在耗尽可重试 SQLite/CAS 错误时统一返回 `ErrUserSettingCASConflict`；request coalescer 将其映射为既有 `ErrCreditValuationStateMismatch`，避免数据库文本穿透。
+
+## E 稳定性、race 与联合回归
+
+- 四场 `-count=10`：`go test ./model -run '^TestConcurrent(RefundAndChargebackRecoverCreditOnceWithChargebackPrecedence|RefundAndAdminDecreaseUseLegalSerializations|LowFrequencyOutflowAndRequest(FinalSettle|Refund)UseLegalSerializations)$' -count=10` → PASS。
+- 窄 race：相同 regex，`go test -race ./model ... -count=1` → PASS。
+- CDE / A/B / Issue #23 / Issue #24 代表性联合回归：`go test ./model -run '^(TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption|TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward|TestConcurrent(RefundAndChargebackRecoverCreditOnceWithChargebackPrecedence|RefundAndAdminDecreaseUseLegalSerializations|LowFrequencyOutflowAndRequest(FinalSettle|Refund)UseLegalSerializations)|TestCreditRequestTarget(InjectedFailureRollsBackAtomically|PersistentSQLiteLockReturnsStableConflictWithoutWrites)|TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)|TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay|TestCreditValuationRequestTargetDecrease(RestoresOriginalSnapshot|AuditsRestoreAbsorbedByOtherDebt|MarksReopenedDebtUnknown)|TestAdminCreditBalanceIncreaseOffsetsDebtBeforeExactValue|TestRedemptionCreditBalanceOffsetsDebtBeforeExactValue)$' -count=1` → PASS。
+- request coalescer 相邻回归：`go test ./model -run '^TestCreditRequestTargetCoalescer' -count=10` → PASS。
+- MySQL 5.7 / PostgreSQL 9.6 未运行，归 Issue #27；API/UI/i18n/browser 与 Issue #28 未进入。

@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-- 阶段：E_REFUND_ADMIN_DECREASE_HANDOFF_READY（第二场直接 GREEN；等待协调器）
+- 阶段：CORE_CDE_HANDOFF_READY（C/D/E 核心合同完成；API/UI/i18n/browser/#27/#28 PENDING）
 - Dispatch：`task_c27d832fec9b` / `ctx_d1e85f528802`
 - Worker 终端：`term_597e2278-5e48-4f44-aaa1-e7f25a04d8af`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
@@ -37,7 +37,7 @@
 
 1. **C 请求快照恢复（MINIMAL PROBE GREEN / HANDOFF）**：新增唯一测试 `TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption`，经公开 `PreConsumeUserSubscriptionByUnits` / `SettleUserSubscriptionRequestTarget` 与真实 SQLite 验证 deduction snapshot → later ingress absorbs debt → full refund。冻结 exact / estimated / unknown 按原 request 恢复，已吸收债务转为 `restored_unknown`，另一 active request 保持逐字段不变；现有生产实现直接 GREEN，未制造生产改动。首次运行仅因测试误引用不存在的结果字段编译失败，修正测试后行为测试 PASS。
 2. **D 邀请取消隔离（GREEN / HANDOFF）**：新增表驱动真实 SQLite 测试 `TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward`，经公开 `RecoverSubscriptionOrder` 覆盖 refund / chargeback。Credit 订单完成时不新增 `InvitationRewardEvent` 或邀请收益；对预存错误/既有事件执行 recovery 时，仅稳定 identity 匹配目标订单的事件转为 `cancelled`，另一订单事件逐字段不变；同事实 replay 复用 recovery ledger 且全量状态零写入。现有生产实现直接 GREEN，未修改生产代码。
-3. **E SQLite 并发原子性（SECOND GREEN / HANDOFF）**：首场 refund + chargeback 已由 `845758872` clean 提交。第二场新增 `TestConcurrentRefundAndAdminDecreaseUseLegalSerializations`，真实文件 SQLite WAL、两个独立连接与确定性 User query barrier 单次直接 GREEN；refund recovery 与 admin decrease 各执行一次，最终 token limit=500 / used=600 / debt=100，mixed pool 成本清零、state_version=3，单一 recovery ledger 与单一 admin decrease ledger；两种合法串行顺序的管理员撤值分别为 0 或 6,000,000 micros，总撤值固定 30,000,000 micros；异参 admin replay 稳定 `ErrCreditValuationIdempotencyMismatch` 且全量快照零写入，无 SQLite/GORM/唯一约束文本泄漏。第三、四场保持 PENDING，等待协调器。
+3. **E SQLite 并发原子性（GREEN）**：四场真实文件 SQLite WAL 双连接确定性 barrier 均通过：refund + chargeback（`845758872`）、refund + admin decrease（`19c6440dd`）、low-frequency outflow + request final settle、low-frequency outflow + request refund。后两场首次复现 request coalescer 向外泄漏 `SQLITE_BUSY`；最小修复为批量 request target 事务复用既有 `transactionWithUserSettingCASRetry`，每次 attempt 清空 `failureIndex/results`，重试耗尽统一返回稳定 sentinel。四场 `-count=10` 与窄 `-race`、C/D 联合、A/B、Issue #23/#24 代表性回归均通过；可控中间失败整事务回滚。MySQL/PostgreSQL 未运行，归 #27；API/UI/i18n/browser 与 #28 仍未进入。
 
 ## 阻塞
 
@@ -62,3 +62,14 @@
 - 行为结果：目标事件进入 `cancelled` 并记录 recovery reason；另一订单事件逐字段不变；同事实 replay 返回原 ledger 且订单、事件、Credit 数量/估值、ledger/event/commission 计数均不变。
 - Credit 排除：两个 Credit 订单完成后 `InvitationRewardEvent` 与 `InvitationCommissionRecord` 均为 0；邀请付费统计的 paid invitee 与 recognized amount 均为 0。
 - 范围：未修改生产代码，未进入 E/API/UI/i18n。
+
+## CORE CDE 最终交接
+
+- C 提交：`e3e7f4e60 test(issue-25): 覆盖请求冻结归因退款恢复`。
+- D 提交：`e86fe7ba3 test(issue-25): 覆盖邀请奖励回收隔离`。
+- E 首场提交：`845758872 test(issue-25): 固化退款拒付并发终态`。
+- E 第二场提交：`19c6440dd test(issue-25): 覆盖退款与管理员减少并发`。
+- E 第三/四场及最小生产修复：本次最终提交 SHA 见 `evidence.md` 与 Git HEAD。
+- SQLite：四场单次、`-count=10`、窄 `-race` PASS；可控失败与持续锁重试耗尽零写入 PASS。
+- 回归：C/D、A/B、Issue #23 request restore/coalescer、Issue #24 ingress/debt 代表性测试 PASS。
+- 未运行：MySQL 5.7 / PostgreSQL 9.6（归 Issue #27）；未进入 API/UI/i18n/browser 或 Issue #28。

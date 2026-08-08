@@ -193,18 +193,41 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 		if err != nil {
 			return nil, err
 		}
-		if !found || purchase.TargetPlanId != request.TargetPlanId || purchase.GrossCredit != request.GrossCredit {
-			return nil, ErrSubscriptionOrderSnapshotMismatch
+		if found {
+			if purchase.TargetPlanId != request.TargetPlanId || purchase.GrossCredit != request.GrossCredit {
+				return nil, ErrSubscriptionOrderSnapshotMismatch
+			}
+			ledger.PlanId = purchase.PlanId
+			ledger.SourcePlanId = purchase.SourcePlanId
+			ledger.SourcePriceMicros = purchase.SourcePriceMicros
+			ledger.SourcePlanCredit = purchase.SourcePlanCredit
+			ledger.FxSourceCurrency = purchase.FxSourceCurrency
+			ledger.FxRateNumerator = purchase.FxRateNumerator
+			ledger.FxRateDenominator = purchase.FxRateDenominator
+			ledger.FxCapturedAt = purchase.FxCapturedAt
+			ledger.FxDirection = purchase.FxDirection
+		} else {
+			var order SubscriptionOrder
+			if err := tx.Where("id = ? AND user_id = ?", request.SourceId, request.UserId).First(&order).Error; err != nil {
+				return nil, ErrSubscriptionOrderSnapshotMismatch
+			}
+			source, conversion, converted, err := recoverableConvertedSubscriptionForOrderTx(tx, &order)
+			if err != nil {
+				return nil, err
+			}
+			if !converted || source == nil || conversion == nil || conversion.TargetPlanId != request.TargetPlanId || conversion.GrossCredit != request.GrossCredit {
+				return nil, ErrSubscriptionOrderSnapshotMismatch
+			}
+			ledger.PlanId = order.PlanId
+			ledger.SourcePlanId = conversion.SourcePlanId
+			ledger.SourcePriceMicros = conversion.ValuationSourcePriceMicros
+			ledger.SourcePlanCredit = conversion.ValuationCreditBasis
+			ledger.FxSourceCurrency = conversion.FxSourceCurrency
+			ledger.FxRateNumerator = conversion.FxRateNumerator
+			ledger.FxRateDenominator = conversion.FxRateDenominator
+			ledger.FxCapturedAt = conversion.FxCapturedAt
+			ledger.FxDirection = creditFXDirection(conversion.FxSourceCurrency, conversion.ValuationCurrency)
 		}
-		ledger.PlanId = purchase.PlanId
-		ledger.SourcePlanId = purchase.SourcePlanId
-		ledger.SourcePriceMicros = purchase.SourcePriceMicros
-		ledger.SourcePlanCredit = purchase.SourcePlanCredit
-		ledger.FxSourceCurrency = purchase.FxSourceCurrency
-		ledger.FxRateNumerator = purchase.FxRateNumerator
-		ledger.FxRateDenominator = purchase.FxRateDenominator
-		ledger.FxCapturedAt = purchase.FxCapturedAt
-		ledger.FxDirection = purchase.FxDirection
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err

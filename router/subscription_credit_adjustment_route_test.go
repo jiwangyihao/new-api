@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -657,4 +658,137 @@ func TestAdminCreditAdjustmentPreviewRequiresReadyValuationMarker(t *testing.T) 
 			assert.Contains(t, response.Body.String(), `"code":"credit_valuation_migration_not_ready"`)
 		})
 	}
+}
+
+type creditOutflowPaidValueRouteEnvelope struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Data dto.AdminPaidSubscriptionValueResponse `json:"data"`
+	} `json:"data"`
+}
+
+func performCreditOutflowPaidValueRouteRequest(t *testing.T, engine *gin.Engine, token, path string) dto.AdminPaidSubscriptionValueResponse {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var response creditOutflowPaidValueRouteEnvelope
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
+	require.True(t, response.Success, recorder.Body.String())
+	return response.Data.Data
+}
+
+func requireCreditOutflowPaidValueMicros(t *testing.T, values []dto.AdminAnalyticsMoneyBreakdown, currency string, expected int64) {
+	t.Helper()
+	for _, value := range values {
+		if value.Currency != currency {
+			continue
+		}
+		actual, err := strconv.ParseInt(value.AmountMicros, 10, 64)
+		require.NoError(t, err)
+		require.Equal(t, expected, actual)
+		return
+	}
+	if expected != 0 {
+		require.Failf(t, "missing currency", "currency %s not found in %#v", currency, values)
+	}
+}
+
+func TestCreditOutflowRoutesImmediatelyProjectIntoFivePaidValueViews(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	optionPlanID := seedAdminCreditAdjustmentValuationRoute(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.TopUp{}))
+
+	increase := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":1000,"plan_id":%d,"idempotency_key":"five-view-admin-increase","reason":"approved exact ingress"}`,
+		optionPlanID,
+	))
+	require.Equal(t, http.StatusOK, increase.Code, increase.Body.String())
+	require.Contains(t, increase.Body.String(), `"success":true`)
+
+	var optionPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&optionPlan, optionPlanID).Error)
+	var creditPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&creditPlan, 9963).Error)
+	snapshot := model.NewSubscriptionEntitlementSnapshot(&optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlan.Id)
+	snapshot.SetTargetCreditBalancePlanSnapshot(&creditPlan)
+	snapshot.SetPaymentSnapshot(model.PaymentProviderEpay, "five-view-product", "alipay", 4000, "CNY")
+	snapshotJSON, err := model.MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := model.SubscriptionOrder{
+		UserId: userID, PlanId: optionPlan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		CreditGrantAmount: 1000, CreditTargetPlanID: creditPlan.Id, TradeNo: "five-view-credit-order",
+		PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending,
+		EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, model.DB.Create(&order).Error)
+	completed, err := model.CompleteSubscriptionOrder(order.TradeNo, `{}`, model.PaymentProviderEpay, "alipay")
+	require.NoError(t, err)
+	require.NotNil(t, completed)
+	require.NotNil(t, completed.CreditBalance)
+
+	decrease := performCreditAdjustmentRouteRequest(engine, token, userID,
+		`{"operation":"decrease","amount":250,"idempotency_key":"five-view-admin-decrease","reason":"verified correction"}`)
+	require.Equal(t, http.StatusOK, decrease.Code, decrease.Body.String())
+	require.Contains(t, decrease.Body.String(), `"success":true`)
+	require.Contains(t, decrease.Body.String(), `"removed_exact_cost_micros":"10000000"`)
+
+	refund := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo,
+		`{"recovery_type":"refund","reason":"provider refund confirmed"}`)
+	require.Equal(t, http.StatusOK, refund.Code, refund.Body.String())
+	require.Contains(t, refund.Body.String(), `"success":true`)
+	require.Contains(t, refund.Body.String(), `"available_credit":750`)
+	require.Contains(t, refund.Body.String(), `"removed_exact_cost_micros":"40000000"`)
+
+	chargeback := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo,
+		`{"recovery_type":"chargeback","reason":"provider chargeback supersedes refund"}`)
+	require.Equal(t, http.StatusOK, chargeback.Code, chargeback.Body.String())
+	require.Contains(t, chargeback.Body.String(), `"success":true`)
+	require.Contains(t, chargeback.Body.String(), `"terminal_state":"chargeback"`)
+
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(750), state.AvailableCredit)
+	require.Equal(t, int64(30_000_000), state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+
+	snapshotAt := common.GetTimestamp()
+	query := fmt.Sprintf("?snapshot_at=%d&currency=CNY&limit=20", snapshotAt)
+	summary := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/summary"+query)
+	require.Equal(t, 1, summary.Summary.ActivePaidSubscriptionCount)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.ExactRemainingValueByCurrency, "CNY", 30_000_000)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.EstimatedRemainingValueByCurrency, "CNY", 0)
+	require.Zero(t, summary.Summary.UnknownCostCredit)
+
+	users := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/users"+query)
+	require.Len(t, users.Users.Items, 1)
+	require.Equal(t, userID, users.Users.Items[0].UserID)
+	requireCreditOutflowPaidValueMicros(t, users.Users.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+
+	subscriptions := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/subscriptions"+query)
+	require.Len(t, subscriptions.Subscriptions.Items, 1)
+	subscription := subscriptions.Subscriptions.Items[0]
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, subscription.SubscriptionID)
+	require.Equal(t, int64(750), subscription.AvailableCredit)
+	require.NotNil(t, subscription.RecognizedRemainingValue)
+	require.Equal(t, "30000000", subscription.RecognizedRemainingValue.AmountMicros)
+	require.Equal(t, "30000000", subscription.ExactRemainingValue.AmountMicros)
+	require.Equal(t, "credit_moving_weighted_average", subscription.ValuationBasis)
+	require.Equal(t, "moving_weighted_pool", subscription.SourceAttribution)
+
+	plans := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/breakdown/plans"+query)
+	require.Len(t, plans.Plans.Items, 1)
+	require.Equal(t, creditPlan.Id, plans.Plans.Items[0].PlanID)
+	requireCreditOutflowPaidValueMicros(t, plans.Plans.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+
+	sources := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/breakdown/sources"+query)
+	require.Len(t, sources.Sources.Items, 1)
+	require.Equal(t, "credit_balance_pool", string(sources.Sources.Items[0].Source))
+	require.Equal(t, "moving_weighted_pool", sources.Sources.Items[0].SourceAttribution)
+	requireCreditOutflowPaidValueMicros(t, sources.Sources.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
 }

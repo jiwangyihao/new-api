@@ -377,8 +377,11 @@ func subscriptionOrderCreditRecoveryIdentityTx(tx *gorm.DB, order *SubscriptionO
 	if target.EntitlementType != SubscriptionEntitlementCreditBalance || target.PlanId <= 0 {
 		return 0, 0, "", false, errors.New("converted subscription target is not a Credit balance")
 	}
+	if conversion.GrossCredit <= 0 {
+		return 0, 0, "", false, ErrSubscriptionOrderSnapshotMismatch
+	}
 	if snapshotReliable {
-		return snapshot.MonthlyTokenLimit, target.PlanId, order.EntitlementSnapshot, true, nil
+		return conversion.GrossCredit, target.PlanId, order.EntitlementSnapshot, true, nil
 	}
 	var plan SubscriptionPlan
 	if err := tx.Select("id", "monthly_token_limit").Where("id = ? AND entitlement_type = ?", order.PlanId, SubscriptionEntitlementTimed).First(&plan).Error; err != nil {
@@ -394,7 +397,7 @@ func subscriptionOrderCreditRecoveryIdentityTx(tx *gorm.DB, order *SubscriptionO
 	if err != nil {
 		return 0, 0, "", false, err
 	}
-	return plan.MonthlyTokenLimit, target.PlanId, string(fallbackBytes), true, nil
+	return conversion.GrossCredit, target.PlanId, string(fallbackBytes), true, nil
 }
 
 func recoverableConvertedSubscriptionForOrderTx(tx *gorm.DB, order *SubscriptionOrder) (*UserSubscription, *SubscriptionConversion, bool, error) {

@@ -434,11 +434,11 @@ func TestCompletedTimedOrderConvertsThenRefundsThroughPersistedMapping(t *testin
 	})
 	require.NoError(t, err)
 	assert.False(t, recovered.Replayed)
-	assert.Equal(t, int64(100), recovered.GrossCredit)
-	assert.Equal(t, int64(10), recovered.SettlementDebt)
+	assert.Equal(t, int64(90), recovered.GrossCredit)
+	assert.Zero(t, recovered.SettlementDebt)
 	require.NoError(t, DB.First(&balance, balance.Id).Error)
 	assert.Equal(t, int64(90), balance.TokenLimit)
-	assert.Equal(t, int64(100), balance.TokenUsed)
+	assert.Equal(t, int64(90), balance.TokenUsed)
 	require.NoError(t, DB.First(&order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
 	assert.Equal(t, recovered.LedgerId, order.RecoveryLedgerID)
@@ -446,7 +446,31 @@ func TestCompletedTimedOrderConvertsThenRefundsThroughPersistedMapping(t *testin
 	require.NoError(t, DB.Model(&CreditBalanceLedger{}).
 		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
 		Count(&recoveryLedgerCount).Error)
+	require.Equal(t, CreditBalanceLedgerSourceSubscriptionOrderRecovery, recoveredLedgerSourceType(t, recovered.LedgerId))
+	require.Equal(t, planID, recoveredLedgerSourcePlanID(t, recovered.LedgerId))
+	require.Equal(t, converted.Conversion.TargetPlanId, recoveredLedgerTargetPlanID(t, recovered.LedgerId))
 	assert.Equal(t, int64(1), recoveryLedgerCount)
+}
+
+func recoveredLedgerSourceType(t *testing.T, ledgerID int) string {
+	t.Helper()
+	var ledger CreditBalanceLedger
+	require.NoError(t, DB.First(&ledger, ledgerID).Error)
+	return ledger.SourceType
+}
+
+func recoveredLedgerSourcePlanID(t *testing.T, ledgerID int) int {
+	t.Helper()
+	var ledger CreditBalanceLedger
+	require.NoError(t, DB.First(&ledger, ledgerID).Error)
+	return ledger.SourcePlanId
+}
+
+func recoveredLedgerTargetPlanID(t *testing.T, ledgerID int) int {
+	t.Helper()
+	var ledger CreditBalanceLedger
+	require.NoError(t, DB.First(&ledger, ledgerID).Error)
+	return ledger.TargetPlanId
 }
 
 func TestExpiredNonActiveConversionDoesNotAutoSelectCreditBalance(t *testing.T) {

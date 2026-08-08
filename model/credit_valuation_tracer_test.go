@@ -347,6 +347,56 @@ func TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay(t *testi
 	require.Equal(t, int64(3), state.StateVersion)
 }
 
+func TestNativeCreditOrderRecoveryRejectsMissingPurchaseLedger(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	_, _, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	now := GetDBTimestamp()
+	balance := UserSubscription{
+		UserId: order.UserId, PlanId: creditPlan.Id, EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status: SubscriptionStatusActive, TokenLimit: order.CreditGrantAmount,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, db.Create(&balance).Error)
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id, UserId: order.UserId, Currency: "CNY",
+		AvailableCredit: order.CreditGrantAmount, ExactCostMicros: 40_000_000,
+		RuleVersion: CreditValuationRuleVersion, StateVersion: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error)
+	require.NoError(t, db.Model(&SubscriptionOrder{}).Where("id = ?", order.Id).Updates(map[string]any{
+		"status": common.TopUpStatusSuccess, "complete_time": now, "fulfilled_subscription_id": balance.Id,
+	}).Error)
+
+	var subscriptionBefore UserSubscription
+	require.NoError(t, db.First(&subscriptionBefore, balance.Id).Error)
+	var stateBefore CreditValuationState
+	require.NoError(t, db.First(&stateBefore, balance.Id).Error)
+
+	recovered, err := RecoverSubscriptionOrder(SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderBalance,
+		RecoveryType: SubscriptionOrderRecoveryRefund, Reason: "missing purchase ledger must fail closed",
+	})
+	require.Nil(t, recovered)
+	require.ErrorIs(t, err, ErrSubscriptionOrderSnapshotMismatch)
+
+	var persistedOrder SubscriptionOrder
+	require.NoError(t, db.First(&persistedOrder, order.Id).Error)
+	require.Equal(t, common.TopUpStatusSuccess, persistedOrder.Status)
+	require.Zero(t, persistedOrder.RecoveryLedgerID)
+	var subscriptionAfter UserSubscription
+	require.NoError(t, db.First(&subscriptionAfter, balance.Id).Error)
+	require.Equal(t, subscriptionBefore, subscriptionAfter)
+	var stateAfter CreditValuationState
+	require.NoError(t, db.First(&stateAfter, balance.Id).Error)
+	require.Equal(t, stateBefore, stateAfter)
+	var recoveryLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryLedgerCount).Error)
+	require.Zero(t, recoveryLedgerCount)
+}
+
 func TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward(t *testing.T) {
 	tests := []struct {
 		name         string

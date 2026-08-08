@@ -5,8 +5,13 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	glebarezsqlite "github.com/glebarez/go-sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	moderncsqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
@@ -15,7 +20,10 @@ const (
 	TimedSubscriptionConversionGraceSeconds    int64 = 336 * 60 * 60
 )
 
-const timedSubscriptionConversionQuoteCandidateLimit = 100
+const (
+	timedSubscriptionConversionQuoteCandidateLimit = 100
+	timedSubscriptionConversionQuoteMaxAttempts    = 8
+)
 
 const (
 	ConversionCreditBasisGrantSnapshot = "grant_snapshot"
@@ -168,7 +176,7 @@ const timedSubscriptionConversionQuoteSelect = `
 	COALESCE(source, '') AS source`
 
 type timedSubscriptionConversionQuoteListHooks struct {
-	afterFactsRead func() error
+	afterFactsRead func(tx *gorm.DB) error
 	beforePersist  func(index int) error
 }
 
@@ -185,31 +193,65 @@ func listTimedSubscriptionConversionQuotes(userId int, hooks *timedSubscriptionC
 	if DB == nil {
 		return nil, errors.New("database is nil")
 	}
+	var lastErr error
+	for attempt := range timedSubscriptionConversionQuoteMaxAttempts {
+		result, err := listTimedSubscriptionConversionQuotesAttempt(userId, hooks)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isRetryableTimedSubscriptionConversionQuoteError(err) {
+			return nil, err
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func listTimedSubscriptionConversionQuotesAttempt(userId int, hooks *timedSubscriptionConversionQuoteListHooks) (*TimedSubscriptionConversionQuoteList, error) {
 	result := &TimedSubscriptionConversionQuoteList{
 		Quotes:      []TimedSubscriptionConversionQuote{},
 		Conversions: []SubscriptionConversion{},
 	}
-	var subscriptions []UserSubscription
-	var batch *timedSubscriptionConversionQuoteBatch
 	err := DB.Transaction(func(tx *gorm.DB) error {
 		databaseNow, err := getDBTimestampStrictTx(tx)
 		if err != nil {
 			return err
 		}
 		result.DatabaseNow = databaseNow
-		if err := tx.Select(timedSubscriptionConversionQuoteSelect).
+		if err := cleanupExpiredSubscriptionConversionQuotesTx(tx, userId, databaseNow); err != nil {
+			return err
+		}
+		var subscriptions []UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(timedSubscriptionConversionQuoteSelect).
 			Where("user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
 			Order("id asc").Limit(timedSubscriptionConversionQuoteCandidateLimit).Find(&subscriptions).Error; err != nil {
 			return err
 		}
-		batch, err = loadTimedSubscriptionConversionQuoteBatchTx(tx, userId, subscriptions)
+		batch, err := loadTimedSubscriptionConversionQuoteBatchTx(tx, userId, subscriptions)
 		if err != nil {
 			return err
+		}
+		if hooks != nil && hooks.afterFactsRead != nil {
+			if err := hooks.afterFactsRead(tx); err != nil {
+				return err
+			}
+			if err := reloadTimedSubscriptionConversionQuoteFactsTx(tx, userId, &subscriptions, &batch); err != nil {
+				return err
+			}
 		}
 		result.Quotes = make([]TimedSubscriptionConversionQuote, 0, len(subscriptions))
 		for i := range subscriptions {
 			quote, err := recalculateTimedSubscriptionConversionQuoteForSubscriptionBatchTx(tx, &subscriptions[i], databaseNow, batch)
 			if err != nil {
+				return err
+			}
+			if hooks != nil && hooks.beforePersist != nil {
+				if err := hooks.beforePersist(i); err != nil {
+					return err
+				}
+			}
+			if err := issueTimedSubscriptionConversionQuoteBatchTx(tx, quote, &subscriptions[i], batch); err != nil {
 				return err
 			}
 			result.Quotes = append(result.Quotes, *quote)
@@ -223,25 +265,46 @@ func listTimedSubscriptionConversionQuotes(userId int, hooks *timedSubscriptionC
 	if err != nil {
 		return nil, err
 	}
-	if hooks != nil && hooks.afterFactsRead != nil {
-		if err := hooks.afterFactsRead(); err != nil {
-			return nil, err
-		}
-	}
-	for i := range subscriptions {
-		if hooks != nil && hooks.beforePersist != nil {
-			if err := hooks.beforePersist(i); err != nil {
-				return nil, err
-			}
-		}
-		if err := issueTimedSubscriptionConversionQuoteBatchTx(DB, &result.Quotes[i], &subscriptions[i], batch); err != nil {
-			return nil, err
-		}
-	}
-	if err := cleanupExpiredSubscriptionConversionQuotesTx(DB, userId, result.DatabaseNow); err != nil {
-		return nil, err
-	}
 	return result, nil
+}
+
+func reloadTimedSubscriptionConversionQuoteFactsTx(tx *gorm.DB, userId int, subscriptions *[]UserSubscription, batch **timedSubscriptionConversionQuoteBatch) error {
+	if tx == nil || subscriptions == nil || batch == nil {
+		return ErrConversionQuoteStale
+	}
+	ids := make([]int, len(*subscriptions))
+	for i := range *subscriptions {
+		ids[i] = (*subscriptions)[i].Id
+	}
+	if len(ids) == 0 {
+		*batch = &timedSubscriptionConversionQuoteBatch{sourcePlans: map[int]*SubscriptionPlan{}}
+		return nil
+	}
+	var refreshed []UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(timedSubscriptionConversionQuoteSelect).
+		Where("id IN ? AND user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", ids, userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
+		Order("id asc").Find(&refreshed).Error; err != nil {
+		return err
+	}
+	refreshedBatch, err := loadTimedSubscriptionConversionQuoteBatchTx(tx, userId, refreshed)
+	if err != nil {
+		return err
+	}
+	*subscriptions = refreshed
+	*batch = refreshedBatch
+	return nil
+}
+
+func isRetryableTimedSubscriptionConversionQuoteError(err error) bool {
+	if err == nil || !common.UsingSQLite {
+		return false
+	}
+	var sqliteErr *glebarezsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	baseCode := sqliteErr.Code() & 0xff
+	return baseCode == moderncsqlite3.SQLITE_BUSY || baseCode == moderncsqlite3.SQLITE_LOCKED
 }
 
 func loadTimedSubscriptionConversionQuoteBatchTx(tx *gorm.DB, userId int, subscriptions []UserSubscription) (*timedSubscriptionConversionQuoteBatch, error) {

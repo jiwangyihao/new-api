@@ -480,8 +480,8 @@ func TestListTimedSubscriptionConversionQuotesRechecksFactsBeforePersist(t *test
 	}).Error)
 
 	result, err := listTimedSubscriptionConversionQuotes(userID, &timedSubscriptionConversionQuoteListHooks{
-		afterFactsRead: func() error {
-			return DB.Model(&UserSubscription{}).Where("id = ?", subscriptionID).UpdateColumn("token_used", 26).Error
+		afterFactsRead: func(tx *gorm.DB) error {
+			return tx.Model(&UserSubscription{}).Where("id = ?", subscriptionID).UpdateColumn("token_used", 26).Error
 		},
 	})
 	require.NoError(t, err)

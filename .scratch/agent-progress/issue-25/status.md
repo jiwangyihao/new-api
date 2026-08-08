@@ -73,3 +73,13 @@
 - SQLite：四场单次、`-count=10`、窄 `-race` PASS；可控失败与持续锁重试耗尽零写入 PASS。
 - 回归：C/D、A/B、Issue #23 request restore/coalescer、Issue #24 ingress/debt 代表性测试 PASS。
 - 未运行：MySQL 5.7 / PostgreSQL 9.6（归 Issue #27）；未进入 API/UI/i18n/browser 或 Issue #28。
+
+
+## 最终 API 投影安全点
+
+- 阶段：`FINAL_BACKEND_PROJECTION_HANDOFF_READY`。
+- `CreditBalanceLedger` 追加低频 outflow 的 `operation`、`terminal_state`、`consumed_available_credit`、`settlement_debt_formed`、removed exact / estimated / unknown 字段；未改变高频请求账本。
+- 管理员 decrease 与订单 refund / chargeback 的 committed result、replay 和 HTTP 响应均直接投影同一持久化 ledger 事实，包括币种、规则版本与估值状态版本。
+- decrease 携带 `plan_id` 继续稳定拒绝；首次空余额 decrease 在 valuation ready 时建立空估值状态后再形成债务，数量、估值与 ledger 同事务。
+- SQLite schema / route / model 定向测试 `-count=10`、gofmt、LSP diagnostics 与 `git diff --check` 均通过。
+- 下一阶段仅进入前端展示、六语言、五分析接口 tracer 与真实 browser；MySQL / PostgreSQL 仍归 Issue #27。

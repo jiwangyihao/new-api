@@ -16,6 +16,9 @@ type CreditBalanceRecoveryRequest struct {
 	IdempotencyKey       string
 	SourceType           string
 	SourceId             int
+	SourceKey            string
+	Operation            string
+	TerminalState        string
 	SourceSnapshot       string
 	Type                 string
 	TargetPlanId         int
@@ -26,17 +29,26 @@ type CreditBalanceRecoveryRequest struct {
 }
 
 type CreditBalanceRecoveryResult struct {
-	UserSubscriptionId int    `json:"user_subscription_id"`
-	PlanId             int    `json:"plan_id"`
-	GrossCredit        int64  `json:"gross_credit"`
-	DebtFormed         int64  `json:"debt_formed"`
-	AvailableCredit    int64  `json:"available_credit"`
-	SettlementDebt     int64  `json:"settlement_debt"`
-	BalanceBefore      int64  `json:"balance_before"`
-	BalanceAfter       int64  `json:"balance_after"`
-	LedgerId           int    `json:"ledger_id"`
-	Status             string `json:"status"`
-	Replayed           bool   `json:"replayed"`
+	UserSubscriptionId         int    `json:"user_subscription_id"`
+	PlanId                     int    `json:"plan_id"`
+	GrossCredit                int64  `json:"gross_credit"`
+	ConsumedAvailableCredit    int64  `json:"consumed_available_credit"`
+	RemovedExactCostMicros     int64  `json:"removed_exact_cost_micros,string"`
+	RemovedEstimatedCostMicros int64  `json:"removed_estimated_cost_micros,string"`
+	RemovedUnknownCredit       int64  `json:"removed_unknown_credit"`
+	ValuationCurrency          string `json:"valuation_currency"`
+	RuleVersion                int    `json:"rule_version"`
+	StateVersionAfter          int64  `json:"state_version_after"`
+	Operation                  string `json:"operation"`
+	TerminalState              string `json:"terminal_state"`
+	DebtFormed                 int64  `json:"debt_formed"`
+	AvailableCredit            int64  `json:"available_credit"`
+	SettlementDebt             int64  `json:"settlement_debt"`
+	BalanceBefore              int64  `json:"balance_before"`
+	BalanceAfter               int64  `json:"balance_after"`
+	LedgerId                   int    `json:"ledger_id"`
+	Status                     string `json:"status"`
+	Replayed                   bool   `json:"replayed"`
 }
 
 func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (*CreditBalanceRecoveryResult, error) {
@@ -45,12 +57,15 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 	}
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	request.SourceType = strings.TrimSpace(request.SourceType)
+	request.SourceKey = strings.TrimSpace(request.SourceKey)
+	request.Operation = strings.TrimSpace(request.Operation)
+	request.TerminalState = strings.TrimSpace(request.TerminalState)
 	request.SourceSnapshot = strings.TrimSpace(request.SourceSnapshot)
 	request.Type = strings.TrimSpace(request.Type)
 	request.PaymentProvider = strings.TrimSpace(request.PaymentProvider)
 	request.Reason = strings.TrimSpace(request.Reason)
 	request.ParameterFingerprint = strings.TrimSpace(request.ParameterFingerprint)
-	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.Type == "" || request.TargetPlanId <= 0 || request.Reason == "" {
+	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.SourceKey == "" || request.Operation == "" || request.TerminalState == "" || request.Type == "" || request.TargetPlanId <= 0 || request.Reason == "" || request.ParameterFingerprint == "" {
 		return nil, errors.New("invalid credit balance recovery")
 	}
 
@@ -109,6 +124,7 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 	availableAfter := maxInt64(balanceAfter, 0)
 	debtAfter := maxInt64(-balanceAfter, 0)
 	debtFormed := maxInt64(debtAfter-debtBefore, 0)
+	consumedAvailable := minInt64(request.GrossCredit, availableBefore)
 	removedCostMicros, ok := checkedAddInt64(valuationMutation.RemovedExactCostMicros, valuationMutation.RemovedEstimatedCostMicros)
 	if !ok {
 		return nil, ErrCreditValuationOverflow
@@ -141,9 +157,19 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 		SourceType:                 request.SourceType,
 		SourceId:                   request.SourceId,
 		SourceSnapshot:             request.SourceSnapshot,
+		SourceKey:                  request.SourceKey,
+		SourceStatus:               request.TerminalState,
+		Operation:                  request.Operation,
+		TerminalState:              request.TerminalState,
+		TargetPlanId:               request.TargetPlanId,
 		GrossCredit:                -request.GrossCredit,
 		NetCredit:                  -minInt64(request.GrossCredit, availableBefore),
 		DebtFormed:                 debtFormed,
+		ConsumedAvailableCredit:    consumedAvailable,
+		SettlementDebtFormed:       debtFormed,
+		RemovedExactCostMicros:     valuationMutation.RemovedExactCostMicros,
+		RemovedEstimatedCostMicros: valuationMutation.RemovedEstimatedCostMicros,
+		RemovedUnknownCredit:       valuationMutation.RemovedUnknownCredit,
 		ValuationCurrency:          valuationCurrency,
 		ValuationGrossCostMicros:   removedCostMicros,
 		ValuationNetCostMicros:     removedCostMicros,
@@ -170,6 +196,8 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 		if !found || purchase.TargetPlanId != request.TargetPlanId || purchase.GrossCredit != request.GrossCredit {
 			return nil, ErrSubscriptionOrderSnapshotMismatch
 		}
+		ledger.PlanId = purchase.PlanId
+		ledger.SourcePlanId = purchase.SourcePlanId
 		ledger.SourcePriceMicros = purchase.SourcePriceMicros
 		ledger.SourcePlanCredit = purchase.SourcePlanCredit
 		ledger.FxSourceCurrency = purchase.FxSourceCurrency
@@ -193,7 +221,7 @@ func findCreditBalanceRecoveryResultTx(tx *gorm.DB, request CreditBalanceRecover
 	if query.RowsAffected == 0 {
 		return nil, false, nil
 	}
-	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != -request.GrossCredit || ledger.Type != request.Type || ledger.PaymentProvider != request.PaymentProvider || ledger.ParameterFingerprint != request.ParameterFingerprint {
+	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.SourceKey != request.SourceKey || ledger.Operation != request.Operation || ledger.TerminalState != request.TerminalState || ledger.GrossCredit != -request.GrossCredit || ledger.Type != request.Type || ledger.PaymentProvider != request.PaymentProvider || ledger.ParameterFingerprint != request.ParameterFingerprint {
 		return nil, false, ErrCreditValuationIdempotencyMismatch
 	}
 	var balance UserSubscription
@@ -215,17 +243,26 @@ func creditBalanceRecoveryResult(ledger *CreditBalanceLedger, planId int, replay
 		gross = -gross
 	}
 	return &CreditBalanceRecoveryResult{
-		UserSubscriptionId: ledger.UserSubscriptionId,
-		PlanId:             planId,
-		GrossCredit:        gross,
-		DebtFormed:         ledger.DebtFormed,
-		AvailableCredit:    ledger.AvailableCreditAfter,
-		SettlementDebt:     ledger.SettlementDebtAfter,
-		BalanceBefore:      ledger.BalanceBefore,
-		BalanceAfter:       ledger.BalanceAfter,
-		LedgerId:           ledger.Id,
-		Status:             creditBalanceStatus(ledger.BalanceAfter),
-		Replayed:           replayed,
+		UserSubscriptionId:         ledger.UserSubscriptionId,
+		PlanId:                     planId,
+		GrossCredit:                gross,
+		ConsumedAvailableCredit:    ledger.ConsumedAvailableCredit,
+		RemovedExactCostMicros:     ledger.RemovedExactCostMicros,
+		RemovedEstimatedCostMicros: ledger.RemovedEstimatedCostMicros,
+		RemovedUnknownCredit:       ledger.RemovedUnknownCredit,
+		ValuationCurrency:          ledger.ValuationCurrency,
+		RuleVersion:                ledger.ValuationRuleVersion,
+		StateVersionAfter:          ledger.ValuationStateVersionAfter,
+		Operation:                  ledger.Operation,
+		TerminalState:              ledger.TerminalState,
+		DebtFormed:                 ledger.DebtFormed,
+		AvailableCredit:            ledger.AvailableCreditAfter,
+		SettlementDebt:             ledger.SettlementDebtAfter,
+		BalanceBefore:              ledger.BalanceBefore,
+		BalanceAfter:               ledger.BalanceAfter,
+		LedgerId:                   ledger.Id,
+		Status:                     creditBalanceStatus(ledger.BalanceAfter),
+		Replayed:                   replayed,
 	}
 }
 

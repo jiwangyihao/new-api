@@ -158,3 +158,13 @@
 - 已核对 A–E 提交链：`92482861f`、`90e6f3c80`、`d6fdcd45c`、`e3e7f4e60`、`e86fe7ba3`、`845758872`、`19c6440dd`、`a65399f15`；不重做核心算法。
 - 已读取父 PRD #19、Issue #25、执行/Wave 3/Issue #25/验收文档、历史提交 `5cec2213b` 中的 C/D/E 续作合同、`CONTEXT.md`、ADR 0002、2026-08-02 specification/plan 相关章节，以及 `skill://tdd` 与 Orca CLI 运行时指南。当前 HEAD 不含题述路径 `docs/agents/credit-operational-value-issue-25-cde-continuation.md`，其合同已从 Git 历史原文核验。
 - 下一条 RED：从已注册的真实管理员 adjustment 路由发起 decrease，锁定 plan_id 拒绝、稳定 code、结构化 ledger 响应与幂等重放合同。
+
+
+## 最终后端结构化 outflow 投影
+
+- RED / GREEN 路由合同：`TestAdminCreditAdjustmentDecreaseRouteProjectsOutflowFactsAndReplay` 锁定 decrease 的 consumed available、removed exact / estimated / unknown、valuation currency、rule version、state version、terminal state 与 committed replay；`TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce` 锁定 refund 的同一字段和 ledger source identity。
+- schema：`TestCreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable` 验证 `credit_balance_ledgers` 的附加式低频 outflow 列存在且重复迁移安全。
+- 稳定命令：`go test ./model ./router -run "(CreditValuationSchemaSQLite|AdminCreditBalanceDecrease|AdminCreditAdjustmentDecreaseRouteProjectsOutflowFactsAndReplay|AdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce|CreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay)" -count=10` → PASS。
+- 格式与静态检查：六个 Go 文件 `gofmt`；修改范围的 Go LSP diagnostics 无问题；`git diff --check` → PASS。
+- 结构：管理员 adjustment / recovery API 从同一 committed `CreditBalanceLedger` 投影权威事实，不另算金额；旧 ledger 的 `debt_formed` 由兼容 helper 读取，新 outflow 写入 `settlement_debt_formed`。
+- 未声称：前端、五分析接口、browser、MySQL 5.7、PostgreSQL 9.6 或生产发布。

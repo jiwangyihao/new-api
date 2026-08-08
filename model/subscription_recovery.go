@@ -77,18 +77,27 @@ type SubscriptionOrderRecoveryRequest struct {
 }
 
 type SubscriptionOrderRecoveryResult struct {
-	OrderId         int    `json:"order_id"`
-	TradeNo         string `json:"trade_no"`
-	Status          string `json:"status"`
-	RecoveryType    string `json:"recovery_type"`
-	GrossCredit     int64  `json:"gross_credit"`
-	DebtFormed      int64  `json:"debt_formed"`
-	AvailableCredit int64  `json:"available_credit"`
-	SettlementDebt  int64  `json:"settlement_debt"`
-	BalanceBefore   int64  `json:"balance_before"`
-	BalanceAfter    int64  `json:"balance_after"`
-	LedgerId        int    `json:"ledger_id"`
-	Replayed        bool   `json:"replayed"`
+	OrderId                    int    `json:"order_id"`
+	TradeNo                    string `json:"trade_no"`
+	Status                     string `json:"status"`
+	RecoveryType               string `json:"recovery_type"`
+	GrossCredit                int64  `json:"gross_credit"`
+	ConsumedAvailableCredit    int64  `json:"consumed_available_credit"`
+	RemovedExactCostMicros     int64  `json:"removed_exact_cost_micros,string"`
+	RemovedEstimatedCostMicros int64  `json:"removed_estimated_cost_micros,string"`
+	RemovedUnknownCredit       int64  `json:"removed_unknown_credit"`
+	ValuationCurrency          string `json:"valuation_currency"`
+	RuleVersion                int    `json:"rule_version"`
+	StateVersionAfter          int64  `json:"state_version_after"`
+	Operation                  string `json:"operation"`
+	TerminalState              string `json:"terminal_state"`
+	DebtFormed                 int64  `json:"debt_formed"`
+	AvailableCredit            int64  `json:"available_credit"`
+	SettlementDebt             int64  `json:"settlement_debt"`
+	BalanceBefore              int64  `json:"balance_before"`
+	BalanceAfter               int64  `json:"balance_after"`
+	LedgerId                   int    `json:"ledger_id"`
+	Replayed                   bool   `json:"replayed"`
 }
 
 type SubscriptionOrderRecoveryPreview struct {
@@ -249,6 +258,9 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 			IdempotencyKey:       creditBalanceRecoveryIdempotencyKey(order.Id),
 			SourceType:           CreditBalanceLedgerSourceSubscriptionOrderRecovery,
 			SourceId:             order.Id,
+			SourceKey:            creditBalanceRecoveryIdempotencyKey(order.Id),
+			Operation:            request.RecoveryType,
+			TerminalState:        status,
 			SourceSnapshot:       sourceSnapshot,
 			Type:                 ledgerType,
 			TargetPlanId:         targetPlanId,
@@ -290,8 +302,13 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 		order.RecoveryLedgerID = recovery.LedgerId
 		order.RecoveryReason = request.Reason
 		result = &SubscriptionOrderRecoveryResult{
-			OrderId: order.Id, TradeNo: order.TradeNo, Status: order.Status, RecoveryType: order.RecoveryType,
-			GrossCredit: recovery.GrossCredit, DebtFormed: recovery.DebtFormed, AvailableCredit: recovery.AvailableCredit,
+			OrderId: order.Id, TradeNo: order.TradeNo, Status: order.Status, RecoveryType: request.RecoveryType,
+			GrossCredit: recovery.GrossCredit, ConsumedAvailableCredit: recovery.ConsumedAvailableCredit,
+			RemovedExactCostMicros: recovery.RemovedExactCostMicros, RemovedEstimatedCostMicros: recovery.RemovedEstimatedCostMicros,
+			RemovedUnknownCredit: recovery.RemovedUnknownCredit, ValuationCurrency: recovery.ValuationCurrency,
+			RuleVersion: recovery.RuleVersion, StateVersionAfter: recovery.StateVersionAfter,
+			Operation: request.RecoveryType, TerminalState: order.Status,
+			DebtFormed: recovery.DebtFormed, AvailableCredit: recovery.AvailableCredit,
 			SettlementDebt: recovery.SettlementDebt, BalanceBefore: recovery.BalanceBefore, BalanceAfter: recovery.BalanceAfter,
 			LedgerId: recovery.LedgerId,
 		}
@@ -480,7 +497,12 @@ func loadSubscriptionOrderRecoveryResultTx(tx *gorm.DB, order *SubscriptionOrder
 	}
 	*destination = &SubscriptionOrderRecoveryResult{
 		OrderId: order.Id, TradeNo: order.TradeNo, Status: order.Status, RecoveryType: order.RecoveryType,
-		GrossCredit: gross, DebtFormed: ledger.DebtFormed, AvailableCredit: ledger.AvailableCreditAfter,
+		GrossCredit: gross, ConsumedAvailableCredit: ledger.ConsumedAvailableCredit,
+		RemovedExactCostMicros: ledger.RemovedExactCostMicros, RemovedEstimatedCostMicros: ledger.RemovedEstimatedCostMicros,
+		RemovedUnknownCredit: ledger.RemovedUnknownCredit, ValuationCurrency: ledger.ValuationCurrency,
+		RuleVersion: ledger.ValuationRuleVersion, StateVersionAfter: ledger.ValuationStateVersionAfter,
+		Operation: request.RecoveryType, TerminalState: order.Status,
+		DebtFormed: creditBalanceLedgerDebtFormed(&ledger), AvailableCredit: ledger.AvailableCreditAfter,
 		SettlementDebt: ledger.SettlementDebtAfter, BalanceBefore: ledger.BalanceBefore, BalanceAfter: ledger.BalanceAfter,
 		LedgerId: ledger.Id, Replayed: replayed,
 	}

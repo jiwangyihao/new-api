@@ -50,34 +50,40 @@ type CreditBalanceAdjustmentRequest struct {
 }
 
 type CreditBalanceAdjustmentAuthoritativeResult struct {
-	PlanId            int    `json:"plan_id"`
-	GrossCredit       int64  `json:"gross_credit"`
-	NetCredit         int64  `json:"net_credit"`
-	GrossAmountMicros int64  `json:"gross_amount_micros,string"`
-	NetAmountMicros   int64  `json:"net_amount_micros,string"`
-	ValuationCurrency string `json:"valuation_currency"`
-	SourceCurrency    string `json:"source_currency"`
-	Confidence        string `json:"confidence"`
-	FxRateNumerator   int64  `json:"fx_rate_numerator,string"`
-	FxRateDenominator int64  `json:"fx_rate_denominator,string"`
-	FxCapturedAt      int64  `json:"fx_captured_at"`
-	FxDirection       string `json:"fx_direction"`
-	RuleVersion       int    `json:"rule_version"`
-	StateVersionAfter int64  `json:"state_version_after"`
-	DebtOffset        int64  `json:"debt_offset"`
-	AvailableCredit   int64  `json:"available_credit"`
-	SettlementDebt    int64  `json:"settlement_debt"`
-	BalanceBefore     int64  `json:"balance_before"`
-	BalanceAfter      int64  `json:"balance_after"`
-	Replayed          bool   `json:"replayed"`
-	Preview           bool   `json:"preview"`
+	PlanId                     int    `json:"plan_id"`
+	GrossCredit                int64  `json:"gross_credit"`
+	NetCredit                  int64  `json:"net_credit"`
+	GrossAmountMicros          int64  `json:"gross_amount_micros,string"`
+	NetAmountMicros            int64  `json:"net_amount_micros,string"`
+	ValuationCurrency          string `json:"valuation_currency"`
+	SourceCurrency             string `json:"source_currency"`
+	Confidence                 string `json:"confidence"`
+	FxRateNumerator            int64  `json:"fx_rate_numerator,string"`
+	FxRateDenominator          int64  `json:"fx_rate_denominator,string"`
+	FxCapturedAt               int64  `json:"fx_captured_at"`
+	FxDirection                string `json:"fx_direction"`
+	RuleVersion                int    `json:"rule_version"`
+	StateVersionAfter          int64  `json:"state_version_after"`
+	ConsumedAvailableCredit    int64  `json:"consumed_available_credit"`
+	DebtFormed                 int64  `json:"debt_formed"`
+	RemovedExactCostMicros     int64  `json:"removed_exact_cost_micros,string"`
+	RemovedEstimatedCostMicros int64  `json:"removed_estimated_cost_micros,string"`
+	RemovedUnknownCredit       int64  `json:"removed_unknown_credit"`
+	Operation                  string `json:"operation"`
+	TerminalState              string `json:"terminal_state"`
+	DebtOffset                 int64  `json:"debt_offset"`
+	AvailableCredit            int64  `json:"available_credit"`
+	SettlementDebt             int64  `json:"settlement_debt"`
+	BalanceBefore              int64  `json:"balance_before"`
+	BalanceAfter               int64  `json:"balance_after"`
+	Replayed                   bool   `json:"replayed"`
+	Preview                    bool   `json:"preview"`
 }
 
 type CreditBalanceAdjustmentResult struct {
 	CreditBalanceAdjustmentAuthoritativeResult
 	Adjustment    *CreditBalanceAdjustment  `json:"adjustment"`
 	CreditBalance *CreditBalanceGrantResult `json:"credit_balance"`
-	DebtFormed    int64                     `json:"debt_formed"`
 }
 
 type CreditBalanceAdjustmentPreviewRequest struct {
@@ -110,6 +116,13 @@ func creditBalanceAdjustmentAuthoritativeResult(planId int, balance *CreditBalan
 	result.FxDirection = balance.FxDirection
 	result.RuleVersion = balance.ValuationRuleVersion
 	result.StateVersionAfter = balance.ValuationStateVersionAfter
+	result.ConsumedAvailableCredit = balance.ConsumedAvailableCredit
+	result.DebtFormed = balance.DebtFormed
+	result.RemovedExactCostMicros = balance.RemovedExactCostMicros
+	result.RemovedEstimatedCostMicros = balance.RemovedEstimatedCostMicros
+	result.RemovedUnknownCredit = balance.RemovedUnknownCredit
+	result.Operation = balance.Operation
+	result.TerminalState = balance.TerminalState
 	result.DebtOffset = balance.DebtOffset
 	result.AvailableCredit = balance.AvailableCredit
 	result.SettlementDebt = balance.SettlementDebt
@@ -437,14 +450,29 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			}
 		} else {
 			ledgerKey := fmt.Sprintf("admin_adjustment:%d", adjustment.Id)
-			if _, _, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, creditPlan); err != nil {
+			balance, created, err := getOrCreateCreditBalanceSubscriptionTx(tx, request.UserId, creditPlan)
+			if err != nil {
 				return err
+			}
+			valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+			if err != nil {
+				return err
+			}
+			if valuationReady && created {
+				if creditPlan.ValuationCurrency == nil {
+					return ErrCreditValuationCurrencyRequired
+				}
+				if err := initializeCreditValuationStateTx(tx, balance, *creditPlan.ValuationCurrency); err != nil {
+					return err
+				}
 			}
 			recovery, err := RecoverCreditBalanceTx(tx, CreditBalanceRecoveryRequest{
 				UserId: request.UserId, GrossCredit: request.Amount,
 				IdempotencyKey: ledgerKey, SourceType: CreditBalanceLedgerSourceAdminAdjustment,
-				SourceId: adjustment.Id, SourceSnapshot: string(snapshotBytes), Type: CreditBalanceLedgerTypeAdminDecrease,
+				SourceId: adjustment.Id, SourceKey: ledgerKey, Operation: request.Operation, TerminalState: "completed",
+				SourceSnapshot: string(snapshotBytes), Type: CreditBalanceLedgerTypeAdminDecrease,
 				TargetPlanId: creditPlan.Id, OperatorUserId: request.OperatorUserId, Reason: request.Reason,
+				ParameterFingerprint: fingerprint,
 			})
 			if err != nil {
 				return err
@@ -633,7 +661,6 @@ func creditBalanceAdjustmentResultTx(tx *gorm.DB, adjustment *CreditBalanceAdjus
 		CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(adjustment.PlanId, grant, false, replayed),
 		Adjustment:    adjustment,
 		CreditBalance: grant,
-		DebtFormed:    ledger.DebtFormed,
 	}, nil
 }
 

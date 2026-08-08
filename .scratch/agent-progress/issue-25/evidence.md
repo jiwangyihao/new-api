@@ -111,3 +111,13 @@
 - 错误合同：拒绝结果不得含 `SQLITE`、`database is locked`、`UNIQUE constraint` 或 `gorm`；稳定 sentinel 经 `errors.Is` 验证。
 - 失败零写入：终态 chargeback 后重放低优先级 refund，订单、余额与 recovery ledger 全量快照不变。
 - 结论：现有生产实现直接满足首场合同；未修改生产代码。
+
+## E 第二场：refund + admin decrease
+
+- 新增测试：`TestConcurrentRefundAndAdminDecreaseUseLegalSerializations`。
+- 并发夹具：复用 `setupSubscriptionRecoveryConcurrencyTestDB` 的真实临时文件 SQLite WAL；User query callback 确定性阻塞 refund 与 admin decrease 两条事务，`sql.DB.Stats().InUse >= 2` 证明两个独立连接同时到达；无 sleep 猜时序。
+- 单次：`go test ./model -run '^TestConcurrentRefundAndAdminDecreaseUseLegalSerializations$' -count=1` → PASS；现有生产实现直接满足，未修改生产代码。
+- 合法串行结果：500 Credit refund recovery 与 100 Credit admin decrease 均成功且各写一次；最终 subscription token limit=500、token used=600、settlement debt=100；valuation available/exact/estimated/unknown 全为 0、state_version=3。
+- 账本不变量：恰好一条 `subscription_order_recovery` ledger（-500）和一条 `admin_decrease` ledger（-100）；两条 ledger 的 valuation gross cost 合计恒为 30,000,000 micros。admin 先执行时撤值 6,000,000 micros，refund 先执行时 admin 撤值 0，均属于合法串行集合；最大 ledger state version 为 3。
+- 错误合同与零写入：使用相同 idempotency key 但 amount=101 的 admin replay 返回 `ErrCreditValuationIdempotencyMismatch`，错误不含 `SQLITE`、`database is locked` 或 `UNIQUE constraint`；订单、余额、估值、全部 ledger 与 adjustment 全量快照不变。
+- 边界：按协调器裁决停在第二场；第三、四场及生产修改均未进入。

@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-- 阶段：E_REFUND_CHARGEBACK_GREEN（E 首场已满足；下一步仅 refund + admin decrease RED）
+- 阶段：E_REFUND_ADMIN_DECREASE_HANDOFF_READY（第二场直接 GREEN；等待协调器）
 - Dispatch：`task_c27d832fec9b` / `ctx_d1e85f528802`
 - Worker 终端：`term_597e2278-5e48-4f44-aaa1-e7f25a04d8af`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
@@ -37,7 +37,7 @@
 
 1. **C 请求快照恢复（MINIMAL PROBE GREEN / HANDOFF）**：新增唯一测试 `TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption`，经公开 `PreConsumeUserSubscriptionByUnits` / `SettleUserSubscriptionRequestTarget` 与真实 SQLite 验证 deduction snapshot → later ingress absorbs debt → full refund。冻结 exact / estimated / unknown 按原 request 恢复，已吸收债务转为 `restored_unknown`，另一 active request 保持逐字段不变；现有生产实现直接 GREEN，未制造生产改动。首次运行仅因测试误引用不存在的结果字段编译失败，修正测试后行为测试 PASS。
 2. **D 邀请取消隔离（GREEN / HANDOFF）**：新增表驱动真实 SQLite 测试 `TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward`，经公开 `RecoverSubscriptionOrder` 覆盖 refund / chargeback。Credit 订单完成时不新增 `InvitationRewardEvent` 或邀请收益；对预存错误/既有事件执行 recovery 时，仅稳定 identity 匹配目标订单的事件转为 `cancelled`，另一订单事件逐字段不变；同事实 replay 复用 recovery ledger 且全量状态零写入。现有生产实现直接 GREEN，未修改生产代码。
-3. **E SQLite 并发原子性（IN PROGRESS）**：首场 `TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence` 使用真实文件型 SQLite WAL、至少两个在用独立连接及确定性 query barrier；单次与 `-count=10` 直接 GREEN。合法串行结果为 refund 先行后 chargeback 晋升，或 chargeback 先行且 refund 稳定 `ErrSubscriptionOrderRecoveryConflict`；均只有一次 outflow、一条 recovery ledger、chargeback 单一终态，拒绝的低终态零写入且不泄漏 SQLite/GORM/唯一约束文本。下一步仅写 refund + admin decrease RED。
+3. **E SQLite 并发原子性（SECOND GREEN / HANDOFF）**：首场 refund + chargeback 已由 `845758872` clean 提交。第二场新增 `TestConcurrentRefundAndAdminDecreaseUseLegalSerializations`，真实文件 SQLite WAL、两个独立连接与确定性 User query barrier 单次直接 GREEN；refund recovery 与 admin decrease 各执行一次，最终 token limit=500 / used=600 / debt=100，mixed pool 成本清零、state_version=3，单一 recovery ledger 与单一 admin decrease ledger；两种合法串行顺序的管理员撤值分别为 0 或 6,000,000 micros，总撤值固定 30,000,000 micros；异参 admin replay 稳定 `ErrCreditValuationIdempotencyMismatch` 且全量快照零写入，无 SQLite/GORM/唯一约束文本泄漏。第三、四场保持 PENDING，等待协调器。
 
 ## 阻塞
 

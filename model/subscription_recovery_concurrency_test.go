@@ -205,6 +205,170 @@ func TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence(
 	require.Equal(t, beforeRejectedRefund, capture(), "the rejected lower terminal must write nothing")
 }
 
+func TestConcurrentRefundAndAdminDecreaseUseLegalSerializations(t *testing.T) {
+	db := setupSubscriptionRecoveryConcurrencyTestDB(t)
+	order := seedRecoverableConcurrentCreditOrder(t, db, 10_401, "concurrent-refund-admin-decrease")
+	require.NoError(t, db.AutoMigrate(&CreditBalanceAdjustment{}))
+	require.NoError(t, migrateCreditValuationSchema(db))
+
+	var balance UserSubscription
+	require.NoError(t, db.Where("user_id = ? AND entitlement_type = ?", order.UserId, SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id,
+		UserId:             order.UserId,
+		AvailableCredit:    500,
+		ExactCostMicros:    30_000_000,
+		Currency:           "CNY",
+		RuleVersion:        CreditValuationRuleVersion,
+		StateVersion:       1,
+		LastMutationType:   CreditValuationMutationGrant,
+		CreatedAt:          now,
+		UpdatedAt:          now,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: CreditValuationRuleVersion, Status: CreditValuationMigrationReady,
+		ValuationCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+	}).Error)
+
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	var journalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode").Scan(&journalMode).Error)
+	require.Equal(t, "wal", journalMode)
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var barrierMu sync.Mutex
+	barrierEntries := 0
+	const barrierCallback = "issue25:refund_admin_decrease_after_user_read"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(barrierCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "User" || tx.Error != nil || tx.RowsAffected != 1 {
+			return
+		}
+		barrierMu.Lock()
+		if barrierEntries >= 2 {
+			barrierMu.Unlock()
+			return
+		}
+		barrierEntries++
+		barrierMu.Unlock()
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(barrierCallback) })
+
+	type recoveryOutcome struct {
+		result *SubscriptionOrderRecoveryResult
+		err    error
+	}
+	type adjustmentOutcome struct {
+		result *CreditBalanceAdjustmentResult
+		err    error
+	}
+	recoveryDone := make(chan recoveryOutcome, 1)
+	adjustmentDone := make(chan adjustmentOutcome, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		result, recoverErr := RecoverSubscriptionOrder(SubscriptionOrderRecoveryRequest{
+			TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderStripe,
+			RecoveryType: SubscriptionOrderRecoveryRefund, Reason: "concurrent refund",
+		})
+		recoveryDone <- recoveryOutcome{result: result, err: recoverErr}
+	}()
+	go func() {
+		<-start
+		result, adjustmentErr := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: order.UserId, Operation: CreditBalanceAdjustmentDecrease, Amount: 100,
+			IdempotencyKey: "concurrent-refund-admin-decrease", OperatorUserId: 10_499,
+			Reason: "concurrent admin decrease",
+		})
+		adjustmentDone <- adjustmentOutcome{result: result, err: adjustmentErr}
+	}()
+	close(start)
+	<-arrived
+	<-arrived
+	require.GreaterOrEqual(t, sqlDB.Stats().InUse, 2, "the barrier must hold two independent SQLite connections")
+	close(release)
+
+	recovery := <-recoveryDone
+	adjustment := <-adjustmentDone
+	for _, operationErr := range []error{recovery.err, adjustment.err} {
+		if operationErr == nil {
+			continue
+		}
+		assert.NotContains(t, operationErr.Error(), "SQLITE")
+		assert.NotContains(t, operationErr.Error(), "database is locked")
+		assert.NotContains(t, operationErr.Error(), "UNIQUE constraint")
+		assert.NotContains(t, operationErr.Error(), "gorm")
+	}
+	require.NoError(t, recovery.err)
+	require.NotNil(t, recovery.result)
+	require.False(t, recovery.result.Replayed)
+	require.NoError(t, adjustment.err)
+	require.NotNil(t, adjustment.result)
+	require.False(t, adjustment.result.Replayed)
+
+	require.NoError(t, db.First(order, order.Id).Error)
+	require.Equal(t, common.TopUpStatusRefunded, order.Status)
+	require.Equal(t, SubscriptionOrderRecoveryRefund, order.RecoveryType)
+	require.NoError(t, db.First(&balance, balance.Id).Error)
+	require.Equal(t, int64(500), balance.TokenLimit)
+	require.Equal(t, int64(600), balance.TokenUsed)
+	require.Equal(t, int64(100), maxInt64(balance.TokenUsed-balance.TokenLimit, 0))
+
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, balance.Id).Error)
+	require.Zero(t, state.AvailableCredit)
+	require.Zero(t, state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+	require.Equal(t, int64(3), state.StateVersion)
+
+	var recoveryLedgers []CreditBalanceLedger
+	require.NoError(t, db.Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Find(&recoveryLedgers).Error)
+	require.Len(t, recoveryLedgers, 1)
+	require.Equal(t, recoveryLedgers[0].Id, order.RecoveryLedgerID)
+	require.Equal(t, int64(-500), recoveryLedgers[0].GrossCredit)
+	var adminLedgers []CreditBalanceLedger
+	require.NoError(t, db.Where("source_type = ? AND type = ?", CreditBalanceLedgerSourceAdminAdjustment, CreditBalanceLedgerTypeAdminDecrease).Find(&adminLedgers).Error)
+	require.Len(t, adminLedgers, 1)
+	require.Equal(t, int64(-100), adminLedgers[0].GrossCredit)
+	require.Equal(t, int64(30_000_000), recoveryLedgers[0].ValuationGrossCostMicros+adminLedgers[0].ValuationGrossCostMicros)
+	require.Contains(t, []int64{0, 6_000_000}, adminLedgers[0].ValuationGrossCostMicros)
+	require.Equal(t, int64(3), maxInt64(recoveryLedgers[0].ValuationStateVersionAfter, adminLedgers[0].ValuationStateVersionAfter))
+
+	type failureSnapshot struct {
+		Order       SubscriptionOrder
+		Balance     UserSubscription
+		State       CreditValuationState
+		Ledgers     []CreditBalanceLedger
+		Adjustments []CreditBalanceAdjustment
+	}
+	capture := func() failureSnapshot {
+		var snapshot failureSnapshot
+		require.NoError(t, db.First(&snapshot.Order, order.Id).Error)
+		require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+		require.NoError(t, db.First(&snapshot.State, balance.Id).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Ledgers).Error)
+		require.NoError(t, db.Order("id asc").Find(&snapshot.Adjustments).Error)
+		return snapshot
+	}
+	beforeConflict := capture()
+	conflicted, conflictErr := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+		UserId: order.UserId, Operation: CreditBalanceAdjustmentDecrease, Amount: 101,
+		IdempotencyKey: "concurrent-refund-admin-decrease", OperatorUserId: 10_499,
+		Reason: "concurrent admin decrease",
+	})
+	require.Nil(t, conflicted)
+	require.ErrorIs(t, conflictErr, ErrCreditValuationIdempotencyMismatch)
+	assert.NotContains(t, conflictErr.Error(), "SQLITE")
+	assert.NotContains(t, conflictErr.Error(), "database is locked")
+	assert.NotContains(t, conflictErr.Error(), "UNIQUE constraint")
+	require.Equal(t, beforeConflict, capture(), "the conflicting admin replay must write nothing")
+}
+
 func seedRecoverableConcurrentCreditOrder(t *testing.T, db *gorm.DB, userID int, tradeNo string) *SubscriptionOrder {
 	t.Helper()
 	optionPlanID := userID + 1

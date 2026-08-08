@@ -2,12 +2,12 @@
 
 ## 当前阶段
 
-- 阶段：管理员 decrease 真实 SQLite RED 已落盘，停止等待协调器
+- 阶段：HANDOFF_READY（管理员 decrease 最小 GREEN）
 - Dispatch：`task_685c1c42de63` / `ctx_214c53d3471f`
 - Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
 - 冻结共同基线：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
-- 当前 HEAD：`f0921dd61`（恢复记录提交）
+- 当前 HEAD：`6fd07dc86`（提交前）
 - merge-base：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - Orca 父工作树：`credit-operational-value-integration`
 
@@ -21,15 +21,17 @@
 - 确认 `ApplyCreditValuationOutflowTx` 已提供混合池 outflow，但 `RecoverCreditBalanceTx` 仍只修改 `token_used`，是首个 RED 的预期失败点。
 - 已通过公开 `AdjustCreditBalance(decrease)` 证明携带 `plan_id` 稳定拒绝且无 adjustment 副作用。
 - 已复现无 `plan_id` decrease 只增加 `token_used`、未同步减少 mixed exact / estimated / unknown 状态的真实缺陷。
+- `RecoverCreditBalanceTx` 在 valuation ready 时复用现有 `ApplyCreditValuationOutflowTx`，同事务同步更新数量与 mixed exact / estimated / unknown。
+- 保留 marker 非 ready 的旧数量路径；未新增字段、接口或 ledger 结构。
+- 定向测试单次及 `count=10` GREEN，`gofmt` 与 `git diff --check` 通过。
 
 ## 下一步
 
-1. 等待协调器验收 RED 安全点并指示后续 GREEN。
-2. 下一条预期命令仍为同一定向测试；不得先扩大读取、设计或测试范围。
+1. HANDOFF_READY，等待协调器验收；不进入退款、拒付、UI 或迁移范围。
 
 ## 阻塞
 
-- 按协调器要求在 RED 提交后主动停止；无技术阻塞。
+- 当前无阻塞；按协调器要求停止扩展范围。
 
 ## 最近安全提交
 

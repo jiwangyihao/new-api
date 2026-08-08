@@ -25,11 +25,14 @@
 
 - RED：`go test ./model -run '^TestAdminCreditBalanceDecreaseRejectsPlanAndWithdrawsMixedPool$' -count=1`
   - 真实 SQLite 公开入口：`AdjustCreditBalance`。
-  - `decrease` 携带 `plan_id` 返回 `ErrCreditValuationPlanIneligible`，且 adjustment 数量不变；该子合同已通过。
-  - 无 `plan_id` 的 200 Credit decrease 后，`UserSubscription.token_used` 从 200 增至 400，但 `CreditValuationState.available_credit` 错误保持 800，期望 600。
-  - 测试在 `model/credit_positive_ingress_test.go:376` RED；证明恢复路径只改数量，未按混合池同步移除 exact / estimated / unknown。
-  - 命令结果：FAIL，`github.com/QuantumNous/new-api/model`，耗时 5.691s。
-  - 尚未实施 GREEN；按协调器收敛指令在 RED 落盘后停止。
+  - `decrease` 携带 `plan_id` 返回 `ErrCreditValuationPlanIneligible`，且 adjustment 数量不变。
+  - 无 `plan_id` 的 200 Credit decrease 后，`token_used` 从 200 增至 400，但 `CreditValuationState.available_credit` 错误保持 800（期望 600）。
+  - 修复前 FAIL：`model/credit_positive_ingress_test.go:376`。
+- GREEN：`go test ./model -run '^TestAdminCreditBalanceDecreaseRejectsPlanAndWithdrawsMixedPool$' -count=1`
+  - PASS；mixed pool 结果为 available=600、exact=24,000,000、estimated=12,000,000、unknown=150、state_version=2。
+- 稳定性：`gofmt -w model/credit_balance_recovery.go && go test ./model -run '^TestAdminCreditBalanceDecreaseRejectsPlanAndWithdrawsMixedPool$' -count=10 && git diff --check`
+  - PASS；10 次重复均通过，格式与 whitespace 检查通过。
+- 实现只修改 `model/credit_balance_recovery.go`：valuation ready 时调用现有 `ApplyCreditValuationOutflowTx`，无新 schema / interface / ledger 字段；未进入退款、拒付、UI、#27 或 #28。
 
 ## 待收集证据
 

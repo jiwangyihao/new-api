@@ -77,45 +77,87 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 	if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
 		return nil, errors.New("invalid credit balance aggregate")
 	}
-	if request.GrossCredit > math.MaxInt64-balance.TokenUsed {
-		return nil, errors.New("credit balance overflow")
-	}
-
 	balanceBefore := balance.TokenLimit - balance.TokenUsed
 	availableBefore := maxInt64(balanceBefore, 0)
 	debtBefore := maxInt64(-balanceBefore, 0)
-	newUsed := balance.TokenUsed + request.GrossCredit
-	balanceAfter := balance.TokenLimit - newUsed
+	valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	valuationMutation := CreditValuationMutationResult{}
+	if valuationReady {
+		valuationMutation, err = ApplyCreditValuationOutflowTx(tx, &balance, request.GrossCredit, request.Type)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if request.GrossCredit > math.MaxInt64-balance.TokenUsed {
+			return nil, errors.New("credit balance overflow")
+		}
+		balance.TokenUsed += request.GrossCredit
+		if err := tx.Model(&UserSubscription{}).Where("id = ?", balance.Id).Updates(map[string]any{
+			"token_used": balance.TokenUsed,
+			"updated_at": getDBTimestampTx(tx),
+		}).Error; err != nil {
+			return nil, err
+		}
+	}
+
+	balanceAfter := balance.TokenLimit - balance.TokenUsed
 	availableAfter := maxInt64(balanceAfter, 0)
 	debtAfter := maxInt64(-balanceAfter, 0)
 	debtFormed := maxInt64(debtAfter-debtBefore, 0)
-	if err := tx.Model(&UserSubscription{}).Where("id = ?", balance.Id).Updates(map[string]any{
-		"token_used": newUsed,
-		"updated_at": getDBTimestampTx(tx),
-	}).Error; err != nil {
-		return nil, err
+	removedCostMicros, ok := checkedAddInt64(valuationMutation.RemovedExactCostMicros, valuationMutation.RemovedEstimatedCostMicros)
+	if !ok {
+		return nil, ErrCreditValuationOverflow
+	}
+	valuationCurrency := ""
+	valuationConfidence := ""
+	valuationRuleVersion := 0
+	if valuationReady {
+		var state CreditValuationState
+		if err := tx.Select("currency").Where("user_subscription_id = ?", balance.Id).First(&state).Error; err != nil {
+			return nil, err
+		}
+		valuationCurrency = state.Currency
+		valuationRuleVersion = CreditValuationRuleVersion
+		switch {
+		case valuationMutation.RemovedUnknownCredit > 0:
+			valuationConfidence = CreditValuationConfidenceUnknown
+		case valuationMutation.RemovedEstimatedCostMicros > 0:
+			valuationConfidence = CreditValuationConfidenceEstimated
+		case valuationMutation.RemovedExactCostMicros > 0:
+			valuationConfidence = CreditValuationConfidenceExact
+		}
 	}
 
 	ledger := CreditBalanceLedger{
-		UserId:                request.UserId,
-		UserSubscriptionId:    balance.Id,
-		Type:                  request.Type,
-		IdempotencyKey:        request.IdempotencyKey,
-		SourceType:            request.SourceType,
-		SourceId:              request.SourceId,
-		SourceSnapshot:        request.SourceSnapshot,
-		GrossCredit:           -request.GrossCredit,
-		DebtFormed:            debtFormed,
-		AvailableCreditBefore: availableBefore,
-		SettlementDebtBefore:  debtBefore,
-		BalanceBefore:         balanceBefore,
-		BalanceAfter:          balanceAfter,
-		AvailableCreditAfter:  availableAfter,
-		SettlementDebtAfter:   debtAfter,
-		OperatorUserId:        request.OperatorUserId,
-		PaymentProvider:       request.PaymentProvider,
-		Reason:                request.Reason,
-		CreatedAt:             getDBTimestampTx(tx),
+		UserId:                     request.UserId,
+		UserSubscriptionId:         balance.Id,
+		Type:                       request.Type,
+		IdempotencyKey:             request.IdempotencyKey,
+		SourceType:                 request.SourceType,
+		SourceId:                   request.SourceId,
+		SourceSnapshot:             request.SourceSnapshot,
+		GrossCredit:                -request.GrossCredit,
+		NetCredit:                  -minInt64(request.GrossCredit, availableBefore),
+		DebtFormed:                 debtFormed,
+		ValuationCurrency:          valuationCurrency,
+		ValuationGrossCostMicros:   removedCostMicros,
+		ValuationNetCostMicros:     removedCostMicros,
+		ValuationConfidence:        valuationConfidence,
+		ValuationRuleVersion:       valuationRuleVersion,
+		ValuationStateVersionAfter: valuationMutation.StateVersionAfter,
+		AvailableCreditBefore:      availableBefore,
+		SettlementDebtBefore:       debtBefore,
+		BalanceBefore:              balanceBefore,
+		BalanceAfter:               balanceAfter,
+		AvailableCreditAfter:       availableAfter,
+		SettlementDebtAfter:        debtAfter,
+		OperatorUserId:             request.OperatorUserId,
+		PaymentProvider:            request.PaymentProvider,
+		Reason:                     request.Reason,
+		CreatedAt:                  getDBTimestampTx(tx),
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err

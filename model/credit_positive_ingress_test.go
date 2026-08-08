@@ -385,6 +385,134 @@ func TestAdminCreditBalanceDecreaseRejectsPlanAndWithdrawsMixedPool(t *testing.T
 	require.Equal(t, int64(200), ledger.AvailableCreditBefore-ledger.AvailableCreditAfter)
 }
 
+func TestAdminCreditBalanceDecreaseClearsRemainderAndOnlyFormsSettlementDebt(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		amount             int64
+		wantSettlementDebt int64
+	}{
+		{name: "exactly clears every mixed-pool remainder", amount: 3},
+		{name: "excess only forms settlement debt", amount: 5, wantSettlementDebt: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+			increase, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+				UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+				PlanId: optionPlanID, IdempotencyKey: "admin-decrease-edge-seed-" + test.name,
+				OperatorUserId: 92_900, Reason: "边界夹具",
+			})
+			require.NoError(t, err)
+			balanceID := increase.CreditBalance.UserSubscriptionId
+			require.NoError(t, db.Model(&UserSubscription{}).Where("id = ?", balanceID).Updates(map[string]any{
+				"token_limit": int64(3), "token_used": int64(0),
+			}).Error)
+			require.NoError(t, db.Model(&CreditValuationState{}).Where("user_subscription_id = ?", balanceID).Updates(map[string]any{
+				"available_credit": int64(3), "exact_cost_micros": int64(10),
+				"estimated_cost_micros": int64(7), "unknown_credit": int64(2),
+			}).Error)
+
+			result, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+				UserId: userID, Operation: CreditBalanceAdjustmentDecrease, Amount: test.amount,
+				IdempotencyKey: "admin-decrease-edge-" + test.name,
+				OperatorUserId: 92_900, Reason: "边界回收",
+			})
+			require.NoError(t, err)
+			require.Equal(t, test.wantSettlementDebt, result.SettlementDebt)
+			require.Equal(t, test.wantSettlementDebt, result.DebtFormed)
+
+			var state CreditValuationState
+			require.NoError(t, db.Where("user_subscription_id = ?", balanceID).First(&state).Error)
+			require.Zero(t, state.AvailableCredit)
+			require.Zero(t, state.ExactCostMicros)
+			require.Zero(t, state.EstimatedCostMicros)
+			require.Zero(t, state.UnknownCredit)
+			require.GreaterOrEqual(t, state.ExactCostMicros, int64(0))
+			require.GreaterOrEqual(t, state.EstimatedCostMicros, int64(0))
+		})
+	}
+}
+
+func TestAdminCreditBalanceDecreaseReplaysConflictsAndRollsBackAtomically(t *testing.T) {
+	t.Run("same facts replay and changed facts conflict", func(t *testing.T) {
+		db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+		increase, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+			PlanId: optionPlanID, IdempotencyKey: "admin-decrease-replay-seed",
+			OperatorUserId: 92_901, Reason: "重放夹具",
+		})
+		require.NoError(t, err)
+		request := CreditBalanceAdjustmentRequest{
+			UserId: userID, Operation: CreditBalanceAdjustmentDecrease, Amount: 200,
+			IdempotencyKey: "admin-decrease-replay", OperatorUserId: 92_901, Reason: "同事实重放",
+		}
+		first, err := AdjustCreditBalance(request)
+		require.NoError(t, err)
+		replay, err := AdjustCreditBalance(request)
+		require.NoError(t, err)
+		require.True(t, replay.Replayed)
+		require.True(t, replay.CreditBalance.Replayed)
+		require.Equal(t, first.GrossCredit, replay.GrossCredit)
+		require.Equal(t, first.CreditBalance.GrossCredit, replay.CreditBalance.GrossCredit)
+		require.Equal(t, first.CreditBalance.LedgerId, replay.CreditBalance.LedgerId)
+		require.Equal(t, first.StateVersionAfter, replay.StateVersionAfter)
+
+		var stateBefore CreditValuationState
+		require.NoError(t, db.Where("user_subscription_id = ?", increase.CreditBalance.UserSubscriptionId).First(&stateBefore).Error)
+		var ledgerCountBefore int64
+		require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&ledgerCountBefore).Error)
+		conflict := request
+		conflict.Amount++
+		result, err := AdjustCreditBalance(conflict)
+		require.Nil(t, result)
+		require.ErrorIs(t, err, ErrCreditValuationIdempotencyMismatch)
+		var stateAfter CreditValuationState
+		require.NoError(t, db.Where("user_subscription_id = ?", increase.CreditBalance.UserSubscriptionId).First(&stateAfter).Error)
+		require.Equal(t, stateBefore, stateAfter)
+		var ledgerCountAfter int64
+		require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&ledgerCountAfter).Error)
+		require.Equal(t, ledgerCountBefore, ledgerCountAfter)
+	})
+
+	t.Run("ledger failure writes nothing", func(t *testing.T) {
+		db, userID, optionPlanID := seedAdminCreditPositiveIngress(t)
+		increase, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: userID, Operation: CreditBalanceAdjustmentIncrease, Amount: 800,
+			PlanId: optionPlanID, IdempotencyKey: "admin-decrease-rollback-seed",
+			OperatorUserId: 92_902, Reason: "回滚夹具",
+		})
+		require.NoError(t, err)
+		var balanceBefore UserSubscription
+		require.NoError(t, db.First(&balanceBefore, increase.CreditBalance.UserSubscriptionId).Error)
+		var stateBefore CreditValuationState
+		require.NoError(t, db.Where("user_subscription_id = ?", balanceBefore.Id).First(&stateBefore).Error)
+		var adjustmentCountBefore int64
+		require.NoError(t, db.Model(&CreditBalanceAdjustment{}).Count(&adjustmentCountBefore).Error)
+		var ledgerCountBefore int64
+		require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&ledgerCountBefore).Error)
+		require.NoError(t, db.Exec(`CREATE TRIGGER reject_admin_decrease_ledger BEFORE INSERT ON credit_balance_ledgers WHEN NEW.type = 'admin_decrease' BEGIN SELECT RAISE(FAIL, 'injected admin decrease ledger failure'); END`).Error)
+		t.Cleanup(func() { _ = db.Exec(`DROP TRIGGER IF EXISTS reject_admin_decrease_ledger`).Error })
+
+		result, err := AdjustCreditBalance(CreditBalanceAdjustmentRequest{
+			UserId: userID, Operation: CreditBalanceAdjustmentDecrease, Amount: 200,
+			IdempotencyKey: "admin-decrease-rollback", OperatorUserId: 92_902, Reason: "回滚验证",
+		})
+		require.Nil(t, result)
+		require.ErrorContains(t, err, "injected admin decrease ledger failure")
+		var balanceAfter UserSubscription
+		require.NoError(t, db.First(&balanceAfter, balanceBefore.Id).Error)
+		require.Equal(t, balanceBefore, balanceAfter)
+		var stateAfter CreditValuationState
+		require.NoError(t, db.Where("user_subscription_id = ?", balanceBefore.Id).First(&stateAfter).Error)
+		require.Equal(t, stateBefore, stateAfter)
+		var adjustmentCountAfter int64
+		require.NoError(t, db.Model(&CreditBalanceAdjustment{}).Count(&adjustmentCountAfter).Error)
+		require.Equal(t, adjustmentCountBefore, adjustmentCountAfter)
+		var ledgerCountAfter int64
+		require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&ledgerCountAfter).Error)
+		require.Equal(t, ledgerCountBefore, ledgerCountAfter)
+	})
+}
+
 func TestAdminCreditBalanceIncreaseReplayKeepsFrozenFXAfterOptionChange(t *testing.T) {
 	originalFX := runtimeCreditFXRateSnapshot.Load()
 	t.Cleanup(func() { runtimeCreditFXRateSnapshot.Store(originalFX) })

@@ -35,6 +35,18 @@
 - 实现只修改 `model/credit_balance_recovery.go`：valuation ready 时调用现有 `ApplyCreditValuationOutflowTx`，无新 schema / interface / ledger 字段；未进入退款、拒付、UI、#27 或 #28。
 - GREEN 安全提交：`92482861f fix(issue-25): 同步管理员减少的运营估值`。
 
+## A 组：Outflow 核心
+
+- 初次 RED：`go test ./model -run '^TestAdminCreditBalanceDecrease(ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)$' -count=1`
+  - 首次编译 RED：testify `require.NotNegative` 不存在，改为可编译的 `GreaterOrEqual` 行为断言。
+  - 行为 RED：同事实首次结果 `state_version_after=0`、重放为 2，暴露首次 decrease 使用临时 ingress 形状而重放使用持久化 ledger 的不一致。
+- 最小 GREEN：decrease 首次返回改为复用 `creditBalanceAdjustmentResultTx` 持久化 ledger 投影；未改变 increase 路径。
+- A 组 GREEN：同一定向命令 PASS。
+- 稳定性与 race：`go test ./model -run '^TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)$' -count=10 && go test -race ./model -run '^TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)$' -count=1 && git diff --check`
+  - PASS / PASS；10 次真实 SQLite 重复、窄 `-race` 与 whitespace 检查通过。
+- 行为结果：A=3 时 Q=3 清空 exact=10、estimated=7、unknown=2 的全部余数；Q=5 仍只移除上述非负池成本并形成 2 Credit settlement debt。
+- 原子性：注入 `admin_decrease` ledger INSERT 失败后 adjustment / subscription / valuation state / ledger 均与操作前一致。
+
 ## 待收集证据
 
 - 混合池比例 outflow、清空余数、欠额、零余额、溢出与成本非负。

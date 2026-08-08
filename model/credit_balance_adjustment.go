@@ -450,17 +450,9 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 				return err
 			}
 			adjustment.LedgerId = recovery.LedgerId
-			decreaseBalance := &CreditBalanceGrantResult{
-				UserSubscriptionId: recovery.UserSubscriptionId, PlanId: recovery.PlanId,
-				GrossCredit: -recovery.GrossCredit, AvailableCredit: recovery.AvailableCredit,
-				SettlementDebt: recovery.SettlementDebt, BalanceBefore: recovery.BalanceBefore,
-				BalanceAfter: recovery.BalanceAfter, LedgerId: recovery.LedgerId, Status: recovery.Status,
-			}
-			result = &CreditBalanceAdjustmentResult{
-				CreditBalanceAdjustmentAuthoritativeResult: creditBalanceAdjustmentAuthoritativeResult(request.PlanId, decreaseBalance, false, false),
-				Adjustment:    adjustment,
-				CreditBalance: decreaseBalance,
-				DebtFormed:    recovery.DebtFormed,
+			result, err = creditBalanceAdjustmentResultTx(tx, adjustment, false)
+			if err != nil {
+				return err
 			}
 		}
 		if err := tx.Model(&CreditBalanceAdjustment{}).Where("id = ?", adjustment.Id).UpdateColumn("ledger_id", adjustment.LedgerId).Error; err != nil {

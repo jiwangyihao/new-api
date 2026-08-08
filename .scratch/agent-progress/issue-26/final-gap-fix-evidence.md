@@ -33,20 +33,29 @@
 ## Finding C：轮询 quote 写放大
 
 - RED 命令：`go test ./model -run '^TestListTimedSubscriptionConversionQuotesReusesActiveQuoteForUnchangedFacts$' -count=1 -timeout=120s`。
-- RED 结果：真实 SQLite 连续两次调用 `ListTimedSubscriptionConversionQuotes`，相同 user/source/facts 得到不同 UUID（`b1e...` → `51d...`），持久 quote 记录数期望 1、实际 2。
-- 根因：`issueTimedSubscriptionConversionQuoteTx` 每次轮询无条件 `Create`；候选订阅无上限；source plan、target plan、Credit debt/valuation/FX 在每项重复查询；无有界过期清理。
-- 设计：quote identity 深模块在 canonical fingerprint 后复用 owner/source/fingerprint 的未过期 DB 记录；复用组合索引支撑查询。候选按 `id asc` 限 100；source plans 批量加载，target plan 与 Credit debt 在列表事务只读一次。每次新发 quote 前按 owner/source 稳定取至多 32 条已过期 identity 再按 PK 删除；不触碰未过期并发 Confirm。
-- GREEN：待实现。
-- RED 提交：待创建。
+- RED 结果：真实 SQLite 连续两次调用 `ListTimedSubscriptionConversionQuotes`，相同 user/source/facts 得到不同 UUID，持久 quote 记录数期望 1、实际 2。
+- 根因：旧 `issueTimedSubscriptionConversionQuoteTx` 每次轮询无条件 `Create`；候选订阅无上限；source plan、target plan、Credit debt/valuation/FX 在每项重复查询；无有界过期清理。
+- RED 提交：`3a2d081b8 test(subscription): 固化报价轮询写放大`。
+- GREEN 设计：报价 facts 仍保存完整权威 fingerprint；同币种的数据库时间型 `fx_captured_at` 只从复用 identity key 中规范化排除，跨币种冻结 FX snapshot 仍参与 key。持久化 nullable 唯一 `reuse_key`，`INSERT ... ON CONFLICT DO NOTHING`/方言等价语义使并发同事实只保留一个有效 identity；复用时重新验证 owner/source、完整 snapshot fingerprint 与 reuse key。
+- GREEN 行为：相同事实且未过期返回相同 `quote_id`/fingerprint/created/expires，记录数保持 1；token usage 等权威事实变化产生新 identity，旧 identity Confirm 返回 `ErrConversionQuoteStale` 且 conversion 记录数 0；过期 identity 被替换，新 identity 可见，旧 identity stale。
+- 查询边界：候选订阅 `id asc LIMIT 100`；source plans 通过 `IN` 批量加载；Credit plan、target mapping/debt、valuation-ready 各在列表快照中只读一次；conversion history 保持 `id desc LIMIT 100`。
+- 清理边界：每次按 `(user_id, expires_at, quote_id)` 稳定选择并删除至多 32 条已过期 identity；不删除未过期报价。并发 Confirm 仍按主键锁 quote，MySQL/PostgreSQL 删除等待锁的语义留给 #27 实机验证。
+- GREEN 提交：`913c5c930 fix(subscription): 复用有效转换报价`。
 
-## 预定验证边界
+## 最终验证
 
-- 前端：受影响 component/API tests、`bun run typecheck`、`bun run i18n:sync`、`bun run build`；不运行全前端套件、formatter 或 linter。
-- 后端：conversion model/controller/router 定向单次、关键 `-count=10`、必要窄 `-race`；不运行 project-wide 套件。
-- 数据库：本 Dispatch 运行真实 SQLite；MySQL 5.7/PostgreSQL 9.6 只做静态兼容审查，实机矩阵留给 #27。
-- 收尾：只格式化明确修改文件，执行 `git diff --check`，最终 staged/unstaged/untracked 全零。
+- `go test ./model -run '^TestListTimedSubscriptionConversionQuotes' -count=10 -timeout=600s`：通过。
+- `go test ./model -run '^(TestListTimedSubscriptionConversionQuotes|TestRecalculateTimedSubscriptionConversionQuote|TestTimedSubscriptionConversionQuote|TestConfirmTimedSubscriptionConversion)' -count=10 -timeout=600s`：通过。
+- `go test -race ./model -run '^TestListTimedSubscriptionConversionQuotesConcurrentSameFactsWritesOnce$' -count=1 -timeout=300s`：通过。
+- `go test ./controller ./router -run 'SubscriptionConversion|TimedConversion' -count=1 -timeout=300s`：两个包通过。
+- `bun test src/features/subscription-conversion/api.test.ts src/features/subscription-conversion/errors.test.ts src/features/subscription-conversion/components/timed-subscription-conversion-quotes-card.test.tsx`：23 pass / 0 fail。
+- `bun run typecheck && bun run i18n:sync && bun run build`：通过；i18n 报告生成，Rsbuild production build 成功。
+- `go test ./model ./service ./controller -count=1 -timeout=1200s`：model、service 通过；controller 仅 `TestCreditBalanceGrantRejectsReplayWithMismatchedIdentity` 失败，其旧断言要求自由文本 `idempotency key mismatch`，实际稳定 code 为 `credit_valuation_idempotency_mismatch`。未将该组合命令误报为通过；父集成需校准旧断言并重跑。
+- `git diff --check`：通过；代码提交 `913c5c930` 后工作树 clean。
 
-## 当前提交与下一动作
+## 验证边界与交接
 
-- 安全文档：`8b390a7fb`；quote identity RED/GREEN：`e984c1eb7`、`e10d4bbd8`、`27c3552cb`；typed adapter：`979c43af2`。
-- 下一动作：提交 stable-code/i18n GREEN，然后建立真实 SQLite quote 写放大 RED。
+- 本 Dispatch 使用真实 SQLite；MySQL 5.7/PostgreSQL 9.6 未运行，三库零 SKIP 归 Issue #27。
+- 未修改 #24 管理员正向入账、#25 destructive recovery、#27 migration/ready 或 #28 release。
+- 安全文档与实现链：`8b390a7fb`、`e984c1eb7`、`e10d4bbd8`、`27c3552cb`、`979c43af2`、`c8aaf557f`、`3a2d081b8`、`913c5c930`。
+- 父协调器下一步：集成本分支，校准一个既有 controller 文本断言，执行组合门禁；不得把 MySQL/PostgreSQL 标记为已实测。

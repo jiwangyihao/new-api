@@ -56,13 +56,14 @@
 
 ## 提交纪律
 
-- 当前安全文档提交：待创建。
-- 前端 quote identity RED/GREEN：待创建。
-- 前端 stable-code/i18n RED/GREEN：待创建。
-- 后端 quote reuse RED/GREEN：待创建。
-- 最终证据与 clean 提交：待创建。
-- 每个小步使用 Conventional Commit，英文 `type(scope)`、简体中文 subject。
+- 安全文档：`8b390a7fb docs(issue-26): 固化最终缺口修复合同`。
+- 前端 quote identity RED/GREEN：`e984c1eb7`、`e10d4bbd8`、`27c3552cb`。
+- 前端 stable-code/i18n GREEN：`979c43af2`、`c8aaf557f`。
+- 后端 quote reuse RED/GREEN：`3a2d081b8`、`913c5c930`。
+- 每个小步均使用 Conventional Commit，英文 `type(scope)`、简体中文 subject。
 
-## 下一动作
+## 交接
 
-提交本安全点，然后定位前端 conversion card、API adapter、既有测试与后端 quote 模型/服务调用接缝；修改导出符号前运行 LSP references。
+- A/B/C 三项合同已经实现；本工作树只剩最终证据提交。
+- 父协调器集成后需校准一个既有 controller 自由文本断言，并执行组合门禁。
+- MySQL 5.7/PostgreSQL 9.6 实机矩阵仍归 Issue #27，不得由本 SQLite 证据替代。

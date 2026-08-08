@@ -5,7 +5,7 @@
 - `git status --short --branch && git rev-parse HEAD && git merge-base HEAD fe1901aaf7a769fe7057c6483e30b7b1491adcdc && git branch --show-current`
   - 分支：`jiwangyihao/issue-25-destructive-outflow`
   - staged / unstaged / untracked：均为 0
-  - HEAD：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
+  - 恢复现场 HEAD：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`；当前 A/B HEAD 见下方交接提交。
   - merge-base：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - `orca status --json && orca worktree current --json && orca orchestration dispatch-show --task task_685c1c42de63 --json`
   - Orca runtime：ready
@@ -57,19 +57,20 @@
   - 使用现有 `CreditBalanceLedger.ParameterFingerprint` 绑定 recovery type / payload / operator / reason / credit-only；同终态仅完全相同事实 replay，payload / reason 变化返回 `ErrSubscriptionOrderRecoveryConflict`。
   - refund→chargeback 晋升复用原 refund ledger，不再次 outflow；随后 chargeback replay 稳定。
 - 最终命令：`gofmt -w model/subscription_recovery.go model/credit_balance_recovery.go model/credit_valuation_tracer_test.go && go test ./model -run '^TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay$' -count=1` → PASS。
-- 硬截止范围：未执行 count=10 / 相邻 recovery / race；未进入 C/D/E、UI、#27/#28。
-- 提交后工作树 clean；B 组开始前未保留未提交 A 组改动。
+- B 组 clean 安全提交：`d6fdcd45c fix(issue-25): 固化订单回收事实与终态幂等`。
+- 硬截止范围：未执行 B 组 count=10 / 相邻 recovery / race；未进入 C/D/E、UI、#27/#28。
 
-## 待收集证据
+## PENDING：下一续作精确测试接缝
 
-- 混合池比例 outflow、清空余数、欠额、零余额、溢出与成本非负。
-- 事务故障注入和完整回滚。
-- 幂等重放、指纹冲突、refund / chargeback 终态竞争。
-- outflow 与 request settle / refund 的数据库并发及活动请求快照不变。
-- 管理员 decrease API、真实订单 recovery、五个运营分析接口的真实 SQLite tracer。
-- 相关 Go 包 `-race`。
-- 管理员 increase→decrease 浏览器交互、真实 payload / response 与分析刷新。
-- 前端定向测试、typecheck/build、六语言 missing/extras 与 `git diff --check`。
+- **C 请求快照恢复**：真实 SQLite，公开 `SettleUserSubscriptionRequestTarget` / `SettleCreditRequestTargetTx`；场景为 deduction snapshot → later ingress absorbs debt → request refund。验证原 exact / estimated / unknown attribution、absorbed 恢复审计、重新可用 unknown 与其他活动 request snapshot 不变。
+- **D 邀请取消隔离**：真实 SQLite，公开 `RecoverSubscriptionOrder`；构造 Credit 订单与错误/既有 `InvitationRewardEvent`，验证 recovery / order terminal / reward cancellation 同事务幂等、Credit 不产生邀请收益且不进入邀请付费统计。
+- **E 并发原子性**：文件型 SQLite WAL；覆盖 refund + chargeback、refund + admin decrease、outflow + request settle、outflow + request refund，断言合法串行集合、单一 recovery ledger、数量/估值/状态版本一致、活动 request snapshot 不变；随后跑相关窄 `-race`。
+- **仍待后续阶段**：管理员 decrease API、五个运营分析接口、UI/browser、六语言、MySQL/PostgreSQL 静态审查；不得在 C/D/E 提前进入 UI 或 #27/#28。
+
+## 当前边界
+
+- A/B 已完成；C/D/E 均为 PENDING，不得误报完成。
+- MySQL 5.7.44 / PostgreSQL 9.6.24 完整零 SKIP 矩阵归 #27；当前只实测 SQLite。
 
 ## 数据库实测边界
 

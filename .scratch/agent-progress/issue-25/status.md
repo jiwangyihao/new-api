@@ -2,12 +2,13 @@
 
 ## 当前阶段
 
-- 阶段：HANDOFF_READY（B 组订单退款 / 拒付 immutable facts GREEN）
+- 阶段：HANDOFF_READY（A/B 完成；C/D/E PENDING）
 - Dispatch：`task_685c1c42de63` / `ctx_214c53d3471f`
 - Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
 - 冻结共同基线：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - A 组提交：`90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`
+- B 组提交：`d6fdcd45c fix(issue-25): 固化订单回收事实与终态幂等`
 - merge-base：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - Orca 父工作树：`credit-operational-value-integration`
 
@@ -32,14 +33,18 @@
 - recovery 按当前 mixed pool 移除 60,000,000 micros；ledger 复制原 purchase price / denominator / FX facts。
 - refund 同事实重放复用 ledger；payload / reason 变化稳定冲突且 state / ledger 数量不变；refund→chargeback 终态晋升复用原 ledger，不重复 outflow。
 
-## 下一步
+## PENDING 与精确续作接缝
 
-1. HANDOFF_READY，等待协调器恢复续作；本次不进入 C/D/E、UI 或下游。
+1. **C 请求快照恢复（PENDING）**：从公开 `SettleUserSubscriptionRequestTarget` / `SettleCreditRequestTargetTx` 接缝写真实 SQLite RED，构造请求 deduction snapshot → 后来 ingress 吸收 debt → 请求退款；断言原 exact / estimated / unknown attribution、absorbed 恢复审计及重新可用 unknown，不改写其他活动 `SubscriptionPreConsumeRecord`。
+2. **D 邀请取消隔离（PENDING）**：从公开 `RecoverSubscriptionOrder` 接缝构造 Credit 订单及错误/既有 `InvitationRewardEvent`，断言 recovery、订单终态、奖励取消同事务且幂等；同时断言 Credit 不新增邀请收益、不进入邀请付费统计。
+3. **E SQLite 并发原子性（PENDING）**：在真实文件型 SQLite WAL 接缝覆盖 refund + chargeback、refund + admin decrease、outflow + request settle、outflow + request refund；断言合法串行结果集合、单一 recovery ledger、数量/状态版本一致及活动 request snapshot 不变，并运行相关窄 `-race`。
 
 ## 阻塞
 
-- 当前无阻塞；B 组安全点已具备可恢复实现与真实测试。
+- 无技术阻塞；协调器硬截止要求本终端不进入 C/D/E，由下一续作继续。
 
 ## 最近安全提交
 
+- `d6fdcd45c fix(issue-25): 固化订单回收事实与终态幂等`
+- `06d185c40 chore(issue-25): 记录 outflow 核心安全点`
 - `90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`

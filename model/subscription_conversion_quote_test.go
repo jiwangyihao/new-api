@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -191,6 +192,7 @@ func TestListTimedSubscriptionConversionQuotesHandlesNullableLegacyEntitlement(t
 	require.NoError(t, db.AutoMigrate(&SubscriptionPlan{}))
 	require.NoError(t, db.AutoMigrate(&SubscriptionConversion{}))
 	require.NoError(t, db.AutoMigrate(&CreditBalanceLedger{}))
+	require.NoError(t, db.AutoMigrate(&SubscriptionConversionQuote{}))
 	seedConversionQuoteCreditBalancePlan(t)
 	seedConversionQuoteTimedPlan(t, 29_101, 100)
 	require.NoError(t, db.Exec(
@@ -274,6 +276,180 @@ func TestListTimedSubscriptionConversionQuotesReusesActiveQuoteForUnchangedFacts
 	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
 		Where("user_id = ? AND source_subscription_id = ?", userID, subscriptionID).
 		Count(&quoteCount).Error)
+	assert.Equal(t, int64(1), quoteCount)
+}
+
+func TestListTimedSubscriptionConversionQuotesIssuesNewIdentityForChangedFacts(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	require.NoError(t, DB.AutoMigrate(&User{}))
+	const (
+		userID         = 19_104
+		planID         = 29_104
+		subscriptionID = 39_104
+	)
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "quote-facts-change", Status: common.UserStatusEnabled}).Error)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit:      100, TokenUsed: 25,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime:               databaseNow - 40*24*60*60,
+		EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+		LastGrantCreditSnapshot: &snapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	first, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, first.Quotes, 1)
+	require.NoError(t, DB.Model(&UserSubscription{}).Where("id = ?", subscriptionID).UpdateColumn("token_used", 26).Error)
+	second, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, second.Quotes, 1)
+	assert.NotEqual(t, first.Quotes[0].QuoteId, second.Quotes[0].QuoteId)
+	assert.NotEqual(t, first.Quotes[0].FactsFingerprint, second.Quotes[0].FactsFingerprint)
+
+	_, err = ConfirmTimedSubscriptionConversionQuote(userID, subscriptionID, "changed-facts-old-quote", first.Quotes[0].QuoteId)
+	require.ErrorIs(t, err, ErrConversionQuoteStale)
+	var conversionCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversion{}).Count(&conversionCount).Error)
+	assert.Zero(t, conversionCount)
+}
+
+func TestListTimedSubscriptionConversionQuotesReplacesExpiredIdentity(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	require.NoError(t, DB.AutoMigrate(&User{}))
+	const (
+		userID         = 19_105
+		planID         = 29_105
+		subscriptionID = 39_105
+	)
+	require.NoError(t, DB.Create(&User{Id: userID, Username: "quote-expiry", Status: common.UserStatusEnabled}).Error)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit:      100, TokenUsed: 25,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime:               databaseNow - 40*24*60*60,
+		EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+		LastGrantCreditSnapshot: &snapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	first, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, first.Quotes, 1)
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
+		Where("quote_id = ?", first.Quotes[0].QuoteId).UpdateColumn("expires_at", 1).Error)
+	second, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, second.Quotes, 1)
+	assert.NotEqual(t, first.Quotes[0].QuoteId, second.Quotes[0].QuoteId)
+
+	var oldCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).Where("quote_id = ?", first.Quotes[0].QuoteId).Count(&oldCount).Error)
+	assert.Zero(t, oldCount)
+	_, err = ConfirmTimedSubscriptionConversionQuote(userID, subscriptionID, "expired-old-quote", first.Quotes[0].QuoteId)
+	require.ErrorIs(t, err, ErrConversionQuoteStale)
+}
+
+func TestListTimedSubscriptionConversionQuotesBoundsCandidatesAndCleanup(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	const (
+		userID = 19_106
+		planID = 29_106
+	)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	subscriptions := make([]UserSubscription, 105)
+	for i := range subscriptions {
+		subscriptions[i] = UserSubscription{
+			Id: 39_200 + i, UserId: userID, PlanId: planID,
+			EntitlementType: "", Status: SubscriptionStatusActive,
+		}
+	}
+	require.NoError(t, DB.Create(&subscriptions).Error)
+	expired := make([]SubscriptionConversionQuote, 40)
+	for i := range expired {
+		expired[i] = SubscriptionConversionQuote{
+			QuoteId: fmt.Sprintf("expired-%02d", i), UserId: userID,
+			SourceSubscriptionId: 80_000 + i, CreatedAt: 1, ExpiresAt: 2,
+			FactsFingerprint: fmt.Sprintf("fingerprint-%02d", i), FactsSnapshot: "{}",
+		}
+	}
+	require.NoError(t, DB.Create(&expired).Error)
+
+	result, err := ListTimedSubscriptionConversionQuotes(userID)
+	require.NoError(t, err)
+	require.Len(t, result.Quotes, timedSubscriptionConversionQuoteCandidateLimit)
+	assert.Equal(t, 39_200, result.Quotes[0].SourceSubscriptionId)
+	assert.Equal(t, 39_299, result.Quotes[len(result.Quotes)-1].SourceSubscriptionId)
+	var expiredCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
+		Where("user_id = ? AND expires_at <= ?", userID, result.DatabaseNow).Count(&expiredCount).Error)
+	assert.Equal(t, int64(40-subscriptionConversionQuoteCleanupLimit), expiredCount)
+}
+
+func TestListTimedSubscriptionConversionQuotesConcurrentSameFactsWritesOnce(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	const (
+		userID         = 19_107
+		planID         = 29_107
+		subscriptionID = 39_107
+	)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit:      100, TokenUsed: 25,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime:               databaseNow - 40*24*60*60,
+		EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+		LastGrantCreditSnapshot: &snapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	start := make(chan struct{})
+	results := make([]*TimedSubscriptionConversionQuoteList, 2)
+	errs := make([]error, 2)
+	var waitGroup sync.WaitGroup
+	for i := range results {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			results[index], errs[index] = ListTimedSubscriptionConversionQuotes(userID)
+		}(i)
+	}
+	close(start)
+	waitGroup.Wait()
+	for i := range errs {
+		require.NoError(t, errs[i])
+		require.Len(t, results[i].Quotes, 1)
+	}
+	assert.Equal(t, results[0].Quotes[0].QuoteId, results[1].Quotes[0].QuoteId)
+	var quoteCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
+		Where("user_id = ? AND source_subscription_id = ?", userID, subscriptionID).Count(&quoteCount).Error)
 	assert.Equal(t, int64(1), quoteCount)
 }
 

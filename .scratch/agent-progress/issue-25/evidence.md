@@ -46,6 +46,18 @@
   - PASS / PASS；10 次真实 SQLite 重复、窄 `-race` 与 whitespace 检查通过。
 - 行为结果：A=3 时 Q=3 清空 exact=10、estimated=7、unknown=2 的全部余数；Q=5 仍只移除上述非负池成本并形成 2 Credit settlement debt。
 - A 组 clean 安全提交：`90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`。
+
+## B 组：订单退款 / 拒付 immutable facts
+
+- RED：`go test ./model -run '^TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay$' -count=1`
+  - 先后暴露订单 recovery 依赖可变 order snapshot、recovery ledger 未复制 purchase price / FX facts、`ParameterFingerprint` 为空、payload / reason 冲突被误判 replay，以及 refund→chargeback 被原 refund 指纹误拒绝。
+- GREEN：同一命令 PASS。
+  - `subscriptionOrderCreditRecoveryIdentityTx` 优先读取 immutable purchase ledger；无 purchase ledger 时保留既有兼容路径。
+  - recovery ledger 复制 purchase `SourcePriceMicros`、`SourcePlanCredit` 与完整 FX facts；实际撤值仍为操作前 mixed pool 的 60,000,000 micros，不按订单原价撤值。
+  - 使用现有 `CreditBalanceLedger.ParameterFingerprint` 绑定 recovery type / payload / operator / reason / credit-only；同终态仅完全相同事实 replay，payload / reason 变化返回 `ErrSubscriptionOrderRecoveryConflict`。
+  - refund→chargeback 晋升复用原 refund ledger，不再次 outflow；随后 chargeback replay 稳定。
+- 最终命令：`gofmt -w model/subscription_recovery.go model/credit_balance_recovery.go model/credit_valuation_tracer_test.go && go test ./model -run '^TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay$' -count=1` → PASS。
+- 硬截止范围：未执行 count=10 / 相邻 recovery / race；未进入 C/D/E、UI、#27/#28。
 - 提交后工作树 clean；B 组开始前未保留未提交 A 组改动。
 
 ## 待收集证据

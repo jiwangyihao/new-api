@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-- 阶段：A 组 outflow 核心已提交，进入 B 组订单终态
+- 阶段：HANDOFF_READY（B 组订单退款 / 拒付 immutable facts GREEN）
 - Dispatch：`task_685c1c42de63` / `ctx_214c53d3471f`
 - Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
@@ -28,16 +28,17 @@
 - 同事实重放返回持久化结果；变化 amount 稳定 `ErrCreditValuationIdempotencyMismatch` 且零写入。
 - ledger 插入失败时 adjustment、权益、估值状态与 ledger 整笔回滚。
 - 首次 decrease 与重放统一从持久化 ledger 投影结果，状态版本一致。
+- B 组唯一真实 SQLite 测试 GREEN：订单可变 Credit 字段 / snapshot 被篡改后仍从 immutable purchase ledger 恢复 1,000 Credit。
+- recovery 按当前 mixed pool 移除 60,000,000 micros；ledger 复制原 purchase price / denominator / FX facts。
+- refund 同事实重放复用 ledger；payload / reason 变化稳定冲突且 state / ledger 数量不变；refund→chargeback 终态晋升复用原 ledger，不重复 outflow。
 
 ## 下一步
 
-1. B 组：订单退款 / 拒付复用 immutable purchase facts，终态幂等。
-2. C 组：请求 deduction snapshot 恢复归因。
-3. D/E 组：邀请隔离与 SQLite 并发原子性。
+1. HANDOFF_READY，等待协调器恢复续作；本次不进入 C/D/E、UI 或下游。
 
 ## 阻塞
 
-- 当前无阻塞；A 组完成后才进入 B 组。
+- 当前无阻塞；B 组安全点已具备可恢复实现与真实测试。
 
 ## 最近安全提交
 

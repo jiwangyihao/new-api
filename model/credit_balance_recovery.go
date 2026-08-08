@@ -11,17 +11,18 @@ import (
 )
 
 type CreditBalanceRecoveryRequest struct {
-	UserId          int
-	GrossCredit     int64
-	IdempotencyKey  string
-	SourceType      string
-	SourceId        int
-	SourceSnapshot  string
-	Type            string
-	TargetPlanId    int
-	PaymentProvider string
-	OperatorUserId  int
-	Reason          string
+	UserId               int
+	GrossCredit          int64
+	IdempotencyKey       string
+	SourceType           string
+	SourceId             int
+	SourceSnapshot       string
+	Type                 string
+	TargetPlanId         int
+	PaymentProvider      string
+	OperatorUserId       int
+	Reason               string
+	ParameterFingerprint string
 }
 
 type CreditBalanceRecoveryResult struct {
@@ -48,6 +49,7 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 	request.Type = strings.TrimSpace(request.Type)
 	request.PaymentProvider = strings.TrimSpace(request.PaymentProvider)
 	request.Reason = strings.TrimSpace(request.Reason)
+	request.ParameterFingerprint = strings.TrimSpace(request.ParameterFingerprint)
 	if request.UserId <= 0 || request.GrossCredit <= 0 || request.IdempotencyKey == "" || request.SourceType == "" || request.SourceId <= 0 || request.Type == "" || request.TargetPlanId <= 0 || request.Reason == "" {
 		return nil, errors.New("invalid credit balance recovery")
 	}
@@ -157,7 +159,24 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 		OperatorUserId:             request.OperatorUserId,
 		PaymentProvider:            request.PaymentProvider,
 		Reason:                     request.Reason,
+		ParameterFingerprint:       request.ParameterFingerprint,
 		CreatedAt:                  getDBTimestampTx(tx),
+	}
+	if request.SourceType == CreditBalanceLedgerSourceSubscriptionOrderRecovery {
+		purchase, found, err := subscriptionOrderCreditPurchaseLedgerTx(tx, &SubscriptionOrder{Id: request.SourceId, UserId: request.UserId})
+		if err != nil {
+			return nil, err
+		}
+		if !found || purchase.TargetPlanId != request.TargetPlanId || purchase.GrossCredit != request.GrossCredit {
+			return nil, ErrSubscriptionOrderSnapshotMismatch
+		}
+		ledger.SourcePriceMicros = purchase.SourcePriceMicros
+		ledger.SourcePlanCredit = purchase.SourcePlanCredit
+		ledger.FxSourceCurrency = purchase.FxSourceCurrency
+		ledger.FxRateNumerator = purchase.FxRateNumerator
+		ledger.FxRateDenominator = purchase.FxRateDenominator
+		ledger.FxCapturedAt = purchase.FxCapturedAt
+		ledger.FxDirection = purchase.FxDirection
 	}
 	if err := tx.Create(&ledger).Error; err != nil {
 		return nil, err
@@ -174,8 +193,8 @@ func findCreditBalanceRecoveryResultTx(tx *gorm.DB, request CreditBalanceRecover
 	if query.RowsAffected == 0 {
 		return nil, false, nil
 	}
-	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != -request.GrossCredit || ledger.Type != request.Type || ledger.PaymentProvider != request.PaymentProvider {
-		return nil, false, errors.New("credit balance recovery idempotency key mismatch")
+	if ledger.UserId != request.UserId || ledger.IdempotencyKey != request.IdempotencyKey || ledger.SourceType != request.SourceType || ledger.SourceId != request.SourceId || ledger.GrossCredit != -request.GrossCredit || ledger.Type != request.Type || ledger.PaymentProvider != request.PaymentProvider || ledger.ParameterFingerprint != request.ParameterFingerprint {
+		return nil, false, ErrCreditValuationIdempotencyMismatch
 	}
 	var balance UserSubscription
 	if err := tx.Select("id", "plan_id").Where("id = ?", ledger.UserSubscriptionId).First(&balance).Error; err != nil {
@@ -208,6 +227,24 @@ func creditBalanceRecoveryResult(ledger *CreditBalanceLedger, planId int, replay
 		Status:             creditBalanceStatus(ledger.BalanceAfter),
 		Replayed:           replayed,
 	}
+}
+
+func subscriptionOrderCreditPurchaseLedgerTx(tx *gorm.DB, order *SubscriptionOrder) (*CreditBalanceLedger, bool, error) {
+	if tx == nil || order == nil || order.Id <= 0 || order.UserId <= 0 {
+		return nil, false, errors.New("invalid subscription order purchase facts")
+	}
+	var ledger CreditBalanceLedger
+	query := tx.Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrder, order.Id).Limit(1).Find(&ledger)
+	if query.Error != nil {
+		return nil, false, query.Error
+	}
+	if query.RowsAffected == 0 {
+		return nil, false, nil
+	}
+	if ledger.UserId != order.UserId || ledger.Type != CreditBalanceLedgerTypePurchase || ledger.GrossCredit <= 0 || ledger.TargetPlanId <= 0 || ledger.UserSubscriptionId <= 0 {
+		return nil, false, ErrSubscriptionOrderSnapshotMismatch
+	}
+	return &ledger, true, nil
 }
 
 func creditBalanceRecoveryIdempotencyKey(orderId int) string {

@@ -186,6 +186,10 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 	default:
 		return nil, errors.New("invalid subscription order recovery type")
 	}
+	recoveryFingerprint, err := subscriptionOrderRecoveryFingerprint(request)
+	if err != nil {
+		return nil, err
+	}
 
 	var result *SubscriptionOrderRecoveryResult
 	run := func(tx *gorm.DB) error {
@@ -207,7 +211,7 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 			if err := advanceSubscriptionOrderRecoveryTerminalTx(tx, &order, request); err != nil {
 				return err
 			}
-			return loadSubscriptionOrderRecoveryResultTx(tx, &order, request, true, &result)
+			return loadSubscriptionOrderRecoveryResultTx(tx, &order, request, recoveryFingerprint, true, &result)
 		}
 		if order.Status != common.TopUpStatusSuccess {
 			return ErrSubscriptionOrderStatusInvalid
@@ -240,17 +244,18 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 			return nil
 		}
 		recovery, err := RecoverCreditBalanceTx(tx, CreditBalanceRecoveryRequest{
-			UserId:          order.UserId,
-			GrossCredit:     credit,
-			IdempotencyKey:  creditBalanceRecoveryIdempotencyKey(order.Id),
-			SourceType:      CreditBalanceLedgerSourceSubscriptionOrderRecovery,
-			SourceId:        order.Id,
-			SourceSnapshot:  sourceSnapshot,
-			Type:            ledgerType,
-			TargetPlanId:    targetPlanId,
-			PaymentProvider: order.PaymentProvider,
-			OperatorUserId:  request.OperatorUserId,
-			Reason:          request.Reason,
+			UserId:               order.UserId,
+			GrossCredit:          credit,
+			IdempotencyKey:       creditBalanceRecoveryIdempotencyKey(order.Id),
+			SourceType:           CreditBalanceLedgerSourceSubscriptionOrderRecovery,
+			SourceId:             order.Id,
+			SourceSnapshot:       sourceSnapshot,
+			Type:                 ledgerType,
+			TargetPlanId:         targetPlanId,
+			PaymentProvider:      order.PaymentProvider,
+			OperatorUserId:       request.OperatorUserId,
+			Reason:               request.Reason,
+			ParameterFingerprint: recoveryFingerprint,
 		})
 		if err != nil {
 			return err
@@ -311,6 +316,13 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 func subscriptionOrderCreditRecoveryIdentityTx(tx *gorm.DB, order *SubscriptionOrder) (int64, int, string, bool, error) {
 	if tx == nil || order == nil {
 		return 0, 0, "", false, errors.New("invalid subscription order recovery identity")
+	}
+	purchase, found, err := subscriptionOrderCreditPurchaseLedgerTx(tx, order)
+	if err != nil {
+		return 0, 0, "", false, err
+	}
+	if found {
+		return purchase.GrossCredit, purchase.TargetPlanId, purchase.SourceSnapshot, true, nil
 	}
 	var snapshot SubscriptionEntitlementSnapshot
 	snapshotReliable := false
@@ -438,7 +450,7 @@ func historicalSubscriptionOrderFulfillmentTx(tx *gorm.DB, order *SubscriptionOr
 	return candidates[0].Id, true, nil
 }
 
-func loadSubscriptionOrderRecoveryResultTx(tx *gorm.DB, order *SubscriptionOrder, request SubscriptionOrderRecoveryRequest, replayed bool, destination **SubscriptionOrderRecoveryResult) error {
+func loadSubscriptionOrderRecoveryResultTx(tx *gorm.DB, order *SubscriptionOrder, request SubscriptionOrderRecoveryRequest, recoveryFingerprint string, replayed bool, destination **SubscriptionOrderRecoveryResult) error {
 	if tx == nil || order == nil || destination == nil {
 		return ErrSubscriptionOrderStatusInvalid
 	}
@@ -460,6 +472,9 @@ func loadSubscriptionOrderRecoveryResultTx(tx *gorm.DB, order *SubscriptionOrder
 		return err
 	}
 	gross := ledger.GrossCredit
+	if ledger.Type == request.RecoveryType && (ledger.ParameterFingerprint == "" || ledger.ParameterFingerprint != recoveryFingerprint) {
+		return fmt.Errorf("%w: recovery facts mismatch", ErrSubscriptionOrderRecoveryConflict)
+	}
 	if gross < 0 {
 		gross = -gross
 	}
@@ -581,13 +596,35 @@ func cancelInvitationRewardForSubscriptionOrderTx(tx *gorm.DB, order *Subscripti
 	return nil
 }
 
+func subscriptionOrderRecoveryFingerprint(request SubscriptionOrderRecoveryRequest) (string, error) {
+	payload, err := common.Marshal(struct {
+		RecoveryType    string `json:"recovery_type"`
+		ProviderPayload string `json:"provider_payload"`
+		OperatorUserId  int    `json:"operator_user_id"`
+		Reason          string `json:"reason"`
+		CreditOnly      bool   `json:"credit_recovery_only"`
+	}{
+		RecoveryType: request.RecoveryType, ProviderPayload: request.ProviderPayload,
+		OperatorUserId: request.OperatorUserId, Reason: request.Reason,
+		CreditOnly: request.CreditRecoveryOnly,
+	})
+	if err != nil {
+		return "", err
+	}
+	return common.Sha1(payload), nil
+}
+
 func findCommittedSubscriptionOrderRecovery(request SubscriptionOrderRecoveryRequest) (*SubscriptionOrderRecoveryResult, error) {
 	var order SubscriptionOrder
 	if err := DB.Where("trade_no = ?", request.TradeNo).First(&order).Error; err != nil {
 		return nil, err
 	}
 	var result *SubscriptionOrderRecoveryResult
-	if err := loadSubscriptionOrderRecoveryResultTx(DB, &order, request, true, &result); err != nil {
+	recoveryFingerprint, err := subscriptionOrderRecoveryFingerprint(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := loadSubscriptionOrderRecoveryResultTx(DB, &order, request, recoveryFingerprint, true, &result); err != nil {
 		return nil, err
 	}
 	return result, nil

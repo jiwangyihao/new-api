@@ -5,14 +5,24 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	glebarezsqlite "github.com/glebarez/go-sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	moderncsqlite3 "modernc.org/sqlite/lib"
 )
 
 const (
 	TimedSubscriptionConversionBlockSeconds    int64 = 31 * 24 * 60 * 60
 	TimedSubscriptionConversionCooldownSeconds int64 = 24 * 60 * 60
 	TimedSubscriptionConversionGraceSeconds    int64 = 336 * 60 * 60
+)
+
+const (
+	timedSubscriptionConversionQuoteCandidateLimit = 100
+	timedSubscriptionConversionQuoteMaxAttempts    = 8
 )
 
 const (
@@ -140,6 +150,14 @@ type TimedSubscriptionConversionQuoteList struct {
 	Conversions []SubscriptionConversion           `json:"conversions"`
 }
 
+type timedSubscriptionConversionQuoteBatch struct {
+	creditPlan           *SubscriptionPlan
+	sourcePlans          map[int]*SubscriptionPlan
+	currentDebt          int64
+	valuationReady       bool
+	targetSubscriptionId int
+}
+
 const timedSubscriptionConversionQuoteSelect = `
 	id,
 	user_id,
@@ -157,15 +175,40 @@ const timedSubscriptionConversionQuoteSelect = `
 	COALESCE(status, '') AS status,
 	COALESCE(source, '') AS source`
 
-// ListTimedSubscriptionConversionQuotes returns a fresh, read-only quote for every
-// non-Credit-balance subscription instance owned by the user.
+type timedSubscriptionConversionQuoteListHooks struct {
+	afterFactsRead func(tx *gorm.DB) error
+	beforePersist  func(index int) error
+}
+
+// ListTimedSubscriptionConversionQuotes returns fresh calculations for a stable,
+// bounded set of non-Credit-balance subscription instances owned by the user.
 func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConversionQuoteList, error) {
+	return listTimedSubscriptionConversionQuotes(userId, nil)
+}
+
+func listTimedSubscriptionConversionQuotes(userId int, hooks *timedSubscriptionConversionQuoteListHooks) (*TimedSubscriptionConversionQuoteList, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
 	if DB == nil {
 		return nil, errors.New("database is nil")
 	}
+	var lastErr error
+	for attempt := range timedSubscriptionConversionQuoteMaxAttempts {
+		result, err := listTimedSubscriptionConversionQuotesAttempt(userId, hooks)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isRetryableTimedSubscriptionConversionQuoteError(err) {
+			return nil, err
+		}
+		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+	}
+	return nil, lastErr
+}
+
+func listTimedSubscriptionConversionQuotesAttempt(userId int, hooks *timedSubscriptionConversionQuoteListHooks) (*TimedSubscriptionConversionQuoteList, error) {
 	result := &TimedSubscriptionConversionQuoteList{
 		Quotes:      []TimedSubscriptionConversionQuote{},
 		Conversions: []SubscriptionConversion{},
@@ -176,36 +219,137 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 			return err
 		}
 		result.DatabaseNow = databaseNow
-		var subscriptions []UserSubscription
-		if err := tx.Select(timedSubscriptionConversionQuoteSelect).
-			Where("user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
-			Order("id asc").Find(&subscriptions).Error; err != nil {
+		if err := cleanupExpiredSubscriptionConversionQuotesTx(tx, userId, databaseNow); err != nil {
 			return err
+		}
+		var subscriptions []UserSubscription
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(timedSubscriptionConversionQuoteSelect).
+			Where("user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
+			Order("id asc").Limit(timedSubscriptionConversionQuoteCandidateLimit).Find(&subscriptions).Error; err != nil {
+			return err
+		}
+		batch, err := loadTimedSubscriptionConversionQuoteBatchTx(tx, userId, subscriptions)
+		if err != nil {
+			return err
+		}
+		if hooks != nil && hooks.afterFactsRead != nil {
+			if err := hooks.afterFactsRead(tx); err != nil {
+				return err
+			}
+			if err := reloadTimedSubscriptionConversionQuoteFactsTx(tx, userId, &subscriptions, &batch); err != nil {
+				return err
+			}
 		}
 		result.Quotes = make([]TimedSubscriptionConversionQuote, 0, len(subscriptions))
 		for i := range subscriptions {
-			quote, err := recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx, &subscriptions[i], databaseNow)
+			quote, err := recalculateTimedSubscriptionConversionQuoteForSubscriptionBatchTx(tx, &subscriptions[i], databaseNow, batch)
 			if err != nil {
 				return err
 			}
-			if err := issueTimedSubscriptionConversionQuoteTx(tx, quote, &subscriptions[i]); err != nil {
+			if hooks != nil && hooks.beforePersist != nil {
+				if err := hooks.beforePersist(i); err != nil {
+					return err
+				}
+			}
+			if err := issueTimedSubscriptionConversionQuoteBatchTx(tx, quote, &subscriptions[i], batch); err != nil {
 				return err
 			}
 			result.Quotes = append(result.Quotes, *quote)
 		}
-		if err := tx.Model(&SubscriptionConversion{}).
+		return tx.Model(&SubscriptionConversion{}).
 			Select("subscription_conversions.*, credit_balance_ledgers.valuation_state_version_after AS valuation_state_version_after").
 			Joins("LEFT JOIN credit_balance_ledgers ON credit_balance_ledgers.id = subscription_conversions.ledger_id").
 			Where("subscription_conversions.user_id = ?", userId).
-			Order("subscription_conversions.id desc").Limit(100).Find(&result.Conversions).Error; err != nil {
-			return err
-		}
-		return nil
+			Order("subscription_conversions.id desc").Limit(100).Find(&result.Conversions).Error
 	})
 	if err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func reloadTimedSubscriptionConversionQuoteFactsTx(tx *gorm.DB, userId int, subscriptions *[]UserSubscription, batch **timedSubscriptionConversionQuoteBatch) error {
+	if tx == nil || subscriptions == nil || batch == nil {
+		return ErrConversionQuoteStale
+	}
+	ids := make([]int, len(*subscriptions))
+	for i := range *subscriptions {
+		ids[i] = (*subscriptions)[i].Id
+	}
+	if len(ids) == 0 {
+		*batch = &timedSubscriptionConversionQuoteBatch{sourcePlans: map[int]*SubscriptionPlan{}}
+		return nil
+	}
+	var refreshed []UserSubscription
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Select(timedSubscriptionConversionQuoteSelect).
+		Where("id IN ? AND user_id = ? AND (entitlement_type IS NULL OR entitlement_type <> ?) AND (status IS NULL OR status <> ?)", ids, userId, SubscriptionEntitlementCreditBalance, SubscriptionStatusConverted).
+		Order("id asc").Find(&refreshed).Error; err != nil {
+		return err
+	}
+	refreshedBatch, err := loadTimedSubscriptionConversionQuoteBatchTx(tx, userId, refreshed)
+	if err != nil {
+		return err
+	}
+	*subscriptions = refreshed
+	*batch = refreshedBatch
+	return nil
+}
+
+func isRetryableTimedSubscriptionConversionQuoteError(err error) bool {
+	if err == nil || !common.UsingSQLite {
+		return false
+	}
+	var sqliteErr *glebarezsqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	baseCode := sqliteErr.Code() & 0xff
+	return baseCode == moderncsqlite3.SQLITE_BUSY || baseCode == moderncsqlite3.SQLITE_LOCKED
+}
+
+func loadTimedSubscriptionConversionQuoteBatchTx(tx *gorm.DB, userId int, subscriptions []UserSubscription) (*timedSubscriptionConversionQuoteBatch, error) {
+	creditPlan, err := getConversionCreditBalancePlanTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	planIds := make([]int, 0, len(subscriptions))
+	seenPlanIds := make(map[int]struct{}, len(subscriptions))
+	for i := range subscriptions {
+		planId := subscriptions[i].PlanId
+		if planId <= 0 {
+			continue
+		}
+		if _, exists := seenPlanIds[planId]; exists {
+			continue
+		}
+		seenPlanIds[planId] = struct{}{}
+		planIds = append(planIds, planId)
+	}
+	var plans []SubscriptionPlan
+	if len(planIds) > 0 {
+		if err := tx.Where("id IN ?", planIds).Find(&plans).Error; err != nil {
+			return nil, err
+		}
+	}
+	sourcePlans := make(map[int]*SubscriptionPlan, len(plans))
+	for i := range plans {
+		sourcePlans[plans[i].Id] = &plans[i]
+	}
+	targetSubscriptionId, currentDebt, err := currentCreditBalanceQuoteStateTx(tx, userId)
+	if err != nil {
+		return nil, err
+	}
+	valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+	if err != nil {
+		return nil, err
+	}
+	return &timedSubscriptionConversionQuoteBatch{
+		creditPlan:           creditPlan,
+		sourcePlans:          sourcePlans,
+		currentDebt:          currentDebt,
+		valuationReady:       valuationReady,
+		targetSubscriptionId: targetSubscriptionId,
+	}, nil
 }
 
 // RecalculateTimedSubscriptionConversionQuoteTx is the reusable transaction seam
@@ -224,13 +368,14 @@ func RecalculateTimedSubscriptionConversionQuoteTx(tx *gorm.DB, userId int, sour
 		First(&subscription).Error; err != nil {
 		return nil, err
 	}
-	return recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx, &subscription, dbNow)
+	return recalculateTimedSubscriptionConversionQuoteForSubscriptionBatchTx(tx, &subscription, dbNow, nil)
 }
 
-func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, subscription *UserSubscription, dbNow int64) (*TimedSubscriptionConversionQuote, error) {
+func recalculateTimedSubscriptionConversionQuoteForSubscriptionBatchTx(tx *gorm.DB, subscription *UserSubscription, dbNow int64, batch *timedSubscriptionConversionQuoteBatch) (*TimedSubscriptionConversionQuote, error) {
 	if tx == nil || subscription == nil || dbNow <= 0 {
 		return nil, errors.New("invalid conversion quote state")
 	}
+	var err error
 	quote := &TimedSubscriptionConversionQuote{
 		SourceSubscriptionId: subscription.Id,
 		PlanId:               subscription.PlanId,
@@ -255,9 +400,14 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		quote.GrantSource = normalizedSubscriptionGrantSource(subscription)
 	}
 
-	creditPlan, err := getConversionCreditBalancePlanTx(tx)
-	if err != nil {
-		return nil, err
+	var creditPlan *SubscriptionPlan
+	if batch != nil {
+		creditPlan = batch.creditPlan
+	} else {
+		creditPlan, err = getConversionCreditBalancePlanTx(tx)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if creditPlan == nil || !creditPlan.Enabled || !creditPlan.CreditBalanceConfigured || !creditPlan.CreditBalanceConversionEnabled {
 		quote.addReason(ConversionQuoteReasonGlobalDisabled, map[string]any{"configured": creditPlan != nil && creditPlan.CreditBalanceConfigured})
@@ -268,11 +418,19 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 	}
 
 	var plan SubscriptionPlan
-	planQuery := tx.Where("id = ?", subscription.PlanId).Limit(1).Find(&plan)
-	if planQuery.Error != nil {
-		return nil, planQuery.Error
+	planFound := false
+	if batch != nil {
+		if batchPlan := batch.sourcePlans[subscription.PlanId]; batchPlan != nil {
+			plan = *batchPlan
+			planFound = true
+		}
+	} else {
+		planQuery := tx.Where("id = ?", subscription.PlanId).Limit(1).Find(&plan)
+		if planQuery.Error != nil {
+			return nil, planQuery.Error
+		}
+		planFound = planQuery.RowsAffected > 0
 	}
-	planFound := planQuery.RowsAffected > 0
 	if !planFound {
 		quote.addReason(ConversionQuoteReasonPlanNotFound, map[string]any{"plan_id": subscription.PlanId})
 	} else {
@@ -407,9 +565,14 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		}
 	}
 
-	debt, debtErr := currentCreditBalanceDebtTx(tx, subscription.UserId)
-	if debtErr != nil {
-		return nil, debtErr
+	var debt int64
+	if batch != nil {
+		debt = batch.currentDebt
+	} else {
+		debt, err = currentCreditBalanceDebtTx(tx, subscription.UserId)
+		if err != nil {
+			return nil, err
+		}
 	}
 	quote.CurrentDebt = debt
 	if quote.CalculationErrorCode == "" {
@@ -422,7 +585,12 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 		}
 	}
 	if quote.CalculationErrorCode == "" && quote.GrossCredit > 0 && planFound && creditPlan != nil {
-		if err := populateTimedSubscriptionConversionQuoteValuationTx(tx, quote, &plan, creditPlan, dbNow); err != nil {
+		if batch != nil {
+			err = populateTimedSubscriptionConversionQuoteValuationReady(quote, &plan, creditPlan, dbNow, batch.valuationReady)
+		} else {
+			err = populateTimedSubscriptionConversionQuoteValuationTx(tx, quote, &plan, creditPlan, dbNow)
+		}
+		if err != nil {
 			quote.setCalculationError(conversionQuoteValuationErrorCode(err))
 		}
 	}
@@ -444,8 +612,15 @@ func recalculateTimedSubscriptionConversionQuoteForSubscriptionTx(tx *gorm.DB, s
 
 func populateTimedSubscriptionConversionQuoteValuationTx(tx *gorm.DB, quote *TimedSubscriptionConversionQuote, sourcePlan *SubscriptionPlan, creditPlan *SubscriptionPlan, dbNow int64) error {
 	ready, err := CreditValuationRuntimeReadyTx(tx)
-	if err != nil || !ready {
+	if err != nil {
 		return err
+	}
+	return populateTimedSubscriptionConversionQuoteValuationReady(quote, sourcePlan, creditPlan, dbNow, ready)
+}
+
+func populateTimedSubscriptionConversionQuoteValuationReady(quote *TimedSubscriptionConversionQuote, sourcePlan *SubscriptionPlan, creditPlan *SubscriptionPlan, dbNow int64, ready bool) error {
+	if !ready {
+		return nil
 	}
 	if quote == nil || sourcePlan == nil || creditPlan == nil || sourcePlan.PriceAmountMicros == nil {
 		return ErrSubscriptionPlanPriceRequired
@@ -560,25 +735,30 @@ func getConversionCreditBalancePlanTx(tx *gorm.DB) (*SubscriptionPlan, error) {
 }
 
 func currentCreditBalanceDebtTx(tx *gorm.DB, userId int) (int64, error) {
+	_, debt, err := currentCreditBalanceQuoteStateTx(tx, userId)
+	return debt, err
+}
+
+func currentCreditBalanceQuoteStateTx(tx *gorm.DB, userId int) (int, int64, error) {
 	var balance UserSubscription
-	query := tx.Select("token_limit", "token_used").Where("user_id = ? AND entitlement_type = ?", userId, SubscriptionEntitlementCreditBalance).Limit(1).Find(&balance)
+	query := tx.Select("id", "token_limit", "token_used").Where("user_id = ? AND entitlement_type = ?", userId, SubscriptionEntitlementCreditBalance).Limit(1).Find(&balance)
 	if query.Error != nil {
-		return 0, query.Error
+		return 0, 0, query.Error
 	}
 	if query.RowsAffected == 0 {
-		return 0, nil
+		return 0, 0, nil
 	}
 	if balance.TokenLimit < 0 || balance.TokenUsed < 0 {
-		return 0, fmt.Errorf("invalid credit balance aggregate for user %d", userId)
+		return 0, 0, fmt.Errorf("invalid credit balance aggregate for user %d", userId)
 	}
 	if balance.TokenUsed <= balance.TokenLimit {
-		return 0, nil
+		return balance.Id, 0, nil
 	}
 	debt, ok := checkedSubInt64(balance.TokenUsed, balance.TokenLimit)
 	if !ok {
-		return 0, errors.New("credit balance debt overflow")
+		return 0, 0, errors.New("credit balance debt overflow")
 	}
-	return debt, nil
+	return balance.Id, debt, nil
 }
 
 func checkedNonNegativeDifference(left int64, right int64) (int64, bool) {

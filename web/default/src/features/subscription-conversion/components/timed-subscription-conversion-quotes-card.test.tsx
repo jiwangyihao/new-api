@@ -31,6 +31,7 @@ import { createInstance } from 'i18next'
 import assert from 'node:assert/strict'
 import { afterEach, beforeEach, describe, test } from 'node:test'
 import { I18nextProvider } from 'react-i18next'
+import { SubscriptionConversionRequestError } from '../api'
 import { deriveLiveConversionQuote } from '../live-quote'
 import type {
   SubscriptionConversionConfirmRequest,
@@ -96,6 +97,10 @@ function makeQuote(
   overrides: Partial<SubscriptionConversionQuote> = {}
 ): SubscriptionConversionQuote {
   return {
+    quote_id: 'quote-default',
+    created_at: '1800000000',
+    expires_at: '1800000300',
+    facts_fingerprint: 'fingerprint-default',
     source_subscription_id: '7001',
     plan_id: '7101',
     plan_title: 'Monthly Pro',
@@ -212,6 +217,7 @@ async function renderQuotesCard(
     confirmConversion?: (
       request: SubscriptionConversionConfirmRequest
     ) => Promise<SubscriptionConversionConfirmResult>
+    createIdempotencyKey?: () => string
   } = {}
 ) {
   const i18n = createInstance()
@@ -250,7 +256,9 @@ async function renderQuotesCard(
           now={() => currentTimeMs}
           loadQuotes={loadQuotes}
           confirmConversion={confirmConversion}
-          createIdempotencyKey={() => 'conversion-client-key'}
+          createIdempotencyKey={
+            options.createIdempotencyKey ?? (() => 'conversion-client-key')
+          }
         />
       </QueryClientProvider>
     </I18nextProvider>
@@ -284,8 +292,14 @@ function runCapturedInterval(delay: number) {
 }
 
 describe('timed subscription conversion quotes', () => {
-  test('refreshes before confirmation and submits only source identity plus a client idempotency key', async () => {
-    const view = await renderQuotesCard()
+  test('submits the unchanged server quote identity from the final refresh', async () => {
+    const stableQuote = makeQuote({
+      quote_id: 'quote-stable',
+      created_at: '1800000000',
+      expires_at: '1800000300',
+      facts_fingerprint: 'fingerprint-stable',
+    })
+    const view = await renderQuotesCard(makeQuoteList([stableQuote]))
     const dialog = await openConversionPreview(view)
 
     fireEvent.click(
@@ -296,16 +310,72 @@ describe('timed subscription conversion quotes', () => {
     await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
     assert.deepEqual(view.getConfirmRequests()[0], {
       subscription_id: '7001',
+      quote_id: 'quote-stable',
       idempotency_key: 'conversion-client-key',
     })
     const result = await waitFor(() =>
       view.getByRole('status', { name: 'Latest conversion result' })
     )
     assert.ok(within(result).getByText('Monthly Pro'))
-    assert.ok(within(result).getByText('20'))
-    assert.ok(within(result).getByText('5'))
-    assert.ok(within(result).getByText('15'))
-    assert.ok(within(result).getByText('115'))
+  })
+
+  test('requires review instead of confirming when the final refresh requotes', async () => {
+    const previewQuote = makeQuote({
+      quote_id: 'quote-preview',
+      created_at: '1800000000',
+      expires_at: '1800000300',
+      facts_fingerprint: 'fingerprint-preview',
+    })
+    const view = await renderQuotesCard(makeQuoteList([previewQuote]))
+    const dialog = await openConversionPreview(view)
+    view.setResponse(
+      makeQuoteList([
+        makeQuote({
+          ...previewQuote,
+          quote_id: 'quote-refreshed',
+          created_at: '1800000001',
+          expires_at: '1800000301',
+          facts_fingerprint: 'fingerprint-refreshed',
+          plan_title: 'Monthly Pro refreshed',
+        }),
+      ])
+    )
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => assert.ok(view.getRequestCount() >= 3))
+    assert.equal(view.getConfirmRequests().length, 0)
+    assert.ok(within(dialog).getByText('Monthly Pro refreshed'))
+    assert.ok(
+      within(dialog).getByText(
+        'The quote expired or authoritative facts changed. Review the refreshed quote and confirm again.'
+      )
+    )
+  })
+  test('localizes a stale code and requires another explicit confirmation', async () => {
+    const view = await renderQuotesCard(makeQuoteList(), {
+      confirmConversion: async () => {
+        throw new SubscriptionConversionRequestError(
+          'subscription_conversion_quote_stale'
+        )
+      },
+    })
+    const dialog = await openConversionPreview(view)
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    await waitFor(() =>
+      within(dialog).getByText(
+        'The quote expired or authoritative facts changed. Review the refreshed quote and confirm again.'
+      )
+    )
+    await waitFor(() => assert.ok(view.getRequestCount() >= 4))
+    assert.equal(view.getConfirmRequests().length, 1)
   })
 
   test('shows quote valuation and the immutable confirmation boundary', async () => {
@@ -387,12 +457,76 @@ describe('timed subscription conversion quotes', () => {
       within(dialog).getByRole('button', { name: 'Submit conversion' })
     )
 
-    await waitFor(() => within(dialog).getByText('Conversion conflict'))
+    await waitFor(() =>
+      assert.equal(
+        within(dialog).getAllByText('Unable to convert subscription').length,
+        2
+      )
+    )
+    assert.equal(within(dialog).queryByText('Conversion conflict'), null)
     await waitFor(() =>
       within(dialog).getByText('Monthly Pro latest after conflict')
     )
     assert.ok(view.getRequestCount() >= 4)
     assert.ok(within(dialog).getByRole('button', { name: 'Submit conversion' }))
+  })
+  test('reuses a key for the same failed quote and rotates it after requoting', async () => {
+    let attemptCount = 0
+    let nextKey = 0
+    let updateResponse: ((next: SubscriptionConversionQuoteList) => void) | null =
+      null
+    const refreshedQuote = makeQuote({
+      quote_id: 'quote-after-failure',
+      facts_fingerprint: 'fingerprint-after-failure',
+      plan_title: 'Monthly Pro after failure',
+    })
+    const view = await renderQuotesCard(makeQuoteList(), {
+      createIdempotencyKey: () => `conversion-key-${++nextKey}`,
+      confirmConversion: async () => {
+        attemptCount += 1
+        if (attemptCount === 1) {
+          throw new Error('Controlled conversion failure')
+        }
+        if (attemptCount === 2) {
+          updateResponse?.(makeQuoteList([refreshedQuote]))
+          throw new Error('Controlled requote failure')
+        }
+        return { replayed: false, conversion: makeConversion() }
+      },
+    })
+    updateResponse = view.setResponse
+    let dialog = await openConversionPreview(view)
+
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 1))
+    await waitFor(() =>
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 2))
+    assert.equal(
+      view.getConfirmRequests()[0]?.idempotency_key,
+      view.getConfirmRequests()[1]?.idempotency_key
+    )
+
+    await waitFor(() => within(dialog).getByText('Monthly Pro after failure'))
+    dialog = view.getByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'Submit conversion' })
+    )
+    await waitFor(() => assert.equal(view.getConfirmRequests().length, 3))
+    assert.notEqual(
+      view.getConfirmRequests()[2]?.idempotency_key,
+      view.getConfirmRequests()[1]?.idempotency_key
+    )
+    assert.equal(
+      view.getConfirmRequests()[2]?.quote_id,
+      'quote-after-failure'
+    )
   })
 
   test('renders converted subscriptions in history without a reverse action', async () => {

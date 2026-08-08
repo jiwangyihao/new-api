@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
+import { SubscriptionConversionRequestError } from './errors'
 import type {
   SubscriptionConversionConfirmRequest,
   SubscriptionConversionConfirmResponse,
@@ -24,14 +25,18 @@ import type {
   SubscriptionConversionQuoteList,
   SubscriptionConversionQuoteResponse,
 } from './types'
+export { SubscriptionConversionRequestError } from './errors'
 
 export async function getSubscriptionConversionQuotes(): Promise<SubscriptionConversionQuoteList> {
   const response = await api.get<SubscriptionConversionQuoteResponse>(
     '/api/subscription/self/conversion-quotes',
-    { disableDuplicate: true } as Record<string, unknown>
+    {
+      disableDuplicate: true,
+      skipBusinessError: true,
+    } as Record<string, unknown>
   )
   if (!response.data.success || !response.data.data) {
-    throw new Error(response.data.message || 'Unable to load conversion quotes')
+    throw new SubscriptionConversionRequestError(response.data.code)
   }
   return response.data.data
 }
@@ -41,10 +46,11 @@ export async function confirmSubscriptionConversion(
 ): Promise<SubscriptionConversionConfirmResult> {
   const response = await api.post<SubscriptionConversionConfirmResponse>(
     '/api/subscription/self/conversions',
-    request
+    request,
+    { skipBusinessError: true } as Record<string, unknown>
   )
   if (!response.data.success || !response.data.data) {
-    throw new Error(response.data.message || 'Unable to convert subscription')
+    throw new SubscriptionConversionRequestError(response.data.code)
   }
   return response.data.data
 }

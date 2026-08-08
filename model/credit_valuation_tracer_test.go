@@ -347,6 +347,127 @@ func TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay(t *testi
 	require.Equal(t, int64(3), state.StateVersion)
 }
 
+func TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward(t *testing.T) {
+	tests := []struct {
+		name         string
+		recoveryType string
+		wantStatus   string
+	}{
+		{name: "refund", recoveryType: SubscriptionOrderRecoveryRefund, wantStatus: common.TopUpStatusRefunded},
+		{name: "chargeback", recoveryType: SubscriptionOrderRecoveryChargeback, wantStatus: common.TopUpStatusChargeback},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupCreditValuationTracerTestDB(t)
+			require.NoError(t, db.AutoMigrate(&TopUp{}, &InvitationRewardEvent{}, &InvitationCommissionRecord{}))
+			user, _, _, targetOrder := seedCreditValuationOrder(t, db, PaymentProviderStripe)
+			inviter := User{Id: 91_090, Username: "credit-recovery-inviter", Status: common.UserStatusEnabled, AffCode: "credit-recovery-inviter-aff"}
+			require.NoError(t, db.Create(&inviter).Error)
+			require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Update("inviter_id", inviter.Id).Error)
+
+			targetPurchase := completeCreditValuationOrder(t, db, &targetOrder)
+			otherOrder := targetOrder
+			otherOrder.Id++
+			otherOrder.TradeNo += "-other"
+			require.NoError(t, db.Create(&otherOrder).Error)
+			otherPurchase := completeCreditValuationOrder(t, db, &otherOrder)
+
+			var generatedRewardCount int64
+			require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&generatedRewardCount).Error)
+			require.Zero(t, generatedRewardCount, "Credit orders must not create invitation income")
+
+			now := common.GetTimestamp()
+			require.NoError(t, db.Create(&[]InvitationRewardEvent{
+				{
+					Id: 91_092, InviterId: inviter.Id, InviteeId: user.Id,
+					SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: targetOrder.Id,
+					SourceOrderId: targetOrder.Id, SourceSubscriptionId: targetPurchase.CreditBalance.UserSubscriptionId,
+					SourceAmountCents: 4_000, SourceCurrency: "CNY", EventStartTime: now, EventEndTime: now + 3_600,
+					Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now,
+				},
+				{
+					Id: 91_093, InviterId: inviter.Id, InviteeId: user.Id,
+					SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: otherOrder.Id,
+					SourceOrderId: otherOrder.Id, SourceSubscriptionId: otherPurchase.CreditBalance.UserSubscriptionId,
+					SourceAmountCents: 4_000, SourceCurrency: "CNY", EventStartTime: now, EventEndTime: now + 3_600,
+					Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now,
+				},
+			}).Error)
+			var targetReward InvitationRewardEvent
+			require.NoError(t, db.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, targetOrder.Id).First(&targetReward).Error)
+			var otherRewardBefore InvitationRewardEvent
+			require.NoError(t, db.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, otherOrder.Id).First(&otherRewardBefore).Error)
+			var rewardCountBefore int64
+			require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&rewardCountBefore).Error)
+			require.Equal(t, int64(2), rewardCountBefore)
+			var commissionCountBefore int64
+			require.NoError(t, db.Model(&InvitationCommissionRecord{}).Count(&commissionCountBefore).Error)
+			require.Zero(t, commissionCountBefore)
+			paidSummary, err := GetAdminInvitationPaidSubscriptionsSummary(AdminAnalyticsQuery{
+				SnapshotAt: now + 1, EndTimestamp: now + 1, RangeMode: AdminAnalyticsRangeModeAllHistory,
+				UserIDs: []int{user.Id}, Currency: "CNY", Limit: 20,
+			})
+			require.NoError(t, err)
+			require.Zero(t, paidSummary.Data.Summary.PaidInviteeCount)
+			require.Empty(t, paidSummary.Data.Summary.RecognizedInvitationPaidAmountByCurrency)
+
+			request := SubscriptionOrderRecoveryRequest{
+				TradeNo: targetOrder.TradeNo, ExpectedUserId: user.Id,
+				ExpectedPaymentProvider: PaymentProviderStripe, RecoveryType: test.recoveryType,
+				ProviderPayload: `{"event":"isolated-credit-recovery"}`,
+				OperatorUserId:  91_091, Reason: "isolated Credit order recovery",
+			}
+			first, err := RecoverSubscriptionOrder(request)
+			require.NoError(t, err)
+			require.False(t, first.Replayed)
+			require.Equal(t, test.wantStatus, first.Status)
+
+			require.NoError(t, db.First(&targetReward, targetReward.Id).Error)
+			require.Equal(t, InvitationRewardEventStatusCancelled, targetReward.Status)
+			require.Equal(t, request.Reason, targetReward.Reason)
+			var otherRewardAfter InvitationRewardEvent
+			require.NoError(t, db.First(&otherRewardAfter, otherRewardBefore.Id).Error)
+			require.Equal(t, otherRewardBefore, otherRewardAfter)
+
+			type recoverySnapshot struct {
+				Order               SubscriptionOrder
+				TargetReward        InvitationRewardEvent
+				OtherReward         InvitationRewardEvent
+				Subscription        UserSubscription
+				Valuation           CreditValuationState
+				LedgerCount         int64
+				RecoveryLedgerCount int64
+				RewardCount         int64
+				CommissionCount     int64
+			}
+			capture := func() recoverySnapshot {
+				var snapshot recoverySnapshot
+				require.NoError(t, db.First(&snapshot.Order, targetOrder.Id).Error)
+				require.NoError(t, db.First(&snapshot.TargetReward, targetReward.Id).Error)
+				require.NoError(t, db.First(&snapshot.OtherReward, otherRewardBefore.Id).Error)
+				require.NoError(t, db.First(&snapshot.Subscription, targetPurchase.CreditBalance.UserSubscriptionId).Error)
+				require.NoError(t, db.First(&snapshot.Valuation, targetPurchase.CreditBalance.UserSubscriptionId).Error)
+				require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&snapshot.LedgerCount).Error)
+				require.NoError(t, db.Model(&CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, targetOrder.Id).Count(&snapshot.RecoveryLedgerCount).Error)
+				require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&snapshot.RewardCount).Error)
+				require.NoError(t, db.Model(&InvitationCommissionRecord{}).Count(&snapshot.CommissionCount).Error)
+				return snapshot
+			}
+
+			beforeReplay := capture()
+			require.Equal(t, int64(1), beforeReplay.RecoveryLedgerCount)
+			require.Equal(t, rewardCountBefore, beforeReplay.RewardCount)
+			require.Equal(t, commissionCountBefore, beforeReplay.CommissionCount)
+			replayed, err := RecoverSubscriptionOrder(request)
+			require.NoError(t, err)
+			require.True(t, replayed.Replayed)
+			require.Equal(t, first.LedgerId, replayed.LedgerId)
+			require.Equal(t, beforeReplay, capture())
+		})
+	}
+}
+
 func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {
 	db := setupCreditValuationTracerTestDB(t)
 	user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)

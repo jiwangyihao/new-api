@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-- 阶段：HANDOFF_READY（C 组最小公开路径测试意外 GREEN；D/E PENDING）
+- 阶段：D_HANDOFF_READY（D 组真实 SQLite 隔离测试 GREEN；E PENDING）
 - Dispatch：`task_c27d832fec9b` / `ctx_d1e85f528802`
 - Worker 终端：`term_597e2278-5e48-4f44-aaa1-e7f25a04d8af`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
@@ -36,7 +36,7 @@
 ## PENDING 与精确续作接缝
 
 1. **C 请求快照恢复（MINIMAL PROBE GREEN / HANDOFF）**：新增唯一测试 `TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption`，经公开 `PreConsumeUserSubscriptionByUnits` / `SettleUserSubscriptionRequestTarget` 与真实 SQLite 验证 deduction snapshot → later ingress absorbs debt → full refund。冻结 exact / estimated / unknown 按原 request 恢复，已吸收债务转为 `restored_unknown`，另一 active request 保持逐字段不变；现有生产实现直接 GREEN，未制造生产改动。首次运行仅因测试误引用不存在的结果字段编译失败，修正测试后行为测试 PASS。
-2. **D 邀请取消隔离（PENDING）**：从公开 `RecoverSubscriptionOrder` 接缝构造 Credit 订单及错误/既有 `InvitationRewardEvent`，断言 recovery、订单终态、奖励取消同事务且幂等；同时断言 Credit 不新增邀请收益、不进入邀请付费统计。
+2. **D 邀请取消隔离（GREEN / HANDOFF）**：新增表驱动真实 SQLite 测试 `TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward`，经公开 `RecoverSubscriptionOrder` 覆盖 refund / chargeback。Credit 订单完成时不新增 `InvitationRewardEvent` 或邀请收益；对预存错误/既有事件执行 recovery 时，仅稳定 identity 匹配目标订单的事件转为 `cancelled`，另一订单事件逐字段不变；同事实 replay 复用 recovery ledger 且全量状态零写入。现有生产实现直接 GREEN，未修改生产代码。
 3. **E SQLite 并发原子性（PENDING）**：在真实文件型 SQLite WAL 接缝覆盖 refund + chargeback、refund + admin decrease、outflow + request settle、outflow + request refund；断言合法串行结果集合、单一 recovery ledger、数量/状态版本一致及活动 request snapshot 不变，并运行相关窄 `-race`。
 
 ## 阻塞
@@ -54,3 +54,11 @@
 - `d6fdcd45c fix(issue-25): 固化订单回收事实与终态幂等`
 - `06d185c40 chore(issue-25): 记录 outflow 核心安全点`
 - `90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`
+
+## D 组邀请取消隔离交接
+
+- 唯一测试：`TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward`（refund / chargeback 表驱动）。
+- 首次运行真实揭示 Credit 订单不会自动创建邀请事件；原测试夹具错误期待事件存在，因此在 recovery 前显式构造错误/既有事件后验证取消隔离。
+- 行为结果：目标事件进入 `cancelled` 并记录 recovery reason；另一订单事件逐字段不变；同事实 replay 返回原 ledger 且订单、事件、Credit 数量/估值、ledger/event/commission 计数均不变。
+- Credit 排除：两个 Credit 订单完成后 `InvitationRewardEvent` 与 `InvitationCommissionRecord` 均为 0；邀请付费统计的 paid invitee 与 recognized amount 均为 0。
+- 范围：未修改生产代码，未进入 E/API/UI/i18n。

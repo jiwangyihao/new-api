@@ -87,3 +87,16 @@
 - 行为命令：`go test ./model -run '^TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption$' -count=1`
   - 结果：`go test: 1 packages ok`，现有生产实现意外 GREEN。
 - 结论：本硬截止未实现生产 GREEN、未进入 D/E；保留该公开路径回归测试并交接。
+
+## D 组：邀请取消隔离
+
+- 新增表驱动真实 SQLite 测试：`TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward`，覆盖 refund 与 chargeback。
+- 初次命令：`go test ./model -run '^TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward$' -count=1`
+  - 初次 FAIL 原因是测试夹具误以为 Credit 订单完成会自动创建 `InvitationRewardEvent`；实际查询 `source_type=subscription_order` / 对应 order id 返回 record not found，直接证明 Credit ingress 不新增邀请收益。
+  - 按 D 合同改为显式插入两个错误/既有 active 事件，分别绑定两个独立订单稳定 identity；未修改生产代码。
+- 修正夹具后的相同命令：PASS（`go test: 1 packages ok`）。
+- 隔离结果：recover 目标订单后仅目标事件变为 `cancelled` 并记录 recovery reason；另一订单事件与 recovery 前结构体逐字段相同。
+- 幂等结果：同事实 replay 返回 `Replayed=true` 并复用首次 recovery ledger；订单、目标/其他事件、Credit subscription、valuation state、总 ledger / recovery ledger / reward / commission 计数全量快照不变。
+- Credit 排除结果：两个 Credit 订单完成后自动生成的 reward event 数为 0、commission 数为 0；邀请付费统计 `PaidInviteeCount=0`、`ActivePaidInviteeCount=0`、recognized / active amount 均为空。
+- 生产代码：零修改；现有实现直接 GREEN。
+- 后续边界：E 仍 PENDING；本提交不进入并发、API、UI、i18n 或 browser。

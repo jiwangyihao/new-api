@@ -7,7 +7,7 @@
 - Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
 - 冻结共同基线：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
-- 当前 HEAD：`6fd07dc86`（提交前）
+- 实现提交：`92482861f fix(issue-25): 同步管理员减少的运营估值`
 - merge-base：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - Orca 父工作树：`credit-operational-value-integration`
 
@@ -35,4 +35,4 @@
 
 ## 最近安全提交
 
-- `617a71358 test(issue-25): 复现管理员减少未同步估值`
+- `92482861f fix(issue-25): 同步管理员减少的运营估值`

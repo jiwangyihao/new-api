@@ -33,6 +33,7 @@
 - 稳定性：`gofmt -w model/credit_balance_recovery.go && go test ./model -run '^TestAdminCreditBalanceDecreaseRejectsPlanAndWithdrawsMixedPool$' -count=10 && git diff --check`
   - PASS；10 次重复均通过，格式与 whitespace 检查通过。
 - 实现只修改 `model/credit_balance_recovery.go`：valuation ready 时调用现有 `ApplyCreditValuationOutflowTx`，无新 schema / interface / ledger 字段；未进入退款、拒付、UI、#27 或 #28。
+- GREEN 安全提交：`92482861f fix(issue-25): 同步管理员减少的运营估值`。
 
 ## 待收集证据
 

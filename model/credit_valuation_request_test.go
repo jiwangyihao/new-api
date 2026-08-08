@@ -411,6 +411,77 @@ func TestCreditValuationRequestTargetDecreaseMarksReopenedDebtUnknown(t *testing
 	require.Equal(t, "settled", record.Status)
 }
 
+func TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	user, option, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	completed := completeCreditValuationOrder(t, db, &order)
+	subscriptionID := completed.CreditBalance.UserSubscriptionId
+	require.NoError(t, db.Model(&CreditValuationState{}).
+		Where("user_subscription_id = ?", subscriptionID).
+		Updates(map[string]any{
+			"exact_cost_micros":     int64(24_000_000),
+			"estimated_cost_micros": int64(12_000_000),
+			"unknown_credit":        int64(300),
+		}).Error)
+
+	const refundRequestID = "credit-request-frozen-attribution-refund"
+	reserved, err := PreConsumeUserSubscriptionByUnits(refundRequestID, user.Id, "gpt-4o", 0, 0, 600)
+	require.NoError(t, err)
+	require.Equal(t, subscriptionID, reserved.UserSubscriptionId)
+
+	const activeRequestID = "credit-request-frozen-attribution-active"
+	active, err := PreConsumeUserSubscriptionByUnits(activeRequestID, user.Id, "gpt-4o", 0, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, subscriptionID, active.UserSubscriptionId)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(refundRequestID, subscriptionID, 1_200, false))
+
+	var frozen SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", refundRequestID).First(&frozen).Error)
+	require.Equal(t, int64(800), frozen.DeductedAvailableCredit)
+	require.Equal(t, int64(400), frozen.DebtFormedCredit)
+	require.Equal(t, int64(19_200_000), frozen.DeductedExactCostMicros)
+	require.Equal(t, int64(9_600_000), frozen.DeductedEstimatedCostMicros)
+	require.Equal(t, int64(240), frozen.DeductedUnknownCredit)
+	var activeBeforeRefund SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeBeforeRefund).Error)
+
+	option.MonthlyTokenLimit = 500
+	ingress := completeAdditionalCreditValuationOrder(t, db, user, option, creditPlan, 91_008, 20_000_000)
+	require.Equal(t, int64(400), ingress.CreditBalance.DebtOffset)
+	require.Equal(t, int64(100), ingress.CreditBalance.AvailableCredit)
+	require.NoError(t, SettleUserSubscriptionRequestTarget(refundRequestID, subscriptionID, 0, true))
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, subscriptionID).Error)
+	require.Equal(t, int64(1_500), subscription.TokenLimit)
+	require.Equal(t, int64(200), subscription.TokenUsed)
+	var state CreditValuationState
+	require.NoError(t, db.First(&state, subscriptionID).Error)
+	require.Equal(t, int64(1_300), state.AvailableCredit)
+	require.Equal(t, int64(23_200_000), state.ExactCostMicros)
+	require.Equal(t, int64(9_600_000), state.EstimatedCostMicros)
+	require.Equal(t, int64(640), state.UnknownCredit)
+
+	var refunded SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", refundRequestID).First(&refunded).Error)
+	require.Zero(t, refunded.AppliedCredit)
+	require.Zero(t, refunded.DeductedAvailableCredit)
+	require.Zero(t, refunded.DebtFormedCredit)
+	require.Zero(t, refunded.DeductedExactCostMicros)
+	require.Zero(t, refunded.DeductedEstimatedCostMicros)
+	require.Zero(t, refunded.DeductedUnknownCredit)
+	require.Zero(t, refunded.AbsorbedRestoreExactCostMicros)
+	require.Zero(t, refunded.AbsorbedRestoreEstimatedCostMicros)
+	require.Zero(t, refunded.AbsorbedRestoreUnknownCredit)
+	require.Equal(t, int64(400), refunded.RestoredUnknownCredit)
+	require.Equal(t, "refunded", refunded.Status)
+	require.Positive(t, refunded.FinalizedAt)
+
+	var activeAfterRefund SubscriptionPreConsumeRecord
+	require.NoError(t, db.Where("request_id = ?", activeRequestID).First(&activeAfterRefund).Error)
+	require.Equal(t, activeBeforeRefund, activeAfterRefund)
+}
+
 func TestCreditValuationRequestTargetFullRestoreClearsSnapshotRemainders(t *testing.T) {
 	db := setupCreditValuationTracerTestDB(t)
 	user, option, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)

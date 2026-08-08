@@ -76,3 +76,14 @@
 
 - 本切片必须真实执行 SQLite。
 - MySQL 5.7.44 / PostgreSQL 9.6.24 完整零 SKIP 矩阵归 #27；本切片只做跨库静态审查，不把 DryRun 宣称为实测。
+
+## C 组：请求冻结归因最小公开路径探针
+
+- 新增唯一测试：`TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption`。
+- 公开真实 SQLite 路径：`PreConsumeUserSubscriptionByUnits` 冻结 mixed exact / estimated / unknown deduction snapshot；第二个 request 保持 active；`SettleUserSubscriptionRequestTarget(..., 1_200, false)` 形成 400 Credit debt；后续 500 Credit ingress 吸收该 debt；`SettleUserSubscriptionRequestTarget(..., 0, true)` 全额退款。
+- 冻结快照：deducted available=800、debt formed=400、exact=19,200,000 micros、estimated=9,600,000 micros、unknown=240。
+- 退款后：available=1,300、exact=23,200,000 micros（保留 later ingress 的 4,000,000 micros，仅恢复原冻结 exact）、estimated=9,600,000 micros、unknown=640；request deduction 与 debt 余数清零，absorbed exact / estimated / unknown 均为 0，`restored_unknown=400`，另一 active request 逐字段不变。
+- 首次命令因测试误引用不存在的 `CreditBalanceGrantResult.NetCostMicros` 编译失败；这是测试编译错误，不是行为 RED，已仅修正测试断言。
+- 行为命令：`go test ./model -run '^TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption$' -count=1`
+  - 结果：`go test: 1 packages ok`，现有生产实现意外 GREEN。
+- 结论：本硬截止未实现生产 GREEN、未进入 D/E；保留该公开路径回归测试并交接。

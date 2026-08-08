@@ -2,9 +2,9 @@
 
 ## 当前阶段
 
-- 阶段：HANDOFF_READY（A/B 完成；C/D/E PENDING）
-- Dispatch：`task_685c1c42de63` / `ctx_214c53d3471f`
-- Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
+- 阶段：HANDOFF_READY（C 组最小公开路径测试意外 GREEN；D/E PENDING）
+- Dispatch：`task_c27d832fec9b` / `ctx_d1e85f528802`
+- Worker 终端：`term_597e2278-5e48-4f44-aaa1-e7f25a04d8af`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
 - 冻结共同基线：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - A 组提交：`90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`
@@ -35,13 +35,19 @@
 
 ## PENDING 与精确续作接缝
 
-1. **C 请求快照恢复（PENDING）**：从公开 `SettleUserSubscriptionRequestTarget` / `SettleCreditRequestTargetTx` 接缝写真实 SQLite RED，构造请求 deduction snapshot → 后来 ingress 吸收 debt → 请求退款；断言原 exact / estimated / unknown attribution、absorbed 恢复审计及重新可用 unknown，不改写其他活动 `SubscriptionPreConsumeRecord`。
+1. **C 请求快照恢复（MINIMAL PROBE GREEN / HANDOFF）**：新增唯一测试 `TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption`，经公开 `PreConsumeUserSubscriptionByUnits` / `SettleUserSubscriptionRequestTarget` 与真实 SQLite 验证 deduction snapshot → later ingress absorbs debt → full refund。冻结 exact / estimated / unknown 按原 request 恢复，已吸收债务转为 `restored_unknown`，另一 active request 保持逐字段不变；现有生产实现直接 GREEN，未制造生产改动。首次运行仅因测试误引用不存在的结果字段编译失败，修正测试后行为测试 PASS。
 2. **D 邀请取消隔离（PENDING）**：从公开 `RecoverSubscriptionOrder` 接缝构造 Credit 订单及错误/既有 `InvitationRewardEvent`，断言 recovery、订单终态、奖励取消同事务且幂等；同时断言 Credit 不新增邀请收益、不进入邀请付费统计。
 3. **E SQLite 并发原子性（PENDING）**：在真实文件型 SQLite WAL 接缝覆盖 refund + chargeback、refund + admin decrease、outflow + request settle、outflow + request refund；断言合法串行结果集合、单一 recovery ledger、数量/状态版本一致及活动 request snapshot 不变，并运行相关窄 `-race`。
 
 ## 阻塞
 
 - 无技术阻塞；协调器硬截止要求本终端不进入 C/D/E，由下一续作继续。
+
+## C 组最小测试交接
+
+- 命令：`go test ./model -run '^TestCreditRequestRefundRestoresFrozenAttributionAfterDebtAbsorption$' -count=1`
+- 结果：`go test: 1 packages ok`（行为意外 GREEN）。
+- 范围：仅新增一个 request 测试并更新 progress；未修改生产代码，未进入 D/E/API/UI/i18n。
 
 ## 最近安全提交
 

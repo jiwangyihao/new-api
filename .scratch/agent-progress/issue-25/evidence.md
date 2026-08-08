@@ -100,3 +100,14 @@
 - Credit 排除结果：两个 Credit 订单完成后自动生成的 reward event 数为 0、commission 数为 0；邀请付费统计 `PaidInviteeCount=0`、`ActivePaidInviteeCount=0`、recognized / active amount 均为空。
 - 生产代码：零修改；现有实现直接 GREEN。
 - 后续边界：E 仍 PENDING；本提交不进入并发、API、UI、i18n 或 browser。
+
+## E 首场：refund + chargeback
+
+- 测试：`TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence`。
+- 并发夹具：真实临时文件 SQLite，`PRAGMA journal_mode=wal`；query callback 确定性阻塞两个 `SubscriptionOrder` 读取，`sql.DB.Stats().InUse >= 2` 证明两个独立连接同时到达 barrier；无 sleep 猜时序。
+- 单次：`go test ./model -run '^TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence$' -count=1` → PASS。
+- 稳定性：相同命令 `-count=10` → PASS。
+- 合法串行集合：refund 先行时 chargeback 晋升并 replay 原 ledger；chargeback 先行时 refund 返回 `ErrSubscriptionOrderRecoveryConflict`。最终始终为 chargeback，只有一条 `subscription_order_recovery` ledger、一次 -500 Credit outflow，balance limit=500 / used=500。
+- 错误合同：拒绝结果不得含 `SQLITE`、`database is locked`、`UNIQUE constraint` 或 `gorm`；稳定 sentinel 经 `errors.Is` 验证。
+- 失败零写入：终态 chargeback 后重放低优先级 refund，订单、余额与 recovery ledger 全量快照不变。
+- 结论：现有生产实现直接满足首场合同；未修改生产代码。

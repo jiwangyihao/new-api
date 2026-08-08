@@ -71,6 +71,32 @@ func TestSubscriptionRecoveryTerminalOrderingContracts(t *testing.T) {
 func TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence(t *testing.T) {
 	db := setupSubscriptionRecoveryConcurrencyTestDB(t)
 	order := seedRecoverableConcurrentCreditOrder(t, db, 10_301, "concurrent-refund-chargeback")
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	var journalMode string
+	require.NoError(t, db.Raw("PRAGMA journal_mode").Scan(&journalMode).Error)
+	require.Equal(t, "wal", journalMode)
+
+	arrived := make(chan struct{}, 2)
+	release := make(chan struct{})
+	var barrierMu sync.Mutex
+	barrierEntries := 0
+	const barrierCallback = "issue25:refund_chargeback_after_order_read"
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register(barrierCallback, func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "SubscriptionOrder" || tx.Error != nil || tx.RowsAffected != 1 {
+			return
+		}
+		barrierMu.Lock()
+		if barrierEntries >= 2 {
+			barrierMu.Unlock()
+			return
+		}
+		barrierEntries++
+		barrierMu.Unlock()
+		arrived <- struct{}{}
+		<-release
+	}))
+	t.Cleanup(func() { _ = db.Callback().Query().Remove(barrierCallback) })
 
 	type outcome struct {
 		recoveryType string
@@ -93,16 +119,29 @@ func TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence(
 		}(recoveryType)
 	}
 	close(start)
+	<-arrived
+	<-arrived
+	require.GreaterOrEqual(t, sqlDB.Stats().InUse, 2, "the barrier must hold two independent SQLite connections")
+	close(release)
 	waitGroup.Wait()
 	close(outcomes)
 
+	byType := make(map[string]outcome, 2)
 	freshCount := 0
 	replayCount := 0
 	conflictCount := 0
+	assertStableConflict := func(conflictErr error) {
+		require.ErrorIs(t, conflictErr, ErrSubscriptionOrderRecoveryConflict)
+		assert.NotContains(t, conflictErr.Error(), "SQLITE")
+		assert.NotContains(t, conflictErr.Error(), "database is locked")
+		assert.NotContains(t, conflictErr.Error(), "UNIQUE constraint")
+		assert.NotContains(t, conflictErr.Error(), "gorm")
+	}
 	for outcome := range outcomes {
+		byType[outcome.recoveryType] = outcome
 		if outcome.err != nil {
 			assert.Equal(t, SubscriptionOrderRecoveryRefund, outcome.recoveryType)
-			assert.ErrorIs(t, outcome.err, ErrSubscriptionOrderRecoveryConflict)
+			assertStableConflict(outcome.err)
 			assert.Nil(t, outcome.result)
 			conflictCount++
 			continue
@@ -114,11 +153,11 @@ func TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence(
 			freshCount++
 		}
 	}
+	require.Len(t, byType, 2)
 	assert.Equal(t, 1, freshCount)
 	assert.Equal(t, 1, replayCount+conflictCount)
-	assert.LessOrEqual(t, replayCount, 1)
-	assert.LessOrEqual(t, conflictCount, 1)
-	require.NoError(t, db.First(&order, order.Id).Error)
+
+	require.NoError(t, db.First(order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusChargeback, order.Status)
 	assert.Equal(t, SubscriptionOrderRecoveryChargeback, order.RecoveryType)
 	var balance UserSubscription
@@ -126,9 +165,44 @@ func TestConcurrentRefundAndChargebackRecoverCreditOnceWithChargebackPrecedence(
 	assert.Equal(t, int64(500), balance.TokenLimit)
 	assert.Equal(t, int64(500), balance.TokenUsed)
 	var recoveryLedgers []CreditBalanceLedger
-	require.NoError(t, db.Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Find(&recoveryLedgers).Error)
+	require.NoError(t, db.Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Order("id asc").Find(&recoveryLedgers).Error)
 	require.Len(t, recoveryLedgers, 1)
 	assert.Equal(t, int64(-500), recoveryLedgers[0].GrossCredit)
+	assert.Equal(t, recoveryLedgers[0].Id, order.RecoveryLedgerID)
+	switch recoveryLedgers[0].Type {
+	case CreditBalanceLedgerTypeRefund:
+		require.NoError(t, byType[SubscriptionOrderRecoveryRefund].err)
+		require.False(t, byType[SubscriptionOrderRecoveryRefund].result.Replayed)
+		require.NoError(t, byType[SubscriptionOrderRecoveryChargeback].err)
+		require.True(t, byType[SubscriptionOrderRecoveryChargeback].result.Replayed)
+	case CreditBalanceLedgerTypeChargeback:
+		require.NoError(t, byType[SubscriptionOrderRecoveryChargeback].err)
+		require.False(t, byType[SubscriptionOrderRecoveryChargeback].result.Replayed)
+		assertStableConflict(byType[SubscriptionOrderRecoveryRefund].err)
+	default:
+		t.Fatalf("unexpected recovery ledger type %q", recoveryLedgers[0].Type)
+	}
+
+	type recoverySnapshot struct {
+		Order   SubscriptionOrder
+		Balance UserSubscription
+		Ledgers []CreditBalanceLedger
+	}
+	capture := func() recoverySnapshot {
+		var snapshot recoverySnapshot
+		require.NoError(t, db.First(&snapshot.Order, order.Id).Error)
+		require.NoError(t, db.First(&snapshot.Balance, balance.Id).Error)
+		require.NoError(t, db.Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).Order("id asc").Find(&snapshot.Ledgers).Error)
+		return snapshot
+	}
+	beforeRejectedRefund := capture()
+	rejected, rejectErr := RecoverSubscriptionOrder(SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderStripe,
+		RecoveryType: SubscriptionOrderRecoveryRefund, Reason: "concurrent refund",
+	})
+	require.Nil(t, rejected)
+	assertStableConflict(rejectErr)
+	require.Equal(t, beforeRejectedRefund, capture(), "the rejected lower terminal must write nothing")
 }
 
 func seedRecoverableConcurrentCreditOrder(t *testing.T, db *gorm.DB, userID int, tradeNo string) *SubscriptionOrder {

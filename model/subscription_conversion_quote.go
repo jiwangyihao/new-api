@@ -167,9 +167,18 @@ const timedSubscriptionConversionQuoteSelect = `
 	COALESCE(status, '') AS status,
 	COALESCE(source, '') AS source`
 
+type timedSubscriptionConversionQuoteListHooks struct {
+	afterFactsRead func() error
+	beforePersist  func(index int) error
+}
+
 // ListTimedSubscriptionConversionQuotes returns fresh calculations for a stable,
 // bounded set of non-Credit-balance subscription instances owned by the user.
 func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConversionQuoteList, error) {
+	return listTimedSubscriptionConversionQuotes(userId, nil)
+}
+
+func listTimedSubscriptionConversionQuotes(userId int, hooks *timedSubscriptionConversionQuoteListHooks) (*TimedSubscriptionConversionQuoteList, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid user id")
 	}
@@ -214,7 +223,17 @@ func ListTimedSubscriptionConversionQuotes(userId int) (*TimedSubscriptionConver
 	if err != nil {
 		return nil, err
 	}
+	if hooks != nil && hooks.afterFactsRead != nil {
+		if err := hooks.afterFactsRead(); err != nil {
+			return nil, err
+		}
+	}
 	for i := range subscriptions {
+		if hooks != nil && hooks.beforePersist != nil {
+			if err := hooks.beforePersist(i); err != nil {
+				return nil, err
+			}
+		}
 		if err := issueTimedSubscriptionConversionQuoteBatchTx(DB, &result.Quotes[i], &subscriptions[i], batch); err != nil {
 			return nil, err
 		}

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -451,6 +452,89 @@ func TestListTimedSubscriptionConversionQuotesConcurrentSameFactsWritesOnce(t *t
 	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).
 		Where("user_id = ? AND source_subscription_id = ?", userID, subscriptionID).Count(&quoteCount).Error)
 	assert.Equal(t, int64(1), quoteCount)
+}
+
+func TestListTimedSubscriptionConversionQuotesRechecksFactsBeforePersist(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	const (
+		userID         = 19_108
+		planID         = 29_108
+		subscriptionID = 39_108
+	)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	require.NoError(t, DB.Create(&UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID,
+		EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit:      100, TokenUsed: 25,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime:               databaseNow - 40*24*60*60,
+		EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+		Status:                  SubscriptionStatusActive,
+		LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+		LastGrantCreditSnapshot: &snapshot,
+		LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         SubscriptionGrantOrder,
+	}).Error)
+
+	result, err := listTimedSubscriptionConversionQuotes(userID, &timedSubscriptionConversionQuoteListHooks{
+		afterFactsRead: func() error {
+			return DB.Model(&UserSubscription{}).Where("id = ?", subscriptionID).UpdateColumn("token_used", 26).Error
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Quotes, 1)
+	assert.Equal(t, int64(74), result.Quotes[0].CurrentRemainingCredit)
+
+	var record SubscriptionConversionQuote
+	require.NoError(t, DB.Where("quote_id = ?", result.Quotes[0].QuoteId).First(&record).Error)
+	var facts subscriptionConversionQuoteFacts
+	require.NoError(t, common.UnmarshalJsonStr(record.FactsSnapshot, &facts))
+	assert.Equal(t, int64(26), facts.SourceTokenUsed)
+	assert.Equal(t, int64(74), facts.CurrentRemainingCredit)
+}
+
+func TestListTimedSubscriptionConversionQuotesRollsBackAllQuotesWhenLaterPersistFails(t *testing.T) {
+	setupSubscriptionConversionQuoteTestDB(t)
+	databaseNow, err := getDBTimestampStrictTx(DB)
+	require.NoError(t, err)
+	const (
+		userID = 19_109
+		planID = 29_109
+	)
+	seedConversionQuoteTimedPlan(t, planID, 100)
+	snapshot := int64(100)
+	for i := range 2 {
+		require.NoError(t, DB.Create(&UserSubscription{
+			Id: 39_109 + i, UserId: userID, PlanId: planID,
+			EntitlementType: SubscriptionEntitlementTimed,
+			TokenLimit:      100, TokenUsed: 25,
+			GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+			StartTime:               databaseNow - 40*24*60*60,
+			EndTime:                 databaseNow + 2*TimedSubscriptionConversionBlockSeconds,
+			Status:                  SubscriptionStatusActive,
+			LastGrantedAt:           databaseNow - TimedSubscriptionConversionCooldownSeconds,
+			LastGrantCreditSnapshot: &snapshot,
+			LastGrantTimeSource:     SubscriptionGrantTimeSourceLive,
+			LastGrantSource:         SubscriptionGrantOrder,
+		}).Error)
+	}
+	injectedErr := errors.New("injected quote persistence failure")
+	result, err := listTimedSubscriptionConversionQuotes(userID, &timedSubscriptionConversionQuoteListHooks{
+		beforePersist: func(index int) error {
+			if index == 1 {
+				return injectedErr
+			}
+			return nil
+		},
+	})
+	require.ErrorIs(t, err, injectedErr)
+	require.Nil(t, result)
+	var quoteCount int64
+	require.NoError(t, DB.Model(&SubscriptionConversionQuote{}).Where("user_id = ?", userID).Count(&quoteCount).Error)
+	assert.Zero(t, quoteCount)
 }
 
 func TestUserSubscriptionGrantMetadataIsNotSerialized(t *testing.T) {

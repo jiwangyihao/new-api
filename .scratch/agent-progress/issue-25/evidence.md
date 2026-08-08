@@ -45,7 +45,8 @@
 - 稳定性与 race：`go test ./model -run '^TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)$' -count=10 && go test -race ./model -run '^TestAdminCreditBalanceDecrease(RejectsPlanAndWithdrawsMixedPool|ClearsRemainderAndOnlyFormsSettlementDebt|ReplaysConflictsAndRollsBackAtomically)$' -count=1 && git diff --check`
   - PASS / PASS；10 次真实 SQLite 重复、窄 `-race` 与 whitespace 检查通过。
 - 行为结果：A=3 时 Q=3 清空 exact=10、estimated=7、unknown=2 的全部余数；Q=5 仍只移除上述非负池成本并形成 2 Credit settlement debt。
-- 原子性：注入 `admin_decrease` ledger INSERT 失败后 adjustment / subscription / valuation state / ledger 均与操作前一致。
+- A 组 clean 安全提交：`90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`。
+- 提交后工作树 clean；B 组开始前未保留未提交 A 组改动。
 
 ## 待收集证据
 

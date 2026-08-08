@@ -2,12 +2,12 @@
 
 ## 当前阶段
 
-- 阶段：A 组 outflow 核心 GREEN，准备 clean 提交
+- 阶段：A 组 outflow 核心已提交，进入 B 组订单终态
 - Dispatch：`task_685c1c42de63` / `ctx_214c53d3471f`
 - Worker 终端：`term_22a24ff9-059b-4d1a-b7d9-9da9f0e33a64`
 - 分支：`jiwangyihao/issue-25-destructive-outflow`
 - 冻结共同基线：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
-- 实现提交：`92482861f fix(issue-25): 同步管理员减少的运营估值`
+- A 组提交：`90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`
 - merge-base：`fe1901aaf7a769fe7057c6483e30b7b1491adcdc`
 - Orca 父工作树：`credit-operational-value-integration`
 
@@ -31,7 +31,9 @@
 
 ## 下一步
 
-1. 提交 A 组 clean 安全点后进入 B 组订单退款 / 拒付 immutable facts。
+1. B 组：订单退款 / 拒付复用 immutable purchase facts，终态幂等。
+2. C 组：请求 deduction snapshot 恢复归因。
+3. D/E 组：邀请隔离与 SQLite 并发原子性。
 
 ## 阻塞
 
@@ -39,4 +41,4 @@
 
 ## 最近安全提交
 
-- `92482861f fix(issue-25): 同步管理员减少的运营估值`
+- `90e6f3c80 test(issue-25): 覆盖管理员减少边界与原子性`

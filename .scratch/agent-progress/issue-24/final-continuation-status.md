@@ -2,7 +2,7 @@
 
 ## 当前阶段
 
-SAFEPOINT_READY：管理员售后授予 UI、组件合同、六语言、定向门禁与真实 32 CNY Chromium preview/成功入口均已 GREEN；正在先形成 clean 安全提交，再完成失败同 key 重试、跨币种、operation 清理、ledger/五分析接口与最终交付。
+FINAL_GATES_GREEN：证据收尾完成。管理员售后授予 UI、六语言、真实 SQLite/Chromium 32 CNY 主例、失败同 key 重试、USD→CNY 冻结 preview、ledger/五运营分析接口与邀请隔离均已完成。
 
 ## 已完成
 
@@ -20,17 +20,19 @@ SAFEPOINT_READY：管理员售后授予 UI、组件合同、六语言、定向�
 - 组件测试、typecheck、i18n sync、production build、Issue #24 后端定向测试及五条 route `-count=10` 已通过。
 - 真实 SQLite/Chromium 已观察唯一合格 40 CNY / 1,000 Credit 档位、800 Credit → 32,000,000 micros CNY 权威 preview，并完成一次真实售后授予。
 - 根目录临时 Cookie 文件已删除；服务、SQLite 与 Chromium 现场保留给剩余验收。
-## 下一步
+- 安全提交 `f56242f8f4b658d67cb2c4c3e49dbdbfa996c91e` 已形成，提交时工作树 clean。
+- 隔离用户 ID 3 的临时 ledger trigger 失败后 adjustment/ledger/subscription 均为 0；删除 trigger 后使用完全相同 key/事实重试成功，仅写一条 125 Credit / 5,000,000 micros CNY 记录。
+- 通过既有 `USDExchangeRate=7.3` seam 与管理员套餐 API，Chromium 权威 preview 显示 10 USD / 1,000 Credit → 73,000,000 micros CNY、FX `73/10 USD_TO_CNY`。
+- 真实 ledger 与 summary/users/subscriptions/plans/sources 五个运营分析接口均 HTTP 200、`success=true`；recognized value 为 5,000,000 micros CNY。
+- 邀请付费汇总为 0，五张 invitation/commission 表均为 0；售后授予未增加邀请、佣金或 paid referral 归因。
+## 收尾
 
-1. 在独立验收用户完成一次真实可控失败，并证明成功重试复用同一 key；再证明成功后新事实换 key与 operation 清理。
-2. 通过既有 `USDExchangeRate` 唯一 FX seam 完成至少一个 CNY↔USD 冻结展示；不得复制 parser/provider。
-3. 读取真实 ledger 与 summary/users/subscriptions/plans/sources 五接口，核对邀请奖励、commission、paid referral 不增加；更新最终证据、停止服务、清理验收 DB 并提交。
+证据整理、边界标注、progress 文档提交与工作树清理均已完成。
 
 ## 阻塞
 
-无外部阻塞。严格禁止从旧 `issue-24-positive-ingress` 继续开发，禁止触碰 #25/#27/#28 或复制 #26 FX 生命周期。
+无外部阻塞。MySQL/PostgreSQL 实机属于 #27；本轮仅真实 SQLite，跨币种 Chromium 只观察 USD→CNY，反向由既有 H2 定向测试覆盖。
 
 - API 阶段提交：`40f9b4686`（稳定错误码与幂等 HTTP 合同）。
-- 后端合同修复提交：待提交。
-- 本续作 progress 安全提交：`b11244d3d`（`docs(agents): 固化 Issue 24 最终续作合同`）。
-- HTTP preview/commit RED 安全提交：待提交。
+- 已由生产安全提交 `f56242f8f4b658d67cb2c4c3e49dbdbfa996c91e` 覆盖管理员售后授予 UI 与相关生产改动；本轮仅提交两份 progress 文档。
+- 本轮没有新增无法由现有文档证明的提交 SHA。

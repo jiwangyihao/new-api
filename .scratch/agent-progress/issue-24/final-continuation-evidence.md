@@ -33,9 +33,9 @@
 
 ## 实际范围声明
 
-- 当前尚未运行新的 API、analytics、frontend 或 browser 验收。
-- MySQL/PostgreSQL 实机验收不属于 #24，完整矩阵归 #27；本轮只做跨库静态兼容与真实 SQLite。
-- 所有后续命令、关键请求/响应、RED/GREEN、浏览器观察、提交 SHA 与清理结果将持续追加到本文件。
+- 本文件前段记录的是续作初始冻结时的阶段性范围；本轮后续 API、analytics、frontend、i18n 与 browser 证据已在下方章节实际记录并完成收尾。
+- MySQL/PostgreSQL 实机验收不属于 #24，完整矩阵归 #27；本轮已观察真实 SQLite。
+- 本轮跨币种 Chromium 只观察 USD→CNY；CNY→USD 仅由既有 H2 定向测试覆盖，测试证据未冒充 Chromium 观察。
 
 ## 管理员 preview/commit 真实 HTTP RED
 
@@ -101,4 +101,24 @@
 - Chromium 权威 preview 实际显示：档位标价 ¥40.00、档位 Credit 1000、source/valuation currency CNY、gross/net Credit 800、gross/net ¥32.00（`32,000,000 micros`）、debt offset 0、FX `1/1 IDENTITY`、confidence exact、rule/state version `1/1`。
 - 首次计划作为“可控失败”的提交实际由服务端成功提交，因此没有冒充失败证据：网络捕获 payload 含 `plan_id=2`、原始 `amount="800"` 与 key `admin-credit-2-aef43c1d-49e2-40a4-8724-aa50ee024dbe`；SQLite 仅有一条 adjustment、ledger 与一份 800 Credit 余额。
 - 临时根目录 Cookie 文件 `.scratchagent-progressissue-24vertical-e2e.cookies` 已删除且不会进入提交。
-- 此安全点之后仍需完成：独立用户上的真实失败→同 key 成功重试、成功后新事实换 key、operation 清理、CNY↔USD 冻结展示、ledger 与五个运营分析接口及邀请/commission/paid-referral 零增长核对。
+- 安全提交：`f56242f8f4b658d67cb2c4c3e49dbdbfa996c91e`（`feat(subscription): 完成管理员售后 Credit 授予界面`），提交时根目录临时 Cookie 已删除且工作树 clean。
+
+## 真实失败同键重试、跨币种与 operation 生命周期
+
+- 通过既有 API 创建隔离用户 `issue24retry`（ID 3），不直接插入用户或业务入口数据；真实 Chromium 仍只看到合格售后档位。
+- 在 SQLite 上创建仅命中 `user_id=3` 且 `source_type=admin_adjustment` 的临时 `BEFORE INSERT` ledger 失败触发器；这是受控本地失败注入，不是生产代码或静态拦截。
+- Chromium 第一次提交 payload：`operation=increase`、原始 `amount="125"`、`plan_id=2`、reason `Issue 24 same-key retry`、key `admin-credit-3-bea32605-69e1-4008-8689-e7a6353f6df8`；UI 只显示本地化安全回退“无法安全完成本次售后授予”。
+- 失败后 SQLite 计数为 adjustment=0、ledger=0、subscription=0，证明原子回滚；随后删除临时 trigger，数据库无残留 trigger。
+- 不改变任何表单事实再次点击提交；第二次真实 payload 的 user/operation/amount/plan/reason/key 与第一次逐项相同。成功后 SQLite 仅有一条 adjustment/ledger，Credit=125，运营价值 `5,000,000` micros CNY，state version=1。
+- 成功后表单清空并关闭，组件合同已覆盖下一事实生成新 key；amount/plan/reason/operation 变化与 decrease 无 `plan_id`、切回 increase 不恢复旧 plan/preview 均由真实可观察组件测试通过。未通过 #24 浏览器执行 decrease 写入，避免越界实现 #25。
+- 通过既有 root `PUT /api/option/` 将唯一 `USDExchangeRate` seam 设为 `7.3`，并通过既有管理员套餐 API 创建本地 `10 USD / 1,000 Credit` 验收档位；未复制或修改 FX parser/provider。
+- Chromium 选择 USD 档位并预览原始 `amount="1000"`，权威结果显示 gross/net Credit 1000、gross/net ¥73.00（`73,000,000 micros`）、source USD、valuation CNY、冻结 FX `73/10 USD_TO_CNY @ 1786135678`、confidence exact、rule/state `1/2`。该 preview 只读，未提交 USD 调整。
+
+## 真实 ledger、五个运营分析接口与邀请隔离
+
+- 同一个已登录真实 Chromium 依次读取 `GET /api/subscription/admin/users/3/credit-balance/ledger` 及 `/api/admin-analytics/paid-subscription-value/{summary,users,subscriptions,breakdown/plans,breakdown/sources}`；六个请求均 HTTP 200、`success=true`。
+- ledger 精确返回一条 ID 2：source `admin_adjustment`、plan 2、key `admin-credit-3-bea32605-69e1-4008-8689-e7a6353f6df8`、gross/net Credit 125、gross/net `5,000,000` micros CNY、balance 0→125、debt offset 0。
+- summary 返回 active paid subscriptions=2、active paid users=2、recognized/exact/token-based value `5,000,000` micros CNY；另有 `credit_valuation_state_missing_count=1`，对应先前 ID 2 的现场夹具未建 state，未隐瞒该真实边界。
+- users 面板把 `issue24retry`（ID 3）归入 recognized `5,000,000` micros CNY；subscriptions 面板列出真实 Credit pool；plans 面板把相同价值归入 `Credit 余额套餐`（plan 1）；sources 面板把同一入口归因到真实 admin adjustment 来源。
+- `GET /api/admin-analytics/invitation-paid-subscriptions/summary` 返回 inviter/invitee/paid subscription 均 0；SQLite 中 `invitation_reward_events`、`invitation_commission_accounts`、`invitation_commission_ledgers`、`invitation_commission_records`、`invitation_monthly_entitlements` 均为 0。售后授予未增加邀请奖励、commission 或 paid referral attribution。
+- 未实测边界：MySQL/PostgreSQL 实机属于 #27；本轮跨币种浏览器只验证 USD→CNY 方向，反向 CNY→USD 已由既有 H2 定向测试覆盖；未将测试证据冒充本轮 Chromium 观察。

@@ -116,6 +116,22 @@ export function formatCreditLedgerDelta(value: number): string {
   return String(value)
 }
 
+function formatCreditLedgerMicros(value: string): string {
+  if (!/^-?\d+$/.test(value)) return value
+  return new Intl.NumberFormat().format(BigInt(value))
+}
+
+function isDestructiveCreditOutflow(entry: CreditBalanceLedgerEntry): boolean {
+  return (
+    entry.gross_credit < 0 ||
+    entry.consumed_available_credit > 0 ||
+    entry.settlement_debt_formed > 0 ||
+    entry.removed_exact_cost_micros !== '0' ||
+    entry.removed_estimated_cost_micros !== '0' ||
+    entry.removed_unknown_credit > 0
+  )
+}
+
 export function ledgerDateTimeToTimestamp(value: string): number | undefined {
   if (!value) return undefined
   const milliseconds = Date.parse(value)
@@ -298,6 +314,7 @@ export function CreditBalanceLedger({
                 <TableHead>{t('Credit change')}</TableHead>
                 <TableHead>{t('Balance before / after')}</TableHead>
                 <TableHead>{t('Debt change')}</TableHead>
+                <TableHead>{t('Outflow valuation')}</TableHead>
                 <TableHead>{t('Source and time')}</TableHead>
                 <TableHead>{t('Operator and reason')}</TableHead>
               </TableRow>
@@ -324,6 +341,53 @@ export function CreditBalanceLedger({
                     <div className='text-muted-foreground text-xs'>
                       {t('Settlement debt')}: {entry.settlement_debt_after}
                     </div>
+                  </TableCell>
+                  <TableCell className='min-w-52 text-xs'>
+                    {isDestructiveCreditOutflow(entry) ? (
+                      <div className='flex flex-col gap-0.5'>
+                        <span>
+                          {t('Consumed available Credit')}:{' '}
+                          {entry.consumed_available_credit}
+                        </span>
+                        <span>
+                          {t('Settlement debt formed')}:{' '}
+                          {entry.settlement_debt_formed}
+                        </span>
+                        <span>
+                          {t('Exact value removed')}:{' '}
+                          {formatCreditLedgerMicros(
+                            entry.removed_exact_cost_micros
+                          )}{' '}
+                          {t('micros')}
+                        </span>
+                        <span>
+                          {t('Estimated value removed')}:{' '}
+                          {formatCreditLedgerMicros(
+                            entry.removed_estimated_cost_micros
+                          )}{' '}
+                          {t('micros')}
+                        </span>
+                        <span>
+                          {t('Unknown Credit removed')}:{' '}
+                          {entry.removed_unknown_credit}
+                        </span>
+                        <span>
+                          {t('Valuation currency')}:{' '}
+                          {entry.valuation_currency || '-'}
+                        </span>
+                        <span>
+                          {t('Rule and state version')}:{' '}
+                          {entry.valuation_rule_version}/
+                          {entry.valuation_state_version_after}
+                        </span>
+                        <span>
+                          {t('Terminal state')}:{' '}
+                          {t(entry.terminal_state || 'Unknown')}
+                        </span>
+                      </div>
+                    ) : (
+                      '-'
+                    )}
                   </TableCell>
                   <TableCell>
                     {creditBalanceLedgerSourceLabel(entry.source_type, t)} #

@@ -510,6 +510,13 @@ export interface CreditBalanceAdjustmentAuthoritativeResult {
   fx_direction: string
   rule_version: number
   state_version_after: number
+  consumed_available_credit: number
+  debt_formed: number
+  removed_exact_cost_micros: string
+  removed_estimated_cost_micros: string
+  removed_unknown_credit: number
+  operation: string
+  terminal_state: string
   debt_offset: number
   available_credit: number
   settlement_debt: number
@@ -519,13 +526,11 @@ export interface CreditBalanceAdjustmentAuthoritativeResult {
   preview: boolean
 }
 
-export interface CreditBalanceAdjustmentPreviewResult
-  extends CreditBalanceAdjustmentAuthoritativeResult {
+export interface CreditBalanceAdjustmentPreviewResult extends CreditBalanceAdjustmentAuthoritativeResult {
   credit_balance: CreditBalanceGrantResult
 }
 
-export interface CreditBalanceAdjustmentResult
-  extends CreditBalanceAdjustmentAuthoritativeResult {
+export interface CreditBalanceAdjustmentResult extends CreditBalanceAdjustmentAuthoritativeResult {
   adjustment: {
     id: number
     idempotency_key: string
@@ -538,7 +543,6 @@ export interface CreditBalanceAdjustmentResult
     created_at: number
   }
   credit_balance: CreditBalanceGrantResult
-  debt_formed: number
 }
 
 export interface SubscriptionOrderRecoveryPreview {
@@ -570,6 +574,15 @@ export interface SubscriptionOrderRecoveryResult {
   status: 'refunded' | 'chargeback'
   recovery_type: 'refund' | 'chargeback'
   gross_credit: number
+  consumed_available_credit: number
+  removed_exact_cost_micros: string
+  removed_estimated_cost_micros: string
+  removed_unknown_credit: number
+  valuation_currency: string
+  rule_version: number
+  state_version_after: number
+  operation: string
+  terminal_state: string
   debt_formed: number
   available_credit: number
   settlement_debt: number
@@ -594,15 +607,27 @@ export interface CreditBalanceLedgerEntry {
   idempotency_key: string
   source_type: string
   source_id: number
+  net_credit: number
+  operation: string
+  terminal_state: string
+  plan_id: number
   gross_credit: number
   debt_offset: number
   debt_formed?: number
+  consumed_available_credit: number
+  settlement_debt_formed: number
+  removed_exact_cost_micros: string
+  removed_estimated_cost_micros: string
+  removed_unknown_credit: number
   available_credit_before?: number
   settlement_debt_before?: number
   balance_before: number
   balance_after: number
   available_credit_after: number
   settlement_debt_after: number
+  valuation_currency: string
+  valuation_rule_version: number
+  valuation_state_version_after: number
   operator_user_id?: number
   reason: string
   source_snapshot?: string

@@ -168,3 +168,13 @@
 - 格式与静态检查：六个 Go 文件 `gofmt`；修改范围的 Go LSP diagnostics 无问题；`git diff --check` → PASS。
 - 结构：管理员 adjustment / recovery API 从同一 committed `CreditBalanceLedger` 投影权威事实，不另算金额；旧 ledger 的 `debt_formed` 由兼容 helper 读取，新 outflow 写入 `settlement_debt_formed`。
 - 未声称：前端、五分析接口、browser、MySQL 5.7、PostgreSQL 9.6 或生产发布。
+
+## 前端权威撤值事实与六语言
+
+- 管理员 decrease 结果展示：`Credit decrease committed` / replay 与 after-sales grant 文案分离；结构化展示 consumed available、settlement debt formed、removed exact / estimated / unknown、valuation currency、rule / state version、terminal state。
+- recovery 与 ledger：refund / chargeback 使用同一 committed response / ledger 字段，不在前端重新计算 micros；micros 通过 `BigInt` 格式化，避免 `Number` 精度损失。
+- 错误语义：`creditBalanceAdjustmentErrorKey` 按 increase / decrease 分流；decrease 的 plan、idempotency、currency 与 fallback 文案不含 after-sales grant。
+- 测试：`bun test src/features/subscriptions/components/admin-credit-balance-panel.test.tsx` → 6 PASS；`bun test src/features/subscriptions/components/credit-balance-ledger.test.tsx src/features/wallet/components/subscription-plans-card.test.ts` → 26 PASS。
+- 静态 / 构建：`bun run typecheck`、`bun run build`、`git diff --check` → PASS。修改 TS 文件的 LSP diagnostics 无可用 language server，因此以 TypeScript build 作为静态证据，未伪报 LSP 通过。
+- i18n：手工补齐 en / zh / fr / ja / ru / vi 的 14 个新键；`bun run i18n:sync` 后 `_sync-report.json` 显示所有 locale 的 missingCount=0、extrasCount=0。报告中的既有 untranslatedCount 未作为本切片新增缺口；本切片新键逐项验证均有非空翻译。
+- 未声称：五个 paid-value API tracer、真实 browser、MySQL 5.7、PostgreSQL 9.6 或生产发布。

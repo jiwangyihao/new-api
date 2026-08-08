@@ -83,3 +83,12 @@
 - decrease 携带 `plan_id` 继续稳定拒绝；首次空余额 decrease 在 valuation ready 时建立空估值状态后再形成债务，数量、估值与 ledger 同事务。
 - SQLite schema / route / model 定向测试 `-count=10`、gofmt、LSP diagnostics 与 `git diff --check` 均通过。
 - 下一阶段仅进入前端展示、六语言、五分析接口 tracer 与真实 browser；MySQL / PostgreSQL 仍归 Issue #27。
+
+## 前端权威撤值事实交接
+
+- 阶段：`FINAL_FRONTEND_OUTFLOW_HANDOFF_READY`。
+- TypeScript 已接入管理员 decrease、订单 refund / chargeback 与 Credit ledger 的权威 outflow 字段；展示 consumed available、settlement debt formed、removed exact / estimated / unknown、valuation currency、rule / state version 与 terminal state。
+- decrease 请求继续不发送 `plan_id`；成功、重放和错误文案均与 after-sales grant 语义分离。
+- 管理员面板、ledger 与钱包相邻测试共 32 项 PASS；`typecheck`、Rsbuild production build 与 `git diff --check` PASS。
+- en / zh / fr / ja / ru / vi 已补齐本切片 14 个 UI 键；`i18n:sync` 后六语言 missing / extras 均为 0。
+- 当前阶段未进入五个运营分析接口真实 SQLite tracer 或真实 browser；MySQL / PostgreSQL 仍归 Issue #27。

@@ -61,13 +61,27 @@ function ledgerEntry(
     idempotency_key: `ledger-${id}`,
     source_type: 'subscription_order_recovery',
     source_id: 7201 + id,
+    operation: type,
+    terminal_state: type === 'refund' ? 'refunded' : 'chargeback',
+    plan_id: 7401,
     gross_credit: grossCredit,
+    net_credit: grossCredit,
     debt_offset: 0,
     debt_formed: Math.abs(grossCredit),
+    consumed_available_credit: 400,
+    settlement_debt_formed: 100,
+    removed_exact_cost_micros: '12000000',
+    removed_estimated_cost_micros: '3000000',
+    removed_unknown_credit: 25,
+    available_credit_before: 400,
+    settlement_debt_before: 0,
     balance_before: 100,
     balance_after: 100 + grossCredit,
     available_credit_after: 0,
     settlement_debt_after: Math.abs(grossCredit),
+    valuation_currency: 'CNY',
+    valuation_rule_version: 1,
+    valuation_state_version_after: 3,
     operator_user_id: 7301,
     payment_provider: 'stripe',
     reason: type === 'refund' ? 'provider refund' : 'provider dispute',
@@ -111,6 +125,15 @@ describe('Credit balance ledger', () => {
     assert.ok(view.getByText('Chargeback'))
     assert.ok(view.getByText('-500'))
     assert.ok(view.getByText('-250'))
+    const refundRow = view.getByText('Refund').closest('tr')?.textContent || ''
+    assert.match(refundRow, /Consumed available Credit.*400/)
+    assert.match(refundRow, /Settlement debt formed.*100/)
+    assert.match(refundRow, /Exact value removed.*12,000,000/)
+    assert.match(refundRow, /Estimated value removed.*3,000,000/)
+    assert.match(refundRow, /Unknown Credit removed.*25/)
+    assert.match(refundRow, /Valuation currency.*CNY/)
+    assert.match(refundRow, /Rule and state version.*1\/3/)
+    assert.match(refundRow, /Terminal state.*refunded/)
 
     const sourceFilter = view.getByRole('combobox', {
       name: 'Ledger source filter',

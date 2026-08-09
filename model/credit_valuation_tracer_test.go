@@ -337,6 +337,19 @@ func TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay(t *testi
 	require.NoError(t, err)
 	require.True(t, chargebackReplay.Replayed)
 	require.Equal(t, first.LedgerId, chargebackReplay.LedgerId)
+	chargebackConflict := chargebackRequest
+	chargebackConflict.Reason = "different chargeback facts"
+	conflicted, err = RecoverSubscriptionOrder(chargebackConflict)
+	require.Nil(t, conflicted)
+	require.ErrorIs(t, err, ErrSubscriptionOrderRecoveryConflict)
+	var chargebackConflictState CreditValuationState
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&chargebackConflictState).Error)
+	require.Equal(t, state, chargebackConflictState)
+	var chargebackConflictLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&chargebackConflictLedgerCount).Error)
+	require.Equal(t, int64(1), chargebackConflictLedgerCount)
 
 	var recoveryCount int64
 	require.NoError(t, db.Model(&CreditBalanceLedger{}).

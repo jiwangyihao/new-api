@@ -349,6 +349,7 @@ type SubscriptionOrder struct {
 	RecoveryTime            int64   `json:"recovery_time,omitempty" gorm:"type:bigint;not null;default:0;index"`
 	RecoveryLedgerID        int     `json:"recovery_ledger_id,omitempty" gorm:"type:int;not null;default:0;index"`
 	RecoveryReason          string  `json:"recovery_reason,omitempty" gorm:"type:varchar(255);not null;default:''"`
+	RecoveryFingerprint     string  `json:"-" gorm:"type:varchar(64);not null;default:''"`
 	ProviderTransactionID   string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
 	ProviderOrderID         string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
 	ProviderInvoiceID       string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`

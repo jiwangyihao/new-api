@@ -33,6 +33,7 @@ import type { PlanRecord } from '../types'
 import {
   AdminCreditBalancePanel,
   creditBalanceAdjustmentErrorKey,
+  subscriptionOrderRecoveryErrorKey,
 } from './admin-credit-balance-panel'
 
 const originalAPIAdapter = api.defaults.adapter
@@ -171,6 +172,20 @@ describe('Admin Credit financial management', () => {
         'increase'
       ),
       /after-sales grant/i
+    )
+  })
+  test('maps recovery failures from stable codes instead of backend text', () => {
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('subscription_order_recovery_conflict'),
+      'This financial terminal no longer matches the committed recovery facts.'
+    )
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('subscription_order_not_found'),
+      'The subscription order was not found for this user.'
+    )
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('internal_error'),
+      'The financial terminal could not be completed safely.'
     )
   })
   test('does not allow an increase without an eligible after-sales plan', async () => {

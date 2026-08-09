@@ -241,6 +241,11 @@ func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
 	replay := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"verified Epay refund"}`)
 	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
 	assert.Contains(t, replay.Body.String(), `"replayed":true`)
+	conflict := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"different refund facts"}`)
+	require.Equal(t, http.StatusOK, conflict.Code, conflict.Body.String())
+	assert.Contains(t, conflict.Body.String(), `"success":false`)
+	assert.Contains(t, conflict.Body.String(), `"code":"subscription_order_recovery_conflict"`)
+	assert.NotContains(t, conflict.Body.String(), `"code":"internal_error"`)
 
 	require.NoError(t, model.DB.First(&balance, balance.Id).Error)
 	assert.Equal(t, int64(1250), balance.TokenUsed)

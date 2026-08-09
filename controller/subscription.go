@@ -1103,6 +1103,36 @@ func adminCreditBalanceAdjustmentErrorCode(err error) string {
 		return "internal_error"
 	}
 }
+func writeAdminSubscriptionOrderRecoveryError(c *gin.Context, err error) {
+	c.JSON(http.StatusOK, gin.H{
+		"success": false,
+		"message": err.Error(),
+		"code":    adminSubscriptionOrderRecoveryErrorCode(err),
+	})
+}
+
+func adminSubscriptionOrderRecoveryErrorCode(err error) string {
+	switch {
+	case errors.Is(err, model.ErrSubscriptionOrderRecoveryInvalid):
+		return "subscription_order_recovery_invalid"
+	case errors.Is(err, model.ErrSubscriptionOrderNotFound):
+		return "subscription_order_not_found"
+	case errors.Is(err, model.ErrSubscriptionOrderStatusInvalid):
+		return "subscription_order_status_invalid"
+	case errors.Is(err, model.ErrSubscriptionOrderSnapshotMismatch):
+		return "subscription_order_snapshot_mismatch"
+	case errors.Is(err, model.ErrPaymentMethodMismatch):
+		return "subscription_order_payment_provider_mismatch"
+	case errors.Is(err, model.ErrSubscriptionOrderProviderIdentityAmbiguous):
+		return "subscription_order_provider_identity_ambiguous"
+	case errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable):
+		return "subscription_order_credit_recovery_not_applicable"
+	case errors.Is(err, model.ErrSubscriptionOrderRecoveryConflict), errors.Is(err, model.ErrCreditValuationIdempotencyMismatch):
+		return "subscription_order_recovery_conflict"
+	default:
+		return adminCreditBalanceAdjustmentErrorCode(err)
+	}
+}
 
 func AdminAdjustUserCreditBalance(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
@@ -1158,12 +1188,12 @@ func AdminGetSubscriptionOrderRecoveryPreview(c *gin.Context) {
 	userId, _ := strconv.Atoi(c.Param("id"))
 	tradeNo := strings.TrimSpace(c.Param("trade_no"))
 	if userId <= 0 || tradeNo == "" {
-		common.ApiErrorMsg(c, "参数错误")
+		writeAdminSubscriptionOrderRecoveryError(c, model.ErrSubscriptionOrderRecoveryInvalid)
 		return
 	}
 	preview, err := model.GetSubscriptionOrderRecoveryPreview(tradeNo, userId)
 	if err != nil {
-		common.ApiError(c, err)
+		writeAdminSubscriptionOrderRecoveryError(c, err)
 		return
 	}
 	common.ApiSuccess(c, preview)
@@ -1174,7 +1204,7 @@ func AdminRecoverSubscriptionOrder(c *gin.Context) {
 	tradeNo := strings.TrimSpace(c.Param("trade_no"))
 	var req AdminSubscriptionOrderRecoveryRequest
 	if userId <= 0 || tradeNo == "" || c.ShouldBindJSON(&req) != nil || strings.TrimSpace(req.Reason) == "" {
-		common.ApiErrorMsg(c, "参数错误")
+		writeAdminSubscriptionOrderRecoveryError(c, model.ErrSubscriptionOrderRecoveryInvalid)
 		return
 	}
 	result, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
@@ -1182,7 +1212,7 @@ func AdminRecoverSubscriptionOrder(c *gin.Context) {
 		OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {
-		common.ApiError(c, err)
+		writeAdminSubscriptionOrderRecoveryError(c, err)
 		return
 	}
 	model.RecordLogWithAdminInfo(userId, model.LogTypeManage,

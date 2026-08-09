@@ -178,3 +178,12 @@
 - 静态 / 构建：`bun run typecheck`、`bun run build`、`git diff --check` → PASS。修改 TS 文件的 LSP diagnostics 无可用 language server，因此以 TypeScript build 作为静态证据，未伪报 LSP 通过。
 - i18n：手工补齐 en / zh / fr / ja / ru / vi 的 14 个新键；`bun run i18n:sync` 后 `_sync-report.json` 显示所有 locale 的 missingCount=0、extrasCount=0。报告中的既有 untranslatedCount 未作为本切片新增缺口；本切片新键逐项验证均有非空翻译。
 - 未声称：五个 paid-value API tracer、真实 browser、MySQL 5.7、PostgreSQL 9.6 或生产发布。
+
+## 自审修复最终门禁
+
+- 订单恢复终态指纹：首次 refund 与 refund→chargeback 晋升均原子持久化 `RecoveryFingerprint`；同终态不同 reason / provider payload / operator 等事实返回稳定冲突且零写入，重复同事实仍只执行一次 outflow。
+- 稳定 API 错误：preview / commit 统一返回 `subscription_order_recovery_conflict` 等 machine code；前端通过 `subscriptionOrderRecoveryErrorKey` 映射，不再解析服务端自由文本。
+- Go 定向回归：恢复 / 终态 / 并发 / 路由 / SQLite 迁移 `-count=10` PASS；窄 `-race` PASS；修改范围 Go LSP diagnostics PASS。
+- 前端分进程回归：管理员面板 7 / 7、ledger 2 / 2、钱包 24 / 24 PASS；组合到同一 Bun 进程时既有重试键用例曾因 OOM 失败，隔离后 1 / 1 且分进程总计 33 / 33 PASS。
+- `bun run typecheck`、Rsbuild production build、`bun run i18n:sync` 与 `git diff --check` PASS；六语言 missing / extras 均为 0。TS LSP 不可用，未声明其通过。
+- MySQL 5.7 / PostgreSQL 9.6、全项目测试与生产发布未在本步骤运行，分别保留给 Issue #27 / #28。

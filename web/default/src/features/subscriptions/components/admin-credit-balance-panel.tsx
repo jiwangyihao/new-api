@@ -150,6 +150,37 @@ export function creditBalanceAdjustmentErrorKey(
       return 'The after-sales grant could not be completed safely.'
   }
 }
+export function subscriptionOrderRecoveryErrorKey(
+  code: string | undefined
+): string {
+  switch (code) {
+    case 'subscription_order_recovery_invalid':
+      return 'Enter a valid order, financial terminal, and reason.'
+    case 'subscription_order_not_found':
+      return 'The subscription order was not found for this user.'
+    case 'subscription_order_status_invalid':
+      return 'The subscription order is not eligible for financial recovery.'
+    case 'subscription_order_snapshot_mismatch':
+      return 'The frozen subscription order facts do not match.'
+    case 'subscription_order_payment_provider_mismatch':
+      return 'The payment provider does not match the subscription order.'
+    case 'subscription_order_provider_identity_ambiguous':
+      return 'The provider identity matches more than one subscription order.'
+    case 'subscription_order_credit_recovery_not_applicable':
+      return 'The subscription order has no Credit to recover.'
+    case 'subscription_order_recovery_conflict':
+    case 'credit_valuation_idempotency_mismatch':
+      return 'This financial terminal no longer matches the committed recovery facts.'
+    case 'credit_valuation_state_missing':
+    case 'credit_valuation_state_mismatch':
+      return 'The Credit valuation state changed. Refresh and try again.'
+    case 'credit_valuation_migration_not_ready':
+      return 'Credit operational valuation is not ready yet.'
+    default:
+      return 'The financial terminal could not be completed safely.'
+  }
+}
+
 
 function formatMicrosCount(value: string): string {
   if (!/^-?\d+$/.test(value)) return value
@@ -384,7 +415,7 @@ export function AdminCreditBalancePanel({
         tradeNo.trim()
       )
       if (!response.success || !response.data) {
-        toast.error(response.message || t('Request failed'))
+        toast.error(t(subscriptionOrderRecoveryErrorKey(response.code)))
         return
       }
       setRecoveryPreview(response.data)
@@ -414,7 +445,7 @@ export function AdminCreditBalancePanel({
         reason: recoveryReason.trim(),
       })
       if (!response.success || !response.data) {
-        toast.error(response.message || t('Request failed'))
+        toast.error(t(subscriptionOrderRecoveryErrorKey(response.code)))
         return
       }
       const message = formatCreditOutflowResult(

@@ -92,3 +92,11 @@
 - 管理员面板、ledger 与钱包相邻测试共 32 项 PASS；`typecheck`、Rsbuild production build 与 `git diff --check` PASS。
 - en / zh / fr / ja / ru / vi 已补齐本切片 14 个 UI 键；`i18n:sync` 后六语言 missing / extras 均为 0。
 - 当前阶段未进入五个运营分析接口真实 SQLite tracer 或真实 browser；MySQL / PostgreSQL 仍归 Issue #27。
+
+## 自审修复交接
+
+- 阶段：`FINAL_SELF_REVIEW_FIX_HANDOFF_READY`。
+- 已固化订单当前终态 `RecoveryFingerprint`，修复 refund→chargeback 后同终态异事实误判 replay；同事实幂等、异事实稳定冲突且零写入。
+- preview / commit 恢复 API 已统一稳定 machine code；前端六语言错误映射不再依赖自由文本。
+- Go 窄 race、后端定向 `-count=10`、前端分进程 33 / 33、typecheck、production build、i18n sync、Go LSP 与 diff-check 均通过。
+- 下一步：冻结 clean HEAD，重新执行 Standards / Spec 双轴只读复评；双轴通过后方可 non-ff 集成并关闭 Issue #25。

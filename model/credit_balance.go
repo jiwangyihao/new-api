@@ -90,6 +90,8 @@ type CreditBalanceLedger struct {
 	SourceSnapshot                    string `json:"source_snapshot,omitempty" gorm:"type:text"`
 	SourceKey                         string `json:"source_key" gorm:"type:varchar(160);not null;default:'';index"`
 	SourceStatus                      string `json:"source_status" gorm:"type:varchar(32);not null;default:'';index"`
+	Operation                         string `json:"operation" gorm:"type:varchar(32);not null;default:'';index"`
+	TerminalState                     string `json:"terminal_state" gorm:"type:varchar(32);not null;default:'';index"`
 	PlanId                            int    `json:"plan_id" gorm:"not null;default:0;index"`
 	GrossCredit                       int64  `json:"gross_credit" gorm:"type:bigint;not null"`
 	NetCredit                         int64  `json:"net_credit" gorm:"type:bigint;not null;default:0"`
@@ -97,6 +99,11 @@ type CreditBalanceLedger struct {
 	SourcePlanCredit                  int64  `json:"source_plan_credit" gorm:"type:bigint;not null;default:0"`
 	DebtOffset                        int64  `json:"debt_offset" gorm:"type:bigint;not null;default:0"`
 	DebtFormed                        int64  `json:"debt_formed" gorm:"type:bigint;not null;default:0"`
+	ConsumedAvailableCredit           int64  `json:"consumed_available_credit" gorm:"type:bigint;not null;default:0"`
+	SettlementDebtFormed              int64  `json:"settlement_debt_formed" gorm:"type:bigint;not null;default:0"`
+	RemovedExactCostMicros            int64  `json:"removed_exact_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	RemovedEstimatedCostMicros        int64  `json:"removed_estimated_cost_micros,string" gorm:"type:bigint;not null;default:0"`
+	RemovedUnknownCredit              int64  `json:"removed_unknown_credit" gorm:"type:bigint;not null;default:0"`
 	AvailableCreditBefore             int64  `json:"available_credit_before" gorm:"type:bigint;not null;default:0"`
 	SettlementDebtBefore              int64  `json:"settlement_debt_before" gorm:"type:bigint;not null;default:0"`
 	BalanceBefore                     int64  `json:"balance_before" gorm:"type:bigint;not null"`
@@ -293,6 +300,13 @@ type CreditBalanceGrantResult struct {
 	ValuationRuleVersion       int    `json:"rule_version"`
 	ValuationStateVersionAfter int64  `json:"state_version_after"`
 	DebtOffset                 int64  `json:"debt_offset"`
+	ConsumedAvailableCredit    int64  `json:"consumed_available_credit"`
+	DebtFormed                 int64  `json:"debt_formed"`
+	RemovedExactCostMicros     int64  `json:"removed_exact_cost_micros,string"`
+	RemovedEstimatedCostMicros int64  `json:"removed_estimated_cost_micros,string"`
+	RemovedUnknownCredit       int64  `json:"removed_unknown_credit"`
+	Operation                  string `json:"operation"`
+	TerminalState              string `json:"terminal_state"`
 	AvailableCredit            int64  `json:"available_credit"`
 	SettlementDebt             int64  `json:"settlement_debt"`
 	BalanceBefore              int64  `json:"balance_before"`
@@ -833,6 +847,13 @@ func creditBalanceGrantResult(ledger *CreditBalanceLedger, planId int, active bo
 		ValuationRuleVersion:       ledger.ValuationRuleVersion,
 		ValuationStateVersionAfter: ledger.ValuationStateVersionAfter,
 		DebtOffset:                 ledger.DebtOffset,
+		ConsumedAvailableCredit:    ledger.ConsumedAvailableCredit,
+		DebtFormed:                 creditBalanceLedgerDebtFormed(ledger),
+		RemovedExactCostMicros:     ledger.RemovedExactCostMicros,
+		RemovedEstimatedCostMicros: ledger.RemovedEstimatedCostMicros,
+		RemovedUnknownCredit:       ledger.RemovedUnknownCredit,
+		Operation:                  ledger.Operation,
+		TerminalState:              ledger.TerminalState,
 		AvailableCredit:            ledger.AvailableCreditAfter,
 		SettlementDebt:             ledger.SettlementDebtAfter,
 		BalanceBefore:              ledger.BalanceBefore,
@@ -841,6 +862,16 @@ func creditBalanceGrantResult(ledger *CreditBalanceLedger, planId int, active bo
 		LedgerId:                   ledger.Id,
 		Status:                     creditBalanceStatus(ledger.BalanceAfter),
 	}
+}
+
+func creditBalanceLedgerDebtFormed(ledger *CreditBalanceLedger) int64 {
+	if ledger == nil {
+		return 0
+	}
+	if ledger.SettlementDebtFormed != 0 {
+		return ledger.SettlementDebtFormed
+	}
+	return ledger.DebtFormed
 }
 
 func creditBalanceStatus(signedBalance int64) string {

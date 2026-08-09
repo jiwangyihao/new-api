@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import type { InternalAxiosRequestConfig } from 'axios'
-import { fireEvent, render, waitFor, cleanup } from '@testing-library/react/pure'
+import {
+  fireEvent,
+  render,
+  waitFor,
+  cleanup,
+} from '@testing-library/react/pure'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, test } from 'bun:test'
 import { createInstance } from 'i18next'
@@ -25,7 +30,12 @@ import assert from 'node:assert/strict'
 import { I18nextProvider } from 'react-i18next'
 import { api } from '@/lib/api'
 import type { PlanRecord } from '../types'
-import { AdminCreditBalancePanel } from './admin-credit-balance-panel'
+import {
+  AdminCreditBalancePanel,
+  creditBalanceAdjustmentErrorKey,
+  subscriptionOrderRecoveryErrorKey,
+} from './admin-credit-balance-panel'
+
 const originalAPIAdapter = api.defaults.adapter
 
 afterEach(() => {
@@ -97,6 +107,13 @@ function authoritativeAdjustmentResult(
     fx_direction: 'CNY->CNY',
     rule_version: 1,
     state_version_after: 1,
+    consumed_available_credit: 0,
+    debt_formed: 0,
+    removed_exact_cost_micros: '0',
+    removed_estimated_cost_micros: '0',
+    removed_unknown_credit: 0,
+    operation: 'increase',
+    terminal_state: '',
     debt_offset: 0,
     available_credit: 800,
     settlement_debt: 0,
@@ -133,9 +150,44 @@ function authoritativeAdjustmentResult(
   }
 }
 
-
-
 describe('Admin Credit financial management', () => {
+  test('keeps decrease errors separate from after-sales grant semantics', () => {
+    const decreaseCodes = [
+      'credit_valuation_plan_required',
+      'credit_valuation_plan_ineligible',
+      'credit_valuation_idempotency_mismatch',
+      'credit_valuation_unsupported_currency',
+      'unknown_error',
+    ]
+
+    for (const code of decreaseCodes) {
+      assert.doesNotMatch(
+        creditBalanceAdjustmentErrorKey(code, 'decrease'),
+        /after-sales grant/i
+      )
+    }
+    assert.match(
+      creditBalanceAdjustmentErrorKey(
+        'credit_valuation_idempotency_mismatch',
+        'increase'
+      ),
+      /after-sales grant/i
+    )
+  })
+  test('maps recovery failures from stable codes instead of backend text', () => {
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('subscription_order_recovery_conflict'),
+      'This financial terminal no longer matches the committed recovery facts.'
+    )
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('subscription_order_not_found'),
+      'The subscription order was not found for this user.'
+    )
+    assert.equal(
+      subscriptionOrderRecoveryErrorKey('internal_error'),
+      'The financial terminal could not be completed safely.'
+    )
+  })
   test('does not allow an increase without an eligible after-sales plan', async () => {
     const i18n = await createTestI18n()
     let adjustmentCalls = 0
@@ -332,10 +384,7 @@ describe('Admin Credit financial management', () => {
     await waitFor(() => assert.equal(adjustments.length, 1))
     fireEvent.click(submit)
     await waitFor(() => assert.equal(adjustments.length, 2))
-    assert.equal(
-      adjustments[1].idempotency_key,
-      adjustments[0].idempotency_key
-    )
+    assert.equal(adjustments[1].idempotency_key, adjustments[0].idempotency_key)
     fireEvent.change(amount, { target: { value: '801' } })
     fireEvent.click(submit)
     await waitFor(() => assert.equal(adjustments.length, 3))
@@ -401,8 +450,6 @@ describe('Admin Credit financial management', () => {
     )
   }, 30_000)
 
-
-
   test('submits plan-bound increases and plan-free decreases from the keyboard', async () => {
     const i18n = await createTestI18n()
     const user = userEvent.setup()
@@ -426,18 +473,29 @@ describe('Admin Credit financial management', () => {
             net_credit: amount,
             gross_amount_micros: '0',
             net_amount_micros: '0',
-            valuation_currency: '',
-            source_currency: '',
-            confidence: '',
-            fx_rate_numerator: '0',
-            fx_rate_denominator: '0',
-            fx_captured_at: 0,
-            fx_direction: '',
-            rule_version: 0,
+            valuation_currency: 'CNY',
+            source_currency: 'CNY',
+            confidence: 'exact',
+            fx_rate_numerator: '1',
+            fx_rate_denominator: '1',
+            fx_captured_at: 1_800_000_000,
+            fx_direction: 'CNY->CNY',
+            rule_version: 1,
             state_version_after: adjustments.length,
+            consumed_available_credit:
+              payload.operation === 'decrease' ? 50 : 0,
+            debt_formed: payload.operation === 'decrease' ? 25 : 0,
+            removed_exact_cost_micros:
+              payload.operation === 'decrease' ? '12000000' : '0',
+            removed_estimated_cost_micros:
+              payload.operation === 'decrease' ? '3000000' : '0',
+            removed_unknown_credit: payload.operation === 'decrease' ? 5 : 0,
+            operation: payload.operation,
+            terminal_state:
+              payload.operation === 'decrease' ? 'admin_decrease' : '',
             debt_offset: 0,
             available_credit: payload.operation === 'increase' ? amount : 0,
-            settlement_debt: payload.operation === 'decrease' ? amount : 0,
+            settlement_debt: payload.operation === 'decrease' ? 25 : 0,
             balance_before: 0,
             balance_after: payload.operation === 'increase' ? amount : -amount,
             replayed: false,
@@ -459,14 +517,14 @@ describe('Admin Credit financial management', () => {
               gross_credit: amount,
               debt_offset: 0,
               available_credit: payload.operation === 'increase' ? amount : 0,
-              settlement_debt: payload.operation === 'decrease' ? amount : 0,
+              settlement_debt: payload.operation === 'decrease' ? 25 : 0,
               balance_before: 0,
-              balance_after: payload.operation === 'increase' ? amount : -amount,
+              balance_after:
+                payload.operation === 'increase' ? amount : -amount,
               active: true,
               ledger_id: adjustments.length,
               status: payload.operation === 'increase' ? 'available' : 'debt',
             },
-            debt_formed: payload.operation === 'decrease' ? amount : 0,
           },
         })
       }
@@ -519,6 +577,17 @@ describe('Admin Credit financial management', () => {
       adjustments[1].idempotency_key,
       adjustments[0].idempotency_key
     )
+    const decreaseResult = view
+      .getAllByRole('status')
+      .map((status) => status.textContent || '')
+      .join(' ')
+    assert.match(decreaseResult, /Credit decrease committed/)
+    assert.match(decreaseResult, /Consumed available Credit.*50/)
+    assert.match(decreaseResult, /Settlement debt formed.*25/)
+    assert.match(decreaseResult, /Exact value removed.*12,000,000/)
+    assert.match(decreaseResult, /Estimated value removed.*3,000,000/)
+    assert.match(decreaseResult, /Unknown Credit removed.*5/)
+    assert.doesNotMatch(decreaseResult, /after-sales grant/i)
   }, 20_000)
 
   test('requires preview and submits a verified chargeback terminal by keyboard', async () => {
@@ -565,6 +634,15 @@ describe('Admin Credit financial management', () => {
             status: 'chargeback',
             recovery_type: 'chargeback',
             gross_credit: 1000,
+            consumed_available_credit: 750,
+            removed_exact_cost_micros: '30000000',
+            removed_estimated_cost_micros: '5000000',
+            removed_unknown_credit: 25,
+            valuation_currency: 'CNY',
+            rule_version: 1,
+            state_version_after: 3,
+            operation: 'chargeback',
+            terminal_state: 'chargeback',
             debt_formed: 250,
             available_credit: 0,
             settlement_debt: 250,
@@ -626,5 +704,12 @@ describe('Admin Credit financial management', () => {
     assert.match(statusText, /chargeback/)
     assert.match(statusText, /1000/)
     assert.match(statusText, /250/)
+    assert.match(statusText, /Consumed available Credit.*750/)
+    assert.match(statusText, /Exact value removed.*30,000,000/)
+    assert.match(statusText, /Estimated value removed.*5,000,000/)
+    assert.match(statusText, /Unknown Credit removed.*25/)
+    assert.match(statusText, /Valuation currency.*CNY/)
+    assert.match(statusText, /Rule and state version.*1\/3/)
+    assert.match(statusText, /Terminal state.*chargeback/)
   })
 })

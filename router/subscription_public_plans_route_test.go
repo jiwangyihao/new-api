@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
@@ -19,6 +20,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
+
+var subscriptionPublicPlansRouteTestDBSequence atomic.Uint64
 
 type subscriptionPlansPublicRouteResponse struct {
 	Success bool `json:"success"`
@@ -169,7 +172,7 @@ func setupSubscriptionPublicPlansRouteTestDB(t *testing.T) *gorm.DB {
 	common.RedisEnabled = false
 	common.GlobalApiRateLimitEnable = false
 
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	dsn := fmt.Sprintf("file:%s_%d?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"), subscriptionPublicPlansRouteTestDBSequence.Add(1))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db

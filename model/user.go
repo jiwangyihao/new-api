@@ -915,10 +915,10 @@ func transactionWithUserSettingCASRetry(run func(*gorm.DB) error) error {
 		}
 		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
 	}
-	if lastErr != nil {
-		return lastErr
+	if isRetryableUserSettingMutationError(lastErr) {
+		return ErrUserSettingCASConflict
 	}
-	return ErrUserSettingCASConflict
+	return lastErr
 }
 
 // MutateUserSetting atomically merges one settings change and synchronizes the cache.

@@ -231,10 +231,304 @@ func TestCreditValuationRequestPreConsumeRemovesMovingAverageCost(t *testing.T) 
 	require.Zero(t, record.DebtFormedCredit)
 	require.Equal(t, subscription.Id, record.ValuationSubscriptionId)
 	require.Equal(t, int64(8_000_000), record.DeductedExactCostMicros)
+
 	require.Zero(t, record.DeductedEstimatedCostMicros)
 	require.Zero(t, record.DeductedUnknownCredit)
 	require.Equal(t, CreditValuationRuleVersion, record.ValuationRuleVersion)
 	require.Equal(t, int64(1), record.SettlementVersion)
+}
+func TestCreditOrderRecoveryUsesImmutablePurchaseFactsAndTerminalReplay(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	require.NoError(t, db.AutoMigrate(&TopUp{}, &InvitationRewardEvent{}, &InvitationCommissionRecord{}))
+	user, _, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderStripe)
+	purchase := completeCreditValuationOrder(t, db, &order)
+
+	capturedAt := common.GetTimestamp()
+	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+		_, err := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
+			UserId: user.Id, GrossCredit: 1_000, IdempotencyKey: "credit-recovery-mixed-ingress",
+			SourceType: CreditBalanceLedgerSourceAdminAdjustment, SourceId: 91_099,
+			Type: CreditBalanceLedgerTypeAdminIncrease, TargetPlanId: creditPlan.Id,
+			TargetPlanSnapshot: &creditPlan, Reason: "second exact ingress",
+			ValuationSource: &CreditValuationSourceSnapshot{
+				SourcePriceMicros: 80_000_000, SourcePlanCredit: 1_000, GrossCredit: 1_000,
+				SourceCurrency: "CNY", ValuationCurrency: "CNY", RuleVersion: CreditValuationRuleVersion,
+				FXRateSnapshot: &CreditFXRateSnapshot{
+					SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1,
+					CapturedAt: capturedAt, Direction: CreditFXDirectionIdentity,
+				},
+			},
+		})
+		return err
+	}))
+
+	var purchaseLedger CreditBalanceLedger
+	require.NoError(t, db.First(&purchaseLedger, purchase.CreditBalance.LedgerId).Error)
+	originalSnapshot := order.EntitlementSnapshot
+	require.NoError(t, db.Model(&SubscriptionOrder{}).Where("id = ?", order.Id).Updates(map[string]any{
+		"credit_grant_amount": int64(1), "credit_target_plan_id": creditPlan.Id + 99,
+		"entitlement_snapshot": `{"corrupted":true}`,
+	}).Error)
+
+	request := SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderStripe,
+		RecoveryType: SubscriptionOrderRecoveryRefund, ProviderPayload: `{"event":"refund-v1"}`,
+		OperatorUserId: 91_070, Reason: "provider refund immutable facts",
+	}
+	first, err := RecoverSubscriptionOrder(request)
+	require.NoError(t, err)
+	require.False(t, first.Replayed)
+	require.Equal(t, int64(1_000), first.GrossCredit)
+	require.Equal(t, int64(1_000), first.AvailableCredit)
+
+	var state CreditValuationState
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&state).Error)
+	require.Equal(t, int64(1_000), state.AvailableCredit)
+	require.Equal(t, int64(60_000_000), state.ExactCostMicros)
+	require.Equal(t, int64(3), state.StateVersion)
+
+	var recoveryLedger CreditBalanceLedger
+	require.NoError(t, db.First(&recoveryLedger, first.LedgerId).Error)
+	require.Equal(t, originalSnapshot, recoveryLedger.SourceSnapshot)
+	require.Equal(t, purchaseLedger.SourcePriceMicros, recoveryLedger.SourcePriceMicros)
+	require.Equal(t, purchaseLedger.SourcePlanCredit, recoveryLedger.SourcePlanCredit)
+	require.Equal(t, purchaseLedger.FxSourceCurrency, recoveryLedger.FxSourceCurrency)
+	require.Equal(t, purchaseLedger.FxRateNumerator, recoveryLedger.FxRateNumerator)
+	require.Equal(t, purchaseLedger.FxRateDenominator, recoveryLedger.FxRateDenominator)
+	require.Equal(t, purchaseLedger.FxCapturedAt, recoveryLedger.FxCapturedAt)
+	require.Equal(t, purchaseLedger.FxDirection, recoveryLedger.FxDirection)
+	require.Equal(t, int64(60_000_000), recoveryLedger.ValuationGrossCostMicros)
+	require.NotEmpty(t, recoveryLedger.ParameterFingerprint)
+
+	replay, err := RecoverSubscriptionOrder(request)
+	require.NoError(t, err)
+	require.True(t, replay.Replayed)
+	require.Equal(t, first.LedgerId, replay.LedgerId)
+	var replayState CreditValuationState
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&replayState).Error)
+	var replayLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&replayLedgerCount).Error)
+	payloadConflict := request
+	payloadConflict.ProviderPayload = `{"event":"refund-v2"}`
+	conflicted, err := RecoverSubscriptionOrder(payloadConflict)
+	require.Nil(t, conflicted)
+	require.ErrorIs(t, err, ErrSubscriptionOrderRecoveryConflict)
+	var conflictState CreditValuationState
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&conflictState).Error)
+	require.Equal(t, replayState, conflictState)
+	var conflictLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&conflictLedgerCount).Error)
+	require.Equal(t, replayLedgerCount, conflictLedgerCount)
+
+	reasonConflict := request
+	reasonConflict.Reason = "different recovery facts"
+	conflicted, err = RecoverSubscriptionOrder(reasonConflict)
+	require.Nil(t, conflicted)
+	require.ErrorIs(t, err, ErrSubscriptionOrderRecoveryConflict)
+
+	chargebackRequest := request
+	chargebackRequest.RecoveryType = SubscriptionOrderRecoveryChargeback
+	chargebackRequest.Reason = "provider chargeback terminal"
+	chargeback, err := RecoverSubscriptionOrder(chargebackRequest)
+	require.NoError(t, err)
+	require.True(t, chargeback.Replayed)
+	require.Equal(t, common.TopUpStatusChargeback, chargeback.Status)
+	chargebackReplay, err := RecoverSubscriptionOrder(chargebackRequest)
+	require.NoError(t, err)
+	require.True(t, chargebackReplay.Replayed)
+	require.Equal(t, first.LedgerId, chargebackReplay.LedgerId)
+	chargebackConflict := chargebackRequest
+	chargebackConflict.Reason = "different chargeback facts"
+	conflicted, err = RecoverSubscriptionOrder(chargebackConflict)
+	require.Nil(t, conflicted)
+	require.ErrorIs(t, err, ErrSubscriptionOrderRecoveryConflict)
+	var chargebackConflictState CreditValuationState
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&chargebackConflictState).Error)
+	require.Equal(t, state, chargebackConflictState)
+	var chargebackConflictLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&chargebackConflictLedgerCount).Error)
+	require.Equal(t, int64(1), chargebackConflictLedgerCount)
+
+	var recoveryCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryCount).Error)
+	require.Equal(t, int64(1), recoveryCount)
+	require.NoError(t, db.Where("user_subscription_id = ?", purchase.CreditBalance.UserSubscriptionId).First(&state).Error)
+	require.Equal(t, int64(3), state.StateVersion)
+}
+
+func TestNativeCreditOrderRecoveryRejectsMissingPurchaseLedger(t *testing.T) {
+	db := setupCreditValuationTracerTestDB(t)
+	_, _, creditPlan, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+	now := GetDBTimestamp()
+	balance := UserSubscription{
+		UserId: order.UserId, PlanId: creditPlan.Id, EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status: SubscriptionStatusActive, TokenLimit: order.CreditGrantAmount,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+		StartTime: now, CreatedAt: now, UpdatedAt: now,
+	}
+	require.NoError(t, db.Create(&balance).Error)
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: balance.Id, UserId: order.UserId, Currency: "CNY",
+		AvailableCredit: order.CreditGrantAmount, ExactCostMicros: 40_000_000,
+		RuleVersion: CreditValuationRuleVersion, StateVersion: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error)
+	require.NoError(t, db.Model(&SubscriptionOrder{}).Where("id = ?", order.Id).Updates(map[string]any{
+		"status": common.TopUpStatusSuccess, "complete_time": now, "fulfilled_subscription_id": balance.Id,
+	}).Error)
+
+	var subscriptionBefore UserSubscription
+	require.NoError(t, db.First(&subscriptionBefore, balance.Id).Error)
+	var stateBefore CreditValuationState
+	require.NoError(t, db.First(&stateBefore, balance.Id).Error)
+
+	recovered, err := RecoverSubscriptionOrder(SubscriptionOrderRecoveryRequest{
+		TradeNo: order.TradeNo, ExpectedPaymentProvider: PaymentProviderBalance,
+		RecoveryType: SubscriptionOrderRecoveryRefund, Reason: "missing purchase ledger must fail closed",
+	})
+	require.Nil(t, recovered)
+	require.ErrorIs(t, err, ErrSubscriptionOrderSnapshotMismatch)
+
+	var persistedOrder SubscriptionOrder
+	require.NoError(t, db.First(&persistedOrder, order.Id).Error)
+	require.Equal(t, common.TopUpStatusSuccess, persistedOrder.Status)
+	require.Zero(t, persistedOrder.RecoveryLedgerID)
+	var subscriptionAfter UserSubscription
+	require.NoError(t, db.First(&subscriptionAfter, balance.Id).Error)
+	require.Equal(t, subscriptionBefore, subscriptionAfter)
+	var stateAfter CreditValuationState
+	require.NoError(t, db.First(&stateAfter, balance.Id).Error)
+	require.Equal(t, stateBefore, stateAfter)
+	var recoveryLedgerCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).
+		Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
+		Count(&recoveryLedgerCount).Error)
+	require.Zero(t, recoveryLedgerCount)
+}
+
+func TestCreditOrderRecoveryCancelsOnlyMatchingInvitationReward(t *testing.T) {
+	tests := []struct {
+		name         string
+		recoveryType string
+		wantStatus   string
+	}{
+		{name: "refund", recoveryType: SubscriptionOrderRecoveryRefund, wantStatus: common.TopUpStatusRefunded},
+		{name: "chargeback", recoveryType: SubscriptionOrderRecoveryChargeback, wantStatus: common.TopUpStatusChargeback},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db := setupCreditValuationTracerTestDB(t)
+			require.NoError(t, db.AutoMigrate(&TopUp{}, &InvitationRewardEvent{}, &InvitationCommissionRecord{}))
+			user, _, _, targetOrder := seedCreditValuationOrder(t, db, PaymentProviderStripe)
+			inviter := User{Id: 91_090, Username: "credit-recovery-inviter", Status: common.UserStatusEnabled, AffCode: "credit-recovery-inviter-aff"}
+			require.NoError(t, db.Create(&inviter).Error)
+			require.NoError(t, db.Model(&User{}).Where("id = ?", user.Id).Update("inviter_id", inviter.Id).Error)
+
+			targetPurchase := completeCreditValuationOrder(t, db, &targetOrder)
+			otherOrder := targetOrder
+			otherOrder.Id++
+			otherOrder.TradeNo += "-other"
+			require.NoError(t, db.Create(&otherOrder).Error)
+			otherPurchase := completeCreditValuationOrder(t, db, &otherOrder)
+
+			var generatedRewardCount int64
+			require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&generatedRewardCount).Error)
+			require.Zero(t, generatedRewardCount, "Credit orders must not create invitation income")
+
+			now := common.GetTimestamp()
+			require.NoError(t, db.Create(&[]InvitationRewardEvent{
+				{
+					Id: 91_092, InviterId: inviter.Id, InviteeId: user.Id,
+					SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: targetOrder.Id,
+					SourceOrderId: targetOrder.Id, SourceSubscriptionId: targetPurchase.CreditBalance.UserSubscriptionId,
+					SourceAmountCents: 4_000, SourceCurrency: "CNY", EventStartTime: now, EventEndTime: now + 3_600,
+					Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now,
+				},
+				{
+					Id: 91_093, InviterId: inviter.Id, InviteeId: user.Id,
+					SourceType: InvitationRewardEventSourceSubscriptionOrder, SourceId: otherOrder.Id,
+					SourceOrderId: otherOrder.Id, SourceSubscriptionId: otherPurchase.CreditBalance.UserSubscriptionId,
+					SourceAmountCents: 4_000, SourceCurrency: "CNY", EventStartTime: now, EventEndTime: now + 3_600,
+					Status: InvitationRewardEventStatusActive, CreatedAt: now, UpdatedAt: now,
+				},
+			}).Error)
+			var targetReward InvitationRewardEvent
+			require.NoError(t, db.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, targetOrder.Id).First(&targetReward).Error)
+			var otherRewardBefore InvitationRewardEvent
+			require.NoError(t, db.Where("source_type = ? AND source_id = ?", InvitationRewardEventSourceSubscriptionOrder, otherOrder.Id).First(&otherRewardBefore).Error)
+			var rewardCountBefore int64
+			require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&rewardCountBefore).Error)
+			require.Equal(t, int64(2), rewardCountBefore)
+			var commissionCountBefore int64
+			require.NoError(t, db.Model(&InvitationCommissionRecord{}).Count(&commissionCountBefore).Error)
+			require.Zero(t, commissionCountBefore)
+			paidSummary, err := GetAdminInvitationPaidSubscriptionsSummary(AdminAnalyticsQuery{
+				SnapshotAt: now + 1, EndTimestamp: now + 1, RangeMode: AdminAnalyticsRangeModeAllHistory,
+				UserIDs: []int{user.Id}, Currency: "CNY", Limit: 20,
+			})
+			require.NoError(t, err)
+			require.Zero(t, paidSummary.Data.Summary.PaidInviteeCount)
+			require.Empty(t, paidSummary.Data.Summary.RecognizedInvitationPaidAmountByCurrency)
+
+			request := SubscriptionOrderRecoveryRequest{
+				TradeNo: targetOrder.TradeNo, ExpectedUserId: user.Id,
+				ExpectedPaymentProvider: PaymentProviderStripe, RecoveryType: test.recoveryType,
+				ProviderPayload: `{"event":"isolated-credit-recovery"}`,
+				OperatorUserId:  91_091, Reason: "isolated Credit order recovery",
+			}
+			first, err := RecoverSubscriptionOrder(request)
+			require.NoError(t, err)
+			require.False(t, first.Replayed)
+			require.Equal(t, test.wantStatus, first.Status)
+
+			require.NoError(t, db.First(&targetReward, targetReward.Id).Error)
+			require.Equal(t, InvitationRewardEventStatusCancelled, targetReward.Status)
+			require.Equal(t, request.Reason, targetReward.Reason)
+			var otherRewardAfter InvitationRewardEvent
+			require.NoError(t, db.First(&otherRewardAfter, otherRewardBefore.Id).Error)
+			require.Equal(t, otherRewardBefore, otherRewardAfter)
+
+			type recoverySnapshot struct {
+				Order               SubscriptionOrder
+				TargetReward        InvitationRewardEvent
+				OtherReward         InvitationRewardEvent
+				Subscription        UserSubscription
+				Valuation           CreditValuationState
+				LedgerCount         int64
+				RecoveryLedgerCount int64
+				RewardCount         int64
+				CommissionCount     int64
+			}
+			capture := func() recoverySnapshot {
+				var snapshot recoverySnapshot
+				require.NoError(t, db.First(&snapshot.Order, targetOrder.Id).Error)
+				require.NoError(t, db.First(&snapshot.TargetReward, targetReward.Id).Error)
+				require.NoError(t, db.First(&snapshot.OtherReward, otherRewardBefore.Id).Error)
+				require.NoError(t, db.First(&snapshot.Subscription, targetPurchase.CreditBalance.UserSubscriptionId).Error)
+				require.NoError(t, db.First(&snapshot.Valuation, targetPurchase.CreditBalance.UserSubscriptionId).Error)
+				require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&snapshot.LedgerCount).Error)
+				require.NoError(t, db.Model(&CreditBalanceLedger{}).Where("source_type = ? AND source_id = ?", CreditBalanceLedgerSourceSubscriptionOrderRecovery, targetOrder.Id).Count(&snapshot.RecoveryLedgerCount).Error)
+				require.NoError(t, db.Model(&InvitationRewardEvent{}).Count(&snapshot.RewardCount).Error)
+				require.NoError(t, db.Model(&InvitationCommissionRecord{}).Count(&snapshot.CommissionCount).Error)
+				return snapshot
+			}
+
+			beforeReplay := capture()
+			require.Equal(t, int64(1), beforeReplay.RecoveryLedgerCount)
+			require.Equal(t, rewardCountBefore, beforeReplay.RewardCount)
+			require.Equal(t, commissionCountBefore, beforeReplay.CommissionCount)
+			replayed, err := RecoverSubscriptionOrder(request)
+			require.NoError(t, err)
+			require.True(t, replayed.Replayed)
+			require.Equal(t, first.LedgerId, replayed.LedgerId)
+			require.Equal(t, beforeReplay, capture())
+		})
+	}
 }
 
 func TestCreditValuationRequestFinalizesSameTargetIdempotently(t *testing.T) {

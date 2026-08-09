@@ -368,17 +368,21 @@ func recoverStripeSubscriptionOrder(ctx context.Context, event stripe.Event, rec
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 财务终态不属于本地订阅订单 event_type=%s client_ip=%s", event.Type, callerIp))
 		return nil
 	}
+	providerRecoveryKey := "stripe:order:" + tradeNo
+	if chargeID != "" {
+		providerRecoveryKey = "stripe:charge:" + chargeID
+	}
 	payload := common.GetJsonString(map[string]any{
 		"event_id": event.ID, "event_type": event.Type,
+		"provider_charge_id":       chargeID,
 		"provider_transaction_id":  identity.TransactionID,
 		"provider_invoice_id":      identity.InvoiceID,
 		"provider_subscription_id": identity.SubscriptionID,
 	})
 	if _, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
 		TradeNo: tradeNo, ExpectedPaymentProvider: model.PaymentProviderStripe,
-		RecoveryType: recoveryType, ProviderPayload: payload,
-		Reason:             "Stripe provider " + recoveryType,
-		CreditRecoveryOnly: true,
+		RecoveryType: recoveryType, ProviderPayload: payload, ProviderRecoveryKey: providerRecoveryKey,
+		Reason: "Stripe provider " + recoveryType, CreditRecoveryOnly: true,
 	}); err != nil {
 		if errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable) {
 			logger.LogInfo(ctx, fmt.Sprintf("Stripe 财务终态无需 Credit 回收 trade_no=%s event_type=%s", tradeNo, event.Type))

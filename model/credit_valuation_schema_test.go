@@ -27,9 +27,11 @@ func TestCreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable(t *testing.
 		require.True(t, db.Migrator().HasColumn(&SubscriptionPreConsumeRecord{}, column), column)
 	}
 	for _, column := range []string{
-		"parameter_fingerprint", "target_plan_id", "source_plan_id", "source_duration_unit",
-		"source_duration_value", "source_quota_reset_period", "source_quota_reset_custom_seconds",
-		"valuation_source_price_micros", "valuation_credit_basis",
+		"parameter_fingerprint", "source_key", "source_status", "operation", "terminal_state",
+		"consumed_available_credit", "settlement_debt_formed", "removed_exact_cost_micros",
+		"removed_estimated_cost_micros", "removed_unknown_credit", "target_plan_id", "source_plan_id",
+		"source_duration_unit", "source_duration_value", "source_quota_reset_period",
+		"source_quota_reset_custom_seconds", "valuation_source_price_micros", "valuation_credit_basis",
 		"valuation_unit_value_numerator_micros", "valuation_unit_value_denominator",
 		"valuation_currency", "valuation_gross_cost_micros", "fx_rate_denominator",
 	} {

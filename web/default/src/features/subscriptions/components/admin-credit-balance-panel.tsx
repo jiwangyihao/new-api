@@ -17,9 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useMemo, useRef, useState } from 'react'
+import type { TFunction } from 'i18next'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { formatAdminMoneyAmount } from '@/features/admin-analytics/lib/format'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +46,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
+import { formatAdminMoneyAmount } from '@/features/admin-analytics/lib/format'
 import {
   adjustUserCreditBalance,
   getAdminCreditBalanceLedger,
@@ -81,16 +82,16 @@ function isEligibleAfterSalesPlan(record: PlanRecord): boolean {
   const priceMicros = plan.price_amount_micros?.trim()
   return Boolean(
     plan.enabled &&
-      (plan.entitlement_type ?? 'timed') === 'timed' &&
-      !plan.is_trial &&
-      !plan.invite_trial &&
-      priceMicros &&
-      /^\d+$/.test(priceMicros) &&
-      BigInt(priceMicros) > 0n &&
-      Number.isSafeInteger(plan.monthly_token_limit) &&
-      Number(plan.monthly_token_limit) > 0 &&
-      plan.unlimited_purchase_enabled === true &&
-      plan.currency?.trim()
+    (plan.entitlement_type ?? 'timed') === 'timed' &&
+    !plan.is_trial &&
+    !plan.invite_trial &&
+    priceMicros &&
+    /^\d+$/.test(priceMicros) &&
+    BigInt(priceMicros) > 0n &&
+    Number.isSafeInteger(plan.monthly_token_limit) &&
+    Number(plan.monthly_token_limit) > 0 &&
+    plan.unlimited_purchase_enabled === true &&
+    plan.currency?.trim()
   )
 }
 
@@ -100,7 +101,33 @@ function isValidAdjustmentAmount(value: string): boolean {
   return /^[1-9]\d*$/.test(value) && BigInt(value) <= maximumAdjustmentAmount
 }
 
-function adjustmentErrorKey(code: string | undefined): string {
+export function creditBalanceAdjustmentErrorKey(
+  code: string | undefined,
+  operation: CreditBalanceAdjustmentOperation
+): string {
+  if (operation === 'decrease') {
+    switch (code) {
+      case 'credit_valuation_plan_required':
+      case 'credit_valuation_plan_ineligible':
+        return 'Credit decrease must not include a plan.'
+      case 'credit_valuation_idempotency_mismatch':
+        return 'This Credit decrease no longer matches its retry key. Change a fact and try again.'
+      case 'credit_valuation_unsupported_currency':
+        return 'The valuation currency is not supported for this Credit decrease.'
+      case 'credit_valuation_invalid_fx':
+        return 'The frozen FX snapshot is unavailable or invalid.'
+      case 'credit_valuation_overflow':
+        return 'The Credit amount is too large to value safely.'
+      case 'credit_valuation_state_missing':
+      case 'credit_valuation_state_mismatch':
+        return 'The Credit valuation state changed. Refresh and try again.'
+      case 'credit_valuation_migration_not_ready':
+        return 'Credit operational valuation is not ready yet.'
+      default:
+        return 'The Credit decrease could not be completed safely.'
+    }
+  }
+
   switch (code) {
     case 'credit_valuation_plan_required':
       return 'Select an eligible after-sales grant plan.'
@@ -123,10 +150,71 @@ function adjustmentErrorKey(code: string | undefined): string {
       return 'The after-sales grant could not be completed safely.'
   }
 }
+export function subscriptionOrderRecoveryErrorKey(
+  code: string | undefined
+): string {
+  switch (code) {
+    case 'subscription_order_recovery_invalid':
+      return 'Enter a valid order, financial terminal, and reason.'
+    case 'subscription_order_not_found':
+      return 'The subscription order was not found for this user.'
+    case 'subscription_order_status_invalid':
+      return 'The subscription order is not eligible for financial recovery.'
+    case 'subscription_order_snapshot_mismatch':
+      return 'The frozen subscription order facts do not match.'
+    case 'subscription_order_payment_provider_mismatch':
+      return 'The payment provider does not match the subscription order.'
+    case 'subscription_order_provider_identity_ambiguous':
+      return 'The provider identity matches more than one subscription order.'
+    case 'subscription_order_credit_recovery_not_applicable':
+      return 'The subscription order has no Credit to recover.'
+    case 'subscription_order_recovery_conflict':
+    case 'credit_valuation_idempotency_mismatch':
+      return 'This financial terminal no longer matches the committed recovery facts.'
+    case 'credit_valuation_state_missing':
+    case 'credit_valuation_state_mismatch':
+      return 'The Credit valuation state changed. Refresh and try again.'
+    case 'credit_valuation_migration_not_ready':
+      return 'Credit operational valuation is not ready yet.'
+    default:
+      return 'The financial terminal could not be completed safely.'
+  }
+}
+
 
 function formatMicrosCount(value: string): string {
   if (!/^-?\d+$/.test(value)) return value
   return new Intl.NumberFormat().format(BigInt(value))
+}
+
+interface CreditOutflowResultFacts {
+  consumed_available_credit: number
+  debt_formed: number
+  removed_exact_cost_micros: string
+  removed_estimated_cost_micros: string
+  removed_unknown_credit: number
+  valuation_currency: string
+  rule_version: number
+  state_version_after: number
+  terminal_state: string
+}
+
+function formatCreditOutflowResult(
+  t: TFunction,
+  introduction: string,
+  facts: CreditOutflowResultFacts
+): string {
+  return [
+    introduction,
+    `${t('Consumed available Credit')}: ${facts.consumed_available_credit}.`,
+    `${t('Settlement debt formed')}: ${facts.debt_formed}.`,
+    `${t('Exact value removed')}: ${formatMicrosCount(facts.removed_exact_cost_micros)} ${t('micros')}.`,
+    `${t('Estimated value removed')}: ${formatMicrosCount(facts.removed_estimated_cost_micros)} ${t('micros')}.`,
+    `${t('Unknown Credit removed')}: ${facts.removed_unknown_credit}.`,
+    `${t('Valuation currency')}: ${facts.valuation_currency || '-'}.`,
+    `${t('Rule and state version')}: ${facts.rule_version}/${facts.state_version_after}.`,
+    `${t('Terminal state')}: ${t(facts.terminal_state || 'Unknown')}.`,
+  ].join(' ')
 }
 export function AdminCreditBalancePanel({
   userId,
@@ -233,7 +321,9 @@ export function AdminCreditBalancePanel({
       })
       if (factsVersion !== adjustmentFactsVersion.current) return
       if (!response.success || !response.data) {
-        toast.error(t(adjustmentErrorKey(response.code)))
+        toast.error(
+          t(creditBalanceAdjustmentErrorKey(response.code, 'increase'))
+        )
         return
       }
       setAdjustmentPreview(response.data)
@@ -272,19 +362,32 @@ export function AdminCreditBalancePanel({
         reason: adjustmentReason.trim(),
       })
       if (!response.success || !response.data) {
-        toast.error(t(adjustmentErrorKey(response.code)))
+        toast.error(
+          t(creditBalanceAdjustmentErrorKey(response.code, operation))
+        )
         return
       }
       const balance = response.data.credit_balance
-      const message = response.data.replayed
-        ? t('The after-sales grant was safely replayed without adding Credit again.')
-        : t(
-            'After-sales grant completed. Available: {{available}}, debt offset: {{debtOffset}}.',
-            {
-              available: balance.available_credit,
-              debtOffset: response.data.debt_offset,
-            }
-          )
+      const message =
+        operation === 'decrease'
+          ? formatCreditOutflowResult(
+              t,
+              response.data.replayed
+                ? t('Credit decrease replayed without another withdrawal.')
+                : t('Credit decrease committed.'),
+              response.data
+            )
+          : response.data.replayed
+            ? t(
+                'The after-sales grant was safely replayed without adding Credit again.'
+              )
+            : t(
+                'After-sales grant completed. Available: {{available}}, debt offset: {{debtOffset}}.',
+                {
+                  available: balance.available_credit,
+                  debtOffset: response.data.debt_offset,
+                }
+              )
       setStatusMessage(message)
       toast.success(message)
       setAmount('')
@@ -312,7 +415,7 @@ export function AdminCreditBalancePanel({
         tradeNo.trim()
       )
       if (!response.success || !response.data) {
-        toast.error(response.message || t('Request failed'))
+        toast.error(t(subscriptionOrderRecoveryErrorKey(response.code)))
         return
       }
       setRecoveryPreview(response.data)
@@ -342,19 +445,19 @@ export function AdminCreditBalancePanel({
         reason: recoveryReason.trim(),
       })
       if (!response.success || !response.data) {
-        toast.error(response.message || t('Request failed'))
+        toast.error(t(subscriptionOrderRecoveryErrorKey(response.code)))
         return
       }
-      const message = response.data.replayed
-        ? t('Financial terminal replayed without another Credit withdrawal.')
-        : t(
-            'Order marked {{status}} and {{credit}} Credit withdrawn. Settlement debt: {{debt}}.',
-            {
+      const message = formatCreditOutflowResult(
+        t,
+        response.data.replayed
+          ? t('Financial terminal replayed without another Credit withdrawal.')
+          : t('Order marked {{status}} and {{credit}} Credit withdrawn.', {
               status: t(response.data.status),
               credit: response.data.gross_credit,
-              debt: response.data.settlement_debt,
-            }
-          )
+            }),
+        response.data
+      )
       setStatusMessage(message)
       toast.success(message)
       setTradeNo('')
@@ -469,7 +572,8 @@ export function AdminCreditBalancePanel({
                     {t('Plan price')}:{' '}
                     {formatAdminMoneyAmount({
                       amount: selectedPlan.price_amount,
-                      amount_micros: selectedPlan.price_amount_micros ?? undefined,
+                      amount_micros:
+                        selectedPlan.price_amount_micros ?? undefined,
                       currency: selectedPlan.currency,
                     })}
                   </span>
@@ -484,7 +588,9 @@ export function AdminCreditBalancePanel({
             ) : null}
             {adjustmentPreview ? (
               <Alert className='sm:col-span-2'>
-                <AlertTitle>{t('Authoritative operational value preview')}</AlertTitle>
+                <AlertTitle>
+                  {t('Authoritative operational value preview')}
+                </AlertTitle>
                 <AlertDescription className='grid grid-cols-1 gap-1 sm:grid-cols-2'>
                   <span>
                     {t('Gross Credit')}: {adjustmentPreview.gross_credit}
@@ -519,7 +625,8 @@ export function AdminCreditBalancePanel({
                     {t('Source currency')}: {adjustmentPreview.source_currency}
                   </span>
                   <span>
-                    {t('Valuation currency')}: {adjustmentPreview.valuation_currency}
+                    {t('Valuation currency')}:{' '}
+                    {adjustmentPreview.valuation_currency}
                   </span>
                   <span>
                     {t('FX snapshot')}: {adjustmentPreview.fx_rate_numerator}/
@@ -531,7 +638,8 @@ export function AdminCreditBalancePanel({
                     {t('Valuation confidence')}: {adjustmentPreview.confidence}
                   </span>
                   <span>
-                    {t('Rule and state version')}: {adjustmentPreview.rule_version}/
+                    {t('Rule and state version')}:{' '}
+                    {adjustmentPreview.rule_version}/
                     {adjustmentPreview.state_version_after}
                   </span>
                 </AlertDescription>

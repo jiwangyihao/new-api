@@ -841,7 +841,7 @@ func TestCreditBalanceProductionMigrationUpgradesLegacySQLiteSchema(t *testing.T
 	requiredColumns := map[string][]string{
 		"subscription_plans":                     {"entitlement_type", "singleton_key", "credit_balance_configured", "credit_balance_purchase_enabled", "credit_balance_redemption_enabled", "credit_balance_conversion_enabled", "timed_conversion_enabled", "conversion_guard_version"},
 		"user_subscriptions":                     {"entitlement_type", "singleton_key", "last_granted_at", "last_grant_credit_snapshot", "last_grant_time_source", "last_grant_source", "conversion_id", "converted_to_subscription_id", "converted_at"},
-		"subscription_orders":                    {"credit_grant_amount", "credit_target_plan_id", "fulfilled_subscription_id", "recovery_type", "recovery_time", "recovery_ledger_id", "recovery_reason", "provider_transaction_id", "provider_order_id", "provider_invoice_id", "provider_subscription_id", "entitlement_snapshot"},
+		"subscription_orders":                    {"credit_grant_amount", "credit_target_plan_id", "fulfilled_subscription_id", "recovery_type", "recovery_time", "recovery_ledger_id", "recovery_reason", "recovery_fingerprint", "provider_transaction_id", "provider_order_id", "provider_invoice_id", "provider_subscription_id", "entitlement_snapshot"},
 		"redemptions":                            {"type", "plan_id", "amount_cents", "currency", "fulfillment_mode", "fulfillment_snapshot", "fulfillment_subscription_id"},
 		"credit_balance_ledgers":                 {"idempotency_key", "source_type", "source_id", "parameter_fingerprint", "debt_offset", "debt_formed", "available_credit_after", "settlement_debt_after"},
 		"credit_balance_adjustments":             {"idempotency_key", "parameter_fingerprint", "ledger_id"},
@@ -1130,7 +1130,7 @@ func TestCreditBalanceProductionMigrationExternalDatabases(t *testing.T) {
 			}{
 				{table: "subscription_plans", model: &SubscriptionPlan{}, columns: []string{"entitlement_type", "singleton_key", "credit_balance_configured"}},
 				{table: "user_subscriptions", model: &UserSubscription{}, columns: []string{"entitlement_type", "singleton_key", "last_granted_at", "conversion_id"}},
-				{table: "subscription_orders", model: &SubscriptionOrder{}, columns: []string{"credit_grant_amount", "fulfilled_subscription_id", "recovery_ledger_id"}},
+				{table: "subscription_orders", model: &SubscriptionOrder{}, columns: []string{"credit_grant_amount", "fulfilled_subscription_id", "recovery_ledger_id", "recovery_fingerprint"}},
 				{table: "redemptions", model: &Redemption{}, columns: []string{"fulfillment_mode", "fulfillment_subscription_id"}},
 				{table: "credit_balance_ledgers", model: &CreditBalanceLedger{}, columns: []string{"idempotency_key", "source_type", "source_id"}},
 				{table: "subscription_conversions", model: &SubscriptionConversion{}, columns: []string{"idempotency_key", "source_subscription_id", "ledger_id"}},

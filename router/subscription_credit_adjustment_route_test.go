@@ -6,10 +6,12 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
@@ -23,7 +25,7 @@ func setupCreditAdjustmentRoute(t *testing.T) (*gin.Engine, string, int) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	db := setupSubscriptionPublicPlansRouteTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.CreditBalanceLedger{}, &model.CreditBalanceAdjustment{}, &model.InvitationRewardEvent{}, &model.Log{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.SubscriptionOrder{}, &model.CreditBalanceLedger{}, &model.CreditBalanceAdjustment{}, &model.CreditValuationState{}, &model.CreditValuationMigration{}, &model.InvitationRewardEvent{}, &model.Log{}))
 	accessToken := "credit-adjustment-admin-token"
 	const adminID = 9961
 	const userID = 9962
@@ -74,11 +76,9 @@ func TestAdminCreditAdjustmentRouteCreatesDebtThenIncreaseOffsetsIt(t *testing.T
 	assert.Contains(t, decrease.Body.String(), `"settlement_debt":300`)
 	var balance model.UserSubscription
 	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
-	now := common.GetTimestamp()
-	require.NoError(t, model.DB.Create(&model.CreditValuationState{
-		UserSubscriptionId: balance.Id, UserId: userID, Currency: "CNY",
-		RuleVersion: model.CreditValuationRuleVersion, CreatedAt: now, UpdatedAt: now,
-	}).Error)
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", balance.Id).First(&state).Error)
+	assert.Zero(t, state.AvailableCredit)
 	assert.Equal(t, int64(0), balance.TokenLimit)
 	assert.Equal(t, int64(300), balance.TokenUsed)
 
@@ -170,8 +170,10 @@ func TestCreditAdjustmentRouteRequiresAdminAuthentication(t *testing.T) {
 func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
 	optionCode := "epay-admin-recovery-option"
+	priceMicros := int64(40_000_000)
 	optionPlan := model.SubscriptionPlan{
 		Id: 9964, Title: "Epay recovery option", EntitlementType: model.SubscriptionEntitlementTimed,
+		PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY",
 		MonthlyTokenLimit: 1000, Enabled: true, BusinessCode: &optionCode,
 	}
 	require.NoError(t, model.DB.Create(&optionPlan).Error)
@@ -189,10 +191,31 @@ func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
 		CompleteTime: common.GetTimestamp(), EntitlementSnapshot: snapshotJSON,
 	}
 	require.NoError(t, model.DB.Create(&order).Error)
-	require.NoError(t, model.DB.Create(&model.UserSubscription{
+	balance := model.UserSubscription{
 		UserId: userID, PlanId: creditPlan.Id, EntitlementType: model.SubscriptionEntitlementCreditBalance,
 		Status: model.SubscriptionStatusActive, TokenLimit: 1000, TokenUsed: 250,
 		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+	}
+	require.NoError(t, model.DB.Create(&balance).Error)
+	now := common.GetTimestamp()
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: balance.Id, UserId: userID, Currency: "CNY", AvailableCredit: 750,
+		ExactCostMicros: 30_000_000, RuleVersion: model.CreditValuationRuleVersion, StateVersion: 2,
+		CreatedAt: now, UpdatedAt: now,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditBalanceLedger{
+		UserId: userID, UserSubscriptionId: balance.Id, Type: model.CreditBalanceLedgerTypePurchase,
+		IdempotencyKey: order.TradeNo, SourceType: model.CreditBalanceLedgerSourceSubscriptionOrder,
+		SourceId: order.Id, SourceKey: order.TradeNo, SourceStatus: common.TopUpStatusSuccess,
+		PlanId: optionPlan.Id, GrossCredit: 1000, NetCredit: 1000,
+		SourcePriceMicros: priceMicros, SourcePlanCredit: 1000, TargetPlanId: creditPlan.Id,
+		SourceSnapshot: snapshotJSON, ValuationCurrency: "CNY", ValuationGrossCostMicros: 40_000_000,
+		ValuationNetCostMicros: 40_000_000, ValuationConfidence: model.CreditValuationConfidenceExact,
+		ValuationRuleVersion: model.CreditValuationRuleVersion, ValuationStateVersionAfter: 1,
+		BalanceBefore: 0, BalanceAfter: 1000, AvailableCreditAfter: 1000, CreatedAt: now,
 	}).Error)
 
 	preview := performSubscriptionOrderRecoveryPreviewRouteRequest(engine, token, userID, order.TradeNo)
@@ -206,12 +229,25 @@ func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
 	require.Equal(t, http.StatusOK, first.Code, first.Body.String())
 	assert.Contains(t, first.Body.String(), `"replayed":false`)
 	assert.Contains(t, first.Body.String(), `"gross_credit":1000`)
+	assert.Contains(t, first.Body.String(), `"consumed_available_credit":750`)
+	assert.Contains(t, first.Body.String(), `"debt_formed":250`)
+	assert.Contains(t, first.Body.String(), `"removed_exact_cost_micros":"30000000"`)
+	assert.Contains(t, first.Body.String(), `"removed_estimated_cost_micros":"0"`)
+	assert.Contains(t, first.Body.String(), `"removed_unknown_credit":0`)
+	assert.Contains(t, first.Body.String(), `"valuation_currency":"CNY"`)
+	assert.Contains(t, first.Body.String(), `"rule_version":1`)
+	assert.Contains(t, first.Body.String(), `"state_version_after":3`)
+	assert.Contains(t, first.Body.String(), `"terminal_state":"refunded"`)
 	replay := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"verified Epay refund"}`)
 	require.Equal(t, http.StatusOK, replay.Code, replay.Body.String())
 	assert.Contains(t, replay.Body.String(), `"replayed":true`)
+	conflict := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo, `{"recovery_type":"refund","reason":"different refund facts"}`)
+	require.Equal(t, http.StatusOK, conflict.Code, conflict.Body.String())
+	assert.Contains(t, conflict.Body.String(), `"success":false`)
+	assert.Contains(t, conflict.Body.String(), `"code":"subscription_order_recovery_conflict"`)
+	assert.NotContains(t, conflict.Body.String(), `"code":"internal_error"`)
 
-	var balance model.UserSubscription
-	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	require.NoError(t, model.DB.First(&balance, balance.Id).Error)
 	assert.Equal(t, int64(1250), balance.TokenUsed)
 	require.NoError(t, model.DB.First(&order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusRefunded, order.Status)
@@ -221,6 +257,20 @@ func TestAdminSubscriptionOrderRecoveryRouteCompensatesEpayOnce(t *testing.T) {
 		Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).
 		Count(&recoveryLedgers).Error)
 	assert.Equal(t, int64(1), recoveryLedgers)
+	var recoveryLedger model.CreditBalanceLedger
+	require.NoError(t, model.DB.Where("source_type = ? AND source_id = ?", model.CreditBalanceLedgerSourceSubscriptionOrderRecovery, order.Id).First(&recoveryLedger).Error)
+	assert.Equal(t, "subscription_order_recovery:"+strconv.Itoa(order.Id), recoveryLedger.SourceKey)
+	assert.Equal(t, model.SubscriptionOrderRecoveryRefund, recoveryLedger.Operation)
+	assert.Equal(t, common.TopUpStatusRefunded, recoveryLedger.TerminalState)
+	assert.Equal(t, int64(750), recoveryLedger.ConsumedAvailableCredit)
+	assert.Equal(t, int64(250), recoveryLedger.SettlementDebtFormed)
+	assert.Equal(t, int64(30_000_000), recoveryLedger.RemovedExactCostMicros)
+	assert.Zero(t, recoveryLedger.RemovedEstimatedCostMicros)
+	assert.Zero(t, recoveryLedger.RemovedUnknownCredit)
+	assert.Equal(t, "CNY", recoveryLedger.ValuationCurrency)
+	assert.Equal(t, model.CreditValuationRuleVersion, recoveryLedger.ValuationRuleVersion)
+	assert.Equal(t, int64(3), recoveryLedger.ValuationStateVersionAfter)
+	assert.NotEmpty(t, recoveryLedger.ParameterFingerprint)
 }
 
 func TestAdminSubscriptionOrderRecoveryRouteValidatesAndRequiresAdmin(t *testing.T) {
@@ -386,6 +436,62 @@ func TestAdminCreditAdjustmentCommitRouteForwardsPlanAndReturnsAuthoritativeResu
 	assert.Equal(t, int64(1), ledgers)
 }
 
+func TestAdminCreditAdjustmentDecreaseRouteProjectsOutflowFactsAndReplay(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	planID := seedAdminCreditAdjustmentValuationRoute(t)
+	seed := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":1000,"plan_id":%d,"idempotency_key":"admin-outflow-projection-seed","reason":"seed mixed pool"}`,
+		planID,
+	))
+	require.Equal(t, http.StatusOK, seed.Code, seed.Body.String())
+	assert.Contains(t, seed.Body.String(), `"success":true`)
+
+	var balance model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", balance.Id).Updates(map[string]any{
+		"token_limit": int64(1_000), "token_used": int64(200),
+	}).Error)
+	require.NoError(t, model.DB.Model(&model.CreditValuationState{}).Where("user_subscription_id = ?", balance.Id).Updates(map[string]any{
+		"available_credit": int64(800), "exact_cost_micros": int64(24_000_000),
+		"estimated_cost_micros": int64(8_000_000), "unknown_credit": int64(200),
+	}).Error)
+
+	body := `{"operation":"decrease","amount":"250","idempotency_key":"admin-outflow-projection","reason":"recover mixed pool"}`
+	firstRecorder := performCreditAdjustmentRouteRequest(engine, token, userID, body)
+	require.Equal(t, http.StatusOK, firstRecorder.Code, firstRecorder.Body.String())
+	first := decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t, firstRecorder)
+	require.True(t, first.Success, firstRecorder.Body.String())
+	assert.Equal(t, int64(-250), first.Data.GrossCredit)
+	assert.Equal(t, int64(250), first.Data.ConsumedAvailableCredit)
+	assert.Zero(t, first.Data.DebtFormed)
+	assert.Equal(t, int64(7_500_000), first.Data.RemovedExactCostMicros)
+	assert.Equal(t, int64(2_500_000), first.Data.RemovedEstimatedCostMicros)
+	assert.Equal(t, int64(62), first.Data.RemovedUnknownCredit)
+	assert.Equal(t, "CNY", first.Data.ValuationCurrency)
+	assert.Equal(t, model.CreditValuationRuleVersion, first.Data.RuleVersion)
+	assert.Equal(t, int64(2), first.Data.StateVersionAfter)
+	assert.Equal(t, "completed", first.Data.TerminalState)
+	assert.False(t, first.Data.Replayed)
+
+	replayRecorder := performCreditAdjustmentRouteRequest(engine, token, userID, body)
+	require.Equal(t, http.StatusOK, replayRecorder.Code, replayRecorder.Body.String())
+	replay := decodeAdminCreditAdjustmentAuthoritativeRouteResponse(t, replayRecorder)
+	require.True(t, replay.Success, replayRecorder.Body.String())
+	wantReplay := first.Data
+	wantReplay.Replayed = true
+	assert.Equal(t, wantReplay, replay.Data)
+
+	var ledger model.CreditBalanceLedger
+	require.NoError(t, model.DB.Where("user_id = ? AND type = ?", userID, model.CreditBalanceLedgerTypeAdminDecrease).First(&ledger).Error)
+	assert.Equal(t, int64(250), ledger.ConsumedAvailableCredit)
+	assert.Equal(t, int64(7_500_000), ledger.RemovedExactCostMicros)
+	assert.Equal(t, int64(2_500_000), ledger.RemovedEstimatedCostMicros)
+	assert.Equal(t, int64(62), ledger.RemovedUnknownCredit)
+	assert.NotEmpty(t, ledger.SourceKey)
+	assert.Equal(t, "completed", ledger.SourceStatus)
+	assert.NotEmpty(t, ledger.ParameterFingerprint)
+}
+
 func TestAdminCreditAdjustmentRoutesExposeStableCodesAndReplayCommittedResult(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
 	planID := seedAdminCreditAdjustmentValuationRoute(t)
@@ -436,27 +542,33 @@ type adminCreditAdjustmentAuthoritativeRouteResponse struct {
 	Success bool   `json:"success"`
 	Code    string `json:"code"`
 	Data    struct {
-		PlanId            int    `json:"plan_id"`
-		GrossCredit       int64  `json:"gross_credit"`
-		NetCredit         int64  `json:"net_credit"`
-		GrossAmountMicros int64  `json:"gross_amount_micros,string"`
-		NetAmountMicros   int64  `json:"net_amount_micros,string"`
-		ValuationCurrency string `json:"valuation_currency"`
-		SourceCurrency    string `json:"source_currency"`
-		Confidence        string `json:"confidence"`
-		FxRateNumerator   int64  `json:"fx_rate_numerator,string"`
-		FxRateDenominator int64  `json:"fx_rate_denominator,string"`
-		FxCapturedAt      int64  `json:"fx_captured_at"`
-		FxDirection       string `json:"fx_direction"`
-		RuleVersion       int    `json:"rule_version"`
-		StateVersionAfter int64  `json:"state_version_after"`
-		DebtOffset        int64  `json:"debt_offset"`
-		AvailableCredit   int64  `json:"available_credit"`
-		SettlementDebt    int64  `json:"settlement_debt"`
-		BalanceBefore     int64  `json:"balance_before"`
-		BalanceAfter      int64  `json:"balance_after"`
-		Replayed          bool   `json:"replayed"`
-		Preview           bool   `json:"preview"`
+		PlanId                     int    `json:"plan_id"`
+		GrossCredit                int64  `json:"gross_credit"`
+		NetCredit                  int64  `json:"net_credit"`
+		GrossAmountMicros          int64  `json:"gross_amount_micros,string"`
+		NetAmountMicros            int64  `json:"net_amount_micros,string"`
+		ValuationCurrency          string `json:"valuation_currency"`
+		SourceCurrency             string `json:"source_currency"`
+		Confidence                 string `json:"confidence"`
+		FxRateNumerator            int64  `json:"fx_rate_numerator,string"`
+		FxRateDenominator          int64  `json:"fx_rate_denominator,string"`
+		FxCapturedAt               int64  `json:"fx_captured_at"`
+		FxDirection                string `json:"fx_direction"`
+		RuleVersion                int    `json:"rule_version"`
+		StateVersionAfter          int64  `json:"state_version_after"`
+		ConsumedAvailableCredit    int64  `json:"consumed_available_credit"`
+		DebtFormed                 int64  `json:"debt_formed"`
+		RemovedExactCostMicros     int64  `json:"removed_exact_cost_micros,string"`
+		RemovedEstimatedCostMicros int64  `json:"removed_estimated_cost_micros,string"`
+		RemovedUnknownCredit       int64  `json:"removed_unknown_credit"`
+		TerminalState              string `json:"terminal_state"`
+		DebtOffset                 int64  `json:"debt_offset"`
+		AvailableCredit            int64  `json:"available_credit"`
+		SettlementDebt             int64  `json:"settlement_debt"`
+		BalanceBefore              int64  `json:"balance_before"`
+		BalanceAfter               int64  `json:"balance_after"`
+		Replayed                   bool   `json:"replayed"`
+		Preview                    bool   `json:"preview"`
 	} `json:"data"`
 }
 
@@ -551,4 +663,137 @@ func TestAdminCreditAdjustmentPreviewRequiresReadyValuationMarker(t *testing.T) 
 			assert.Contains(t, response.Body.String(), `"code":"credit_valuation_migration_not_ready"`)
 		})
 	}
+}
+
+type creditOutflowPaidValueRouteEnvelope struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Data dto.AdminPaidSubscriptionValueResponse `json:"data"`
+	} `json:"data"`
+}
+
+func performCreditOutflowPaidValueRouteRequest(t *testing.T, engine *gin.Engine, token, path string) dto.AdminPaidSubscriptionValueResponse {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("New-Api-User", "9961")
+	engine.ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	var response creditOutflowPaidValueRouteEnvelope
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response), recorder.Body.String())
+	require.True(t, response.Success, recorder.Body.String())
+	return response.Data.Data
+}
+
+func requireCreditOutflowPaidValueMicros(t *testing.T, values []dto.AdminAnalyticsMoneyBreakdown, currency string, expected int64) {
+	t.Helper()
+	for _, value := range values {
+		if value.Currency != currency {
+			continue
+		}
+		actual, err := strconv.ParseInt(value.AmountMicros, 10, 64)
+		require.NoError(t, err)
+		require.Equal(t, expected, actual)
+		return
+	}
+	if expected != 0 {
+		require.Failf(t, "missing currency", "currency %s not found in %#v", currency, values)
+	}
+}
+
+func TestCreditOutflowRoutesImmediatelyProjectIntoFivePaidValueViews(t *testing.T) {
+	engine, token, userID := setupCreditAdjustmentRoute(t)
+	optionPlanID := seedAdminCreditAdjustmentValuationRoute(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.TopUp{}))
+
+	increase := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+		`{"operation":"increase","amount":1000,"plan_id":%d,"idempotency_key":"five-view-admin-increase","reason":"approved exact ingress"}`,
+		optionPlanID,
+	))
+	require.Equal(t, http.StatusOK, increase.Code, increase.Body.String())
+	require.Contains(t, increase.Body.String(), `"success":true`)
+
+	var optionPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&optionPlan, optionPlanID).Error)
+	var creditPlan model.SubscriptionPlan
+	require.NoError(t, model.DB.First(&creditPlan, 9963).Error)
+	snapshot := model.NewSubscriptionEntitlementSnapshot(&optionPlan, model.SubscriptionPurchaseModeCreditBalance, creditPlan.Id)
+	snapshot.SetTargetCreditBalancePlanSnapshot(&creditPlan)
+	snapshot.SetPaymentSnapshot(model.PaymentProviderEpay, "five-view-product", "alipay", 4000, "CNY")
+	snapshotJSON, err := model.MarshalSubscriptionEntitlementSnapshot(snapshot)
+	require.NoError(t, err)
+	order := model.SubscriptionOrder{
+		UserId: userID, PlanId: optionPlan.Id, Money: 40, AmountCents: 4000, Currency: "CNY",
+		CreditGrantAmount: 1000, CreditTargetPlanID: creditPlan.Id, TradeNo: "five-view-credit-order",
+		PaymentProvider: model.PaymentProviderEpay, PaymentMethod: "alipay", Status: common.TopUpStatusPending,
+		EntitlementSnapshot: snapshotJSON,
+	}
+	require.NoError(t, model.DB.Create(&order).Error)
+	completed, err := model.CompleteSubscriptionOrder(order.TradeNo, `{}`, model.PaymentProviderEpay, "alipay")
+	require.NoError(t, err)
+	require.NotNil(t, completed)
+	require.NotNil(t, completed.CreditBalance)
+
+	decrease := performCreditAdjustmentRouteRequest(engine, token, userID,
+		`{"operation":"decrease","amount":250,"idempotency_key":"five-view-admin-decrease","reason":"verified correction"}`)
+	require.Equal(t, http.StatusOK, decrease.Code, decrease.Body.String())
+	require.Contains(t, decrease.Body.String(), `"success":true`)
+	require.Contains(t, decrease.Body.String(), `"removed_exact_cost_micros":"10000000"`)
+
+	refund := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo,
+		`{"recovery_type":"refund","reason":"provider refund confirmed"}`)
+	require.Equal(t, http.StatusOK, refund.Code, refund.Body.String())
+	require.Contains(t, refund.Body.String(), `"success":true`)
+	require.Contains(t, refund.Body.String(), `"available_credit":750`)
+	require.Contains(t, refund.Body.String(), `"removed_exact_cost_micros":"40000000"`)
+
+	chargeback := performSubscriptionOrderRecoveryRouteRequest(engine, token, userID, order.TradeNo,
+		`{"recovery_type":"chargeback","reason":"provider chargeback supersedes refund"}`)
+	require.Equal(t, http.StatusOK, chargeback.Code, chargeback.Body.String())
+	require.Contains(t, chargeback.Body.String(), `"success":true`)
+	require.Contains(t, chargeback.Body.String(), `"terminal_state":"chargeback"`)
+
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.First(&state, completed.CreditBalance.UserSubscriptionId).Error)
+	require.Equal(t, int64(750), state.AvailableCredit)
+	require.Equal(t, int64(30_000_000), state.ExactCostMicros)
+	require.Zero(t, state.EstimatedCostMicros)
+	require.Zero(t, state.UnknownCredit)
+
+	snapshotAt := common.GetTimestamp()
+	query := fmt.Sprintf("?snapshot_at=%d&currency=CNY&limit=20", snapshotAt)
+	summary := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/summary"+query)
+	require.Equal(t, 1, summary.Summary.ActivePaidSubscriptionCount)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.ExactRemainingValueByCurrency, "CNY", 30_000_000)
+	requireCreditOutflowPaidValueMicros(t, summary.Summary.EstimatedRemainingValueByCurrency, "CNY", 0)
+	require.Zero(t, summary.Summary.UnknownCostCredit)
+
+	users := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/users"+query)
+	require.Len(t, users.Users.Items, 1)
+	require.Equal(t, userID, users.Users.Items[0].UserID)
+	requireCreditOutflowPaidValueMicros(t, users.Users.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+
+	subscriptions := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/subscriptions"+query)
+	require.Len(t, subscriptions.Subscriptions.Items, 1)
+	subscription := subscriptions.Subscriptions.Items[0]
+	require.Equal(t, completed.CreditBalance.UserSubscriptionId, subscription.SubscriptionID)
+	require.Equal(t, int64(750), subscription.AvailableCredit)
+	require.NotNil(t, subscription.RecognizedRemainingValue)
+	require.Equal(t, "30000000", subscription.RecognizedRemainingValue.AmountMicros)
+	require.Equal(t, "30000000", subscription.ExactRemainingValue.AmountMicros)
+	require.Equal(t, "credit_moving_weighted_average", subscription.ValuationBasis)
+	require.Equal(t, "moving_weighted_pool", subscription.SourceAttribution)
+
+	plans := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/breakdown/plans"+query)
+	require.Len(t, plans.Plans.Items, 1)
+	require.Equal(t, creditPlan.Id, plans.Plans.Items[0].PlanID)
+	requireCreditOutflowPaidValueMicros(t, plans.Plans.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
+
+	sources := performCreditOutflowPaidValueRouteRequest(t, engine, token, "/api/admin-analytics/paid-subscription-value/breakdown/sources"+query)
+	require.Len(t, sources.Sources.Items, 1)
+	require.Equal(t, "credit_balance_pool", string(sources.Sources.Items[0].Source))
+	require.Equal(t, "moving_weighted_pool", sources.Sources.Items[0].SourceAttribution)
+	requireCreditOutflowPaidValueMicros(t, sources.Sources.Items[0].RecognizedRemainingValueByCurrency, "CNY", 30_000_000)
 }

@@ -72,6 +72,7 @@ type SubscriptionOrderRecoveryRequest struct {
 	ExpectedPaymentProvider string
 	RecoveryType            string
 	ProviderPayload         string
+	ProviderRecoveryKey     string
 	OperatorUserId          int
 	Reason                  string
 	CreditRecoveryOnly      bool
@@ -180,6 +181,7 @@ func RecoverSubscriptionOrder(request SubscriptionOrderRecoveryRequest) (*Subscr
 	request.ExpectedPaymentProvider = strings.TrimSpace(request.ExpectedPaymentProvider)
 	request.RecoveryType = strings.TrimSpace(request.RecoveryType)
 	request.ProviderPayload = strings.TrimSpace(request.ProviderPayload)
+	request.ProviderRecoveryKey = strings.TrimSpace(request.ProviderRecoveryKey)
 	request.Reason = strings.TrimSpace(request.Reason)
 	if request.TradeNo == "" || request.Reason == "" {
 		return nil, ErrSubscriptionOrderRecoveryInvalid
@@ -736,17 +738,21 @@ func subscriptionOrderRecoveryFingerprint(request SubscriptionOrderRecoveryReque
 	default:
 		return "", ErrSubscriptionOrderRecoveryInvalid
 	}
+	providerRecoveryKey := request.ProviderRecoveryKey
+	if providerRecoveryKey == "" {
+		providerRecoveryKey = request.ProviderPayload
+	}
 	payload, err := common.Marshal(struct {
-		Operation       string                                    `json:"operation"`
-		TerminalState   string                                    `json:"terminal_state"`
-		ProviderPayload string                                    `json:"provider_payload"`
-		OperatorUserId  int                                       `json:"operator_user_id"`
-		Reason          string                                    `json:"reason"`
-		CreditOnly      bool                                      `json:"credit_recovery_only"`
-		Facts           subscriptionOrderRecoveryFingerprintFacts `json:"facts"`
+		Operation           string                                    `json:"operation"`
+		TerminalState       string                                    `json:"terminal_state"`
+		ProviderRecoveryKey string                                    `json:"provider_recovery_key"`
+		OperatorUserId      int                                       `json:"operator_user_id"`
+		Reason              string                                    `json:"reason"`
+		CreditOnly          bool                                      `json:"credit_recovery_only"`
+		Facts               subscriptionOrderRecoveryFingerprintFacts `json:"facts"`
 	}{
 		Operation: request.RecoveryType, TerminalState: terminalState,
-		ProviderPayload: request.ProviderPayload, OperatorUserId: request.OperatorUserId,
+		ProviderRecoveryKey: providerRecoveryKey, OperatorUserId: request.OperatorUserId,
 		Reason: request.Reason, CreditOnly: request.CreditRecoveryOnly, Facts: facts,
 	})
 	if err != nil {

@@ -450,7 +450,14 @@ func TestExternalCreditPurchaseWebhookAndRefundLifecycle(t *testing.T) {
 	assert.Equal(t, model.PaymentProviderStripe, recoveryLedger.PaymentProvider)
 	assert.Equal(t, "Stripe provider refund", recoveryLedger.Reason)
 
-	refundReplay := signedStripeWebhookRecorderForSubscriptionTest(t, refundPayload)
+	refundReplayPayload := stripeWebhookPayloadForSubscriptionTest(t, "evt_external_credit_lifecycle_refund_updated", stripe.EventTypeRefundUpdated, map[string]any{
+		"id":       "re_external_credit_lifecycle",
+		"charge":   "ch_external_credit_lifecycle",
+		"status":   "succeeded",
+		"amount":   4000,
+		"currency": "cny",
+	})
+	refundReplay := signedStripeWebhookRecorderForSubscriptionTest(t, refundReplayPayload)
 	require.Equal(t, http.StatusOK, refundReplay.Code, refundReplay.Body.String())
 	assert.Equal(t, 2, refundIdentityLoads, "both signed refund deliveries must resolve through the provider charge identity seam")
 	require.NoError(t, model.DB.First(&order, order.Id).Error)

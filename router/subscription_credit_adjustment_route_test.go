@@ -492,6 +492,73 @@ func TestAdminCreditAdjustmentDecreaseRouteProjectsOutflowFactsAndReplay(t *test
 	assert.NotEmpty(t, ledger.ParameterFingerprint)
 }
 
+func TestAdminCreditAdjustmentDecreaseRouteRejectsEveryExplicitPlanWithoutWrites(t *testing.T) {
+	missingEngine, missingToken, missingUserID := setupCreditAdjustmentRoute(t)
+	missingPlanID := seedAdminCreditAdjustmentValuationRoute(t)
+	seed := performCreditAdjustmentRouteRequest(missingEngine, missingToken, missingUserID, fmt.Sprintf(
+		`{"operation":"increase","amount":1000,"plan_id":%d,"idempotency_key":"admin-plan-presence-missing-seed","reason":"seed plan presence test"}`,
+		missingPlanID,
+	))
+	require.Equal(t, http.StatusOK, seed.Code, seed.Body.String())
+	omitted := performCreditAdjustmentRouteRequest(missingEngine, missingToken, missingUserID,
+		`{"operation":"decrease","amount":"25","idempotency_key":"admin-plan-presence-omitted","reason":"omit plan"}`)
+	require.Equal(t, http.StatusOK, omitted.Code, omitted.Body.String())
+	assert.Contains(t, omitted.Body.String(), `"success":true`)
+
+	tests := []struct {
+		name             string
+		planField        func(int) string
+		wantCodeFragment string
+	}{
+		{name: "zero", planField: func(_ int) string { return `"plan_id":0` }, wantCodeFragment: `"code":"credit_valuation_plan_ineligible"`},
+		{name: "null", planField: func(_ int) string { return `"plan_id":null` }, wantCodeFragment: `"code":"credit_valuation_plan_ineligible"`},
+		{name: "empty-string", planField: func(_ int) string { return `"plan_id":""` }, wantCodeFragment: `"message":"参数错误"`},
+		{name: "positive", planField: func(planID int) string { return fmt.Sprintf(`"plan_id":%d`, planID) }, wantCodeFragment: `"code":"credit_valuation_plan_ineligible"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			engine, token, userID := setupCreditAdjustmentRoute(t)
+			planID := seedAdminCreditAdjustmentValuationRoute(t)
+			seed := performCreditAdjustmentRouteRequest(engine, token, userID, fmt.Sprintf(
+				`{"operation":"increase","amount":1000,"plan_id":%d,"idempotency_key":"admin-plan-presence-%s-seed","reason":"seed plan presence test"}`,
+				planID,
+				test.name,
+			))
+			require.Equal(t, http.StatusOK, seed.Code, seed.Body.String())
+
+			var balanceBefore model.UserSubscription
+			require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balanceBefore).Error)
+			var stateBefore model.CreditValuationState
+			require.NoError(t, model.DB.Where("user_subscription_id = ?", balanceBefore.Id).First(&stateBefore).Error)
+			var adjustmentsBefore, ledgersBefore int64
+			require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Count(&adjustmentsBefore).Error)
+			require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Count(&ledgersBefore).Error)
+
+			body := fmt.Sprintf(
+				`{"operation":"decrease","amount":"25",%s,"idempotency_key":"admin-plan-presence-%s","reason":"reject explicit plan"}`,
+				test.planField(planID),
+				test.name,
+			)
+			response := performCreditAdjustmentRouteRequest(engine, token, userID, body)
+			require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+			assert.Contains(t, response.Body.String(), `"success":false`)
+			assert.Contains(t, response.Body.String(), test.wantCodeFragment)
+
+			var adjustmentsAfter, ledgersAfter int64
+			require.NoError(t, model.DB.Model(&model.CreditBalanceAdjustment{}).Count(&adjustmentsAfter).Error)
+			require.NoError(t, model.DB.Model(&model.CreditBalanceLedger{}).Count(&ledgersAfter).Error)
+			assert.Equal(t, adjustmentsBefore, adjustmentsAfter)
+			assert.Equal(t, ledgersBefore, ledgersAfter)
+			var balanceAfter model.UserSubscription
+			require.NoError(t, model.DB.First(&balanceAfter, balanceBefore.Id).Error)
+			assert.Equal(t, balanceBefore, balanceAfter)
+			var stateAfter model.CreditValuationState
+			require.NoError(t, model.DB.Where("user_subscription_id = ?", stateBefore.UserSubscriptionId).First(&stateAfter).Error)
+			assert.Equal(t, stateBefore, stateAfter)
+		})
+	}
+}
+
 func TestAdminCreditAdjustmentRoutesExposeStableCodesAndReplayCommittedResult(t *testing.T) {
 	engine, token, userID := setupCreditAdjustmentRoute(t)
 	planID := seedAdminCreditAdjustmentValuationRoute(t)

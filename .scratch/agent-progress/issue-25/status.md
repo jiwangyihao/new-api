@@ -100,3 +100,12 @@
 - preview / commit 恢复 API 已统一稳定 machine code；前端六语言错误映射不再依赖自由文本。
 - Go 窄 race、后端定向 `-count=10`、前端分进程 33 / 33、typecheck、production build、i18n sync、Go LSP 与 diff-check 均通过。
 - 下一步：冻结 clean HEAD，重新执行 Standards / Spec 双轴只读复评；双轴通过后方可 non-ff 集成并关闭 Issue #25。
+
+## 协调器最终浏览器验收
+
+- 阶段：`FINAL_COORDINATOR_BROWSER_ACCEPTED`。
+- 真实 SQLite / default Chromium 已贯通 increase preview → decrease 切换清空 plan/preview → 无 `plan_id` payload → 受控失败同 key 重试 → 精确 outflow 响应 → 五个 paid-value 视图刷新。
+- decrease 最终状态：available=800、exact=32,000,000 micros、estimated=0、unknown=0、state_version=2；五视图一致，active paid count=1。
+- 真实 account-balance Credit 订单 refund 与同事实 replay 已通过；首次仅一条 recovery ledger，重放不重复扣减。
+- Chromium、监督服务与临时 SQLite 已清理；MySQL 5.7 / PostgreSQL 9.6、历史迁移与发布仍分别归 #27 / #28。
+- 当前剩余工作仅为提交协调器窄修正与证据、确认 clean HEAD，然后从该完整基线继续 #27。

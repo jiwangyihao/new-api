@@ -44,6 +44,7 @@ type CreditBalanceAdjustmentRequest struct {
 	Operation      string
 	Amount         int64
 	PlanId         int
+	PlanIdPresent  bool
 	IdempotencyKey string
 	OperatorUserId int
 	Reason         string
@@ -87,10 +88,11 @@ type CreditBalanceAdjustmentResult struct {
 }
 
 type CreditBalanceAdjustmentPreviewRequest struct {
-	UserId    int
-	Operation string
-	Amount    int64
-	PlanId    int
+	UserId        int
+	Operation     string
+	Amount        int64
+	PlanId        int
+	PlanIdPresent bool
 }
 
 type CreditBalanceAdjustmentPreviewResult struct {
@@ -333,7 +335,7 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 	if request.Operation == CreditBalanceAdjustmentIncrease && request.PlanId <= 0 {
 		return nil, ErrCreditValuationPlanRequired
 	}
-	if request.Operation == CreditBalanceAdjustmentDecrease && request.PlanId != 0 {
+	if request.Operation == CreditBalanceAdjustmentDecrease && (request.PlanIdPresent || request.PlanId != 0) {
 		return nil, ErrCreditValuationPlanIneligible
 	}
 

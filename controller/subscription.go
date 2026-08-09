@@ -1038,12 +1038,35 @@ func AdminListUserSubscriptions(c *gin.Context) {
 	common.ApiSuccess(c, toAdminUserSubscriptionResponses(subs))
 }
 
+type adminCreditPlanID struct {
+	Value   int
+	Present bool
+}
+
+func (p *adminCreditPlanID) UnmarshalJSON(data []byte) error {
+	p.Present = true
+	if strings.TrimSpace(string(data)) == "null" {
+		p.Value = 0
+		return nil
+	}
+	var value int
+	if err := common.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	p.Value = value
+	return nil
+}
+
 type AdminCreditBalanceAdjustmentRequest struct {
-	Operation      string          `json:"operation"`
-	Amount         dto.StringValue `json:"amount"`
-	PlanId         int             `json:"plan_id"`
-	IdempotencyKey string          `json:"idempotency_key"`
-	Reason         string          `json:"reason"`
+	Operation      string            `json:"operation"`
+	Amount         dto.StringValue   `json:"amount"`
+	PlanId         adminCreditPlanID `json:"plan_id"`
+	IdempotencyKey string            `json:"idempotency_key"`
+	Reason         string            `json:"reason"`
+}
+
+func (r AdminCreditBalanceAdjustmentRequest) planID() (int, bool) {
+	return r.PlanId.Value, r.PlanId.Present
 }
 
 func (r AdminCreditBalanceAdjustmentRequest) amountInt64() (int64, error) {
@@ -1063,7 +1086,7 @@ func AdminPreviewUserCreditBalance(c *gin.Context) {
 		return
 	}
 	result, err := service.PreviewCreditBalanceAdjustment(service.CreditBalanceAdjustmentPreviewRequest{
-		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId.Value, PlanIdPresent: req.PlanId.Present,
 	})
 	if err != nil {
 		writeAdminCreditBalanceAdjustmentError(c, err)
@@ -1147,7 +1170,7 @@ func AdminAdjustUserCreditBalance(c *gin.Context) {
 		return
 	}
 	result, err := service.AdjustCreditBalance(service.CreditBalanceAdjustmentRequest{
-		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId,
+		UserId: userId, Operation: req.Operation, Amount: amount, PlanId: req.PlanId.Value, PlanIdPresent: req.PlanId.Present,
 		IdempotencyKey: req.IdempotencyKey, OperatorUserId: c.GetInt("id"), Reason: req.Reason,
 	})
 	if err != nil {

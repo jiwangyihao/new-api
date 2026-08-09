@@ -187,3 +187,16 @@
 - 前端分进程回归：管理员面板 7 / 7、ledger 2 / 2、钱包 24 / 24 PASS；组合到同一 Bun 进程时既有重试键用例曾因 OOM 失败，隔离后 1 / 1 且分进程总计 33 / 33 PASS。
 - `bun run typecheck`、Rsbuild production build、`bun run i18n:sync` 与 `git diff --check` PASS；六语言 missing / extras 均为 0。TS LSP 不可用，未声明其通过。
 - MySQL 5.7 / PostgreSQL 9.6、全项目测试与生产发布未在本步骤运行，分别保留给 Issue #27 / #28。
+
+## 协调器真实 SQLite / API / Chromium 最终验收
+
+- 构建：当前集成树 `web/default` Rsbuild production build 与 `web/classic` Vite production build 均成功，随后 Go embed 直接提供该批产物；未使用 request interception、mock fetch 或 DOM 注入。
+- 隔离服务：`PORT=3125`、`SQLITE_PATH=.scratch/agent-progress/issue-25/browser-smoke.db`、独立 `SESSION_SECRET`，启动日志显示 SQLite 与 `New API v0.0.0 ready`，TCP `127.0.0.1:3125` 就绪。一次环境丢失导致错误落到默认 3000 / `one-api.db`，该实例立即停止且数据库已删除，不计验收证据。
+- 初始化与主题：真实 `POST /api/setup` 创建 `root25`，真实登录建立 HttpOnly session；真实 `PUT /api/option/` 将前端切为 `default`。仅在隔离 SQLite 插入 `credit_valuation_migrations(version=1,status=ready,valuation_currency=CNY,fx=1/1)` 作为 #25 验收允许的迁移前置夹具；未修改迁移生产逻辑。
+- 前置业务事实：真实 UI 创建用户 `credituser25`（ID 2）；真实 API 配置全局 Credit CNY 池，并创建有价充值档位 `40,000,000` micros / `1,000 Credit`。真实管理员 UI increase 预览请求为 `{"operation":"increase","amount":"1000","plan_id":2}`，响应显示 40,000,000 micros、CNY、exact、FX 1/1。
+- UI 切换：从已选择档位且已有预览的 increase 切到 decrease 后，`After-sales grant plan` 控件消失，权威预览消失；实际 amount / reason 可编辑，提交 payload 不含 `plan_id`。
+- 可控失败与 key 生命周期：停止受监督服务后，真实 Chromium 发出 decrease payload `{"operation":"decrease","amount":"200","idempotency_key":"admin-credit-2-afa76b73-21a1-4538-9c3b-4d01743d3976","reason":"Issue 25 browser controlled decrease"}` 并失败；服务恢复后原表单仍保留相同事实，再次提交复用完全相同 key。
+- decrease 提交：HTTP 200；权威响应为 consumed available `200`、debt formed `0`、removed exact `8,000,000` micros、estimated `0`、unknown `0`、CNY、rule/state `1/2`、terminal `completed`、available `800`。UI 显示同一结构化结果。对同 key / 同事实再次调用返回 `replayed=true`、ledger ID 2、state version 2，未二次扣减。
+- 五分析接口：以 `snapshot_at=1786308860` 和随后 `1786309044` 调用 summary/users/subscriptions/plans/sources，五个 HTTP 状态均为 200；五视图 recognized/exact 均为 `amount_micros="32000000"` CNY，summary active paid count=1，明细 subscription ID 1 / user ID 2 / available 800 / state version 2 / moving weighted pool。真实 `/admin-analytics?tab=paid-subscription-value` 页面发出五个同源请求，并可见 `¥32.00`、Available Credit `800`、Exact、Moving weighted average、Snapshot state。
+- 真实订单 recovery：真实 `POST /api/subscription/balance/pay` 创建 account-balance Credit 订单 `BALSUBUSR1NO8e9de9ca33cc54ad1b320d6c61ee42672c60b88c` 并入账 1,000 Credit；管理员 UI recovery preview 验证 user ID 1、plan ID 2、40 CNY、balance/account_balance、gross 1,000。真实 refund 请求返回 consumed 1,000、removed exact 40,000,000 micros、state version 2、terminal refunded、available 0；同事实重放返回 `replayed=true` 且 recovery ledger 数仍为 1。
+- 清理：受控 Chromium tab 已关闭；`issue25-browser-final` 已停止；`browser-smoke.db` / WAL / SHM、错误 `one-api.db` 及临时 secret 均已清理。MySQL 5.7 / PostgreSQL 9.6、历史迁移和生产发布仍归 #27 / #28，未冒充通过。

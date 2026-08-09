@@ -107,7 +107,7 @@ func TestRecoverDirectCreditOrderRejectsProviderAndTerminalMismatch(t *testing.T
 	assert.Equal(t, common.TopUpStatusChargeback, chargeback.Status)
 	require.NoError(t, model.DB.First(order, order.Id).Error)
 	assert.Equal(t, common.TopUpStatusChargeback, order.Status)
-	assert.Equal(t, "provider refund", order.RecoveryReason)
+	assert.Equal(t, "provider chargeback", order.RecoveryReason)
 	var balance model.UserSubscription
 	require.NoError(t, model.DB.Where("user_id = ? AND entitlement_type = ?", userID, model.SubscriptionEntitlementCreditBalance).First(&balance).Error)
 	assert.Equal(t, int64(500), balance.TokenUsed)

@@ -2,6 +2,8 @@ package controller
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +75,37 @@ func TestKyrenWebhookCompletesTopUpUsingSnapshot(t *testing.T) {
 	var user model.User
 	require.NoError(t, model.DB.First(&user, userID).Error)
 	assert.Equal(t, 5000000, user.Quota)
+}
+
+func TestKyrenWebhookRecoversStaleClaimedTopUp(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6202
+	seedKyrenPaymentUser(t, userID)
+	tradeNo := "kyren-topup-stale-claim"
+	seedPendingKyrenTopUp(t, tradeNo, userID, "topup_stale", "prod_topup_stale", "10.00", 5000000)
+	payload := kyrenWebhookEventPayload(t, "order.paid", "topup", tradeNo, "prod_topup_stale", "10.00", kyrenCurrencyCNY)
+	payloadHash := sha256.Sum256(payload)
+	now := common.GetTimestamp()
+	require.NoError(t, model.DB.Create(&model.PaymentProviderEvent{
+		Provider: model.PaymentProviderKyren, EventID: "evt_kyren_topup_stale_claim", EventType: "order.paid",
+		PayloadHash: hex.EncodeToString(payloadHash[:]), TradeNo: tradeNo, OrderKind: model.PaymentOrderKindTopUp,
+		ProviderOrderID: "ord_kyren_topup_stale_claim", Status: model.PaymentProviderEventProcessing,
+		ProcessingToken: "stale-topup-event-token", ProcessingStartedAt: now - 600, CreatedAt: now - 600, UpdatedAt: now - 600,
+	}).Error)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	topUp := model.GetTopUpByTradeNo(tradeNo)
+	require.NotNil(t, topUp)
+	assert.Equal(t, common.TopUpStatusSuccess, topUp.Status)
+	var user model.User
+	require.NoError(t, model.DB.First(&user, userID).Error)
+	assert.Equal(t, 5000000, user.Quota)
+	var event model.PaymentProviderEvent
+	require.NoError(t, model.DB.Where("provider = ? AND event_id = ?", model.PaymentProviderKyren, "evt_kyren_topup_stale_claim").First(&event).Error)
+	assert.Equal(t, model.PaymentProviderEventApplied, event.Status)
+	assert.Empty(t, event.ProcessingToken)
 }
 
 func performKyrenTopUpPayRequest(t *testing.T, userID int, body string) *httptest.ResponseRecorder {

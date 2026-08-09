@@ -161,27 +161,8 @@ func GetTopUpByTradeNo(tradeNo string) *TopUp {
 	return topUp
 }
 
-func ClaimPendingKyrenTopUp(tradeNo string) (bool, error) {
-	if tradeNo == "" {
-		return false, ErrTopUpNotFound
-	}
-	result := DB.Model(&TopUp{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusPending).
-		Update("status", common.TopUpStatusFailed)
-	if result.Error != nil {
-		return false, result.Error
-	}
-	return result.RowsAffected > 0, nil
-}
-
-func RestoreClaimedKyrenTopUp(tradeNo string) error {
-	if tradeNo == "" {
-		return nil
-	}
-	return DB.Model(&TopUp{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed).
-		Update("status", common.TopUpStatusPending).Error
-}
+// Kyren webhook ownership is persisted in PaymentProviderEvent. Local top-up
+// rows only expose the business status transition guarded below.
 
 func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, targetStatus string) error {
 	if tradeNo == "" {
@@ -195,7 +176,7 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 
 	return DB.Transaction(func(tx *gorm.DB) error {
 		topUp := &TopUp{}
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(topUp).Error; err != nil {
 			return ErrTopUpNotFound
 		}
 		if expectedPaymentProvider != "" && topUp.PaymentProvider != expectedPaymentProvider {
@@ -204,9 +185,16 @@ func UpdatePendingTopUpStatus(tradeNo string, expectedPaymentProvider string, ta
 		if topUp.Status != common.TopUpStatusPending {
 			return ErrTopUpStatusInvalid
 		}
-
-		topUp.Status = targetStatus
-		return tx.Save(topUp).Error
+		result := tx.Model(&TopUp{}).
+			Where("id = ? AND status = ?", topUp.Id, common.TopUpStatusPending).
+			Updates(map[string]any{"status": targetStatus, "complete_time": common.GetTimestamp()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrTopUpStatusInvalid
+		}
+		return nil
 	})
 }
 

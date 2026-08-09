@@ -384,78 +384,8 @@ func GetSubscriptionOrderByTradeNo(tradeNo string) *SubscriptionOrder {
 	return &order
 }
 
-var ErrKyrenSubscriptionOrderLeaseMismatch = errors.New("kyren subscription order lease mismatch")
-
-func ClaimPendingKyrenSubscriptionOrder(tradeNo string) (bool, int64, error) {
-	if tradeNo == "" {
-		return false, 0, ErrSubscriptionOrderNotFound
-	}
-	leaseTime := common.GetTimestamp()
-	result := DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusPending).
-		Updates(map[string]any{"status": common.TopUpStatusFailed, "complete_time": leaseTime})
-	if result.Error != nil {
-		return false, 0, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return false, 0, nil
-	}
-	return true, leaseTime, nil
-}
-
-func RecoverStaleClaimedKyrenSubscriptionOrder(tradeNo string, staleBefore int64) (bool, int64, error) {
-	if tradeNo == "" {
-		return false, 0, ErrSubscriptionOrderNotFound
-	}
-	leaseTime := common.GetTimestamp()
-	result := DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time > 0 AND complete_time <= ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed, staleBefore).
-		Update("complete_time", leaseTime)
-	if result.Error != nil {
-		return false, 0, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return false, 0, nil
-	}
-	return true, leaseTime, nil
-}
-
-func MarkClaimedKyrenSubscriptionOrderSuccessTx(tx *gorm.DB, order *SubscriptionOrder, leaseTime int64) error {
-	if tx == nil || order == nil || order.TradeNo == "" || leaseTime <= 0 {
-		return errors.New("invalid subscription order")
-	}
-	updates := map[string]any{
-		"status":        common.TopUpStatusSuccess,
-		"complete_time": order.CompleteTime,
-	}
-	if order.ProviderPayload != "" {
-		updates["provider_payload"] = order.ProviderPayload
-	}
-	if order.PaymentMethod != "" {
-		updates["payment_method"] = order.PaymentMethod
-	}
-	result := tx.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time = ?", order.TradeNo, PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
-		Updates(updates)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrKyrenSubscriptionOrderLeaseMismatch
-	}
-	order.Status = common.TopUpStatusSuccess
-	return nil
-}
-
-func RestoreClaimedKyrenSubscriptionOrder(tradeNo string, leaseTime int64) error {
-	if tradeNo == "" || leaseTime <= 0 {
-		return nil
-	}
-	updates := map[string]any{"status": common.TopUpStatusPending, "complete_time": int64(0)}
-	return DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
-		Updates(updates).Error
-}
+// Kyren webhook ownership is persisted in PaymentProviderEvent. Local orders
+// remain a simple pending-to-terminal state machine guarded by row locks.
 
 // User subscription instance
 type UserSubscription struct {
@@ -1410,7 +1340,7 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
 			return ErrSubscriptionOrderNotFound
 		}
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
@@ -1419,9 +1349,16 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 		if order.Status != common.TopUpStatusPending {
 			return nil
 		}
-		order.Status = common.TopUpStatusExpired
-		order.CompleteTime = common.GetTimestamp()
-		return tx.Save(&order).Error
+		result := tx.Model(&SubscriptionOrder{}).
+			Where("id = ? AND status = ?", order.Id, common.TopUpStatusPending).
+			Updates(map[string]any{"status": common.TopUpStatusExpired, "complete_time": common.GetTimestamp()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrSubscriptionOrderStatusInvalid
+		}
+		return nil
 	})
 }
 

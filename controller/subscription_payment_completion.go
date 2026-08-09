@@ -10,12 +10,9 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 var errSubscriptionOrderAmountSnapshotMismatch = errors.New("subscription order provider amount or currency mismatch")
-
-const kyrenSubscriptionOrderClaimLeaseSeconds int64 = 5 * 60
 
 type testCleanup interface {
 	Cleanup(func())
@@ -240,10 +237,6 @@ func decimalMoneyValueToCents(value any) (int64, bool) {
 	return exactNonNegativeInt64(parsed.Mul(decimal.NewFromInt(100)))
 }
 
-func decimalMoneyStringToCents(raw string) (int64, bool) {
-	return decimalMoneyValueToCents(raw)
-}
-
 func exactNonNegativeInt64(value decimal.Decimal) (int64, bool) {
 	if !value.IsInteger() || value.LessThan(decimal.Zero) || !value.BigInt().IsInt64() {
 		return 0, false
@@ -265,142 +258,4 @@ func normalizeProviderCheckoutSnapshot(amountCents int64, currency string) (int6
 		return 0, ""
 	}
 	return amountCents, currency
-}
-
-func kyrenOrderAmountSnapshotFromPaymentSnapshot(snapshot model.KyrenPaymentSnapshot) (int64, string, error) {
-	if normalizeProviderSnapshotCurrency(snapshot.Currency) != kyrenCurrencyCNY {
-		return 0, "", nil
-	}
-	amountCents, ok := decimalMoneyStringToCents(snapshot.Amount)
-	if !ok {
-		return 0, "", errSubscriptionOrderAmountSnapshotMismatch
-	}
-	return amountCents, kyrenCurrencyCNY, nil
-}
-
-func completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo string, providerPayload string, expectedPaymentProvider string, actualPaymentMethod string) error {
-	tradeNo = strings.TrimSpace(tradeNo)
-	if tradeNo == "" {
-		return errors.New("tradeNo is empty")
-	}
-	var logUserID int
-	var logPlanID int
-	var logMoney float64
-	var logPaymentMethod string
-	var completedOrderID int
-	var completion *model.SubscriptionOrderCompletionResult
-	claimed, leaseTime, err := model.ClaimPendingKyrenSubscriptionOrder(tradeNo)
-	if err != nil {
-		return err
-	}
-	if !claimed {
-		recovered, recoveredLeaseTime, recoverErr := model.RecoverStaleClaimedKyrenSubscriptionOrder(tradeNo, common.GetTimestamp()-kyrenSubscriptionOrderClaimLeaseSeconds)
-		if recoverErr != nil {
-			return recoverErr
-		}
-		if recovered {
-			claimed = true
-			leaseTime = recoveredLeaseTime
-		}
-	}
-	if !claimed {
-		order, lookupErr := findKyrenSubscriptionOrderByTradeNo(tradeNo)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if order == nil {
-			return model.ErrSubscriptionOrderNotFound
-		}
-		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
-			return model.ErrPaymentMethodMismatch
-		}
-		if order.Status == common.TopUpStatusSuccess {
-			completion, err := model.CompleteSubscriptionOrder(order.TradeNo, providerPayload, expectedPaymentProvider, actualPaymentMethod)
-			if err != nil {
-				return err
-			}
-			if completion != nil && completion.PurchaseMode == model.SubscriptionPurchaseModeTimed {
-				if err := handleInvitationRewardForCompletedSubscriptionOrder(order.Id); err != nil {
-					common.SysError("failed to handle invitation reward: " + err.Error())
-					return err
-				}
-			}
-			return nil
-		}
-		if order.Status == common.TopUpStatusFailed {
-			return errKyrenSubscriptionOrderClaimed
-		}
-		return model.ErrSubscriptionOrderStatusInvalid
-	}
-	restoreClaimOnFailure := true
-	defer func() {
-		if err != nil && restoreClaimOnFailure {
-			_ = model.RestoreClaimedKyrenSubscriptionOrder(tradeNo, leaseTime)
-		}
-	}()
-
-	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		var order model.SubscriptionOrder
-		if err := tx.Where("trade_no = ?", tradeNo).First(&order).Error; err != nil {
-			return err
-		}
-		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
-			return model.ErrPaymentMethodMismatch
-		}
-		if order.Status != common.TopUpStatusFailed || order.CompleteTime != leaseTime {
-			return model.ErrKyrenSubscriptionOrderLeaseMismatch
-		}
-		paymentSnapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
-		if err != nil {
-			return err
-		}
-		amountCents, currency, err := kyrenOrderAmountSnapshotFromPaymentSnapshot(paymentSnapshot)
-		if err != nil {
-			return err
-		}
-		restore := tx.Model(&model.SubscriptionOrder{}).
-			Where("id = ? AND payment_provider = ? AND status = ? AND complete_time = ?", order.Id, model.PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
-			Updates(map[string]any{"status": common.TopUpStatusPending, "complete_time": int64(0), "amount_cents": amountCents, "currency": currency})
-		if restore.Error != nil {
-			return restore.Error
-		}
-		if restore.RowsAffected == 0 {
-			return model.ErrKyrenSubscriptionOrderLeaseMismatch
-		}
-		order.Status = common.TopUpStatusPending
-		order.CompleteTime = 0
-		order.AmountCents = amountCents
-		order.Currency = currency
-		completion, err = model.CompleteSubscriptionOrderTx(tx, &order, providerPayload, actualPaymentMethod)
-		if err != nil {
-			return err
-		}
-		completedOrderID = order.Id
-		logUserID = order.UserId
-		logPlanID = order.PlanId
-		logMoney = order.Money
-		logPaymentMethod = order.PaymentMethod
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	restoreClaimOnFailure = false
-	if completedOrderID > 0 && completion != nil && completion.PurchaseMode == model.SubscriptionPurchaseModeTimed {
-		if err := handleInvitationRewardForCompletedSubscriptionOrder(completedOrderID); err != nil {
-			common.SysError("failed to handle invitation reward: " + err.Error())
-			return err
-		}
-	}
-	if logUserID > 0 {
-		if cacheErr := model.InvalidateUserCache(logUserID); cacheErr != nil {
-			common.SysLog(fmt.Sprintf("failed to invalidate user cache after Kyren subscription commit user_id=%d trade_no=%s: %s", logUserID, tradeNo, cacheErr.Error()))
-		}
-	}
-	if logUserID > 0 {
-		if logPlanID > 0 && logMoney > 0 && logPaymentMethod != "" {
-			model.RecordLog(logUserID, model.LogTypeTopup, fmt.Sprintf("订阅购买成功，套餐ID: %d，支付金额: %.2f，支付方式: %s", logPlanID, logMoney, logPaymentMethod))
-		}
-	}
-	return nil
 }

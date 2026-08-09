@@ -380,14 +380,20 @@ describe('Admin Credit financial management', () => {
       name: 'Submit Credit adjustment',
     })
 
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 1))
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 2))
+    const submitFailedAttempt = async (expectedCount: number) => {
+      assert.equal((submit as HTMLButtonElement).disabled, false)
+      fireEvent.click(submit)
+      await waitFor(() => assert.equal(adjustments.length, expectedCount))
+      await waitFor(() =>
+        assert.equal((submit as HTMLButtonElement).disabled, false)
+      )
+    }
+
+    await submitFailedAttempt(1)
+    await submitFailedAttempt(2)
     assert.equal(adjustments[1].idempotency_key, adjustments[0].idempotency_key)
     fireEvent.change(amount, { target: { value: '801' } })
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 3))
+    await submitFailedAttempt(3)
     assert.equal(adjustments[2].amount, '801')
     assert.notEqual(
       adjustments[2].idempotency_key,
@@ -406,8 +412,7 @@ describe('Admin Credit financial management', () => {
       view.queryByText('Authoritative operational value preview'),
       null
     )
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 4))
+    await submitFailedAttempt(4)
     assert.equal(adjustments[3].plan_id, 9102)
     assert.notEqual(
       adjustments[3].idempotency_key,
@@ -431,8 +436,13 @@ describe('Admin Credit financial management', () => {
       null
     )
     allowSuccess = true
+    assert.equal((submit as HTMLButtonElement).disabled, false)
     fireEvent.click(submit)
     await waitFor(() => assert.equal(adjustments.length, 5))
+    await waitFor(() => {
+      assert.equal((amount as HTMLInputElement).value, '')
+      assert.equal((reason as HTMLTextAreaElement).value, '')
+    })
     assert.equal(adjustments[4].operation, 'decrease')
     assert.equal('plan_id' in adjustments[4], false)
     assert.notEqual(
@@ -442,6 +452,9 @@ describe('Admin Credit financial management', () => {
 
     fireEvent.change(amount, { target: { value: '801' } })
     fireEvent.change(reason, { target: { value: 'controlled retry' } })
+    await waitFor(() =>
+      assert.equal((submit as HTMLButtonElement).disabled, false)
+    )
     fireEvent.click(submit)
     await waitFor(() => assert.equal(adjustments.length, 6))
     assert.notEqual(

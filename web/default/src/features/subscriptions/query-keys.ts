@@ -21,6 +21,7 @@ export const subscriptionQueryKeys = {
   walletPlans: ['subscriptions', 'plans'] as const,
   homePublicPlans: ['home', 'subscription-public-plans'] as const,
   selfSummary: ['subscriptions', 'self', 'summary'] as const,
+  selfConversionQuotes: ['subscriptions', 'self', 'conversion-quotes'] as const,
   dashboardSelfSubscriptions: [
     'dashboard',
     'overview',

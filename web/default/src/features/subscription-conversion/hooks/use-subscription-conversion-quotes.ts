@@ -30,17 +30,12 @@ import type {
 } from '../types'
 
 const CONVERSION_QUOTE_REFETCH_MS = 5000
-const subscriptionConversionQuoteQueryKey = [
-  'subscriptions',
-  'self',
-  'conversion-quotes',
-] as const
 
 export function useSubscriptionConversionQuotes(
   queryFn: () => Promise<SubscriptionConversionQuoteList> = getSubscriptionConversionQuotes
 ) {
   const query = useQuery({
-    queryKey: subscriptionConversionQuoteQueryKey,
+    queryKey: subscriptionQueryKeys.selfConversionQuotes,
     queryFn,
     refetchInterval: CONVERSION_QUOTE_REFETCH_MS,
     refetchIntervalInBackground: false,
@@ -70,7 +65,7 @@ export function useConfirmSubscriptionConversion(
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({
-          queryKey: subscriptionConversionQuoteQueryKey,
+          queryKey: subscriptionQueryKeys.selfConversionQuotes,
         }),
         queryClient.invalidateQueries({
           queryKey: subscriptionQueryKeys.selfSummary,

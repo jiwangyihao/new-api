@@ -76,6 +76,25 @@ describe('subscriptions page layout', () => {
     )
   })
 
+  test('keeps redemption and conversion cards beside subscription plans on wide screens', () => {
+    const page = readSource('src/features/wallet/index.tsx')
+    const plansIndex = page.indexOf('<SubscriptionPlansCard')
+    const redemptionIndex = page.indexOf('<RedemptionCodeCard')
+    const conversionIndex = page.indexOf(
+      '<TimedSubscriptionConversionQuotesCard'
+    )
+
+    assert.match(
+      page,
+      /xl:grid-cols-\[minmax\(0,1\.05fr\)_minmax\(360px,0\.95fr\)\]/
+    )
+    assert.ok(plansIndex >= 0)
+    assert.ok(redemptionIndex > plansIndex)
+    assert.ok(conversionIndex > redemptionIndex)
+    assert.match(page, /<RedemptionDialog/)
+    assert.match(page, /submitInitialRedemption/)
+  })
+
   test('keeps billing strategy outside My Subscriptions', () => {
     const page = readSource('src/features/wallet/index.tsx')
     const plans = readSource(

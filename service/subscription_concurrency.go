@@ -20,6 +20,7 @@ import (
 var (
 	ErrSubscriptionConcurrencyExceeded    = errors.New("subscription concurrency exceeded")
 	ErrSubscriptionConcurrencyUnavailable = errors.New("subscription concurrency unavailable")
+	ErrSubscriptionConcurrencyLeaseLost   = errors.New("subscription concurrency lease lost")
 )
 
 type SubscriptionConcurrencyCounters struct {
@@ -345,6 +346,42 @@ redis.call('ZREM', KEYS[1], ARGV[1])
 return 1
 `
 
+const subscriptionConcurrencyHeartbeatScript = `
+local active_key = KEYS[1]
+local user_index_key = KEYS[2]
+local request_id = ARGV[1]
+local user_id = ARGV[2]
+local now = tonumber(ARGV[3])
+local ttl = tonumber(ARGV[4])
+if redis.call('ZSCORE', active_key, request_id) then
+  redis.call('ZADD', active_key, now, request_id)
+  redis.call('EXPIRE', active_key, ttl)
+  redis.call('ZADD', user_index_key, now, user_id)
+  redis.call('EXPIRE', user_index_key, ttl)
+  return 1
+end
+return 0
+`
+
+const (
+	subscriptionConcurrencyHeartbeatAttempts     = 3
+	subscriptionConcurrencyRedisOperationTimeout = 5 * time.Second
+)
+
+func subscriptionConcurrencyHeartbeatInterval(ttl int) time.Duration {
+	if ttl <= 0 {
+		ttl = 600
+	}
+	if ttl > 90 {
+		return 30 * time.Second
+	}
+	interval := time.Duration(ttl) * time.Second / 3
+	if interval < 100*time.Millisecond {
+		return 100 * time.Millisecond
+	}
+	return interval
+}
+
 func AcquireUserConcurrency(ctx context.Context, userId int, requestId string, limit int) (ConcurrencyLease, error) {
 	return acquireUserConcurrency(ctx, userId, requestId, limit, common.SubscriptionConcurrencyQueueCapacity)
 }
@@ -407,7 +444,7 @@ func acquireRedisUserConcurrencyWithEvaler(ctx context.Context, evaler redisEval
 		case redisAcquireAllowed:
 			recordSubscriptionConcurrencyAcquired()
 			recordRedisSubscriptionConcurrencyUser(ctx, evaler, userId, ttl, now)
-			return &redisSubscriptionConcurrencyLease{evaler: evaler, key: activeKey, requestId: requestId}, nil
+			return newRedisSubscriptionConcurrencyLease(evaler, activeKey, userId, requestId, ttl), nil
 		case redisAcquireQueuedNew:
 			recordSubscriptionConcurrencyQueued()
 			recordRedisSubscriptionConcurrencyUser(ctx, evaler, userId, ttl, now)
@@ -693,18 +730,122 @@ func sortSubscriptionConcurrencyRuntimeRows(rows []SubscriptionConcurrencyUserRu
 }
 
 type redisSubscriptionConcurrencyLease struct {
-	evaler    redisEvaler
-	key       string
-	requestId string
-	released  atomic.Bool
+	evaler          redisEvaler
+	key             string
+	userId          int
+	requestId       string
+	heartbeatCancel context.CancelFunc
+	heartbeatDone   chan struct{}
+	heartbeatMu     sync.Mutex
+	heartbeatErr    error
+	released        atomic.Bool
 }
 
-func (l *redisSubscriptionConcurrencyLease) Release(ctx context.Context) error {
+func newRedisSubscriptionConcurrencyLease(evaler redisEvaler, key string, userId int, requestId string, ttl int) *redisSubscriptionConcurrencyLease {
+	heartbeatCtx, heartbeatCancel := context.WithCancel(context.Background())
+	lease := &redisSubscriptionConcurrencyLease{
+		evaler:          evaler,
+		key:             key,
+		userId:          userId,
+		requestId:       requestId,
+		heartbeatCancel: heartbeatCancel,
+		heartbeatDone:   make(chan struct{}),
+	}
+	go lease.runHeartbeat(heartbeatCtx, ttl)
+	return lease
+}
+
+func (l *redisSubscriptionConcurrencyLease) runHeartbeat(ctx context.Context, ttl int) {
+	defer close(l.heartbeatDone)
+	interval := subscriptionConcurrencyHeartbeatInterval(ttl)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	attemptTimeout := interval / time.Duration(subscriptionConcurrencyHeartbeatAttempts+1)
+	if attemptTimeout > subscriptionConcurrencyRedisOperationTimeout {
+		attemptTimeout = subscriptionConcurrencyRedisOperationTimeout
+	}
+	if attemptTimeout < 100*time.Millisecond {
+		attemptTimeout = 100 * time.Millisecond
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var heartbeatErr error
+			for attempt := range subscriptionConcurrencyHeartbeatAttempts {
+				operationCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+				result, err := l.evaler.Eval(operationCtx, subscriptionConcurrencyHeartbeatScript, []string{l.key, subscriptionConcurrencyUserIndexKey()}, l.requestId, l.userId, time.Now().Unix(), ttl).Result()
+				cancel()
+				if ctx.Err() != nil {
+					return
+				}
+				if err != nil {
+					heartbeatErr = err
+					if attempt+1 < subscriptionConcurrencyHeartbeatAttempts {
+						retryDelay := attemptTimeout
+						if retryDelay > time.Second {
+							retryDelay = time.Second
+						}
+						retryTimer := time.NewTimer(retryDelay)
+						select {
+						case <-ctx.Done():
+							retryTimer.Stop()
+							return
+						case <-retryTimer.C:
+						}
+					}
+					continue
+				}
+				refreshed, ok := subscriptionConcurrencyResultInt64(result)
+				if !ok || refreshed != 1 {
+					l.setHeartbeatError(ErrSubscriptionConcurrencyLeaseLost)
+					return
+				}
+				heartbeatErr = nil
+				break
+			}
+			if heartbeatErr != nil {
+				recordSubscriptionConcurrencyRedisError()
+				continue
+			}
+		}
+	}
+}
+
+func (l *redisSubscriptionConcurrencyLease) setHeartbeatError(err error) {
+	l.heartbeatMu.Lock()
+	defer l.heartbeatMu.Unlock()
+	if l.heartbeatErr == nil {
+		l.heartbeatErr = err
+	}
+}
+
+func (l *redisSubscriptionConcurrencyLease) getHeartbeatError() error {
+	l.heartbeatMu.Lock()
+	defer l.heartbeatMu.Unlock()
+	return l.heartbeatErr
+}
+
+func (l *redisSubscriptionConcurrencyLease) Release(_ context.Context) error {
 	if l == nil || l.evaler == nil || !l.released.CompareAndSwap(false, true) {
 		return nil
 	}
-	_, err := l.evaler.Eval(ctx, subscriptionConcurrencyReleaseScript, []string{l.key}, l.requestId).Result()
-	return err
+	l.heartbeatCancel()
+	<-l.heartbeatDone
+
+	releaseCtx, cancel := context.WithTimeout(context.Background(), subscriptionConcurrencyRedisOperationTimeout)
+	defer cancel()
+	_, releaseErr := l.evaler.Eval(releaseCtx, subscriptionConcurrencyReleaseScript, []string{l.key}, l.requestId).Result()
+	heartbeatErr := l.getHeartbeatError()
+	if heartbeatErr != nil && releaseErr != nil {
+		return errors.Join(heartbeatErr, releaseErr)
+	}
+	if heartbeatErr != nil {
+		return heartbeatErr
+	}
+	return releaseErr
 }
 
 func SubscriptionConcurrencyAPIError(limit int) *types.NewAPIError {

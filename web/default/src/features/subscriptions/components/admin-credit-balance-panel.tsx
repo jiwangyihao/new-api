@@ -181,7 +181,6 @@ export function subscriptionOrderRecoveryErrorKey(
   }
 }
 
-
 function formatMicrosCount(value: string): string {
   if (!/^-?\d+$/.test(value)) return value
   return new Intl.NumberFormat().format(BigInt(value))
@@ -368,26 +367,30 @@ export function AdminCreditBalancePanel({
         return
       }
       const balance = response.data.credit_balance
-      const message =
-        operation === 'decrease'
-          ? formatCreditOutflowResult(
-              t,
-              response.data.replayed
-                ? t('Credit decrease replayed without another withdrawal.')
-                : t('Credit decrease committed.'),
-              response.data
-            )
-          : response.data.replayed
-            ? t(
-                'The after-sales grant was safely replayed without adding Credit again.'
-              )
-            : t(
-                'After-sales grant completed. Available: {{available}}, debt offset: {{debtOffset}}.',
-                {
-                  available: balance.available_credit,
-                  debtOffset: response.data.debt_offset,
-                }
-              )
+      let message: string
+      if (operation === 'decrease') {
+        let decreaseMessage: string
+        if (response.data.replayed) {
+          decreaseMessage = t(
+            'Credit decrease replayed without another withdrawal.'
+          )
+        } else {
+          decreaseMessage = t('Credit decrease committed.')
+        }
+        message = formatCreditOutflowResult(t, decreaseMessage, response.data)
+      } else if (response.data.replayed) {
+        message = t(
+          'The after-sales grant was safely replayed without adding Credit again.'
+        )
+      } else {
+        message = t(
+          'After-sales grant completed. Available: {{available}}, debt offset: {{debtOffset}}.',
+          {
+            available: balance.available_credit,
+            debtOffset: response.data.debt_offset,
+          }
+        )
+      }
       setStatusMessage(message)
       toast.success(message)
       setAmount('')

@@ -9,7 +9,7 @@
 - [ ] Worker 工作树干净；`.scratch/agent-progress/issue-28/{status,evidence,contract,release-runbook}.md` 与审阅后的服务器脚本均已提交，记录的最近安全提交与实际 HEAD 一致。
 - [ ] 逐条复核 Issue #28 的 13 条 acceptance criteria；每条有命令、digest、数据库、API、浏览器或监控证据，不能以计划/TODO 代替。
 - [ ] 未重新设计 #27 迁移算法、弱化 verify、伪造 marker、热改服务器源码/二进制、使用漂移 tag、插入临时生产用户/套餐/订阅/权益或复制凭据。
-- [ ] 所有生产访问均经既定 `AutoDLChen` 跳板；证据和提交不含私钥、DSN、令牌、Cookie、dump 或可识别用户数据。
+- [ ] 所有生产访问均通过已配置的 `netcup-ows-migrate` SSH 主机别名；证据和提交不含私钥、DSN、令牌、Cookie、dump 或可识别用户数据。
 - [ ] 主树 `CLAUDE.md`、用户工作树、受保护项目标识和许可证未被修改。
 
 ## Gate B：本地最终门禁与不可变镜像

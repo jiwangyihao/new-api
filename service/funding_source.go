@@ -72,6 +72,7 @@ type SubscriptionFunding struct {
 	subscriptionId         int
 	preConsumed            int64
 	targetAppliedCredit    int64
+	requestRefundHandled   bool
 	// 以下字段在 PreConsume 成功后填充，供 RelayInfo 同步使用
 	AmountTotal                int64
 	AmountUsedAfter            int64
@@ -145,11 +146,12 @@ func (s *SubscriptionFunding) PreConsume(_ int) error {
 }
 
 func (s *SubscriptionFunding) settleCreditRequestTarget(targetCredit int64, final bool) (bool, error) {
-	if s == nil || !s.creditValuationTracked || s.EntitlementType != model.SubscriptionEntitlementCreditBalance {
+	if s == nil || s.requestId == "" || s.subscriptionId <= 0 {
 		return false, nil
 	}
-	if err := model.SettleUserSubscriptionRequestTarget(s.requestId, s.subscriptionId, targetCredit, final); err != nil {
-		return true, err
+	handled, err := model.SettleUserSubscriptionRequestTargetIfMapped(s.requestId, s.subscriptionId, targetCredit, final)
+	if err != nil || !handled {
+		return handled, err
 	}
 	s.targetAppliedCredit = targetCredit
 	return true, nil
@@ -159,21 +161,27 @@ func (s *SubscriptionFunding) Settle(delta int) error {
 	if delta == 0 {
 		return nil
 	}
-	if s.creditValuationTracked && s.EntitlementType == model.SubscriptionEntitlementCreditBalance {
-		target := s.targetAppliedCredit + int64(delta)
-		if (delta > 0 && target < s.targetAppliedCredit) || target < 0 {
-			return model.ErrCreditValuationOverflow
-		}
-		if _, err := s.settleCreditRequestTarget(target, false); err != nil {
+	if s.requestId != "" && s.subscriptionId > 0 {
+		result, err := model.ApplyUserSubscriptionRequestDelta(s.requestId, s.subscriptionId, int64(delta), false)
+		if err != nil {
 			return err
 		}
-	} else if s.DistributorTokenBilling {
+		if result.Mapped {
+			s.targetAppliedCredit = result.AppliedCredit
+			return s.applySettledDelta(int64(delta))
+		}
+	}
+	if s.DistributorTokenBilling {
 		if err := model.PostConsumeUserSubscriptionTokenDelta(s.subscriptionId, int64(delta)); err != nil {
 			return err
 		}
 	} else if err := model.PostConsumeUserSubscriptionAmountDelta(s.subscriptionId, int64(delta)); err != nil {
 		return err
 	}
+	return s.applySettledDelta(int64(delta))
+}
+
+func (s *SubscriptionFunding) applySettledDelta(delta int64) error {
 	if s.DistributorTokenBilling {
 		s.TokenUsedAfter += int64(delta)
 		if s.TokenUsedAfter < 0 {
@@ -193,14 +201,22 @@ func (s *SubscriptionFunding) Settle(delta int) error {
 	}
 	return nil
 }
-
 func (s *SubscriptionFunding) Refund() error {
 	if s.preConsumed <= 0 {
 		return nil
 	}
+	s.requestRefundHandled = false
 	return refundWithRetry(func() error {
-		if handled, err := s.settleCreditRequestTarget(0, true); handled {
+		handled, err := s.settleCreditRequestTarget(0, true)
+		if err != nil {
+			if handled {
+				s.requestRefundHandled = true
+			}
 			return err
+		}
+		if handled {
+			s.requestRefundHandled = true
+			return nil
 		}
 		return model.RefundSubscriptionPreConsume(s.requestId)
 	})

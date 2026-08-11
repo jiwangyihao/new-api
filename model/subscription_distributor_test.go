@@ -629,6 +629,29 @@ func TestEnsureCreditBalanceSubscriptionPlanConcurrentInitializationConverges(t 
 	assert.Equal(t, creditBalancePlanSingletonKey, *plans[0].SingletonKey)
 }
 
+func TestEnsureCreditBalanceSubscriptionPlanRejectsMultipleExistingPlans(t *testing.T) {
+	originalDB := DB
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		DB = originalDB
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	DB = db
+	require.NoError(t, DB.AutoMigrate(&SubscriptionPlan{}))
+	require.NoError(t, DB.Exec("INSERT INTO subscription_plans (title, currency, entitlement_type, singleton_key) VALUES (?, ?, ?, ?), (?, ?, ?, ?)",
+		"Credit A", "CNY", SubscriptionEntitlementCreditBalance, creditBalancePlanSingletonKey,
+		"Credit B", "CNY", SubscriptionEntitlementCreditBalance, "legacy-duplicate-credit-plan").Error)
+
+	err = ensureCreditBalanceSubscriptionPlan()
+	require.EqualError(t, err, "multiple credit balance subscription plans exist")
+	var count int64
+	require.NoError(t, DB.Model(&SubscriptionPlan{}).Where("entitlement_type = ?", SubscriptionEntitlementCreditBalance).Count(&count).Error)
+	require.Equal(t, int64(2), count)
+}
+
 func TestEnsureSubscriptionPlanTableSQLiteCreatesCreditBalanceSchema(t *testing.T) {
 	originalDB := DB
 	originalUsingSQLite := common.UsingSQLite

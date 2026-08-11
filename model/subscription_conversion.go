@@ -227,7 +227,7 @@ func confirmTimedSubscriptionConversionWithQuote(userId int, sourceSubscriptionI
 			return subscriptionConversionRejection(quote)
 		}
 		var valuationSource *CreditValuationSourceSnapshot
-		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+		valuationReady, err := CreditValuationWriterReadyTx(tx)
 		if err != nil {
 			return err
 		}

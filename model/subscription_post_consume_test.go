@@ -65,6 +65,34 @@ func TestPostConsumeUserSubscriptionRequestDeltaRoutesCreditAndTimed(t *testing.
 		require.Equal(t, valuationBeforeReplay, valuationAfterReplay)
 	})
 
+	t.Run("incremental Credit calls accumulate from persisted applied target", func(t *testing.T) {
+		db := setupCreditValuationTracerTestDB(t)
+		user, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)
+		completed := completeCreditValuationOrder(t, db, &order)
+		const requestID = "post-consume-request-incremental-credit"
+		preConsumed, err := PreConsumeUserSubscriptionByUnits(requestID, user.Id, "gpt-4o", 0, 0, 100)
+		require.NoError(t, err)
+		require.Equal(t, completed.CreditBalance.UserSubscriptionId, preConsumed.UserSubscriptionId)
+
+		first, err := ApplyUserSubscriptionRequestDelta(requestID, preConsumed.UserSubscriptionId, 25, false)
+		require.NoError(t, err)
+		require.Equal(t, UserSubscriptionRequestDeltaResult{PostDelta: 25, AppliedCredit: 125, Mapped: true}, first)
+		second, err := ApplyUserSubscriptionRequestDelta(requestID, preConsumed.UserSubscriptionId, 25, false)
+		require.NoError(t, err)
+		require.Equal(t, UserSubscriptionRequestDeltaResult{PostDelta: 50, AppliedCredit: 150, Mapped: true}, second)
+
+		var record SubscriptionPreConsumeRecord
+		require.NoError(t, db.Where("request_id = ?", requestID).First(&record).Error)
+		require.Equal(t, int64(150), record.AppliedCredit)
+		var subscription UserSubscription
+		require.NoError(t, db.First(&subscription, preConsumed.UserSubscriptionId).Error)
+		require.Equal(t, int64(150), subscription.TokenUsed)
+		var state CreditValuationState
+		require.NoError(t, db.Where("user_subscription_id = ?", preConsumed.UserSubscriptionId).First(&state).Error)
+		require.Equal(t, int64(850), state.AvailableCredit)
+		require.Equal(t, int64(34_000_000), state.ExactCostMicros)
+	})
+
 	t.Run("missing Credit request fails without writes", func(t *testing.T) {
 		db := setupCreditValuationTracerTestDB(t)
 		_, _, _, order := seedCreditValuationOrder(t, db, PaymentProviderBalance)

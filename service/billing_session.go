@@ -70,6 +70,16 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 		final := s.relayInfo == nil || s.relayInfo.RelayFormat != types.RelayFormatTask
 		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens, final)
 		if err != nil {
+			noFundingActivity := input.SubscriptionTokens == 0 &&
+				s.preConsumedSubscription == 0 &&
+				s.committedSubscriptionTokens == 0 &&
+				subscriptionFunding.preConsumed == 0 &&
+				subscriptionFunding.targetAppliedCredit == 0
+			if errors.Is(err, model.ErrCreditValuationRequestNotFound) &&
+				!subscriptionFunding.creditValuationTracked && noFundingActivity {
+				s.settled = true
+				return nil
+			}
 			return err
 		}
 		if handled {
@@ -169,6 +179,9 @@ func (s *BillingSession) Refund(c *gin.Context) {
 		if err := funding.Refund(); err != nil {
 			common.SysLog("error refunding billing source: " + err.Error())
 		}
+		if sub, ok := funding.(*SubscriptionFunding); ok && sub.requestRefundHandled {
+			creditTargetTracked = true
+		}
 		if !creditTargetTracked && committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 			err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)
 			if err != nil {
@@ -214,6 +227,9 @@ func (s *BillingSession) refundSync() {
 
 	if err := funding.Refund(); err != nil {
 		common.SysLog("error refunding billing source: " + err.Error())
+	}
+	if sub, ok := funding.(*SubscriptionFunding); ok && sub.requestRefundHandled {
+		creditTargetTracked = true
 	}
 	if !creditTargetTracked && committedSubscriptionTokens > 0 && funding.Source() == BillingSourceSubscription && subscriptionId > 0 {
 		err := postConsumeSubscriptionFundingDelta(funding, subscriptionId, -committedSubscriptionTokens)

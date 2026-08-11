@@ -2401,9 +2401,14 @@ func getCachedPrimaryBillableSubscription(tx *gorm.DB, userId int, setting strin
 	if entry.loaded.Subscription.NextResetTime > 0 && entry.loaded.Subscription.NextResetTime <= now {
 		return nil, false
 	}
+	// The cache supplies only the candidate identity. Every write transaction
+	// must reload and lock the authoritative row before validating its balance.
 	selection := entry.loaded
 	var sub UserSubscription
-	if err := tx.Select("id", "user_id", "plan_id", "entitlement_type", "amount_total", "amount_used", "token_limit", "token_used", "concurrency_limit", "grant_reason", "grant_source_user_id", "start_time", "end_time", "status", "source", "last_reset_time", "next_reset_time", "created_at", "updated_at").Where("id = ? AND user_id = ?", selection.Subscription.Id, userId).Take(&sub).Error; err != nil {
+	query := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Select("id", "user_id", "plan_id", "entitlement_type", "amount_total", "amount_used", "token_limit", "token_used", "concurrency_limit", "grant_reason", "grant_source_user_id", "start_time", "end_time", "status", "source", "last_reset_time", "next_reset_time", "created_at", "updated_at").
+		Where("id = ? AND user_id = ?", selection.Subscription.Id, userId)
+	if err := query.Take(&sub).Error; err != nil {
 		return nil, false
 	}
 	if sub.Status != "active" || sub.StartTime > now || (sub.EntitlementType != SubscriptionEntitlementCreditBalance && sub.EndTime <= now) {
@@ -3024,9 +3029,13 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			PreConsumed:               consumeAmount,
 			Status:                    "consumed",
 		}
-		valuationReady, err := CreditValuationRuntimeReadyTx(tx)
-		if err != nil {
-			return err
+		valuationReady := false
+		if sub.EntitlementType == SubscriptionEntitlementCreditBalance {
+			var valuationErr error
+			valuationReady, valuationErr = CreditValuationWriterReadyTx(tx)
+			if valuationErr != nil {
+				return valuationErr
+			}
 		}
 		if valuationReady && sub.EntitlementType == SubscriptionEntitlementCreditBalance {
 			if !distributor {
@@ -3092,6 +3101,9 @@ func RefundSubscriptionPreConsume(requestId string) error {
 		var record SubscriptionPreConsumeRecord
 		if err := tx.Set("gorm:query_option", "FOR UPDATE").
 			Where("request_id = ?", requestId).First(&record).Error; err != nil {
+			return err
+		}
+		if err := GuardCreditValuationSubscriptionWriterTx(tx, record.UserSubscriptionId); err != nil {
 			return err
 		}
 		if record.Status == "refunded" {
@@ -3414,35 +3426,129 @@ type UserSubscriptionPostConsumeResult struct {
 	ReplacePostDelta bool
 }
 
-// PostConsumeUserSubscriptionRequestDelta routes request-aware Credit targets
-// and compatible non-Credit deltas without exposing persistence details.
+// UserSubscriptionRequestDeltaResult describes a true incremental request
+// mutation. AppliedCredit is read and updated under the persisted request lock.
+type UserSubscriptionRequestDeltaResult struct {
+	PostDelta     int64
+	AppliedCredit int64
+	Mapped        bool
+}
+
+// ApplyUserSubscriptionRequestDelta atomically adds a real incremental charge
+// to the request's persisted Credit target. An unmapped timed request is left
+// untouched so the caller can retain its legacy timed settlement path.
+func ApplyUserSubscriptionRequestDelta(requestId string, userSubscriptionId int, delta int64, final bool) (UserSubscriptionRequestDeltaResult, error) {
+	requestId = strings.TrimSpace(requestId)
+	if requestId == "" || userSubscriptionId <= 0 {
+		return UserSubscriptionRequestDeltaResult{}, ErrCreditValuationTargetConflict
+	}
+	var result UserSubscriptionRequestDeltaResult
+	err := runConvertedSubscriptionSettlementWithRetry(func() error {
+		result = UserSubscriptionRequestDeltaResult{}
+		return DB.Transaction(func(tx *gorm.DB) error {
+			var record SubscriptionPreConsumeRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).First(&record).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrCreditValuationRequestNotFound
+				}
+				return err
+			}
+			if record.UserSubscriptionId != userSubscriptionId {
+				return ErrCreditValuationMappingConflict
+			}
+			if record.ValuationSubscriptionId <= 0 {
+				return nil
+			}
+			target, ok := checkedAddInt64(record.AppliedCredit, delta)
+			if !ok {
+				return ErrCreditValuationOverflow
+			}
+			if target < 0 {
+				return ErrCreditValuationNegativeInput
+			}
+			if err := SettleCreditRequestTargetTx(tx, &record, target, final); err != nil {
+				return err
+			}
+			result = UserSubscriptionRequestDeltaResult{
+				PostDelta:     record.AppliedCredit - record.PreConsumed,
+				AppliedCredit: record.AppliedCredit,
+				Mapped:        true,
+			}
+			return nil
+		})
+	})
+	return result, err
+}
+
+// SettleUserSubscriptionRequestTargetIfMapped settles a persisted Credit route
+// while leaving an unmapped timed request on its compatibility path.
+func SettleUserSubscriptionRequestTargetIfMapped(requestId string, originalSubscriptionId int, targetCredit int64, final bool) (bool, error) {
+	requestId = strings.TrimSpace(requestId)
+	if requestId == "" || originalSubscriptionId <= 0 {
+		return false, ErrCreditValuationTargetConflict
+	}
+	if targetCredit < 0 {
+		return false, ErrCreditValuationNegativeInput
+	}
+	handled := false
+	err := runConvertedSubscriptionSettlementWithRetry(func() error {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			var record SubscriptionPreConsumeRecord
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("request_id = ?", requestId).First(&record).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrCreditValuationRequestNotFound
+				}
+				return err
+			}
+			if record.UserSubscriptionId != originalSubscriptionId {
+				return ErrCreditValuationMappingConflict
+			}
+			if record.ValuationSubscriptionId <= 0 {
+				return nil
+			}
+			handled = true
+			return SettleCreditRequestTargetTx(tx, &record, targetCredit, final)
+		})
+	})
+	return handled, err
+}
+
+// PostConsumeUserSubscriptionRequestDelta applies an idempotent cumulative
+// post-consume target for Credit and preserves legacy timed delta behavior.
 func PostConsumeUserSubscriptionRequestDelta(requestId string, userSubscriptionId int, delta int64, distributor bool) (UserSubscriptionPostConsumeResult, error) {
+	var record SubscriptionPreConsumeRecord
+	recordQuery := DB.Select("pre_consumed", "user_subscription_id", "valuation_subscription_id").Where("request_id = ?", requestId).Limit(1).Find(&record)
+	if recordQuery.Error != nil {
+		return UserSubscriptionPostConsumeResult{}, ErrDatabase
+	}
+	if recordQuery.RowsAffected > 0 {
+		if record.UserSubscriptionId != userSubscriptionId {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationMappingConflict
+		}
+		if record.ValuationSubscriptionId > 0 {
+			target, ok := checkedAddInt64(record.PreConsumed, delta)
+			if !ok {
+				return UserSubscriptionPostConsumeResult{}, ErrCreditValuationOverflow
+			}
+			if target < 0 {
+				return UserSubscriptionPostConsumeResult{}, ErrCreditValuationNegativeInput
+			}
+			if err := SettleUserSubscriptionRequestTarget(requestId, userSubscriptionId, target, false); err != nil {
+				return UserSubscriptionPostConsumeResult{}, err
+			}
+			return UserSubscriptionPostConsumeResult{PostDelta: target - record.PreConsumed, ReplacePostDelta: true}, nil
+		}
+	}
+
 	var subscription UserSubscription
 	if err := DB.Select("entitlement_type").Where("id = ?", userSubscriptionId).First(&subscription).Error; err != nil {
 		return UserSubscriptionPostConsumeResult{}, ErrDatabase
 	}
 	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance {
-		var record SubscriptionPreConsumeRecord
-		if err := DB.Select("pre_consumed", "user_subscription_id").Where("request_id = ?", requestId).First(&record).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return UserSubscriptionPostConsumeResult{}, ErrCreditValuationRequestNotFound
-			}
-			return UserSubscriptionPostConsumeResult{}, ErrDatabase
+		if recordQuery.RowsAffected == 0 {
+			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationRequestNotFound
 		}
-		if record.UserSubscriptionId != userSubscriptionId {
-			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationMappingConflict
-		}
-		target, ok := checkedAddInt64(record.PreConsumed, delta)
-		if !ok {
-			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationOverflow
-		}
-		if target < 0 {
-			return UserSubscriptionPostConsumeResult{}, ErrCreditValuationNegativeInput
-		}
-		if err := SettleUserSubscriptionRequestTarget(requestId, userSubscriptionId, target, false); err != nil {
-			return UserSubscriptionPostConsumeResult{}, err
-		}
-		return UserSubscriptionPostConsumeResult{PostDelta: target - record.PreConsumed, ReplacePostDelta: true}, nil
+		return UserSubscriptionPostConsumeResult{}, ErrCreditValuationStateMismatch
 	}
 
 	var err error
@@ -3510,6 +3616,9 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 	if tx == nil {
 		return errors.New("tx is nil")
 	}
+	if err := GuardCreditValuationSubscriptionWriterTx(tx, userSubscriptionId); err != nil {
+		return err
+	}
 	updatedAt := common.GetTimestamp()
 	updates := map[string]interface{}{
 		"token_used": tokenUsedDeltaExpr(delta),
@@ -3545,6 +3654,9 @@ func postConsumeUserSubscriptionDeltaTx(tx *gorm.DB, userSubscriptionId int, del
 func applyConvertedSubscriptionTokenDeltaTx(tx *gorm.DB, source *UserSubscription, delta int64) error {
 	if tx == nil || source == nil || source.Id <= 0 || source.ConversionId <= 0 || source.ConvertedToSubscriptionId <= 0 {
 		return errors.New("invalid converted subscription mapping")
+	}
+	if _, err := CreditValuationWriterReadyTx(tx); err != nil {
+		return err
 	}
 	var conversion SubscriptionConversion
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).

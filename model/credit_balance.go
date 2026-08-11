@@ -461,7 +461,7 @@ func GrantCreditBalanceTx(tx *gorm.DB, request CreditBalanceGrantRequest) (*Cred
 	if hasAuthorizedPlan {
 		plan = authorizedPlan
 	}
-	valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+	valuationReady, err := CreditValuationWriterReadyTx(tx)
 	if err != nil {
 		return nil, err
 	}

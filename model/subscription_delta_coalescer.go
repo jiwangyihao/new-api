@@ -122,10 +122,10 @@ func (c *subscriptionTokenDeltaCoalescerState) drain() {
 }
 
 func (c *subscriptionTokenDeltaCoalescerState) run(id int, group *subscriptionTokenDeltaGroup) {
-	if c.flushDelay > 0 {
-		time.Sleep(c.flushDelay)
-	}
 	for {
+		if c.flushDelay > 0 {
+			time.Sleep(c.flushDelay)
+		}
 		c.mu.Lock()
 		requests := group.requests
 		group.requests = nil

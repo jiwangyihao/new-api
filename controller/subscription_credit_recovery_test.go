@@ -169,7 +169,7 @@ func TestRecoverConvertedTimedOrderUsesOrderMonthlyCreditSnapshot(t *testing.T) 
 	require.NoError(t, model.DB.Create(balance).Error)
 	source := &model.UserSubscription{UserId: userID, PlanId: timedPlanID, EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusConverted, TokenLimit: 1000, ConvertedToSubscriptionId: balance.Id, ConvertedAt: common.GetTimestamp()}
 	require.NoError(t, model.DB.Create(source).Error)
-	conversion := &model.SubscriptionConversion{UserId: userID, IdempotencyKey: "converted-refund", SourceSubscriptionId: source.Id, SourcePlanId: timedPlanID, SourcePlanTitle: timedPlan.Title, TargetSubscriptionId: balance.Id, TargetPlanId: creditPlanID, LedgerId: 9791, SourceStatus: model.SubscriptionStatusActive, GrantSource: model.SubscriptionGrantOrder, ConvertedAt: common.GetTimestamp(), CreatedAt: common.GetTimestamp()}
+	conversion := &model.SubscriptionConversion{UserId: userID, IdempotencyKey: "converted-refund", SourceSubscriptionId: source.Id, SourcePlanId: timedPlanID, SourcePlanTitle: timedPlan.Title, TargetSubscriptionId: balance.Id, TargetPlanId: creditPlanID, LedgerId: 9791, GrossCredit: 1000, SourceStatus: model.SubscriptionStatusActive, GrantSource: model.SubscriptionGrantOrder, ConvertedAt: common.GetTimestamp(), CreatedAt: common.GetTimestamp()}
 	require.NoError(t, model.DB.Create(conversion).Error)
 	require.NoError(t, model.DB.Model(source).Updates(map[string]any{"conversion_id": conversion.Id, "converted_to_subscription_id": balance.Id}).Error)
 	snapshot := model.NewSubscriptionEntitlementSnapshot(&model.SubscriptionPlan{Id: timedPlanID, Title: "Converted plan", EntitlementType: model.SubscriptionEntitlementTimed, MonthlyTokenLimit: 1000}, model.SubscriptionPurchaseModeTimed, 0)
@@ -201,7 +201,7 @@ func TestRecoverHistoricalConvertedTimedOrderFallsBackToCurrentMonthlyCredit(t *
 	now := common.GetTimestamp()
 	source := &model.UserSubscription{UserId: userID, PlanId: timedPlanID, EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusConverted, TokenLimit: 1000, StartTime: now - 86400, EndTime: now + 86400, ConvertedToSubscriptionId: balance.Id, ConvertedAt: now}
 	require.NoError(t, model.DB.Create(source).Error)
-	conversion := &model.SubscriptionConversion{UserId: userID, IdempotencyKey: "historical-converted-refund", SourceSubscriptionId: source.Id, SourcePlanId: timedPlanID, SourcePlanTitle: "Historical converted", TargetSubscriptionId: balance.Id, TargetPlanId: creditPlanID, LedgerId: 9792, SourceStatus: model.SubscriptionStatusActive, GrantSource: model.SubscriptionGrantOrder, ConvertedAt: now, CreatedAt: now}
+	conversion := &model.SubscriptionConversion{UserId: userID, IdempotencyKey: "historical-converted-refund", SourceSubscriptionId: source.Id, SourcePlanId: timedPlanID, SourcePlanTitle: "Historical converted", TargetSubscriptionId: balance.Id, TargetPlanId: creditPlanID, LedgerId: 9792, GrossCredit: 777, SourceStatus: model.SubscriptionStatusActive, GrantSource: model.SubscriptionGrantOrder, ConvertedAt: now, CreatedAt: now}
 	require.NoError(t, model.DB.Create(conversion).Error)
 	require.NoError(t, model.DB.Model(source).Updates(map[string]any{"conversion_id": conversion.Id, "converted_to_subscription_id": balance.Id}).Error)
 	require.NoError(t, model.DB.Create(&model.UserSubscription{UserId: userID, PlanId: timedPlanID, EntitlementType: model.SubscriptionEntitlementTimed, Status: model.SubscriptionStatusActive, StartTime: now + 2*86400, EndTime: now + 3*86400}).Error)

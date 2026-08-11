@@ -360,6 +360,177 @@ func TestBillingSessionSettlesAndRefundsRequestsStartedBeforeSubscriptionConvers
 	}
 }
 
+func TestBillingSessionIncrementsAndRefundsAfterReadyTimedConversion(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 8_081
+		tokenID      = 8_082
+		timedPlanID  = 8_083
+		creditPlanID = 8_084
+		sourceID     = 8_085
+		requestID    = "converted-ready-increment"
+	)
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-converted-ready-increment", 10_000)
+	ensureSubscriptionBillingTables(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	currency := "CNY"
+	priceMicros := int64(40_000_000)
+	timedCode := "converted-ready-increment-timed"
+	creditCode := "converted-ready-increment-credit"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "Ready convertible billing plan", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementTimed, BusinessCode: &timedCode,
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+		TimedConversionEnabled: true, PriceAmountMicros: &priceMicros, Currency: currency,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: creditPlanID, Title: "Ready Credit balance", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementCreditBalance, BusinessCode: &creditCode,
+		CreditBalanceConfigured: true, CreditBalanceConversionEnabled: true,
+		ValuationCurrency: &currency,
+	}).Error)
+	now := model.GetDBTimestamp()
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady,
+		ValuationCurrency: currency, FxRateNumerator: 1, FxRateDenominator: 1,
+		FxCapturedAt: now,
+	}).Error)
+	basis := int64(100)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: sourceID, UserId: userID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, TokenLimit: 100,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+		StartTime: now - 48*60*60, EndTime: now + 60*60,
+		Status: model.SubscriptionStatusActive, LastGrantedAt: now - 48*60*60,
+		LastGrantCreditSnapshot: &basis,
+		LastGrantTimeSource:     model.SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         model.SubscriptionGrantOrder,
+	}).Error)
+	require.NoError(t, model.SetUserActiveSubscription(userID, sourceID))
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-converted-ready-increment", requestID, "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	session, ok := relayInfo.Billing.(*BillingSession)
+	require.True(t, ok)
+
+	conversion, err := model.ConfirmTimedSubscriptionConversion(userID, sourceID, "converted-ready-increment")
+	require.NoError(t, err)
+	targetID := conversion.Conversion.TargetSubscriptionId
+	require.NoError(t, session.SettleSubscriptionIncrement(15))
+	require.NoError(t, session.SettleSubscriptionIncrement(15))
+
+	var source model.UserSubscription
+	require.NoError(t, model.DB.First(&source, sourceID).Error)
+	require.Equal(t, int64(10), source.TokenUsed)
+	var target model.UserSubscription
+	require.NoError(t, model.DB.First(&target, targetID).Error)
+	require.Equal(t, int64(90), target.TokenLimit)
+	require.Equal(t, int64(30), target.TokenUsed, "post-conversion increments must consume the target Credit pool")
+	var request model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&request).Error)
+	require.Equal(t, sourceID, request.UserSubscriptionId)
+	require.Equal(t, targetID, request.ValuationSubscriptionId)
+	require.Equal(t, int64(40), request.AppliedCredit)
+	require.Equal(t, int64(16_000_000), request.DeductedExactCostMicros)
+	var state model.CreditValuationState
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", targetID).First(&state).Error)
+	require.Equal(t, int64(60), state.AvailableCredit)
+	require.Equal(t, int64(24_000_000), state.ExactCostMicros)
+
+	session.refundSync()
+	require.NoError(t, model.DB.First(&target, targetID).Error)
+	require.Equal(t, int64(100), target.TokenLimit)
+	require.Zero(t, target.TokenUsed)
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&request).Error)
+	require.Zero(t, request.AppliedCredit)
+	require.Equal(t, "refunded", request.Status)
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", targetID).First(&state).Error)
+	require.Equal(t, int64(100), state.AvailableCredit)
+	require.Equal(t, int64(40_000_000), state.ExactCostMicros)
+}
+
+func TestConvertedRequestRefundFailureDoesNotFallBackToTimedSource(t *testing.T) {
+	truncate(t)
+	const (
+		userID       = 8_091
+		tokenID      = 8_092
+		timedPlanID  = 8_093
+		creditPlanID = 8_094
+		sourceID     = 8_095
+		requestID    = "converted-refund-failure"
+	)
+	seedUser(t, userID, 10_000)
+	seedToken(t, tokenID, userID, "sk-converted-refund-failure", 10_000)
+	ensureSubscriptionBillingTables(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	currency := "CNY"
+	priceMicros := int64(40_000_000)
+	timedCode := "converted-refund-failure-timed"
+	creditCode := "converted-refund-failure-credit"
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: timedPlanID, Title: "Convertible refund failure plan", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementTimed, BusinessCode: &timedCode,
+		DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1,
+		QuotaResetPeriod: model.SubscriptionResetMonthly, MonthlyTokenLimit: 100,
+		TimedConversionEnabled: true, PriceAmountMicros: &priceMicros, Currency: currency,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: creditPlanID, Title: "Refund failure Credit balance", Enabled: true,
+		EntitlementType: model.SubscriptionEntitlementCreditBalance, BusinessCode: &creditCode,
+		CreditBalanceConfigured: true, CreditBalanceConversionEnabled: true,
+		ValuationCurrency: &currency,
+	}).Error)
+	now := model.GetDBTimestamp()
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{
+		Version: model.CreditValuationRuleVersion, Status: model.CreditValuationMigrationReady,
+		ValuationCurrency: currency, FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+	}).Error)
+	basis := int64(100)
+	require.NoError(t, model.DB.Create(&model.UserSubscription{
+		Id: sourceID, UserId: userID, PlanId: timedPlanID,
+		EntitlementType: model.SubscriptionEntitlementTimed, TokenLimit: 100,
+		GrantReason: model.SubscriptionGrantOrder, Source: model.SubscriptionGrantOrder,
+		StartTime: now - 48*60*60, EndTime: now + 60*60,
+		Status: model.SubscriptionStatusActive, LastGrantedAt: now - 48*60*60,
+		LastGrantCreditSnapshot: &basis,
+		LastGrantTimeSource:     model.SubscriptionGrantTimeSourceLive,
+		LastGrantSource:         model.SubscriptionGrantOrder,
+	}).Error)
+	require.NoError(t, model.SetUserActiveSubscription(userID, sourceID))
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-converted-refund-failure", requestID, "subscription_only")
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 10)
+	session := relayInfo.Billing.(*BillingSession)
+	conversion, err := model.ConfirmTimedSubscriptionConversion(userID, sourceID, "converted-refund-failure")
+	require.NoError(t, err)
+	targetID := conversion.Conversion.TargetSubscriptionId
+	var sourceBefore model.UserSubscription
+	require.NoError(t, model.DB.First(&sourceBefore, sourceID).Error)
+	var targetBefore model.UserSubscription
+	require.NoError(t, model.DB.First(&targetBefore, targetID).Error)
+	var requestBefore model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&requestBefore).Error)
+	require.NoError(t, model.DB.Where("user_subscription_id = ?", targetID).Delete(&model.CreditValuationState{}).Error)
+
+	err = session.funding.Refund()
+	require.ErrorIs(t, err, model.ErrCreditValuationStateMissing)
+	require.True(t, session.funding.(*SubscriptionFunding).requestRefundHandled)
+	var sourceAfter model.UserSubscription
+	require.NoError(t, model.DB.First(&sourceAfter, sourceID).Error)
+	require.Equal(t, sourceBefore, sourceAfter)
+	var targetAfter model.UserSubscription
+	require.NoError(t, model.DB.First(&targetAfter, targetID).Error)
+	require.Equal(t, targetBefore, targetAfter)
+	var requestAfter model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&requestAfter).Error)
+	require.Equal(t, requestBefore, requestAfter)
+}
+
 func TestSubscriptionBillingPreConsumeUsesReturnedPlanMetadata(t *testing.T) {
 	truncate(t)
 	const userID = 8041
@@ -1775,6 +1946,58 @@ func TestSettleBillingWithInputFreeModelIgnoresNonZeroSubscriptionTokens(t *test
 	assert.Equal(t, int64(0), relayInfo.SubscriptionPostDelta)
 }
 
+func TestSettleBillingWithInputMissingRequestStillFailsForSubscriptionFundingActivity(t *testing.T) {
+	tests := []struct {
+		name        string
+		preConsumed int64
+		target      int64
+	}{
+		{name: "nonzero target", target: 8},
+		{name: "preconsumed refund", preConsumed: 8},
+	}
+
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			truncate(t)
+			userID := 82_751 + index*10
+			tokenID := userID + 1
+			planID := userID + 2
+			subscriptionID := userID + 3
+			requestID := fmt.Sprintf("missing-subscription-request-%d", index)
+			seedUser(t, userID, 10_000)
+			seedToken(t, tokenID, userID, fmt.Sprintf("sk-missing-subscription-request-%d", index), 10_000)
+			seedDistributorPlan(t, planID, fmt.Sprintf("missing-subscription-request-%d", index), 1_000)
+			seedDistributorSubscription(t, subscriptionID, userID, planID, 1_000, test.preConsumed)
+
+			ctx := newBillingTestContext(t)
+			relayInfo := newBillingTestRelayInfo(userID, tokenID, fmt.Sprintf("sk-missing-subscription-request-%d", index), requestID, "subscription_only")
+			relayInfo.SubscriptionId = subscriptionID
+			relayInfo.SubscriptionDistributorTokenBilling = true
+			relayInfo.Billing = &BillingSession{
+				relayInfo:               relayInfo,
+				preConsumedSubscription: test.preConsumed,
+				funding: &SubscriptionFunding{
+					requestId:               requestID,
+					userId:                  userID,
+					subscriptionId:          subscriptionID,
+					preConsumed:             test.preConsumed,
+					DistributorTokenBilling: true,
+					creditValuationTracked:  true,
+					EntitlementType:         model.SubscriptionEntitlementCreditBalance,
+				},
+			}
+
+			err := SettleBillingWithInput(ctx, relayInfo, BillingSettleInput{
+				SubscriptionTokens:                 test.target,
+				SubscriptionTokensCodexProAdjusted: true,
+			})
+
+			require.ErrorIs(t, err, model.ErrCreditValuationRequestNotFound)
+			assert.Equal(t, test.preConsumed, getSubscriptionTokenUsed(t, subscriptionID))
+		})
+	}
+}
+
 func seedCodexProBillingPlan(t *testing.T, id int, code string, tokenLimit int64, price float64, isTrial bool, inviteTrial bool) {
 	t.Helper()
 	ensureSubscriptionBillingTables(t)
@@ -1924,6 +2147,61 @@ func TestCreditBillingSessionRefundUsesStableRequestTarget(t *testing.T) {
 	var requestCount int64
 	require.NoError(t, model.DB.Model(&model.SubscriptionPreConsumeRecord{}).Where("request_id = ?", requestID).Count(&requestCount).Error)
 	require.Equal(t, int64(1), requestCount)
+}
+
+func TestCreditBillingSessionFinalizesMappedZeroTargetAfterRestart(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 82951, 82952, 82953, 82954, 82955
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-zero-target-replay", 1_000, 0)
+	require.NoError(t, model.DB.AutoMigrate(&model.CreditValuationState{}, &model.CreditValuationMigration{}))
+	require.NoError(t, model.DB.Create(&model.CreditValuationMigration{Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY"}).Error)
+	require.NoError(t, model.DB.Create(&model.CreditValuationState{
+		UserSubscriptionId: subID,
+		UserId:             userID,
+		Currency:           "CNY",
+		AvailableCredit:    1_000,
+		ExactCostMicros:    40_000_000,
+		RuleVersion:        model.CreditValuationRuleVersion,
+		StateVersion:       1,
+	}).Error)
+
+	const requestID = "req-credit-zero-target-replay"
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-zero-target-replay", requestID, "subscription_only")
+	freezeCreditBillingForServiceTest(t, ctx, relayInfo, channelID, creditbilling.ModeUsageTokens, 0, false)
+	relayInfo.SetEstimatePromptTokens(100)
+	preConsumeForBillingTest(t, ctx, relayInfo, 999)
+	require.NoError(t, model.SettleUserSubscriptionRequestTarget(requestID, subID, 0, false))
+
+	var active model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&active).Error)
+	require.Equal(t, subID, active.ValuationSubscriptionId)
+	require.Zero(t, active.AppliedCredit)
+	require.Zero(t, active.FinalizedAt)
+
+	replayedInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-zero-target-replay", requestID, "subscription_only")
+	replayedInfo.SubscriptionId = subID
+	replayedInfo.SubscriptionDistributorTokenBilling = true
+	replayedInfo.Billing = &BillingSession{
+		relayInfo: replayedInfo,
+		funding: &SubscriptionFunding{
+			requestId:              requestID,
+			userId:                 userID,
+			subscriptionId:         subID,
+			creditValuationTracked: true,
+			EntitlementType:        model.SubscriptionEntitlementCreditBalance,
+		},
+	}
+	require.NoError(t, SettleBillingWithInput(ctx, replayedInfo, BillingSettleInput{
+		SubscriptionTokens:                 0,
+		SubscriptionTokensCodexProAdjusted: true,
+	}))
+
+	var finalized model.SubscriptionPreConsumeRecord
+	require.NoError(t, model.DB.Where("request_id = ?", requestID).First(&finalized).Error)
+	require.Equal(t, "refunded", finalized.Status)
+	require.Positive(t, finalized.FinalizedAt)
+	require.Zero(t, getSubscriptionTokenUsed(t, subID))
 }
 
 func TestCreditTaskInitialSettlementPersistsNonFinalRequestIdentity(t *testing.T) {

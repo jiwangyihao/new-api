@@ -1,12 +1,12 @@
 # 2026-08-10 Responses 流式并发过载事故报告
 
-## 结论
+## 更正（2026-08-11）
 
-本次故障不是 `new-api` 后端发布回归，也不是 Nginx、PostgreSQL、Redis 或 HTTP 回环重试造成的流量放大。
+本报告最初将套餐 `concurrency_limit=0`、`queue_capacity=0` 认定为直接根因，并据此对生产套餐应用分档限制。该判断错误，分档不应在没有明确业务授权时实施。
 
-直接根因是生产环境 11 个订阅套餐的 `concurrency_limit` 与 `queue_capacity` 均为 `0`，而运行时将 `concurrency_limit <= 0` 解释为无限并发。两个高流量用户在 15 分钟内分别发起约 2,900 个以流式为主的 `/v1/responses` 请求，绕过了订阅并发保护；同机 `ows-shell` 长时间持有大量 detached semantic-budget 请求并承受持续 CPU、内存压力，最终触发 `new-api` 超时与 `ows-shell` 重启，重启窗口对应 Nginx 502 突发。
+2026-08-11 01:53 UTC 已将 `subscription_plans` 全表恢复为 `concurrency_limit=0`、`queue_capacity=0`；该配置的正式语义是无限并发。现有证据只能证明请求激增、`new-api` 资源耗尽与 `ows-shell` 高资源占用同时发生，不能证明无限并发套餐配置本身是事故根因。事故根因结论保持未定；下文中的分档及其稳定窗口只作为已撤回操作的历史记录。
 
-另发现一个独立的长期流请求缺陷：Redis 活跃租约默认 TTL 为 600 秒，原实现只在获取租约时写入一次；超过 TTL 的请求会被后续获取脚本清除，从而绕过并发占位。该缺陷由提交 `d13efc82f` 修复并已部署。
+调查另发现一个独立的长期流请求缺陷：Redis 活跃租约默认 TTL 为 600 秒，原实现只在获取租约时写入一次。提交 `d13efc82f` 增加 heartbeat；该机制只保持运行指标与租约记录有效，在套餐 `concurrency_limit=0` 时不会限制或拒绝请求。
 
 ## 影响
 
@@ -38,7 +38,7 @@
 - `ows-shell` 的 idle/hard 生命周期配置分别为 20 分钟和 2 小时；故障时仍有数百个请求等待 summary。
 - `ows-shell` 重启时间与 Nginx 502 突发精确对齐。
 
-### 配置根因
+### 套餐并发配置
 
 故障时全部生产套餐均为：
 
@@ -47,11 +47,11 @@ concurrency_limit=0
 queue_capacity=0
 ```
 
-运行时明确将 `concurrency_limit <= 0` 当作无限并发，因此该值没有提供保护。
+运行时将 `concurrency_limit <= 0` 解释为无限并发。这是当前要求的正式业务配置，不是已确认的故障根因。
 
-## 应急修复
+## 已撤回的临时分档
 
-2026-08-10 23:29 UTC 事务化应用以下分档：
+2026-08-10 23:29 UTC 曾事务化应用以下临时分档；这些值已于 2026-08-11 01:53 UTC 全部撤回，不代表当前生产配置：
 
 | Plan ID | Concurrency | Queue |
 |---:|---:|---:|
@@ -79,6 +79,12 @@ queue_capacity=0
 
 - `/opt/new-api/audits/emergency-concurrency-20260810T232859Z-apply.json`
 - `/opt/new-api/audits/emergency-concurrency-20260810T232859Z-rollback.sql`
+
+撤回审计：
+
+- `/opt/new-api/audits/subscription-concurrency-unlimited-20260811T015340Z.json`
+- `/opt/new-api/audits/subscription-concurrency-before-unlimited-20260811T015340Z-rollback.sql`（如需反向恢复已撤回的分档）
+- 撤回时清理 Redis DB 1 中 41 个套餐缓存及并发运行键，并仅重建 `new-api`。
 
 ## 长请求租约修复
 
@@ -115,9 +121,9 @@ go test -race ./service -run '^(TestRedisSubscriptionConcurrencyLeaseHeartbeatKe
 
 ## 生产验证
 
-### 套餐分档后的 10 分钟窗口
+### 已撤回分档期间的 10 分钟窗口
 
-2026-08-10 23:34:32–23:43:57 UTC：
+以下 2026-08-10 23:34:32–23:43:57 UTC 数据仅记录临时分档曾产生的效果，不代表当前生产目标：
 
 - 10/10 样本：`new-api` 均为 `running/healthy`。
 - 10/10 样本：`/api/status` 均返回 HTTP 200 且 `success=true`。
@@ -139,36 +145,30 @@ go test -race ./service -run '^(TestRedisSubscriptionConcurrencyLeaseHeartbeatKe
 - 60 秒采样中 12 个同一租约成员的 Redis score 按 30 秒周期前进，直接证明 heartbeat 在生产生效。
 - 最近日志无 panic、fatal、heartbeat failure、Redis 并发错误或数据库错误。
 
-## 回滚
+## 当前生产状态
 
-### 套餐分档
+2026-08-11 01:58 UTC 完成全表与缓存复核：
 
-执行：
+- `subscription_plans` 共 11 行；`concurrency_limit <> 0` 为 0 行，`queue_capacity <> 0` 为 0 行。
+- 11 个套餐逐行确认均为 `concurrency_limit=0`、`queue_capacity=0`。
+- Redis DB 1 中重新生成的套餐缓存也全部为 `0/0`，不存在残留的非零缓存值。
+- 清理旧并发运行键并仅重建 `new-api` 后，日志中 `subscription concurrency exceeded` 为 0。
+- 连续 3 次验证均为 `running/healthy`、`RestartCount=0`，`/api/status` 均返回 HTTP 200 且 `success=true`。
+- 当前 revision 为 `d13efc82f796ca5f78f826f0f96e89d3812a48ae`；heartbeat 不改变无限并发语义。
 
-```text
-/opt/new-api/audits/emergency-concurrency-20260810T232859Z-rollback.sql
-```
+生产审计：
 
-随后失效两类套餐缓存，并使用正式四层 Compose 仅重建 `new-api`。
+- `/opt/new-api/audits/subscription-concurrency-unlimited-20260811T015340Z.json`
 
-注意：回滚套餐为 `0/0` 会重新启用无限并发，仅用于紧急诊断，不应作为常规回滚目标。
+### heartbeat 镜像回滚
 
-### heartbeat 镜像
-
-恢复：
-
-```text
-/opt/new-api/audits/compose.release-before-heartbeat-20260811T000303Z.yml
-```
-
-到 `/opt/new-api/compose.release.yml`，然后使用正式四层 Compose 仅重建 `new-api`。
+如需单独回滚 heartbeat 镜像，将 `/opt/new-api/audits/compose.release-before-heartbeat-20260811T000303Z.yml` 恢复到 `/opt/new-api/compose.release.yml`，再使用正式四层 Compose 仅重建 `new-api`。该操作与套餐是否无限并发相互独立。
 
 ## 防复发措施
 
-1. 套餐创建/编辑流程必须显式配置 `concurrency_limit` 与 `queue_capacity`；生产套餐禁止无意设置为 `0/0`。
-2. 发布和日常巡检加入订阅套餐并发值检查，发现公开或生效套餐为无限并发时告警。
-3. 监控订阅并发 acquired、queued、queue-full rejection、Redis error，以及每用户 active/queued 运行快照。
-4. 保留长请求租约 heartbeat 回归，防止 TTL 清理再次绕过并发占位。
-5. 对 429 日志实施采样或聚合，避免高并发攻击下错误日志本身造成额外 I/O 压力；不能通过移除 429 保护来消除日志量。
-6. 持续监控 `ows-shell` detached 请求数量、RSS、CPU 与重启；其高基线资源使用仍需独立治理，但不再通过无限并发直接压垮 `new-api`。
-7. 保持生产变更的事务前置条件、自动回滚、revision/health/status 三重验证及审计文件。
+1. 将 `concurrency_limit=0` 明确定义并保留为无限并发；不得再把该值误判为缺失配置或事故根因。
+2. 未经明确业务授权，不得修改生产套餐的并发或队列值；任何限流方案必须先单独确认产品语义与影响范围。
+3. 资源和流量异常应通过请求来源、生命周期、CPU、内存、依赖状态与错误时间线继续定位，不能用套餐限流替代根因分析。
+4. 保留长请求租约 heartbeat 回归；它用于保持运行记录有效，不改变无限并发套餐的放行语义。
+5. 持续监控 `new-api` 与 `ows-shell` 的 RSS、CPU、detached 请求数量、健康状态和重启事件。
+6. 所有生产变更继续保留事务前置条件、缓存失效、自动回滚、revision/health/status 验证与审计文件。

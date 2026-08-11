@@ -22,8 +22,8 @@
 
 ## 生产访问与安全边界
 
-- RackNerd 访问必须遵守既有跳板：先到 `AutoDLChen`，再从跳板使用服务器既有密钥连接 `root@107.173.87.253`。不得改成未经验证的本机直连，不复制私钥，不把凭据写入仓库、`.scratch`、Orca 消息或日志。
-- 开始时只读记录当前 release/commit/image digest、容器、端口、反代、数据库/Redis、磁盘/内存、marker（如存在）和健康状态。不得把根工作树最新 HEAD 当生产证据；已知生产行为基线是 `f446a1569c2ced54a3fe438b5c4575659a59241d`，以服务器实测为准。
+- 生产访问使用已配置的 SSH 主机别名 `netcup-ows-migrate`；不得改动、复制或记录任何凭据，也不得使用其他主机、跳板或裸 IP。
+- 开始时只读记录 `netcup-ows-migrate` 当前 release/commit/image digest、容器、端口、反代、数据库/Redis、磁盘/内存、marker（如存在）和健康状态。最新只读核验观察到 Compose release 使用 `ghcr.io/jiwangyihao/new-api@sha256:093c2b638a3a4e3c99f511257f62ebd9fa34e5d71b2cf43168c244edbe57be2f`；不得把根工作树最新 HEAD 当生产证据，以服务器实测为准。
 - 保留所有用户自有工作树和主树 `CLAUDE.md`。不得修改受保护的 nеw-аρi/QuаntumΝоuѕ 标识、许可证或归属。
 - 生产验证默认只读。只有已有明确授权的受控账号才能执行有写行为的业务探针；否则使用最新一致备份的隔离克隆完成 32 CNY 行为证明，生产库只做只读不变量和真实健康检查。
 

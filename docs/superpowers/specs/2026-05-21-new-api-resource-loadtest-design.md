@@ -16,7 +16,7 @@
 
 ## 非目标
 
-- 不在 RackNerd 或任何远端环境运行压测。
+- 不在任何远端或生产环境运行压测。
 - 不测试真实 OpenAI 或真实生产 upstream。
 - 不复用 `sub2api` 的 usage logs/dedup 业务语义。
 - 不关闭 `DataExportEnabled`、`LogConsumeEnabled`、订阅并发队列或 plan/token-quota billing。

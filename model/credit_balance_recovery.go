@@ -97,7 +97,7 @@ func RecoverCreditBalanceTx(tx *gorm.DB, request CreditBalanceRecoveryRequest) (
 	balanceBefore := balance.TokenLimit - balance.TokenUsed
 	availableBefore := maxInt64(balanceBefore, 0)
 	debtBefore := maxInt64(-balanceBefore, 0)
-	valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+	valuationReady, err := CreditValuationWriterReadyTx(tx)
 	if err != nil {
 		return nil, err
 	}

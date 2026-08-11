@@ -81,6 +81,9 @@ var classicBuildFS embed.FS
 var classicIndexPage []byte
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "credit-valuation-migrate" {
+		os.Exit(RunCreditValuationCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	startTime := time.Now()
 
 	err := InitResources()

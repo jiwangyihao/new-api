@@ -367,6 +367,9 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			result = loaded
 			return nil
 		}
+		if _, err := CreditValuationWriterReadyTx(tx); err != nil {
+			return err
+		}
 
 		creditPlan, err := AcquireCreditBalancePlanGuardTx(tx)
 		if err != nil {
@@ -456,7 +459,7 @@ func AdjustCreditBalance(request CreditBalanceAdjustmentRequest) (*CreditBalance
 			if err != nil {
 				return err
 			}
-			valuationReady, err := CreditValuationRuntimeReadyTx(tx)
+			valuationReady, err := CreditValuationWriterReadyTx(tx)
 			if err != nil {
 				return err
 			}

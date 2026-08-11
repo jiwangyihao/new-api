@@ -121,6 +121,22 @@ func taskAdjustFunding(task *model.Task, delta int, final bool) error {
 			return err
 		}
 		if sub.Status == model.SubscriptionStatusConverted {
+			if requestID := strings.TrimSpace(task.PrivateData.SubscriptionRequestId); requestID != "" {
+				result, applyErr := model.ApplyUserSubscriptionRequestDelta(requestID, task.PrivateData.SubscriptionId, int64(delta), final)
+				if applyErr != nil {
+					return applyErr
+				}
+				if result.Mapped {
+					return nil
+				}
+				valuationReady, readyErr := model.CreditValuationRuntimeReadyTx(model.DB)
+				if readyErr != nil {
+					return readyErr
+				}
+				if valuationReady {
+					return model.ErrCreditValuationStateMismatch
+				}
+			}
 			return model.PostConsumeUserSubscriptionTokenDelta(task.PrivateData.SubscriptionId, int64(delta))
 		}
 		if sub.EntitlementType == model.SubscriptionEntitlementCreditBalance {

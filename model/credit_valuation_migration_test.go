@@ -1,0 +1,365 @@
+package model
+
+import (
+	"github.com/QuantumNous/new-api/common"
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
+)
+
+func TestValidateCreditValuationMigrationRequestRequiresVersion(t *testing.T) {
+	err := ValidateCreditValuationMigrationRequest(CreditValuationMigrationRequest{
+		Mode:      CreditValuationMigrationModeDryRun,
+		BatchSize: 100,
+	})
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrCreditValuationMigrationVersionRequired)
+}
+
+func TestFreshCreditValuationDatabaseAutoReadiesThroughStartupMigration(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	previousDB, previousLogDB := DB, LOG_DB
+	previousSQLite, previousMySQL, previousPostgreSQL := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
+	DB, LOG_DB = db, db
+	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = true, false, false
+	t.Setenv("LOG_SQL_DSN", "")
+	t.Cleanup(func() {
+		DB, LOG_DB = previousDB, previousLogDB
+		common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = previousSQLite, previousMySQL, previousPostgreSQL
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	require.NoError(t, migrateDB())
+	empty, err := creditValuationMigrationBusinessDatabaseEmpty(db)
+	require.NoError(t, err)
+	require.True(t, empty, "the built-in Credit container is not historical business data")
+
+	var marker CreditValuationMigration
+	require.NoError(t, db.First(&marker, "version = ?", 1).Error)
+	require.Equal(t, CreditValuationMigrationReady, marker.Status)
+	require.Positive(t, marker.FxCapturedAt)
+	require.Equal(t, int64(1), marker.FxRateNumerator)
+	require.Equal(t, int64(1), marker.FxRateDenominator)
+	require.NotEmpty(t, marker.Checksum)
+
+	report, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeVerify, Version: 1, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.True(t, report.Ready)
+	require.Equal(t, marker.Checksum, report.Checksum)
+}
+
+func setupCreditValuationMigrationLifecycleTestDB(t *testing.T, tables ...any) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	previousDB, previousLogDB := DB, LOG_DB
+	previousSQLite, previousMySQL, previousPostgreSQL := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
+	DB, LOG_DB = db, db
+	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = true, false, false
+	ClearPrimaryBillableSubscriptionCacheForTest()
+	ClearSubscriptionPlanCacheForTest()
+	require.NoError(t, db.AutoMigrate(append([]any{&CreditValuationMigration{}}, tables...)...))
+	t.Cleanup(func() {
+		DB, LOG_DB = previousDB, previousLogDB
+		common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = previousSQLite, previousMySQL, previousPostgreSQL
+		ClearPrimaryBillableSubscriptionCacheForTest()
+		ClearSubscriptionPlanCacheForTest()
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	return db
+}
+
+func TestVerifyCreditValuationMigrationRejectsEveryNonReadyStatus(t *testing.T) {
+	for _, status := range []string{
+		CreditValuationMigrationPending,
+		CreditValuationMigrationRunning,
+		CreditValuationMigrationFailed,
+		CreditValuationMigrationSuspended,
+	} {
+		t.Run(status, func(t *testing.T) {
+			db := setupCreditValuationMigrationLifecycleTestDB(t)
+			require.NoError(t, db.Create(&CreditValuationMigration{Version: 7, Status: status}).Error)
+			report, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+				Mode: CreditValuationMigrationModeVerify, Version: 7, BatchSize: 100,
+			})
+			require.ErrorIs(t, err, ErrCreditValuationMigrationNotReady)
+			require.Equal(t, status, report.Status)
+			require.False(t, report.Ready)
+		})
+	}
+}
+
+func TestHigherFailedMarkerBlocksLowerReadyApplyReplay(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+	require.NoError(t, db.Create(&CreditValuationMigration{Version: 1, Status: CreditValuationMigrationReady, Checksum: "ready"}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{Version: 2, Status: CreditValuationMigrationFailed, Checksum: "failed"}).Error)
+	report, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeApply, Version: 1, BatchSize: 100,
+	})
+	require.ErrorIs(t, err, ErrCreditValuationMigrationConflict)
+	require.False(t, report.Changed)
+}
+
+func TestRunningMigrationLeaseActiveRejectsClaim(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+	now, err := getDBTimestampStrictTx(db)
+	require.NoError(t, err)
+	fx := CreditValuationMigrationFXSnapshot{SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: now}
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 3, Status: CreditValuationMigrationRunning, ValuationCurrency: "CNY",
+		FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+		PreflightChecksum: "same", RunLeaseExpiresAt: now + 60,
+	}).Error)
+	_, err = claimCreditValuationMigration(db, CreditValuationMigrationRequest{Version: 3}, "CNY", fx, "same", false)
+	require.ErrorIs(t, err, ErrCreditValuationMigrationConflict)
+}
+
+func TestExpiredRunningMigrationSameChecksumCanResume(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+	now, err := getDBTimestampStrictTx(db)
+	require.NoError(t, err)
+	fx := CreditValuationMigrationFXSnapshot{SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: now}
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 4, Status: CreditValuationMigrationRunning, ValuationCurrency: "CNY",
+		FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+		PreflightChecksum: "same", RunLeaseExpiresAt: now - 1,
+	}).Error)
+	claimed, err := claimCreditValuationMigration(db, CreditValuationMigrationRequest{Version: 4}, "CNY", fx, "same", false)
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationRunning, claimed.Status)
+	require.Greater(t, claimed.RunLeaseExpiresAt, now)
+}
+
+func TestExpiredRunningMigrationChecksumDriftRejectsResume(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+	now, err := getDBTimestampStrictTx(db)
+	require.NoError(t, err)
+	fx := CreditValuationMigrationFXSnapshot{SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: now}
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 5, Status: CreditValuationMigrationRunning, ValuationCurrency: "CNY",
+		FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: now,
+		PreflightChecksum: "original", RunLeaseExpiresAt: now - 1,
+	}).Error)
+	_, err = claimCreditValuationMigration(db, CreditValuationMigrationRequest{Version: 5}, "CNY", fx, "drifted", false)
+	require.ErrorIs(t, err, ErrCreditValuationMigrationChecksumMismatch)
+}
+
+func TestFailedMigrationRetryPreservesFrozenFXAndChecksum(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+	now, err := getDBTimestampStrictTx(db)
+	require.NoError(t, err)
+	fx := CreditValuationMigrationFXSnapshot{SourceCurrency: "USD", ValuationCurrency: "CNY", Numerator: 73, Denominator: 10, CapturedAt: now}
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 6, Status: CreditValuationMigrationFailed, ValuationCurrency: "CNY",
+		FxRateNumerator: 73, FxRateDenominator: 10, FxCapturedAt: now,
+		PreflightChecksum: "frozen",
+	}).Error)
+	claimed, err := claimCreditValuationMigration(db, CreditValuationMigrationRequest{Version: 6}, "CNY", fx, "frozen", false)
+	require.NoError(t, err)
+	require.Equal(t, int64(73), claimed.FxRateNumerator)
+	require.Equal(t, int64(10), claimed.FxRateDenominator)
+	require.Equal(t, now, claimed.FxCapturedAt)
+	require.Equal(t, "frozen", claimed.PreflightChecksum)
+}
+
+func TestSuspendedMigrationRejectsGrantAndPreconsumeWithoutSideEffects(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t,
+		&User{}, &SubscriptionPlan{}, &UserSubscription{}, &CreditBalanceLedger{}, &SubscriptionPreConsumeRecord{},
+	)
+	const userID = 27_001
+	const planID = 27_002
+	const subscriptionID = 27_003
+	valuationCurrency := "CNY"
+	require.NoError(t, db.Create(&CreditValuationMigration{Version: 1, Status: CreditValuationMigrationSuspended}).Error)
+	require.NoError(t, db.Create(&User{Id: userID, Username: "suspended-writer", Status: common.UserStatusEnabled}).Error)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: planID, Title: "Suspended Credit", Enabled: true, EntitlementType: SubscriptionEntitlementCreditBalance,
+		MonthlyTokenLimit: 100, ValuationCurrency: &valuationCurrency,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: subscriptionID, UserId: userID, PlanId: planID, EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status: SubscriptionStatusActive, TokenLimit: 100, TokenUsed: 0,
+	}).Error)
+
+	err := db.Transaction(func(tx *gorm.DB) error {
+		_, grantErr := GrantCreditBalanceTx(tx, CreditBalanceGrantRequest{
+			UserId: userID, GrossCredit: 10, IdempotencyKey: "suspended-grant",
+			SourceType: CreditBalanceLedgerSourceAdminAdjustment, SourceId: 27_004,
+			Type: CreditBalanceLedgerTypeAdminIncrease, TargetPlanId: planID,
+		})
+		return grantErr
+	})
+	require.ErrorIs(t, err, ErrCreditValuationMigrationSuspended)
+	_, err = PreConsumeUserSubscription("suspended-preconsume", userID, "gpt-4o", 0, 5)
+	require.ErrorIs(t, err, ErrCreditValuationMigrationSuspended)
+
+	var subscription UserSubscription
+	require.NoError(t, db.First(&subscription, subscriptionID).Error)
+	require.Equal(t, int64(100), subscription.TokenLimit)
+	require.Zero(t, subscription.TokenUsed)
+	var ledgerCount, preconsumeCount int64
+	require.NoError(t, db.Model(&CreditBalanceLedger{}).Count(&ledgerCount).Error)
+	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).Count(&preconsumeCount).Error)
+	require.Zero(t, ledgerCount)
+	require.Zero(t, preconsumeCount)
+}
+
+func TestVerifyCreditValuationMigrationSourcesUsesCanonicalCreditSourceKey(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &CreditBalanceLedger{})
+	ledgers := []CreditBalanceLedger{
+		{Id: 1, UserId: 1, UserSubscriptionId: 1, Type: CreditBalanceLedgerTypePurchase, IdempotencyKey: "canonical-source-a", SourceType: CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 101, SourceKey: "subscription_order:shared", GrossCredit: 100, NetCredit: 100},
+		{Id: 2, UserId: 2, UserSubscriptionId: 2, Type: CreditBalanceLedgerTypePurchase, IdempotencyKey: "canonical-source-b", SourceType: CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 102, SourceKey: "subscription_order:shared", GrossCredit: 100, NetCredit: 100},
+	}
+	require.NoError(t, db.Create(&ledgers).Error)
+
+	failures, err := verifyCreditValuationMigrationSources(db)
+	require.NoError(t, err)
+	require.Contains(t, failures, CreditValuationMigrationReasonCount{Reason: "credit_valuation_source_duplicate", Count: 2})
+}
+
+func TestMigrationSnapshotUsesFXDirectionForUSDValuation(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &Option{}, &SubscriptionPlan{}, &UserSubscription{})
+	valuationCurrency := "USD"
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_101, Title: "USD Credit", Currency: "USD", ValuationCurrency: &valuationCurrency,
+		EntitlementType: SubscriptionEntitlementCreditBalance, MonthlyTokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_102, UserId: 27_103, PlanId: 27_101, EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status: SubscriptionStatusActive, TokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&Option{Key: "USDExchangeRate", Value: "7.3"}).Error)
+
+	fx, currency, blockers, err := migrationSnapshotInputs(db, CreditValuationMigration{}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, "USD", currency)
+	require.Empty(t, blockers)
+	require.Equal(t, "CNY", fx.SourceCurrency)
+	require.Equal(t, "USD", fx.ValuationCurrency)
+	require.Equal(t, int64(10), fx.Numerator)
+	require.Equal(t, int64(73), fx.Denominator)
+	require.Positive(t, fx.CapturedAt)
+}
+
+func TestRepairMissingAsUnknownCanBeAppliedWithSameVersion(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t,
+		&Option{}, &SubscriptionPlan{}, &UserSubscription{}, &CreditValuationState{},
+		&CreditBalanceLedger{}, &TimedSubscriptionValuationGrant{},
+	)
+	valuationCurrency := "CNY"
+	zeroMicros := int64(0)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_201, Title: "Repair Credit", PriceAmountMicros: &zeroMicros,
+		Currency: "CNY", ValuationCurrency: &valuationCurrency,
+		EntitlementType: SubscriptionEntitlementCreditBalance, MonthlyTokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_202, UserId: 27_203, PlanId: 27_201,
+		EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status:          SubscriptionStatusActive, TokenLimit: 1_000, TokenUsed: 200,
+	}).Error)
+	require.NoError(t, db.Create(&Option{Key: "USDExchangeRate", Value: "7.3"}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 1, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 73, FxRateDenominator: 10, FxCapturedAt: 1, Checksum: "previous",
+	}).Error)
+	var beforeStates int64
+	require.NoError(t, db.Model(&CreditValuationState{}).Count(&beforeStates).Error)
+	require.Zero(t, beforeStates)
+
+	repair, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeRepairMissingAsUnknown, Version: 2, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationFailed, repair.Status)
+	require.True(t, repair.Changed)
+	require.Equal(t, int64(1), repair.Credit.RowsUnknown)
+	require.Equal(t, int64(800), repair.Credit.UnknownCredit)
+
+	applied, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeApply, Version: 2, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationReady, applied.Status)
+	require.True(t, applied.Ready)
+	require.Equal(t, int64(1), applied.Credit.RowsUnknown)
+	require.Equal(t, int64(800), applied.Credit.UnknownCredit)
+
+	verified, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeVerify, Version: 2, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.True(t, verified.Ready)
+	require.Equal(t, applied.Checksum, verified.Checksum)
+}
+
+func TestVerifyCreditValuationMigrationSourcesRejectsInvalidTimedGrantFacts(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &TimedSubscriptionValuationGrant{})
+	grants := []TimedSubscriptionValuationGrant{
+		{Id: 1, IdempotencyKey: "invalid-window", UserSubscriptionId: 1, UserId: 1, PlanId: 1, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:1", SourceId: 1, EventStartTime: 200, EventEndTime: 100, GrantCredit: 1_000, SourcePriceMicros: 40_000_000, SourceCurrency: "CNY", ValuationAmountMicros: 40_000_000, ValuationCurrency: "CNY", Confidence: CreditValuationConfidenceEstimated, RuleVersion: CreditValuationRuleVersion, FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: 1, CreatedAt: 1},
+		{Id: 2, IdempotencyKey: "invalid-value", UserSubscriptionId: 2, UserId: 2, PlanId: 2, SourceType: TimedSubscriptionGrantSourceOrder, SourceKey: "subscription_order:2", SourceId: 2, EventStartTime: 100, EventEndTime: 200, GrantCredit: 0, SourcePriceMicros: -1, SourceCurrency: "EUR", ValuationAmountMicros: -1, ValuationCurrency: "USD", Confidence: "invalid", RuleVersion: 0, FxRateNumerator: 0, FxRateDenominator: 0, CreatedAt: 1},
+	}
+	require.NoError(t, db.Create(&grants).Error)
+
+	failures, err := verifyCreditValuationMigrationSources(db)
+	require.NoError(t, err)
+	require.Contains(t, failures, CreditValuationMigrationReasonCount{Reason: "timed_valuation_grant_invalid", Count: 2})
+}
+
+func TestSuspendTransitionsHighestReadyMarkerAndKeepsReadOnlyViewsAvailable(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &SubscriptionPlan{})
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 3, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 73, FxRateDenominator: 10, FxCapturedAt: 1, Checksum: "ready",
+	}).Error)
+
+	report, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeSuspend, Version: 3, BatchSize: 100, Reason: "maintenance window",
+	})
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationSuspended, report.Status)
+	require.True(t, report.Changed)
+	require.False(t, report.Ready)
+
+	status, err := CreditValuationRuntimeStatusTx(db)
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationRuntimeSuspended, status)
+	ready, err := CreditValuationRuntimeReadyTx(db)
+	require.NoError(t, err)
+	require.False(t, ready)
+	_, err = CreditValuationWriterReadyTx(db)
+	require.ErrorIs(t, err, ErrCreditValuationMigrationSuspended)
+
+	dryRun, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeDryRun, Version: 3, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.True(t, dryRun.ReadOnly)
+	require.Equal(t, CreditValuationMigrationSuspended, dryRun.Status)
+}
+
+func TestFreshDatabaseDetectionIncludesTimedHistoryWithoutCredit(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &UserSubscription{})
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_301, UserId: 27_302, PlanId: 27_303, EntitlementType: SubscriptionEntitlementTimed,
+		Status: SubscriptionStatusActive, StartTime: 100, EndTime: 200,
+	}).Error)
+
+	empty, err := creditValuationMigrationBusinessDatabaseEmpty(db)
+	require.NoError(t, err)
+	require.False(t, empty)
+	require.NoError(t, ensureCreditValuationMigration(db))
+	var count int64
+	require.NoError(t, db.Model(&CreditValuationMigration{}).Count(&count).Error)
+	require.Zero(t, count)
+}

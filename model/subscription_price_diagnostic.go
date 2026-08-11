@@ -34,7 +34,7 @@ func sqliteSubscriptionPlanPriceRoundtripMatches(db *gorm.DB, planId int, amount
 	canonicalPrice := fmt.Sprintf("%d.%06d", amountMicros/amountMicrosPerUnit, amountMicros%amountMicrosPerUnit)
 	var matches int
 	err := db.Raw(
-		`SELECT CASE WHEN price_amount = CAST(? AS NUMERIC) THEN 1 ELSE 0 END FROM subscription_plans WHERE id = ? AND price_amount_micros IS NULL`,
+		`SELECT CASE WHEN price_amount = CAST(? AS NUMERIC) THEN 1 ELSE 0 END FROM subscription_plans WHERE id = ?`,
 		canonicalPrice,
 		planId,
 	).Scan(&matches).Error

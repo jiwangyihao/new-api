@@ -15,6 +15,7 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 var commonGroupCol = "`group`"
@@ -116,6 +117,10 @@ func CheckSetup() {
 }
 
 func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
+	return chooseDBWithSelectionLog(envName, isLog, true)
+}
+
+func chooseDBWithSelectionLog(envName string, isLog bool, logSelection bool) (*gorm.DB, error) {
 	defer func() {
 		initCol()
 	}()
@@ -123,7 +128,9 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	if dsn != "" {
 		if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
 			// Use PostgreSQL
-			common.SysLog("using PostgreSQL as database")
+			if logSelection {
+				common.SysLog("using PostgreSQL as database")
+			}
 			if !isLog {
 				common.UsingPostgreSQL = true
 			} else {
@@ -137,7 +144,9 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 			})
 		}
 		if strings.HasPrefix(dsn, "local") {
-			common.SysLog("SQL_DSN not set, using SQLite as database")
+			if logSelection {
+				common.SysLog("SQL_DSN not set, using SQLite as database")
+			}
 			if !isLog {
 				common.UsingSQLite = true
 			} else {
@@ -148,7 +157,9 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 			})
 		}
 		// Use MySQL
-		common.SysLog("using MySQL as database")
+		if logSelection {
+			common.SysLog("using MySQL as database")
+		}
 		// check parseTime
 		if !strings.Contains(dsn, "parseTime") {
 			if strings.Contains(dsn, "?") {
@@ -167,11 +178,64 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 		})
 	}
 	// Use SQLite
-	common.SysLog("SQL_DSN not set, using SQLite as database")
+	if logSelection {
+		common.SysLog("SQL_DSN not set, using SQLite as database")
+	}
 	common.UsingSQLite = true
 	return gorm.Open(sqlite.Open(common.SQLitePath), &gorm.Config{
 		PrepareStmt: true, // precompile SQL
 	})
+}
+
+var maintenanceDB *gorm.DB
+
+func InitMaintenanceDB() (*gorm.DB, error) {
+	if maintenanceDB != nil {
+		return maintenanceDB, nil
+	}
+	if os.Getenv("SQL_DSN") == "" {
+		if sqlitePath := strings.TrimSpace(os.Getenv("SQLITE_PATH")); sqlitePath != "" {
+			common.SQLitePath = sqlitePath
+		}
+	}
+
+	db, err := chooseDBWithSelectionLog("SQL_DSN", false, false)
+	if err != nil {
+		return nil, err
+	}
+	// Maintenance commands own stdout/stderr as a machine-readable JSON
+	// protocol; database diagnostics must be returned as errors, not logged.
+	db = db.Session(&gorm.Session{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, err
+	}
+	sqlDB.SetMaxIdleConns(2)
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetConnMaxLifetime(60 * time.Second)
+	if err := sqlDB.Ping(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("failed to connect to maintenance database: %w", err)
+	}
+	if common.UsingMySQL {
+		if err := checkMySQLChineseSupport(db); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
+	}
+
+	maintenanceDB = db
+	return db, nil
+}
+
+func CloseMaintenanceDB() error {
+	if maintenanceDB == nil {
+		return nil
+	}
+	db := maintenanceDB
+	maintenanceDB = nil
+	return closeDB(db)
 }
 
 func InitDB() (err error) {
@@ -335,6 +399,9 @@ func migrateDB() error {
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
 		return err
 	}
+	if err := ensureCreditValuationMigration(DB); err != nil {
+		return err
+	}
 	if err := BackfillTimedSubscriptionGrantMetadata(); err != nil {
 		return err
 	}
@@ -452,6 +519,9 @@ func migrateDBFast() error {
 		return err
 	}
 	if err := ensureCreditBalanceSubscriptionPlan(); err != nil {
+		return err
+	}
+	if err := ensureCreditValuationMigration(DB); err != nil {
 		return err
 	}
 	if err := BackfillTimedSubscriptionGrantMetadata(); err != nil {
@@ -814,16 +884,24 @@ func ensureCreditBalanceSubscriptionPlan() error {
 		return fmt.Errorf("multiple credit balance subscription plans exist")
 	}
 	if len(existing) == 1 {
-		if existing[0].SingletonKey != nil && *existing[0].SingletonKey == creditBalancePlanSingletonKey {
+		updates := make(map[string]any)
+		if existing[0].SingletonKey == nil || *existing[0].SingletonKey != creditBalancePlanSingletonKey {
+			updates["singleton_key"] = creditBalancePlanSingletonKey
+		}
+		if existing[0].PriceAmountMicros == nil && existing[0].PriceAmount == 0 {
+			updates["price_amount_micros"] = int64(0)
+		}
+		if len(updates) == 0 {
 			return nil
 		}
-		return DB.Model(&SubscriptionPlan{}).Where("id = ?", existing[0].Id).Update("singleton_key", creditBalancePlanSingletonKey).Error
+		return DB.Model(&SubscriptionPlan{}).Where("id = ?", existing[0].Id).Updates(updates).Error
 	}
 
 	now := common.GetTimestamp()
 	createErr := DB.Model(&SubscriptionPlan{}).Create(map[string]any{
 		"title":                             "Credit 余额套餐",
 		"price_amount":                      0,
+		"price_amount_micros":               int64(0),
 		"currency":                          "CNY",
 		"duration_unit":                     SubscriptionDurationMonth,
 		"duration_value":                    1,

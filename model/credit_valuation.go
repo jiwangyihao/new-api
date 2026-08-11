@@ -158,21 +158,83 @@ func creditValuationUnitValueRatio(sourcePriceMicros int64, sourcePlanCredit int
 	return combinedNumerator, combinedDenominator, nil
 }
 
-// CreditValuationRuntimeReadyTx only observes the existing marker. Marker
-// creation and every lifecycle transition remain owned by Issue #27.
-func CreditValuationRuntimeReadyTx(tx *gorm.DB) (bool, error) {
+type CreditValuationRuntimeStatus string
+
+const (
+	CreditValuationRuntimeAbsent    CreditValuationRuntimeStatus = "absent"
+	CreditValuationRuntimePending   CreditValuationRuntimeStatus = CreditValuationMigrationPending
+	CreditValuationRuntimeRunning   CreditValuationRuntimeStatus = CreditValuationMigrationRunning
+	CreditValuationRuntimeReady     CreditValuationRuntimeStatus = CreditValuationMigrationReady
+	CreditValuationRuntimeFailed    CreditValuationRuntimeStatus = CreditValuationMigrationFailed
+	CreditValuationRuntimeSuspended CreditValuationRuntimeStatus = CreditValuationMigrationSuspended
+)
+
+// CreditValuationRuntimeStatusTx observes only the highest migration version.
+func CreditValuationRuntimeStatusTx(tx *gorm.DB) (CreditValuationRuntimeStatus, error) {
 	if tx == nil {
-		return false, ErrDatabase
+		return CreditValuationRuntimeAbsent, ErrDatabase
 	}
 	if !tx.Migrator().HasTable(&CreditValuationMigration{}) {
-		return false, nil
+		return CreditValuationRuntimeAbsent, nil
 	}
 	var marker CreditValuationMigration
 	query := tx.Select("version", "status").Order("version desc").Limit(1).Find(&marker)
 	if query.Error != nil {
-		return false, query.Error
+		return CreditValuationRuntimeAbsent, query.Error
 	}
-	return query.RowsAffected == 1 && marker.Status == CreditValuationMigrationReady, nil
+	if query.RowsAffected != 1 {
+		return CreditValuationRuntimeAbsent, nil
+	}
+	switch marker.Status {
+	case CreditValuationMigrationPending:
+		return CreditValuationRuntimePending, nil
+	case CreditValuationMigrationRunning:
+		return CreditValuationRuntimeRunning, nil
+	case CreditValuationMigrationReady:
+		return CreditValuationRuntimeReady, nil
+	case CreditValuationMigrationFailed:
+		return CreditValuationRuntimeFailed, nil
+	case CreditValuationMigrationSuspended:
+		return CreditValuationRuntimeSuspended, nil
+	default:
+		return CreditValuationRuntimeStatus(marker.Status), nil
+	}
+}
+
+// CreditValuationRuntimeReadyTx is the read-only compatibility view.
+func CreditValuationRuntimeReadyTx(tx *gorm.DB) (bool, error) {
+	status, err := CreditValuationRuntimeStatusTx(tx)
+	return status == CreditValuationRuntimeReady, err
+}
+
+// CreditValuationWriterReadyTx distinguishes maintenance suspension from
+// schema-release non-ready states, which retain the legacy quantity path.
+func CreditValuationWriterReadyTx(tx *gorm.DB) (bool, error) {
+	status, err := CreditValuationRuntimeStatusTx(tx)
+	if err != nil {
+		return false, err
+	}
+	if status == CreditValuationRuntimeSuspended {
+		return false, ErrCreditValuationMigrationSuspended
+	}
+	return status == CreditValuationRuntimeReady, nil
+}
+
+// GuardCreditValuationSubscriptionWriterTx rejects only writes that can reach
+// Credit quantity state; timed-only writers remain available while suspended.
+func GuardCreditValuationSubscriptionWriterTx(tx *gorm.DB, subscriptionId int) error {
+	status, err := CreditValuationRuntimeStatusTx(tx)
+	if err != nil || status != CreditValuationRuntimeSuspended {
+		return err
+	}
+	var subscription UserSubscription
+	if err := tx.Select("entitlement_type", "status", "converted_to_subscription_id").Where("id = ?", subscriptionId).First(&subscription).Error; err != nil {
+		return err
+	}
+	if subscription.EntitlementType == SubscriptionEntitlementCreditBalance || (subscription.Status == SubscriptionStatusConverted && subscription.ConvertedToSubscriptionId > 0) {
+		return ErrCreditValuationMigrationSuspended
+	}
+	return nil
 }
 
 func initializeCreditValuationStateTx(tx *gorm.DB, lockedSub *UserSubscription, currency string) error {
@@ -202,6 +264,9 @@ func initializeCreditValuationStateTx(tx *gorm.DB, lockedSub *UserSubscription, 
 func ApplyCreditValuationIngressTx(tx *gorm.DB, lockedSub *UserSubscription, ingress creditValuationIngress) (CreditValuationMutationResult, error) {
 	if tx == nil || lockedSub == nil || lockedSub.Id <= 0 || lockedSub.EntitlementType != SubscriptionEntitlementCreditBalance {
 		return CreditValuationMutationResult{}, ErrCreditValuationStateMismatch
+	}
+	if _, err := CreditValuationWriterReadyTx(tx); err != nil {
+		return CreditValuationMutationResult{}, err
 	}
 	if lockedSub.TokenLimit < 0 || lockedSub.TokenUsed < 0 || ingress.grossCredit <= 0 || ingress.grossCostMicros < 0 || ingress.confidence != CreditValuationConfidenceExact {
 		return CreditValuationMutationResult{}, ErrCreditValuationStateMismatch
@@ -299,6 +364,9 @@ func ApplyCreditValuationOutflowTx(tx *gorm.DB, lockedSub *UserSubscription, cre
 	if tx == nil || lockedSub == nil || lockedSub.Id <= 0 || lockedSub.EntitlementType != SubscriptionEntitlementCreditBalance || credit <= 0 || mutationType == "" {
 		return CreditValuationMutationResult{}, ErrCreditValuationStateMismatch
 	}
+	if _, err := CreditValuationWriterReadyTx(tx); err != nil {
+		return CreditValuationMutationResult{}, err
+	}
 	var state CreditValuationState
 	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_subscription_id = ?", lockedSub.Id).First(&state).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -379,6 +447,9 @@ func ApplyCreditValuationOutflowTx(tx *gorm.DB, lockedSub *UserSubscription, cre
 func SettleCreditRequestTargetTx(tx *gorm.DB, route *SubscriptionPreConsumeRecord, targetCredit int64, final bool) error {
 	if tx == nil || route == nil || route.Id <= 0 || strings.TrimSpace(route.RequestId) == "" || targetCredit < 0 {
 		return ErrCreditValuationTargetConflict
+	}
+	if _, err := CreditValuationWriterReadyTx(tx); err != nil {
+		return err
 	}
 	expectedRoute := *route
 	var record SubscriptionPreConsumeRecord

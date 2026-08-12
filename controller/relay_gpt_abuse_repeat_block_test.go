@@ -149,3 +149,50 @@ func TestRelayChecksGPTAbuseRepeatBlockOnEveryRetryAttempt(t *testing.T) {
 	require.NoError(t, model.DB.Model(&model.GPTAbuseRepeatBlockLog{}).Count(&repeatCount).Error)
 	assert.Equal(t, int64(1), repeatCount)
 }
+
+func TestRelaySkipsGPTAbuseRepeatBlockWhenDisabled(t *testing.T) {
+	var upstreamCalls int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&upstreamCalls, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-request-id", "req-upstream-repeat-disabled")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}`))
+	}))
+	defer upstream.Close()
+	setupRelayGPTAbuseRepeatBlockTest(t, upstream.URL)
+	service.GPTAbuseRepeatBlockEnabled = false
+
+	body := `{"model":"gpt-4o","messages":[{"role":"user","content":"blocked"}]}`
+	channel := &model.Channel{Id: 87103, Type: constant.ChannelTypeOpenAI, Key: "sk-upstream", Status: common.ChannelStatusEnabled, Name: "relay-repeat-channel", Models: "gpt-4o", BaseURL: common.GetPointer(upstream.URL), AutoBan: common.GetPointer(0)}
+	for _, requestID := range []string{"req-relay-repeat-disabled-1", "req-relay-repeat-disabled-2"} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Set(common.RequestIdKey, requestID)
+		common.SetContextKey(c, constant.ContextKeyUserId, 87101)
+		common.SetContextKey(c, constant.ContextKeyUserEmail, "relay-repeat@example.com")
+		common.SetContextKey(c, constant.ContextKeyUserName, "relay-repeat-user")
+		common.SetContextKey(c, constant.ContextKeyUserQuota, 100000)
+		common.SetContextKey(c, constant.ContextKeyTokenId, 87102)
+		common.SetContextKey(c, constant.ContextKeyTokenKey, "sk-relay-repeat")
+		common.SetContextKey(c, constant.ContextKeyOriginalModel, "gpt-4o")
+		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		common.SetContextKey(c, constant.ContextKeyUserSetting, dto.UserSetting{BillingPreference: "subscription_only"})
+		c.Set("token_name", "relay-repeat-token")
+		require.Nil(t, middleware.SetupContextForSelectedChannel(c, channel, "gpt-4o"))
+
+		Relay(c, types.RelayFormatOpenAI)
+
+		require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+		assert.NotContains(t, recorder.Body.String(), string(types.ErrorCodeGPTAbuseRepeatedWarningRequest))
+	}
+	assert.Equal(t, int32(2), atomic.LoadInt32(&upstreamCalls))
+	var signalCount int64
+	require.NoError(t, model.DB.Model(&model.GPTAbuseSignalLog{}).Count(&signalCount).Error)
+	assert.Equal(t, int64(2), signalCount)
+	var repeatCount int64
+	require.NoError(t, model.DB.Model(&model.GPTAbuseRepeatBlockLog{}).Count(&repeatCount).Error)
+	assert.Zero(t, repeatCount)
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -127,10 +128,12 @@ func exceedsMaxTokensLimit(values ...*uint) bool {
 }
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
-	request := &dto.OpenAIResponsesRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
-	if err != nil {
-		return nil, err
+	request, ok := common.GetContextKeyType[*dto.OpenAIResponsesRequest](c, constant.ContextKeyOpenAIResponsesRequest)
+	if !ok || request == nil {
+		request = &dto.OpenAIResponsesRequest{}
+		if err := common.UnmarshalBodyReusable(c, request); err != nil {
+			return nil, err
+		}
 	}
 	if request.Model == "" {
 		return nil, errors.New("model is required")

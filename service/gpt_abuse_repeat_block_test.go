@@ -41,6 +41,40 @@ func setupGPTAbuseRepeatBlockServiceTest(t *testing.T) {
 	})
 }
 
+func TestGPTAbuseRepeatBlockFeatureFlagDefaultsDisabled(t *testing.T) {
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "")
+	assert.False(t, gptAbuseRepeatBlockEnabledFromEnv())
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "false")
+	assert.False(t, gptAbuseRepeatBlockEnabledFromEnv())
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "true")
+	assert.True(t, gptAbuseRepeatBlockEnabledFromEnv())
+}
+
+func TestGPTAbuseRepeatBlockDisabledShortCircuitsCaptureCheckAndStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseRepeatBlockServiceTest(t)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not read"))
+	closedStorage, err := common.CreateBodyStorage([]byte("not read"))
+	require.NoError(t, err)
+	require.NoError(t, closedStorage.Close())
+	info := newGPTAbuseSignalTestRelayInfo()
+	GPTAbuseRepeatBlockEnabled = false
+	require.NoError(t, CaptureGPTAbuseRepeatBlockFingerprint(c, info, closedStorage))
+	_, captured := GPTAbuseRepeatBlockContextFromGin(c)
+	assert.False(t, captured)
+
+	GPTAbuseRepeatBlockEnabled = true
+	c, info = newGPTAbuseRepeatBlockContext(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"blocked"}]}`)
+	GPTAbuseRepeatBlockEnabled = false
+	StoreGPTAbuseRepeatBlock(c, info, &model.GPTAbuseSignalLog{Id: 100, CreatedAt: 1700000000, CountEligible: true})
+	assert.Nil(t, CheckGPTAbuseRepeatBlock(c, info))
+	GPTAbuseRepeatBlockEnabled = true
+	assert.Nil(t, CheckGPTAbuseRepeatBlock(c, info), "disabled Store must not populate the repeat-block cache")
+}
+
 func newGPTAbuseRepeatBlockContext(t *testing.T, body string) (*gin.Context, *relaycommon.RelayInfo) {
 	t.Helper()
 	recorder := httptest.NewRecorder()

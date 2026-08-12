@@ -28,7 +28,9 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-var GPTAbuseRepeatBlockEnabled = true
+const gptAbuseRepeatBlockEnabledEnv = "GPT_ABUSE_REPEAT_BLOCK_ENABLED"
+
+var GPTAbuseRepeatBlockEnabled = gptAbuseRepeatBlockEnabledFromEnv()
 var GPTAbuseRepeatBlockTTLSeconds = 900
 var GPTAbuseRepeatBlockRequireRedis = false
 
@@ -78,6 +80,10 @@ var gptAbuseRepeatBlockMemoryCache = struct {
 	items map[string]gptAbuseRepeatBlockMemoryEntry
 }{items: map[string]gptAbuseRepeatBlockMemoryEntry{}}
 
+func gptAbuseRepeatBlockEnabledFromEnv() bool {
+	return common.GetEnvOrDefaultBool(gptAbuseRepeatBlockEnabledEnv, false)
+}
+
 func BuildGPTAbuseRepeatBlockFingerprint(userID int, tokenID int, endpointPath string, relayMode int, originModel string, contentType string, body []byte) (GPTAbuseRepeatBlockFingerprint, error) {
 	contentTypeSemantic, jsonBody := gptAbuseRepeatBlockContentTypeSemantic(contentType)
 	bodyForDigest := body
@@ -107,13 +113,10 @@ func BuildGPTAbuseRepeatBlockFingerprint(userID int, tokenID int, endpointPath s
 }
 
 func CaptureGPTAbuseRepeatBlockFingerprint(c *gin.Context, info *relaycommon.RelayInfo, bodyStorage common.BodyStorage) error {
-	if c == nil {
+	if !GPTAbuseRepeatBlockEnabled || c == nil {
 		return nil
 	}
 	if _, ok := GPTAbuseRepeatBlockContextFromGin(c); ok {
-		return nil
-	}
-	if !GPTAbuseRepeatBlockEnabled {
 		return nil
 	}
 	if !shouldCaptureGPTAbuseRepeatBlock(info) {

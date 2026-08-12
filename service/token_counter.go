@@ -305,6 +305,9 @@ func EstimateRequestToken(c *gin.Context, meta *types.TokenCountMeta, info *rela
 }
 
 func CountTokenRealtime(info *relaycommon.RelayInfo, request dto.RealtimeEvent, model string) (int, int, error) {
+	if !constant.CountToken {
+		return 0, 0, nil
+	}
 	audioToken := 0
 	textToken := 0
 	switch request.Type {
@@ -359,6 +362,9 @@ func CountTokenRealtime(info *relaycommon.RelayInfo, request dto.RealtimeEvent, 
 }
 
 func CountTokenInput(input any, model string) int {
+	if !constant.CountToken {
+		return 0
+	}
 	switch v := input.(type) {
 	case string:
 		return CountTextToken(v, model)
@@ -379,6 +385,9 @@ func CountTokenInput(input any, model string) int {
 }
 
 func CountAudioTokenInput(audioBase64 string, audioFormat string) (int, error) {
+	if !constant.CountToken {
+		return 0, nil
+	}
 	if audioBase64 == "" {
 		return 0, nil
 	}
@@ -393,6 +402,9 @@ func CountAudioTokenInput(audioBase64 string, audioFormat string) (int, error) {
 }
 
 func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) {
+	if !constant.CountToken {
+		return 0, nil
+	}
 	if audioBase64 == "" {
 		return 0, nil
 	}
@@ -408,6 +420,9 @@ func CountAudioTokenOutput(audioBase64 string, audioFormat string) (int, error) 
 
 // CountTextToken 统计文本的token数量，仅OpenAI模型使用tokenizer，其余模型使用估算
 func CountTextToken(text string, model string) int {
+	if !constant.CountToken {
+		return 0
+	}
 	if text == "" {
 		return 0
 	}

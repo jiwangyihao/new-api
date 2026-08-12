@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/tiktoken-go/tokenizer"
 	"github.com/tiktoken-go/tokenizer/codec"
 )
@@ -18,12 +19,19 @@ var tokenEncoderMap = make(map[string]tokenizer.Codec)
 var tokenEncoderMutex sync.RWMutex
 
 func InitTokenEncoders() {
+	if !constant.CountToken {
+		common.SysLog("local token counting disabled; skipping token encoders")
+		return
+	}
 	common.SysLog("initializing token encoders")
 	defaultTokenEncoder = codec.NewCl100kBase()
 	common.SysLog("token encoders initialized")
 }
 
 func getTokenEncoder(model string) tokenizer.Codec {
+	if !constant.CountToken {
+		return nil
+	}
 	// First, try to get the encoder from cache with read lock
 	tokenEncoderMutex.RLock()
 	if encoder, exists := tokenEncoderMap[model]; exists {
@@ -40,6 +48,9 @@ func getTokenEncoder(model string) tokenizer.Codec {
 	if encoder, exists := tokenEncoderMap[model]; exists {
 		return encoder
 	}
+	if defaultTokenEncoder == nil {
+		defaultTokenEncoder = codec.NewCl100kBase()
+	}
 
 	// Create new encoder
 	modelCodec, err := tokenizer.ForModel(tokenizer.Model(model))
@@ -55,9 +66,12 @@ func getTokenEncoder(model string) tokenizer.Codec {
 }
 
 func getTokenNum(tokenEncoder tokenizer.Codec, text string) int {
-	if text == "" {
+	if !constant.CountToken || tokenEncoder == nil || text == "" {
 		return 0
 	}
-	tkm, _ := tokenEncoder.Count(text)
+	tkm, err := tokenEncoder.Count(text)
+	if err != nil {
+		return 0
+	}
 	return tkm
 }

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 export type GPTAbuseStatusFilter = 'all' | 'active_suspended' | 'warning_only'
 export type GPTAbuseSortBy =
   | 'warning_count'

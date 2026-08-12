@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 const OPENAI_BASE_PATH = '/v1'
 const PROVIDER_ID = 'new-api'
 const CODEX_PRO_INTENT_HEADER_NAME = 'X-NewAPI-Codex-Pro-Intent'

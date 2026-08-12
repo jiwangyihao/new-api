@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 const invalidFXMessage =
   'The configured Credit exchange rate is invalid. Contact an administrator.'
 

@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { GPTAbusePage } from '@/features/gpt-abuse'
 import { gptAbuseSearchSchema } from '@/features/gpt-abuse/lib/filters'

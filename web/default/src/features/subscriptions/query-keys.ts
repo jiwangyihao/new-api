@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-
 export const subscriptionQueryKeys = {
   walletPlans: ['subscriptions', 'plans'] as const,
   homePublicPlans: ['home', 'subscription-public-plans'] as const,

@@ -51,7 +51,11 @@ func pprofListenAddr() string {
 	if addr := os.Getenv("PPROF_ADDR"); addr != "" {
 		return addr
 	}
-	return "0.0.0.0:8005"
+	return "127.0.0.1:8005"
+}
+
+func pprofMonitorEnabled() bool {
+	return os.Getenv("ENABLE_PPROF_MONITOR") == "true"
 }
 
 func channelUpdateFrequencyFromEnv(value string) (int, bool, error) {
@@ -188,8 +192,11 @@ func main() {
 		gopool.Go(func() {
 			log.Println(http.ListenAndServe(pprofListenAddr(), nil))
 		})
-		go common.Monitor()
 		common.SysLog("pprof enabled")
+	}
+	if pprofMonitorEnabled() {
+		go common.Monitor()
+		common.SysLog("automatic pprof monitor enabled")
 	}
 
 	err = common.StartPyroScope()

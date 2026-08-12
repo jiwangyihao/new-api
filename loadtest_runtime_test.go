@@ -17,6 +17,28 @@ func TestPprofListenAddr(t *testing.T) {
 	}
 }
 
+func TestPprofListenAddrDefaultsToLoopback(t *testing.T) {
+	t.Setenv("PPROF_ADDR", "")
+	if got := pprofListenAddr(); got != "127.0.0.1:8005" {
+		t.Fatalf("addr = %q", got)
+	}
+}
+
+func TestPprofMonitorEnabledDefaultsOff(t *testing.T) {
+	t.Setenv("ENABLE_PPROF_MONITOR", "")
+	t.Setenv("ENABLE_PPROF", "true")
+	if pprofMonitorEnabled() {
+		t.Fatal("automatic pprof monitor enabled by default")
+	}
+}
+
+func TestPprofMonitorEnabledWhenRequested(t *testing.T) {
+	t.Setenv("ENABLE_PPROF_MONITOR", "true")
+	if !pprofMonitorEnabled() {
+		t.Fatal("automatic pprof monitor not enabled")
+	}
+}
+
 func TestChannelUpdateFrequencyFromEnvDisablesZeroAndEmpty(t *testing.T) {
 	for _, value := range []string{"", "0", "-1"} {
 		frequency, enabled, err := channelUpdateFrequencyFromEnv(value)

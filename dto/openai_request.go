@@ -1,6 +1,7 @@
 package dto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -918,6 +919,69 @@ type OpenAIResponsesRequest struct {
 	EnableThinking json.RawMessage `json:"enable_thinking,omitempty"`
 	// perplexity
 	Preset json.RawMessage `json:"preset,omitempty"`
+}
+
+// Clone returns a deep copy safe for provider-specific request conversion.
+func (r *OpenAIResponsesRequest) Clone() *OpenAIResponsesRequest {
+	if r == nil {
+		return nil
+	}
+
+	clone := *r
+	clone.Input = bytes.Clone(r.Input)
+	clone.Include = bytes.Clone(r.Include)
+	clone.Conversation = bytes.Clone(r.Conversation)
+	clone.ContextManagement = bytes.Clone(r.ContextManagement)
+	clone.Instructions = bytes.Clone(r.Instructions)
+	clone.Metadata = bytes.Clone(r.Metadata)
+	clone.ParallelToolCalls = bytes.Clone(r.ParallelToolCalls)
+	clone.Store = bytes.Clone(r.Store)
+	clone.PromptCacheKey = bytes.Clone(r.PromptCacheKey)
+	clone.PromptCacheRetention = bytes.Clone(r.PromptCacheRetention)
+	clone.SafetyIdentifier = bytes.Clone(r.SafetyIdentifier)
+	clone.Text = bytes.Clone(r.Text)
+	clone.ToolChoice = bytes.Clone(r.ToolChoice)
+	clone.Tools = bytes.Clone(r.Tools)
+	clone.Truncation = bytes.Clone(r.Truncation)
+	clone.User = bytes.Clone(r.User)
+	clone.Prompt = bytes.Clone(r.Prompt)
+	clone.EnableThinking = bytes.Clone(r.EnableThinking)
+	clone.Preset = bytes.Clone(r.Preset)
+
+	if r.MaxOutputTokens != nil {
+		value := *r.MaxOutputTokens
+		clone.MaxOutputTokens = &value
+	}
+	if r.TopLogProbs != nil {
+		value := *r.TopLogProbs
+		clone.TopLogProbs = &value
+	}
+	if r.Reasoning != nil {
+		value := *r.Reasoning
+		clone.Reasoning = &value
+	}
+	if r.Stream != nil {
+		value := *r.Stream
+		clone.Stream = &value
+	}
+	if r.StreamOptions != nil {
+		value := *r.StreamOptions
+		clone.StreamOptions = &value
+	}
+	if r.Temperature != nil {
+		value := *r.Temperature
+		clone.Temperature = &value
+	}
+	if r.TopP != nil {
+		value := *r.TopP
+		clone.TopP = &value
+	}
+	if r.MaxToolCalls != nil {
+		value := *r.MaxToolCalls
+		clone.MaxToolCalls = &value
+	}
+
+	return &clone
 }
 
 func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {

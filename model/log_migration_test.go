@@ -121,6 +121,35 @@ func TestMigrateDefaultDBRunsLogSchemaWhenLogDBIsPrimaryDB(t *testing.T) {
 	requireLogDerivedColumns(t, DB)
 }
 
+func TestMigrateLogSchemaCreatesAggregationStatusIDIndex(t *testing.T) {
+	db := openLogMigrationSQLiteDB(t, "aggregation-status-id-index")
+	t.Cleanup(func() { closeLogMigrationSQLiteDB(t, db) })
+
+	require.NoError(t, migrateLogSchema(db))
+	require.NoError(t, migrateLogSchema(db), "repeated migration must be idempotent")
+	require.True(t, db.Migrator().HasIndex(&LogAggregationEvent{}, logAggregationEventStatusIDIndex))
+
+	var columns []struct {
+		Name string `gorm:"column:name"`
+	}
+	require.NoError(t, db.Raw("PRAGMA index_info('"+logAggregationEventStatusIDIndex+"')").Scan(&columns).Error)
+	require.Len(t, columns, 2)
+	assert.Equal(t, "status", columns[0].Name)
+	assert.Equal(t, "id", columns[1].Name)
+
+	var indexes []struct {
+		Name string `gorm:"column:name"`
+	}
+	require.NoError(t, db.Raw("PRAGMA index_list('log_aggregation_events')").Scan(&indexes).Error)
+	matchingIndexes := 0
+	for _, index := range indexes {
+		if index.Name == logAggregationEventStatusIDIndex {
+			matchingIndexes++
+		}
+	}
+	assert.Equal(t, 1, matchingIndexes, "repeated migration must create exactly one composite index")
+}
+
 func TestMigrateLogDerivedColumnsAreNullableWithoutDefaults(t *testing.T) {
 	db := openLogMigrationSQLiteDB(t, "nullable")
 	t.Cleanup(func() { closeLogMigrationSQLiteDB(t, db) })

@@ -285,9 +285,11 @@ describe('Admin Credit financial management', () => {
     fireEvent.change(view.getByLabelText('Credit amount'), {
       target: { value: '801' },
     })
-    assert.equal(
-      view.queryByText('Authoritative operational value preview'),
-      null
+    await waitFor(() =>
+      assert.equal(
+        view.queryByText('Authoritative operational value preview') === null,
+        true
+      )
     )
   }, 20_000)
   test('keeps a failed retry key and replaces it after amount, plan, operation, and success changes', async () => {
@@ -406,11 +408,21 @@ describe('Admin Credit financial management', () => {
     await waitFor(() =>
       assert.ok(view.getByText('Authoritative operational value preview'))
     )
-    plan.focus()
-    await user.keyboard('{Enter}{End}{Enter}')
-    assert.equal(
-      view.queryByText('Authoritative operational value preview'),
-      null
+    await user.click(plan)
+    await user.click(
+      await view.findByRole('option', { name: '50 CNY / 1,000 Credit' })
+    )
+    await waitFor(() => {
+      const selectedPlanDetails =
+        view.getByText('Selected after-sales grant plan').parentElement
+          ?.textContent || ''
+      assert.match(selectedPlanDetails, /¥50\.00/)
+    })
+    await waitFor(() =>
+      assert.equal(
+        view.queryByText('Authoritative operational value preview') === null,
+        true
+      )
     )
     await submitFailedAttempt(4)
     assert.equal(adjustments[3].plan_id, 9102)
@@ -428,13 +440,15 @@ describe('Admin Credit financial management', () => {
     const operation = view.getByRole('combobox', {
       name: 'Credit adjustment operation',
     })
-    operation.focus()
-    await user.keyboard('{Enter}{End}{Enter}')
-    assert.equal(view.queryByLabelText('After-sales grant plan'), null)
-    assert.equal(
-      view.queryByText('Authoritative operational value preview'),
-      null
-    )
+    await user.click(operation)
+    await user.click(await view.findByRole('option', { name: 'Decrease Credit' }))
+    await waitFor(() => {
+      assert.equal(view.queryByLabelText('After-sales grant plan') === null, true)
+      assert.equal(
+        view.queryByText('Authoritative operational value preview') === null,
+        true
+      )
+    })
     allowSuccess = true
     assert.equal((submit as HTMLButtonElement).disabled, false)
     fireEvent.click(submit)

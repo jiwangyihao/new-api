@@ -1401,30 +1401,39 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 }
 
 // HasActiveUserSubscription returns whether the user has any billable active subscription.
-// Subscription plans do not restrict models; API-key model restrictions remain independent.
+// It is a read-only relay precheck: quota resets and stale active-subscription repairs are
+// projected in memory. The locked pre-consume path remains authoritative and persists them.
 func HasActiveUserSubscription(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := GetDBTimestamp()
-	var repairedSettingJSON string
-	hasSubscription := false
-	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
-		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
-		if err != nil {
-			return err
-		}
-		repairedSettingJSON = outcome.RepairedSettingJSON
-		hasSubscription = outcome.Selection != nil
-		return nil
-	})
+	setting, err := GetUserSetting(userId, false)
 	if err != nil {
 		return false, err
 	}
-	if repairedSettingJSON != "" {
-		syncSubscriptionSelectionSettingCacheAfterCommit(userId, repairedSettingJSON)
+	candidates, err := loadBillableSubscriptionCandidatesTx(DB, userId, now, false, false)
+	if err != nil {
+		return false, err
 	}
-	return hasSubscription, nil
+	for i := range candidates {
+		if _, err := projectUserSubscriptionQuotaReset(&candidates[i].sub, candidates[i].plan, now); err != nil {
+			return false, err
+		}
+	}
+	automaticOrder := automaticBillingCandidateOrder(candidates)
+	activeCandidate, activeFound := findBillableSubscriptionCandidate(candidates, setting.ActiveSubscriptionId)
+	if !activeFound && len(automaticOrder) > 0 {
+		activeCandidate = automaticOrder[0]
+		activeFound = true
+	}
+	ordered := orderBillingStrategyCandidates(NormalizeSubscriptionBillingStrategy(setting.SubscriptionBillingStrategy), activeCandidate, activeFound, automaticOrder)
+	for i := range ordered {
+		if billable, _ := isBillableSubscriptionCandidate(&ordered[i].sub, ordered[i].plan, 1); billable {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type ActiveSubscriptionUsage struct {
@@ -2569,18 +2578,18 @@ func livePlanQueueCapacity(plan *SubscriptionPlan) int {
 	}
 	return 0
 }
-func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
-	if tx == nil || sub == nil || plan == nil {
-		return errors.New("invalid reset args")
+func projectUserSubscriptionQuotaReset(sub *UserSubscription, plan *SubscriptionPlan, now int64) (bool, error) {
+	if sub == nil || plan == nil {
+		return false, errors.New("invalid reset args")
 	}
 	if sub.EntitlementType == SubscriptionEntitlementCreditBalance || plan.EntitlementType == SubscriptionEntitlementCreditBalance {
-		return nil
+		return false, nil
 	}
 	if sub.NextResetTime > 0 && sub.NextResetTime > now {
-		return nil
+		return false, nil
 	}
 	if NormalizeResetPeriod(plan.QuotaResetPeriod) == SubscriptionResetNever {
-		return nil
+		return false, nil
 	}
 	baseUnix := sub.LastResetTime
 	if baseUnix <= 0 {
@@ -2598,14 +2607,25 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		if sub.NextResetTime == 0 && next > 0 {
 			sub.NextResetTime = next
 			sub.LastResetTime = base.Unix()
-			return tx.Save(sub).Error
+			return true, nil
 		}
-		return nil
+		return false, nil
 	}
 	sub.AmountUsed = 0
 	sub.TokenUsed = 0
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
+	return true, nil
+}
+
+func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
+	if tx == nil {
+		return errors.New("invalid reset args")
+	}
+	changed, err := projectUserSubscriptionQuotaReset(sub, plan, now)
+	if err != nil || !changed {
+		return err
+	}
 	return tx.Save(sub).Error
 }
 

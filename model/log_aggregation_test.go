@@ -1,17 +1,23 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func setupLogAggregationTestDBs(t *testing.T) {
@@ -84,6 +90,25 @@ func setLogAggregationDrainTriggerForTest(trigger func()) {
 func logAggregationIntPtr(value int) *int { return &value }
 
 func logAggregationInt64Ptr(value int64) *int64 { return &value }
+
+type logAggregationEventSelectCounter struct {
+	logger.Interface
+	eventSelects atomic.Int64
+}
+
+func (l *logAggregationEventSelectCounter) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	selectsEvents := strings.HasPrefix(normalized, "select") && (strings.Contains(normalized, "from `log_aggregation_events`") ||
+		strings.Contains(normalized, `from "log_aggregation_events"`) ||
+		strings.Contains(normalized, "from log_aggregation_events"))
+	if selectsEvents {
+		l.eventSelects.Add(1)
+	}
+	if l.Interface != nil {
+		l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+	}
+}
 
 func waitForLogUsageHourlyAggregation(t *testing.T, bucketStart int64, userID int, tokenID int, channelID int, status string, modelName string) LogUsageHourly {
 	t.Helper()
@@ -212,6 +237,103 @@ func runApplyLogUsageAggregationEventIsIdempotentByLogIDAndAggregateName(t *test
 
 	require.NoError(t, LOG_DB.Model(&LogAggregationEvent{}).Where("log_id = ? AND aggregate_name = ?", log.Id, logAggregationNameLogUsageHourly).Where("status = ?", logAggregationEventStatusApplied).Count(&eventCount).Error)
 	assert.Equal(t, int64(1), eventCount)
+}
+
+func TestApplyPendingLogAggregationEventsPrefetchesBatchEvents(t *testing.T) {
+	setupLogAggregationTestDBs(t)
+	const totalLogs = 4
+	const bucketStart = int64(1778716800)
+	logs := make([]*Log, 0, totalLogs)
+	for i := 0; i < totalLogs; i++ {
+		log := &Log{
+			UserId:        109,
+			Username:      "batch-event-prefetch",
+			CreatedAt:     bucketStart + int64(i),
+			Type:          LogTypeConsume,
+			TokenId:       209,
+			ChannelId:     309,
+			ModelName:     "gpt-batch-event-prefetch",
+			Quota:         1,
+			MeteredTokens: logAggregationIntPtr(1),
+		}
+		require.NoError(t, LOG_DB.Create(log).Error)
+		logs = append(logs, log)
+	}
+	require.NoError(t, queueLogAggregationEventsForLogs(logs))
+
+	counter := &logAggregationEventSelectCounter{Interface: logger.Default.LogMode(logger.Silent)}
+	LOG_DB = LOG_DB.Session(&gorm.Session{Logger: counter})
+	require.NoError(t, ApplyPendingLogAggregationEvents(totalLogs))
+	eventSelects := counter.eventSelects.Load()
+	assert.Equal(t, int64(1), eventSelects, "the batch lookup must be the only SELECT from log_aggregation_events")
+
+	var usage LogUsageHourly
+	require.NoError(t, LOG_DB.Where("bucket_start = ? AND user_id = ? AND token_id = ? AND channel_id = ? AND status = ?", bucketStart, 109, 209, 309, "success").First(&usage).Error)
+	assert.Equal(t, int64(totalLogs), usage.RequestCount)
+}
+
+func TestApplyLogAggregationEventConcurrentWorkersAggregateOnce(t *testing.T) {
+	setupLogAggregationTestDBs(t)
+	dsn := "file:" + filepath.ToSlash(filepath.Join(t.TempDir(), "log-aggregation-workers.db")) + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	concurrentDB, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	require.NoError(t, err)
+	sqlDB, err := concurrentDB.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(4)
+	require.NoError(t, migrateLogSchema(concurrentDB))
+	previousLogDB := LOG_DB
+	LOG_DB = concurrentDB
+	t.Cleanup(func() {
+		LOG_DB = previousLogDB
+		require.NoError(t, sqlDB.Close())
+	})
+
+	const bucketStart = int64(1778716800)
+	log := &Log{
+		UserId:        110,
+		Username:      "concurrent-aggregation-workers",
+		CreatedAt:     bucketStart + 42,
+		Type:          LogTypeConsume,
+		TokenId:       210,
+		ChannelId:     310,
+		ModelName:     "gpt-concurrent-aggregation-workers",
+		Quota:         17,
+		MeteredTokens: logAggregationIntPtr(19),
+	}
+	require.NoError(t, LOG_DB.Create(log).Error)
+	require.NoError(t, queueLogAggregationEventsForLogsDB(LOG_DB, []*Log{log}))
+	events, pendingCount, err := logAggregationEventsForProcessing(1)
+	require.NoError(t, err)
+	require.Equal(t, 1, pendingCount)
+	require.Len(t, events, 1)
+	event := events[0]
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var workers sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			results <- applyLogAggregationEventByID(event.Id, event.LogID, event.AggregateName)
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(results)
+	for workerErr := range results {
+		require.NoError(t, workerErr)
+	}
+
+	var usage LogUsageHourly
+	require.NoError(t, LOG_DB.Where("bucket_start = ? AND user_id = ? AND token_id = ? AND channel_id = ? AND status = ?", bucketStart, log.UserId, log.TokenId, log.ChannelId, "success").First(&usage).Error)
+	assert.Equal(t, int64(1), usage.RequestCount)
+	assert.Equal(t, int64(17), usage.QuotaSum)
+	assert.Equal(t, int64(19), usage.MeteredTokensSum)
+	var storedEvent LogAggregationEvent
+	require.NoError(t, LOG_DB.First(&storedEvent, event.Id).Error)
+	assert.Equal(t, logAggregationEventStatusApplied, storedEvent.Status)
 }
 func TestLogUsageHourlyUpsertPostgresSQLQualifiesConflictColumns(t *testing.T) {
 	setupLogAggregationTestDBs(t)

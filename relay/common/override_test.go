@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/samber/lo"
+	"github.com/stretchr/testify/require"
 )
 
 func TestApplyParamOverrideTrimPrefix(t *testing.T) {
@@ -2083,6 +2084,53 @@ func TestRemoveDisabledFieldsAllowSpeed(t *testing.T) {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
 	assertJSONEqual(t, `{"speed":"fast","store":true}`, string(out))
+}
+
+func TestRemoveDisabledFieldsPreservesExplicitZeroValuesWhenAllowed(t *testing.T) {
+	input := `{"service_tier":"","inference_geo":"","speed":"","store":false,"safety_identifier":"","stream_options":{"include_obfuscation":false}}`
+	settings := dto.ChannelOtherSettings{
+		AllowServiceTier:        true,
+		AllowInferenceGeo:       true,
+		AllowSpeed:              true,
+		AllowSafetyIdentifier:   true,
+		AllowIncludeObfuscation: true,
+	}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	require.NoError(t, err)
+	assertJSONEqual(t, input, string(out))
+}
+
+func TestRemoveDisabledFieldsFiltersExplicitZeroValuesWhenDisabled(t *testing.T) {
+	input := `{"service_tier":"","safety_identifier":"","store":false,"stream_options":{"include_obfuscation":false},"keep":0}`
+
+	out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{DisableStore: true}, false)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"keep":0}`, string(out))
+}
+
+func TestRemoveDisabledFieldsPreservesBodyWithoutTargetFields(t *testing.T) {
+	input := `{"model":"gpt-5.5","input":[{"role":"user","content":"hello"}],"stream":false}`
+
+	out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{}, false)
+	require.NoError(t, err)
+	assertJSONEqual(t, input, string(out))
+}
+
+func TestRemoveDisabledFieldsPreservesNonObjectStreamOptions(t *testing.T) {
+	input := `{"stream_options":[],"keep":false}`
+
+	out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{}, false)
+	require.NoError(t, err)
+	assertJSONEqual(t, input, string(out))
+}
+
+func TestRemoveDisabledFieldsFiltersEscapedTopLevelKey(t *testing.T) {
+	input := `{"\u0073ervice_tier":"flex","keep":true}`
+
+	out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{}, false)
+	require.NoError(t, err)
+	assertJSONEqual(t, `{"keep":true}`, string(out))
 }
 
 func TestApplyParamOverrideWithRelayInfoRecordsOperationAuditInDebugMode(t *testing.T) {

@@ -1,7 +1,10 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -9,6 +12,10 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func TestMonthlyInvitationEntitlement(t *testing.T) {
@@ -511,6 +518,142 @@ func TestRunMonthlyInvitationEntitlementSweepSkipsCommissionInviters(t *testing.
 	var entitlementCount int64
 	require.NoError(t, model.DB.Model(&model.InvitationMonthlyEntitlement{}).Where("inviter_id = ?", 9321).Count(&entitlementCount).Error)
 	assert.Equal(t, int64(0), entitlementCount)
+}
+
+type invitationEntitlementSweepSQLCaptureLogger struct {
+	gormlogger.Interface
+	statements []string
+}
+
+func (l *invitationEntitlementSweepSQLCaptureLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	l.statements = append(l.statements, sql)
+	if l.Interface != nil {
+		l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+	}
+}
+
+func normalizeInvitationEntitlementSweepSQL(sql string) string {
+	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
+	return strings.NewReplacer("`", "", "\"", "").Replace(normalized)
+}
+
+func TestInvitationEntitlementRefreshUsesKeysetAcrossMoreThanTwoBatches(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	at := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	expectedInviterIds := []int{9401, 9411, 9421, 9431, 9441}
+	for _, inviterId := range expectedInviterIds {
+		seedInvitationRewardUsers(t, inviterId, inviterId+1, inviterId+2)
+	}
+
+	processedInviterIds := make([]int, 0, len(expectedInviterIds))
+	processed, err := runInvitationEntitlementRefreshAt(at, 2, func(inviterId int, _ time.Time) error {
+		processedInviterIds = append(processedInviterIds, inviterId)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, len(expectedInviterIds), processed)
+	assert.Equal(t, expectedInviterIds, processedInviterIds)
+}
+
+func TestInvitationEntitlementRefreshChecksEmptyPageWhenExactBatchSize(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	at := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	expectedInviterIds := []int{9451, 9461}
+	for _, inviterId := range expectedInviterIds {
+		seedInvitationRewardUsers(t, inviterId, inviterId+1)
+	}
+	capture := &invitationEntitlementSweepSQLCaptureLogger{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+	originalDB := model.DB
+	model.DB = model.DB.Session(&gorm.Session{Logger: capture})
+	defer func() { model.DB = originalDB }()
+
+	processedInviterIds := make([]int, 0, len(expectedInviterIds))
+	processed, err := runInvitationEntitlementRefreshAt(at, len(expectedInviterIds), func(inviterId int, _ time.Time) error {
+		processedInviterIds = append(processedInviterIds, inviterId)
+		return nil
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, len(expectedInviterIds), processed)
+	assert.Equal(t, expectedInviterIds, processedInviterIds)
+	require.Len(t, capture.statements, 2, "expected a full page followed by an empty page: %#v", capture.statements)
+	assert.Contains(t, normalizeInvitationEntitlementSweepSQL(capture.statements[1]), "invitees.inviter_id > 9461")
+}
+
+func TestInvitationEntitlementSweepQueryGeneratesPortableQualifiedSQL(t *testing.T) {
+	baseStatement := model.DB.Session(&gorm.Session{DryRun: true}).Find(&[]model.User{}).Statement
+	tests := []struct {
+		name      string
+		dialector gorm.Dialector
+	}{
+		{name: "sqlite", dialector: model.DB.Dialector},
+		{name: "mysql", dialector: mysql.New(mysql.Config{
+			Conn:                      baseStatement.ConnPool,
+			SkipInitializeWithVersion: true,
+		})},
+		{name: "postgres", dialector: postgres.New(postgres.Config{
+			DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+			PreferSimpleProtocol: true,
+			Conn:                 baseStatement.ConnPool,
+		})},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			capture := &invitationEntitlementSweepSQLCaptureLogger{Interface: gormlogger.Default.LogMode(gormlogger.Silent)}
+			dryRunDB, err := gorm.Open(testCase.dialector, &gorm.Config{DryRun: true, Logger: capture})
+			require.NoError(t, err)
+			originalDB := model.DB
+			model.DB = dryRunDB
+			defer func() { model.DB = originalDB }()
+
+			processed, lastInviterId, err := runMonthlyInvitationEntitlementSweepBatch(time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC), 2, 7)
+
+			require.NoError(t, err)
+			assert.Zero(t, processed)
+			assert.Equal(t, 7, lastInviterId)
+			var sweepStatements []string
+			for _, statement := range capture.statements {
+				normalized := normalizeInvitationEntitlementSweepSQL(statement)
+				if strings.Contains(normalized, "from users as invitees") {
+					sweepStatements = append(sweepStatements, normalized)
+				}
+			}
+			require.Len(t, sweepStatements, 1, "captured SQL: %#v", capture.statements)
+			assert.Contains(t, sweepStatements[0], "select distinct invitees.inviter_id")
+			assert.Contains(t, sweepStatements[0], "join users as inviters on inviters.id = invitees.inviter_id")
+			assert.Contains(t, sweepStatements[0], "where invitees.inviter_id >")
+			assert.Contains(t, sweepStatements[0], "order by invitees.inviter_id asc")
+		})
+	}
+}
+
+func TestInvitationEntitlementSweepCursorStopsAtLastSuccessfulSparseInviter(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.User{}))
+	at := time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	for _, inviterId := range []int{9501, 9701, 9901} {
+		seedInvitationRewardUsers(t, inviterId, inviterId+1)
+	}
+	wantErr := errors.New("stop refresh")
+	processedInviterIds := make([]int, 0, 2)
+
+	processed, lastInviterId, err := runMonthlyInvitationEntitlementSweepBatchWithProcessor(at, 3, 0, func(inviterId int, _ time.Time) error {
+		if inviterId == 9901 {
+			return wantErr
+		}
+		processedInviterIds = append(processedInviterIds, inviterId)
+		return nil
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	assert.Equal(t, 2, processed)
+	assert.Equal(t, 9701, lastInviterId)
+	assert.Equal(t, []int{9501, 9701}, processedInviterIds)
 }
 
 func seedPaidInviteeSubscriptionWithEnd(t *testing.T, userId int, planId int, at time.Time, end int64) {

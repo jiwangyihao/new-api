@@ -2,20 +2,21 @@
 
 ## 当前阶段
 
-- 阶段：发布阻断（本地门禁与外部依赖未闭环）
-- 协调器生产写操作授权：冻结/未授权
+- 阶段：候选集成、推送与 CI 构建
+- 用户授权：已明确授权推送 `jiwangyihao/new-api` 远端 `main` 并通过 CI 构建，目标生产实例为 `netcup-ows-migrate`
+- Orca 生产写操作授权：仍显示冻结/未授权；在该状态实际更新前，禁止生产 pull/up、停写、备份、迁移或其他远端变更
 - 现网外部写流量：未核验（只读预检未证明关闭；不得记录为关闭）
-- 最近安全提交：`0d85b9f14a8b2170f6c769b64602068105fe6184`
-- 下一动作：仅保存阻断证据并发送 `worker_done --outcome failed`；不得继续依赖安装、代码/锁文件修复或生产动作
+- 当前候选提交：`f1434499b`（Credit 管理员调整重试幂等修复）；待提交发布脚本/证据并合并最新 `deploy/main`
+- 下一动作：提交发布合同与脚本，合并最新远端主线，完成受影响门禁并将确切 SHA 推送到 `main`
 
 ## Read-back
 
-- 实际 Worker HEAD：`0d85b9f14a8b2170f6c769b64602068105fe6184`
+- 当前 Worker HEAD：`f1434499bf3ab4669b741d9bc6ff12a442f977bb`
 - 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
-- `merge-base(HEAD, production baseline)`：`f446a1569c2ced54a3fe438b5c4575659a59241d`
+- 候选与 `deploy/main` 的共同祖先：`73c658daa8e7954cb6f229348aac80287253391c`
 - Issue #27 验收提交：`e6ec1072104a826a7a572dd55cf9c0422f2b3d8d`
-- #27 集成关系：`e6ec10721` 是当前 HEAD 祖先；当前 HEAD 是集成提交 `0d85b9f14`
-- 读取时工作树：clean（`git status --porcelain=v1 --branch` 仅显示分支行）
+- #27 集成关系：`e6ec10721` 是当前候选祖先；#27 历史三库零 SKIP 证据有效，但不能替代合并后候选的门禁
+- 工作树：含待提交的 Issue #28 合同、runbook、状态、证据与发布脚本；Credit UI 修复已单独提交，不能记录为 clean
 - #28 指令 SHA-256：`80dde8437e7ffece26dc1718b6d1bf0b3775f84dd607c29d7869b43a03f3ad8b`
 - #28 验收 SHA-256：`89f05b563b69f0622eff4e2e2a673b7bca4e239619da06a6aaeec019cb4d30ff`
 - #27 交接 SHA-256：`3db9d7d1481a32aa9a6cbb7013554d51d291223a41ab57dd420a574f8c9b622b`
@@ -30,12 +31,13 @@
 - 协调器裁决：接受集成提交 `737a6b02c` 的 Netcup 更正和上述远端身份作为现行生产目标；禁止访问旧 RackNerd/AutoDLChen 目标
 - 审计冲突：历史任务和旧 SOP 曾写 RackNerd/AutoDLChen；该冲突已被 `737a6b02c` 更正为 Netcup，原始 hostname/vendor/product 输出保留在 `evidence.md`，不得将旧文字伪装为当前主机身份
 
-## 服务器安全状态
+## 服务器安全状态（最新只读实测）
 
-- 只读实测：当前应用 digest=`ghcr.io/jiwangyihao/new-api@sha256:45f0ae2bb003a08ffa2beffdea60506b89251db4b24931bf344087b6a7395a09`，image ID 同 digest，revision=`d13efc82f796ca5f78f826f0f96e89d3812a48ae`，`new-api`/PostgreSQL/Redis 均 healthy；API 13080/13081 返回 `success=true`，现网版本 `deploy-20260810-d13efc8`
-- 只读实测 PostgreSQL：`18.4`，数据库 `new_api`、schema `public`；既有业务表存在，但 `credit_valuation_migrations`、`credit_valuation_states`、`timed_subscription_valuation_grants` 均 absent，关键附加列尚 absent；这是预迁移基线，不是 ready 证据
+- 生产应用：digest=`ghcr.io/jiwangyihao/new-api@sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，revision=`0a6995369c5f3755508567eaa2db5f363eb1d22f`，容器 `running healthy`，`RestartCount=0`
+- Compose：`/opt/new-api/compose.yml` + `/opt/new-api/compose.release.yml`；release override 当前固定上述 immutable digest
 - 主机只读身份：SSH alias=`netcup-ows-migrate`，hostname=`netcup-ows-migrate`，vendor=`netcup`，product=`KVM Server`
-- 未执行：远程脚本创建/传输、flock、停写、备份、`docker compose pull`、修改 compose、apply、verify、重启、写探针、开放流量
+- `/api/status`：`127.0.0.1:13080` 返回 `success=true`，版本 `deploy-20260813-0a69953`
+- 未执行：远程脚本创建/传输、flock、停写、备份、镜像 pull、修改 compose、apply、verify、重启、写探针、开放流量
 
 ## 故障恢复规则
 
@@ -44,14 +46,20 @@
 - ready 后且外部写未开放：先停服，保留附加 schema/marker 后回滚
 - 强制双写接受流量后：禁止 image-only rollback；必须 stop writes → 原子 `suspend --reason` → 新一致备份 → 新 migration version 重建/verify → 重新受控开放
 
-## 最终阻断证据
+## 最新候选门禁结果
 
-- Go 全套命令：`go test ./... -count=1`；退出码 `1`；原始日志 `artifact://33`。根因证据包括 `main.go:77:12: pattern web/classic/dist: no matching files found`（root setup failure）；`TestCreditValuationExternalMatrix/mysql` 与 `/postgres` 均以 `TEST_MYSQL_DSN is required` / `TEST_POSTGRES_DSN is required` 失败，明确 Gate F 禁止 SKIP；`github.com/QuantumNous/new-api/model` 最终 `FAIL`。未修复、未重跑为通过。
-- Go 定向 race 命令：`go test ./model -run 'Test(CreditValuationMath|CreditValuationDeltaCoalescer|CreditValuationMigration|CreditValuationRequest|SubscriptionDeltaCoalescer)' -race -count=1 -timeout 30m`；退出码 `0`。这只是窄门禁，不能替代 Go 全套或三数据库零 SKIP。
-- 默认前端全套命令（cwd=`web/default`）：`bun test`；退出码 `1`；`0 pass / 105 fail`；原始日志 `artifact://29`，共同错误为无法从 `src/test/setup.ts` 找到 `happy-dom`，不是测试通过。
-- 默认前端 typecheck（cwd=`web/default`）：`bun run typecheck`；退出码 `1`；`tsc -b` 后 `bun: command not found: tsc`。
-- 经典前端依赖命令（cwd=`web/classic`）：`bun install --frozen-lockfile`；退出码 `1`；日志为 `lockfile had changes, but lockfile is frozen`。默认前端冻结安装没有获得完成结果，后续挂起任务已取消；不得将其当作成功或失败替代证据。`bun install --no-save` 未获得执行结果，不计门禁。
-- 默认前端生产 build、`build:check`、六语言 `i18n:sync`、版权检查未执行；classic dist 未生成；不得创建/提交 dist 或 lockfile 掩盖环境阻断。
-- 本地镜像工具探测：`docker version --format '{{.Client.Version}}'`；退出码 `127`，`docker: command not found`；未构建镜像、未取得候选 digest。
-- #27 继承证据仍是已合入提交中的 SQLite 3.50.4/MySQL 5.7.44/PostgreSQL 9.6.24、36 阶段 PASS、`SKIP=0`；但当前候选重跑因外部 DSN 缺失退出 `1`，不能把当前全套结果宣称三库通过。
-- 结论：本次发布 `blocked/failed`。未执行镜像、备份、迁移、停写、重启、生产写探针或切流量；不得关闭 #20–#28 或父 #19。
+- 默认前端：`bun test` 为 573 pass、0 fail；`bun run typecheck`、`bun run build:check`、`bun run copyright:check`、`bun run i18n:sync` 均通过
+- 经典前端：`bun run build` 通过；仅有既有 Browserslist、第三方 `eval` 与大 chunk 警告
+- Go 窄门禁：估值迁移/请求/结算相关 `-race` 定向命令通过；外部矩阵的 SQLite 3.50.4 阶段通过
+- #27 历史 Gate F：SQLite 3.50.4、MySQL 5.7.44、PostgreSQL 9.6.24 同一矩阵 36 阶段 PASS、`SKIP=0`；当前 shell 未提供 MySQL/PostgreSQL DSN，不能冒充当前候选三库重跑
+- 发布脚本：`TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 完整状态机合同通过；`server-release.sh` 与测试脚本语法检查通过
+- 本地 Linux/WSL 测试：按用户决定取消，不再作为发布阻断；严格 `0600` 权限检查未放宽，由获授权后的目标 Linux 发布流程满足
+- `git diff --check` 通过；最终合并 `deploy/main` 后仍需复跑受影响门禁
+
+## 发布结论
+
+- 候选推送与 CI 构建：已获用户授权，可以继续
+- CI 产物必须绑定最终推送到 `main` 的确切 SHA；仅接受该 SHA 对应成功 run 产生的 GHCR immutable digest，禁止以 `latest` 或 CI 绿灯替代 digest 绑定
+- 生产远程写：Orca 协调器授权状态仍冻结/未授权；状态更新前禁止生产 pull/up、停写、备份、迁移、重启或开放流量
+- 获授权后严格按 dry-run→stop-writes→backup→apply/verify→start-closed→probe→open-writes→observe 执行；部署后核对 digest、OCI revision、健康/API 与 migration version/status
+- 尚未发生任何生产写操作

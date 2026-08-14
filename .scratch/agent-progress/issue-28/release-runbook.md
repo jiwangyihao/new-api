@@ -4,18 +4,19 @@
 
 ## 0. Read-back / preflight（只读）
 
-- 本地实际：HEAD=`0d85b9f14a8b2170f6c769b64602068105fe6184`，merge-base=`f446a1569c2ced54a3fe438b5c4575659a59241d`；工作树含未提交 `.scratch/agent-progress/issue-28/`。
-- #27：已合入提交 `e6ec10721` 的历史证据为三库 36 阶段 PASS、`SKIP=0`；当前候选重跑因 MySQL/PostgreSQL DSN 缺失退出 `1`，不能宣称当前候选三库通过。
+- 候选分支：`jiwangyihao/issue-28-production-release`；发布前合并最新 `deploy/main`，最终以推送到远端 `main` 的确切 SHA 为唯一源码身份。
+- #27：已合入提交 `e6ec10721` 的历史证据为 SQLite 3.50.4、MySQL 5.7.44、PostgreSQL 9.6.24 同一矩阵 36 阶段 PASS、`SKIP=0`；当前 shell 未提供 MySQL/PostgreSQL DSN，不能宣称当前候选三库重跑。
 - 目标：仅 `ssh netcup-ows-migrate`；只读身份 hostname/vendor/product=`netcup-ows-migrate`/`netcup`/`KVM Server`。
-- 生产只读基线：应用旧 digest=`sha256:45f0ae2bb003a08ffa2beffdea60506b89251db4b24931bf344087b6a7395a09`、revision=`d13efc82f796ca5f78f826f0f96e89d3812a48ae`，依赖和应用 healthy，PostgreSQL `18.4`；估值新增表均 absent，属于预迁移基线。
-- 执行状态：协调器生产写操作授权冻结/未授权；现网外部写流量未核验；未执行任何远程写。
-## 0.1 本地门禁失败记录
+- 最近只读生产基线：应用 digest=`sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`、revision=`0a6995369c5f3755508567eaa2db5f363eb1d22f`，应用 healthy；部署前必须再次实测，禁止沿用文档中的旧 digest。
+- 用户已授权推送 `main` 与 CI 构建；Orca 协调器生产写状态仍冻结/未授权，在该状态实际更新前不得执行生产远程写。
 
-- `go test ./... -count=1`：退出码 `1`；`main.go:77:12` 缺少 `web/classic/dist`，`TestCreditValuationExternalMatrix/mysql` 与 `/postgres` 因缺 DSN Fatal，model 最终 FAIL；日志 `artifact://33`。
-- cwd=`web/default` `bun test`：退出码 `1`，`0 pass / 105 fail`，缺 `happy-dom`；日志 `artifact://29`。
-- cwd=`web/default` `bun run typecheck`：退出码 `1`，`tsc` 不存在。
-- cwd=`web/classic` `bun install --frozen-lockfile`：退出码 `1`，lockfile changes；默认冻结安装无完成结果，挂起任务已取消；`bun install --no-save` 未获得执行结果。
-- Go 窄 race 退出码 `0`，但不能替代失败的全套门禁；build、build:check、i18n、copyright 未执行。
+## 0.1 已完成本地门禁
+
+- 默认前端 `bun test`：573 pass、0 fail；`bun run typecheck`、`bun run build:check`、`bun run copyright:check`、`bun run i18n:sync` 均通过。
+- 经典前端 `bun run build` 通过；仅有既有非阻断警告。
+- Go 代表性窄门禁含 `-race` 通过；外部矩阵 SQLite 3.50.4 阶段通过。缺少两条外部 DSN 的失败如实保留，不视为跳过后的 PASS。
+- `server-release.test.sh` 的 `TEST_FILTER=full` 状态机合同通过；`server-release.sh` 与测试脚本语法检查通过。
+- 用户明确取消本地 Linux/WSL 测试；严格 `0600` 权限合同不放宽，实际生产阶段由目标 Linux 满足。
 
 ## 1. 本地门禁
 
@@ -27,7 +28,7 @@
 - `cd web/default && bun run build:check`
 - `cd web/default && bun run copyright:check`
 - `git diff --check`
-- 生产镜像 smoke/build：记录源码 SHA、workflow run、image ID、immutable digest
+- CI 镜像：只接受推送到 `deploy/main` 的确切 SHA 对应的成功 `Build deployment image` run；从该 run 取得 `ghcr.io/jiwangyihao/new-api@sha256:<digest>`，记录 SHA、run ID、digest，禁止使用 `latest` 或漂移 tag。
 
 ## 2. 只读 dry-run
 
@@ -58,8 +59,9 @@ C. 双写接受流量后：禁止 image-only rollback；stop → suspend(reason)
 ## 5. 中断恢复
 
 若命令中断：先读取锁、容器、流量、marker、备份和迁移日志；状态不明时不重跑 apply、不开放流量、不启动旧镜像，向协调器 escalation。
-## 6. 最终阻断收尾
+## 6. 当前恢复入口
 
-- 状态：`blocked/failed`。
-- 未执行：镜像构建/拉取、服务器脚本、flock、stop-writes、PostgreSQL 备份、dry-run/apply/verify、marker ready、重启、生产写探针、Chromium 认证 API 验证、open-writes、观察窗口、回滚演练。
-- 不能发送 succeeded 或宣称发布完成；恢复入口是先取得可用的 classic dist/前端锁定依赖和真实 MySQL 5.7.44/PostgreSQL 9.6.24 DSN，再从当前精确候选重跑全套门禁。
+- 先完成候选提交、合并最新 `deploy/main`、解决冲突并复跑受影响门禁；随后将确切 SHA 推送到远端 `main`。
+- 等待该 SHA 对应 CI run 成功并取得不可变 digest；CI 绿灯或 `latest` 标签都不能替代 digest 绑定。
+- 生产远程写仅在 Orca 协调器授权状态实际更新后执行；按 dry-run→stop-writes→backup→apply/verify→start-closed→probe→open-writes→observe 顺序推进。
+- 部署后同时核对容器镜像 digest、OCI revision、健康/API 探针与 `credit_valuation_migrations` 目标版本/状态；任一不一致保持写关闭并按合同恢复。

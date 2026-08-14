@@ -2,7 +2,7 @@
 
 ## 目标与边界
 
-从已集成 `0d85b9f14a8b2170f6c769b64602068105fe6184` 发布 Credit 运营估值版本；生产行为基线为 `f446a1569c2ced54a3fe438b5c4575659a59241d`。#27 的历史迁移算法、verify、marker 状态机和三库矩阵已验收，#28 只负责本地门禁、不可变镜像、生产停写切换、探针、观察和回滚。
+从已集成的 Credit 运营估值候选发布到生产；生产行为基线为 `f446a1569c2ced54a3fe438b5c4575659a59241d`。#27 的历史迁移算法、verify、marker 状态机和三库矩阵已验收，#28 负责集成最新 `deploy/main`、候选门禁、不可变镜像、生产停写切换、探针、观察和回滚。
 
 ## 部署目标
 
@@ -13,13 +13,13 @@
 - 监听：`127.0.0.1:13080`、`127.0.0.1:13081`
 - 镜像：GHCR immutable digest；禁止 `latest`、deploy tag 或服务器本机构建
 - 目标身份：远端 hostname `netcup-ows-migrate`、vendor `netcup`、product `KVM Server`；旧 RackNerd/AutoDLChen 文字仅作冲突审计，不是目标
-## 当前执行状态（最终）
+## 当前执行状态
 
-- 发布状态：`blocked/failed`；本文件中的状态机是目标合同，不表示任何阶段已执行或通过。
-- 协调器生产写操作授权：冻结/未授权。
-- 现网外部写流量：未核验；未执行 stop-writes，不能记录为关闭。
-- 未发生远程写：未创建/传输脚本、未获取 flock、未备份、未 pull 镜像、未修改 compose、未 apply/verify、未重启、未执行生产写探针、未开放流量。
-- 生产只读基线 marker 表 `credit_valuation_migrations` absent，属于预迁移状态，不是 ready 证据。
+- 用户已明确授权将候选推送到 `jiwangyihao/new-api` 的远端 `main` 并通过 CI 构建镜像。
+- Orca 协调器的生产写操作能力仍显示冻结/未授权；推送与 CI 可继续，但在该状态实际更新前，禁止在 `netcup-ows-migrate` 执行 pull/up、停写、备份、迁移或其他远端变更。
+- 现网外部写流量未核验；未执行 stop-writes，不能记录为关闭。
+- 尚未发生生产远程写：未创建/传输脚本、未获取 flock、未备份、未 pull 镜像、未修改 compose、未 apply/verify、未重启、未执行生产写探针、未开放流量。
+- 最近一次只读实测生产镜像为 `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，revision 为 `0a6995369c5f3755508567eaa2db5f363eb1d22f`，容器 healthy；部署前仍须再次只读核验。
 
 
 ## 状态机
@@ -68,7 +68,8 @@
 - 任一回滚不得删除 valuation state、immutable grant、ledger、request snapshot，不得把 marker 伪装为 pending
 ## 当前门禁结论
 
-- `go test ./... -count=1` 退出 `1`：classic dist 缺失、model 外部矩阵 DSN 缺失并最终 FAIL。
-- cwd=`web/default` 的 `bun test` 退出 `1`（0/105，缺 `happy-dom`）；`bun run typecheck` 退出 `1`（`tsc` 不存在）。
-- cwd=`web/classic` 的 `bun install --frozen-lockfile` 退出 `1`（lockfile changes）；默认冻结安装未获得完成结果，`--no-save` 未获得执行结果。
-- 因此不得进入镜像、备份、迁移、停写或流量阶段；不得将未执行的安装/修复当作门禁证据。
+- 默认前端 `bun test` 为 573 pass、0 fail；`bun run typecheck`、`bun run build:check`、`bun run copyright:check`、`bun run i18n:sync` 均通过。
+- 经典前端 `bun run build` 通过；仅有既有 Browserslist、第三方 `eval` 与 chunk 大小警告。
+- Go 窄门禁（含 `-race`）通过；`TestCreditValuationExternalMatrix` 的 SQLite 3.50.4 阶段通过。#27 已有 MySQL 5.7.44/PostgreSQL 9.6.24 同一矩阵 36 阶段 PASS、`SKIP=0` 的历史证据，但当前 shell 未提供两条 DSN，不能冒充当前候选三库重跑。
+- `server-release.test.sh` 的 `TEST_FILTER=full` 完整状态机合同通过，脚本语法检查通过。用户明确取消本地 Linux/WSL 权限测试；严格 `0600` 合同保持不变，由获授权后的目标 Linux 发布流程满足。
+- 当前允许完成候选集成、推送和 CI 镜像构建；生产远程写仍须等待 Orca 协调器授权状态实际更新，并严格按本合同状态机执行。

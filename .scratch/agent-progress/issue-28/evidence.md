@@ -15,25 +15,26 @@
 
 ## 强制 Read-back 与主机身份
 
-- 当前候选 HEAD：`f1434499bf3ab4669b741d9bc6ff12a442f977bb`（发布脚本与本证据尚待提交）
+- 合并候选 HEAD：`989d91d1e961fbeef27880fb57a3042f97588865`（合并后门禁证据与经典前端锁文件尚待提交）
 - 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
-- 候选与最新 `deploy/main` 的共同祖先：`73c658daa8e7954cb6f229348aac80287253391c`；合并完成后以最终推送 SHA 替换本值
+- 最新 `deploy/main` 提交 `0a6995369c5f3755508567eaa2db5f363eb1d22f` 已成为候选祖先；最终推送 SHA 待证据提交后记录
 - SSH 别名：`netcup-ows-migrate`
 - 远端原始只读输出：`hostname=netcup-ows-migrate`、`sys_vendor=netcup`、`product_name=KVM Server`
 - 目标裁决：协调器已明确接受 Netcup 为现行生产目标；旧 RackNerd/AutoDLChen 目标禁止访问
 - 冲突审计：提交 `737a6b02c` 将既有 RackNerd/AutoDLChen 访问约定更正为 `netcup-ows-migrate`；该更正与远端身份输出一致。发布前后不得省略这一冲突历史。
 
-## 本地候选门禁（合并前）
+## 最终合并候选门禁
 
-- Go 全套：`go test ./... -count=1` 的唯一实际失败为 `TestCreditValuationExternalMatrix/mysql` 与 `/postgres` 缺少外部 DSN；原始日志 `artifact://15257`。SQLite 3.50.4 阶段完成。
-- 外部矩阵定向：`artifact://15263`；SQLite 3.50.4 的 schema、锁、迁移、生命周期、转换、恢复和并发阶段完成；MySQL/PostgreSQL 因 DSN 未提供而 Fatal，不能宣称当前候选三库通过。
-- #27 历史 Gate F：提交 `e6ec10721` 已记录 SQLite 3.50.4、MySQL 5.7.44、PostgreSQL 9.6.24 同一矩阵 36 阶段 PASS、`SKIP=0`；该证据有效但不替代最终合并候选重跑。
-- Go 窄门禁：估值迁移/请求/结算相关定向 `-race` 命令退出码 `0`。
-- 默认前端：`bun test` 为 573 pass、0 fail；`bun run typecheck`、`bun run build:check`、`bun run copyright:check`、`bun run i18n:sync` 均通过。
-- 经典前端：`bun run build` 通过；仅有既有 Browserslist、第三方 `eval` 与大 chunk 警告。
-- 发布脚本：`env TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 完整状态机合同通过；输出覆盖 preflight、stop-writes、backup、stage-schema、双 dry-run、apply、verify、start-closed、probe、open-writes、observe、rollback-suspend 及幂等重放。`bash -n server-release.sh` 与 `bash -u -n server-release.test.sh` 通过。
+- 唯一合并冲突位于 `controller/subscription_payment_kyren_test.go`；采用远端新的 `CompleteSubscriptionOrderTx` 完成入口，并保留候选估值 plan/snapshot 夹具。五个 Kyren 终态/事件定向测试退出码 `0`。
+- 默认前端全套：575 pass、0 fail；Credit 调整重试单文件：8 pass、0 fail。
+- 默认前端构建门禁：`bun run build:check`、`bun run copyright:check`（1108 项）、`bun run i18n:sync` 均通过。
+- 经典前端：首次 `bun install --frozen-lockfile` 失败，暴露 `package.json` 的 axios 1.15.2 与 `bun.lock` 的 1.15.0 不一致；运行常规 `bun install` 只更新锁文件 5 行，随后冻结安装通过，生产构建通过；仅有既有非阻断警告。
+- Go 非矩阵全套：`go test ./... -skip '^TestCreditValuationExternalMatrix$' -count=1` 结果为 53 packages ok、59 no tests；原始输出 `artifact://15341`。该命令明确跳过 Gate F，不能称为完整 Go 或三数据库门禁。
+- Go 估值核心合并门禁：迁移/请求/结算相关 `-race` 定向命令退出码 `0`。
+- #27 历史 Gate F：提交 `e6ec10721` 已记录 SQLite 3.50.4、MySQL 5.7.44、PostgreSQL 9.6.24 同一矩阵 36 阶段 PASS、`SKIP=0`；当前 shell 未提供 MySQL/PostgreSQL DSN，最终合并候选没有新鲜 Gate F 结果。
+- 发布脚本：合并后 `env TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 完整状态机合同通过；输出覆盖所有正向、幂等与 rollback-suspend 阶段。
 - 本地 Linux/WSL 测试按用户决定取消；严格 `0600` 权限合同未放宽，由获授权后的目标 Linux 发布流程满足。
-- `git diff --check` 通过；合并最新 `deploy/main` 后必须复跑受影响门禁。
+- `git diff --check` 通过。`ghcr-deploy.yml` 仅构建/推送镜像，不运行测试；CI 成功只能证明该 SHA 镜像构建成功，不能证明 Gate F 或发布安全。
 
 ## 生产只读预检
 

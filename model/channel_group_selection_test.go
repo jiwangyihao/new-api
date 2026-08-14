@@ -1,17 +1,21 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func setupChannelGroupSelectionTestDB(t *testing.T) *gorm.DB {
@@ -64,6 +68,21 @@ func seedSelectionChannel(t *testing.T, db *gorm.DB, id int, model string) {
 	priority := int64(0)
 	channel := &Channel{Id: id, Type: constant.ChannelTypeOpenAI, Key: "sk-test", Status: common.ChannelStatusEnabled, Name: fmt.Sprintf("ch-%d", id), Models: model, Priority: &priority}
 	require.NoError(t, db.Create(channel).Error)
+}
+
+type effectiveGroupSQLCaptureLogger struct {
+	logger.Interface
+	statements []string
+}
+
+func (l *effectiveGroupSQLCaptureLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, rows := fc()
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(sql)), "SELECT") {
+		l.statements = append(l.statements, sql)
+	}
+	if l.Interface != nil {
+		l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
+	}
 }
 
 func makeGroup(t *testing.T, name string, channelIds []int) *ChannelGroup {
@@ -324,6 +343,120 @@ func TestResolveEffectiveGroupPrefersNonDefault(t *testing.T) {
 	profile := ResolveEffectiveBillingProfile(eff, channel)
 	assert.Equal(t, "fixed_request", profile.CreditBillingMode)
 	assert.Equal(t, int64(80_000), profile.FixedRequestCredits)
+}
+
+func TestResolveEffectiveGroupForSelectedChannelUsesSingleQuery(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	const model = "gpt-eff-query-count"
+	seedSelectionChannel(t, db, 6051, model)
+	makeGroup(t, "paid-query-count", []int{6051})
+
+	capture := &effectiveGroupSQLCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	countedDB := db.Session(&gorm.Session{Logger: capture})
+	DB = countedDB
+	require.Same(t, countedDB, DB)
+
+	effective, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName, "paid-query-count"}, 6051)
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+	assert.Equal(t, "paid-query-count", effective.Name)
+	require.Len(t, capture.statements, 1, "actual SQL: %#v", capture.statements)
+	assert.Contains(t, capture.statements[0], "selected_membership")
+}
+
+func TestLoadEffectiveGroupsForChannelGeneratesPortableSQL(t *testing.T) {
+	baseDB := setupChannelGroupSelectionTestDB(t)
+	baseStatement := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]ChannelGroup{}).Statement
+	tests := []struct {
+		name      string
+		dialector gorm.Dialector
+	}{
+		{name: "sqlite", dialector: baseDB.Dialector},
+		{name: "mysql", dialector: mysql.New(mysql.Config{
+			Conn:                      baseStatement.ConnPool,
+			SkipInitializeWithVersion: true,
+		})},
+		{name: "postgres", dialector: postgres.New(postgres.Config{
+			DSN:                  "host=localhost user=test dbname=test sslmode=disable",
+			PreferSimpleProtocol: true,
+			Conn:                 baseStatement.ConnPool,
+		})},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			capture := &effectiveGroupSQLCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+			dryRunDB, err := gorm.Open(testCase.dialector, &gorm.Config{DryRun: true, Logger: capture})
+			require.NoError(t, err)
+			oldDB := DB
+			DB = dryRunDB
+			defer func() { DB = oldDB }()
+
+			_, err = loadEffectiveGroupsForChannel(6051)
+			require.NoError(t, err)
+			targetStatements := make([]string, 0, len(capture.statements))
+			for _, statement := range capture.statements {
+				if strings.Contains(strings.ToLower(statement), "selected_membership") {
+					targetStatements = append(targetStatements, statement)
+				}
+			}
+			require.Len(t, targetStatements, 1, "captured SQL: %#v", capture.statements)
+			normalized := strings.ToLower(strings.Join(strings.Fields(targetStatements[0]), " "))
+			normalized = strings.NewReplacer("\"", "", "`", "").Replace(normalized)
+			assert.Contains(t, normalized, "channel_groups.*")
+			assert.Contains(t, normalized, "case when selected_membership.channel_id is null")
+			assert.Contains(t, normalized, "select count(*) from channel_group_channels")
+			assert.Contains(t, normalized, "deleted_at is null")
+		})
+	}
+}
+
+func TestResolveEffectiveGroupDefaultWithoutExplicitMembers(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6061, "gpt-eff-default-implicit")
+
+	effective, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName}, 6061)
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+	assert.True(t, effective.IsDefault())
+}
+
+func TestResolveEffectiveGroupDefaultWithExplicitMembersStillFallsBackForUnexpectedChannel(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6071, "gpt-eff-default-explicit-target")
+	seedSelectionChannel(t, db, 6072, "gpt-eff-default-explicit-member")
+	defaultGroup, err := GetChannelGroupByName(DefaultChannelGroupName)
+	require.NoError(t, err)
+	require.NoError(t, SetChannelGroupChannels(defaultGroup.Id, []int{6072}))
+
+	effective, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName}, 6071)
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+	assert.True(t, effective.IsDefault())
+}
+
+func TestResolveEffectiveGroupMissingDefaultPreservesRecordNotFound(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6081, "gpt-eff-default-missing")
+	require.NoError(t, db.Unscoped().Where("name = ?", DefaultChannelGroupName).Delete(&ChannelGroup{}).Error)
+
+	_, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName}, 6081)
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestResolveEffectiveGroupMissingDefaultStillReturnsMatchedNonDefault(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6091, "gpt-eff-paid-without-default")
+	paid := makeGroup(t, "paid-without-default", []int{6091})
+	paid.CreditBillingMode = "fixed_request"
+	paid.FixedRequestCredits = 90_000
+	require.NoError(t, paid.Update())
+	require.NoError(t, db.Unscoped().Where("name = ?", DefaultChannelGroupName).Delete(&ChannelGroup{}).Error)
+
+	effective, err := ResolveEffectiveGroupForChannel([]string{"paid-without-default"}, 6091)
+	require.NoError(t, err)
+	require.NotNil(t, effective)
+	assert.Equal(t, "paid-without-default", effective.Name)
 }
 
 func TestResolveEffectiveGroupInheritFallsBackToChannelProfile(t *testing.T) {

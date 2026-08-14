@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -46,7 +47,15 @@ func TestRealtimeAPIKeyTokenLimitExhaustedPreservesAPIKeyCode(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, apiErr.StatusCode)
 }
 
-func TestRealtimeFixedRequestDoesNotTrustLocalUsageFallback(t *testing.T) {
+func TestRealtimeLocalUsageHonorsGlobalTokenCountSwitch(t *testing.T) {
+	oldCountToken := constant.CountToken
+	t.Cleanup(func() { constant.CountToken = oldCountToken })
+
+	constant.CountToken = false
+	assert.False(t, shouldTrustRealtimeLocalUsage(&relaycommon.RelayInfo{CreditBillingMode: "usage_tokens"}))
+	assert.False(t, shouldTrustRealtimeLocalUsage(nil))
+
+	constant.CountToken = true
 	assert.False(t, shouldTrustRealtimeLocalUsage(&relaycommon.RelayInfo{CreditBillingMode: "fixed_request"}))
 	assert.True(t, shouldTrustRealtimeLocalUsage(&relaycommon.RelayInfo{CreditBillingMode: "usage_tokens"}))
 	assert.True(t, shouldTrustRealtimeLocalUsage(nil))

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -708,4 +709,81 @@ func TestStreamScannerHandler_PingInterleavesWithSlowUpstream(t *testing.T) {
 	t.Logf("received %d pings interleaved with 10 chunks over 5s", pingCount)
 	assert.GreaterOrEqual(t, pingCount, 3,
 		"expected at least 3 pings during 5s stream with 1s ping interval; got %d", pingCount)
+}
+
+type countingResponseWriter struct {
+	gin.ResponseWriter
+	writes  int
+	flushes int
+}
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	w.writes++
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *countingResponseWriter) Flush() {
+	w.flushes++
+	w.ResponseWriter.Flush()
+}
+
+type shortWriteResponseWriter struct {
+	gin.ResponseWriter
+	flushes int
+}
+
+func (w *shortWriteResponseWriter) Write(p []byte) (int, error) {
+	n := len(p) - 1
+	if n < 0 {
+		n = 0
+	}
+	_, err := w.ResponseWriter.Write(p[:n])
+	return n, err
+}
+
+func (w *shortWriteResponseWriter) Flush() {
+	w.flushes++
+	w.ResponseWriter.Flush()
+}
+
+func TestResponseChunkDataReturnsShortWrite(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	writer := &shortWriteResponseWriter{ResponseWriter: c.Writer}
+	c.Writer = writer
+
+	err := ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"x"}`)
+	require.ErrorIs(t, err, io.ErrShortWrite)
+	assert.Zero(t, writer.flushes)
+}
+
+func TestResponseChunkDataWritesSingleSSEFrame(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	writer := &countingResponseWriter{ResponseWriter: c.Writer}
+	c.Writer = writer
+
+	err := ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"x"}`)
+	require.NoError(t, err)
+	assert.Equal(t, 1, writer.writes)
+	assert.Equal(t, 1, writer.flushes)
+	assert.Equal(t, "event: response.output_text.delta\ndata: {\"delta\":\"x\"}\n\n", recorder.Body.String())
+}
+
+func BenchmarkResponseChunkData(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		if err := ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"x"}`); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

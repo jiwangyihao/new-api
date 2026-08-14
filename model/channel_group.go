@@ -486,6 +486,29 @@ func ValidateChannelGroupIds(ids []int) error {
 	return nil
 }
 
+// effectiveGroupForChannelRow 一次查询返回渠道显式成员关系、分组配置及默认分组成员状态。
+type effectiveGroupForChannelRow struct {
+	ChannelGroup
+	SelectedMemberCount int64 `gorm:"column:selected_member_count"`
+	ExplicitMemberCount int64 `gorm:"column:explicit_member_count"`
+}
+
+func loadEffectiveGroupsForChannel(channelId int) ([]effectiveGroupForChannelRow, error) {
+	var rows []effectiveGroupForChannelRow
+	err := DB.Model(&ChannelGroup{}).
+		Select(`channel_groups.*,
+			CASE WHEN selected_membership.channel_id IS NULL THEN 0 ELSE 1 END AS selected_member_count,
+			(SELECT COUNT(*) FROM channel_group_channels AS explicit_membership
+			 WHERE explicit_membership.channel_group_id = channel_groups.id) AS explicit_member_count`).
+		Joins(`LEFT JOIN channel_group_channels AS selected_membership
+			ON selected_membership.channel_group_id = channel_groups.id
+			AND selected_membership.channel_id = ?`, channelId).
+		Where("selected_membership.channel_id IS NOT NULL OR channel_groups.name = ?", DefaultChannelGroupName).
+		Order("channel_groups.id ASC").
+		Find(&rows).Error
+	return rows, err
+}
+
 // ResolveEffectiveGroupForChannel 在 API Key 所选分组中，找出选中渠道实际命中的“生效分组”。
 // 规则：生效分组 = 渠道所属 ∩ token 所选分组；优先非默认分组，再按 id 升序；都不匹配则回落默认分组。
 // 用于决定本次请求使用哪个分组的计费 profile（inherit 时回落渠道）。
@@ -493,56 +516,48 @@ func ResolveEffectiveGroupForChannel(tokenGroupNames []string, channelId int) (*
 	if len(tokenGroupNames) == 0 {
 		tokenGroupNames = []string{DefaultChannelGroupName}
 	}
-	// 渠道生效所属分组名（含默认分组特判）。
-	channelGroupNames, err := GetGroupNamesByChannel(channelId)
+
+	rows, err := loadEffectiveGroupsForChannel(channelId)
 	if err != nil {
 		return nil, err
 	}
-	channelSet := make(map[string]struct{}, len(channelGroupNames))
-	for _, n := range channelGroupNames {
-		channelSet[n] = struct{}{}
-	}
-	// token 所选 ∩ 渠道所属。
-	candidates := make([]string, 0, len(tokenGroupNames))
-	for _, n := range tokenGroupNames {
-		if _, ok := channelSet[n]; ok {
-			candidates = append(candidates, n)
-		}
-	}
-	if len(candidates) == 0 {
-		// 渠道不在 token 任何分组内（理论上不应发生，因为选择已过滤）；回落默认分组。
-		candidates = []string{DefaultChannelGroupName}
-	}
-	groups, err := loadChannelGroupsByNames(candidates)
-	if err != nil {
-		return nil, err
-	}
-	if len(groups) == 0 {
-		return GetChannelGroupByName(DefaultChannelGroupName)
-	}
-	// 优先非默认分组，再按 id 升序。
-	var chosen *ChannelGroup
-	for _, g := range groups {
-		if g.IsDefault() {
+	groupsByName := make(map[string]*ChannelGroup, len(rows))
+	channelGroupNames := make(map[string]struct{}, len(rows))
+	var defaultGroup *ChannelGroup
+	for i := range rows {
+		row := &rows[i]
+		group := &row.ChannelGroup
+		groupsByName[group.Name] = group
+		if group.IsDefault() {
+			defaultGroup = group
+			if row.ExplicitMemberCount == 0 || row.SelectedMemberCount > 0 {
+				channelGroupNames[group.Name] = struct{}{}
+			}
 			continue
 		}
-		if chosen == nil || g.Id < chosen.Id {
-			chosen = g
+		if row.SelectedMemberCount > 0 {
+			channelGroupNames[group.Name] = struct{}{}
+		}
+	}
+
+	var chosen *ChannelGroup
+	for _, name := range tokenGroupNames {
+		if _, belongs := channelGroupNames[name]; !belongs {
+			continue
+		}
+		group := groupsByName[name]
+		if group == nil || group.IsDefault() {
+			continue
+		}
+		if chosen == nil || group.Id < chosen.Id {
+			chosen = group
 		}
 	}
 	if chosen != nil {
 		return chosen, nil
 	}
-	return GetChannelGroupByName(DefaultChannelGroupName)
-}
-
-func loadChannelGroupsByNames(names []string) ([]*ChannelGroup, error) {
-	if len(names) == 0 {
-		return nil, nil
+	if defaultGroup == nil {
+		return nil, gorm.ErrRecordNotFound
 	}
-	var groups []*ChannelGroup
-	if err := DB.Where("name IN ?", names).Find(&groups).Error; err != nil {
-		return nil, err
-	}
-	return groups, nil
+	return defaultGroup, nil
 }

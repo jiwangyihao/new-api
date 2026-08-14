@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -10,6 +12,14 @@ type KyrenPaymentSnapshot struct {
 	ProductID string `json:"product_id"`
 	Amount    string `json:"amount"`
 	Currency  string `json:"currency"`
+}
+
+type KyrenTopUpSnapshot struct {
+	LocalTopUpID string `json:"local_topup_id"`
+	ProductID    string `json:"product_id"`
+	Amount       string `json:"amount"`
+	Currency     string `json:"currency"`
+	Quota        int64  `json:"quota"`
 }
 
 type SubscriptionEntitlementSnapshot struct {
@@ -153,6 +163,22 @@ func UnmarshalKyrenPaymentSnapshot(payload string) (KyrenPaymentSnapshot, error)
 	return snapshot, nil
 }
 
+func MarshalKyrenTopUpSnapshot(snapshot KyrenTopUpSnapshot) (string, error) {
+	payload, err := common.Marshal(snapshot)
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func UnmarshalKyrenTopUpSnapshot(payload string) (KyrenTopUpSnapshot, error) {
+	var snapshot KyrenTopUpSnapshot
+	if err := common.UnmarshalJsonStr(payload, &snapshot); err != nil {
+		return KyrenTopUpSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
 func MarshalSubscriptionEntitlementSnapshot(snapshot SubscriptionEntitlementSnapshot) (string, error) {
 	payload, err := common.Marshal(snapshot)
 	if err != nil {
@@ -167,4 +193,12 @@ func UnmarshalSubscriptionEntitlementSnapshot(payload string) (SubscriptionEntit
 		return SubscriptionEntitlementSnapshot{}, err
 	}
 	return snapshot, nil
+}
+
+func newKyrenProcessingToken() (string, error) {
+	buffer := make([]byte, 32)
+	if _, err := rand.Read(buffer); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(buffer), nil
 }

@@ -59,6 +59,15 @@ func OpenaiTTSHandler(c *gin.Context, resp *http.Response, info *relaycommon.Rel
 			info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
 		}
 	} else {
+		if !constant.CountToken {
+			if _, err := io.Copy(c.Writer, resp.Body); err != nil {
+				logger.LogError(c, fmt.Sprintf("failed to stream TTS response body: %v", err))
+			}
+			if info != nil {
+				info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+			}
+			return usage
+		}
 		common.SetContextKey(c, constant.ContextKeyLocalCountTokens, true)
 		// 读取响应体到缓冲区
 		bodyBytes, err := io.ReadAll(resp.Body)

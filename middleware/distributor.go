@@ -162,9 +162,16 @@ func Distribute() func(c *gin.Context) {
 // - application/x-www-form-urlencoded
 // - multipart/form-data
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
+	if endpointType, ok := endpointTypeFromRequest(c); ok && endpointType == constant.EndpointTypeOpenAIResponse {
+		request := &dto.OpenAIResponsesRequest{}
+		if err := common.UnmarshalBodyReusable(c, request); err == nil {
+			common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
+			return &ModelRequest{Model: request.Model}, nil
+		}
+	}
+
 	var modelRequest ModelRequest
-	err := common.UnmarshalBodyReusable(c, &modelRequest)
-	if err != nil {
+	if err := common.UnmarshalBodyReusable(c, &modelRequest); err != nil {
 		return nil, errors.New(i18n.T(c, i18n.MsgDistributorInvalidRequest, map[string]any{"Error": err.Error()}))
 	}
 	return &modelRequest, nil

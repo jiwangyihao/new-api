@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +27,25 @@ func (brokenRedisEvaler) Eval(ctx context.Context, script string, keys []string,
 type redisResultFunc func() (interface{}, error)
 
 func (f redisResultFunc) Result() (interface{}, error) { return f() }
+
+type transientHeartbeatRedisEvaler struct {
+	delegate          redisEvaler
+	remainingFailures atomic.Int32
+	heartbeatCalls    atomic.Int32
+}
+
+func (f *transientHeartbeatRedisEvaler) Eval(ctx context.Context, script string, keys []string, args ...interface{}) redisResult {
+	if script == subscriptionConcurrencyHeartbeatScript {
+		f.heartbeatCalls.Add(1)
+		if f.remainingFailures.Load() > 0 {
+			f.remainingFailures.Add(-1)
+			return redisResultFunc(func() (interface{}, error) {
+				return nil, errors.New("transient heartbeat failure")
+			})
+		}
+	}
+	return f.delegate.Eval(ctx, script, keys, args...)
+}
 
 func resetSubscriptionConcurrencyForTest(t *testing.T) {
 	t.Helper()
@@ -208,6 +231,117 @@ func TestSubscriptionConcurrencyFailOpenWhenRedisCommandFails(t *testing.T) {
 	lease, err := AcquireUserConcurrency(context.Background(), 7505, "req", 1)
 	require.NoError(t, err)
 	require.NoError(t, lease.Release(context.Background()))
+}
+
+func TestRedisSubscriptionConcurrencyLeaseHeartbeatKeepsLongRequestActive(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+		server.Close()
+	})
+
+	common.RedisEnabled = true
+	common.SubscriptionConcurrencyQueueCapacity = 0
+	common.SubscriptionConcurrencyTTLSeconds = 3
+	evaler := redisClientEvaler{client: client}
+	ctx := context.Background()
+	const userID = 7510
+	const requestID = "req-long-running"
+
+	lease, err := acquireRedisUserConcurrencyWithEvaler(ctx, evaler, userID, requestID, 1, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
+	activeKey := subscriptionConcurrencyKey(userID)
+	userIndexKey := subscriptionConcurrencyUserIndexKey()
+	staleScore := float64(time.Now().Unix() - int64(common.SubscriptionConcurrencyTTLSeconds) - 10)
+	require.NoError(t, client.ZAdd(ctx, activeKey, &redis.Z{Score: staleScore, Member: requestID}).Err())
+	require.NoError(t, client.ZAdd(ctx, userIndexKey, &redis.Z{Score: staleScore, Member: userID}).Err())
+	require.Eventually(t, func() bool {
+		activeScore, activeErr := client.ZScore(ctx, activeKey, requestID).Result()
+		indexScore, indexErr := client.ZScore(ctx, userIndexKey, strconv.Itoa(userID)).Result()
+		freshAfter := float64(time.Now().Unix() - int64(common.SubscriptionConcurrencyTTLSeconds))
+		return activeErr == nil && indexErr == nil && activeScore > freshAfter && indexScore > freshAfter
+	}, 4*time.Second, 25*time.Millisecond, "heartbeat did not refresh the active lease and user index")
+
+	competingLease, err := acquireRedisUserConcurrencyWithEvaler(ctx, evaler, userID, "req-competing", 1, 0)
+	assert.Nil(t, competingLease)
+	require.ErrorIs(t, err, ErrSubscriptionConcurrencyExceeded)
+
+	require.NoError(t, lease.Release(ctx))
+	nextLease, err := acquireRedisUserConcurrencyWithEvaler(ctx, evaler, userID, "req-after-release", 1, 0)
+	require.NoError(t, err)
+	require.NoError(t, nextLease.Release(ctx))
+}
+
+func TestRedisSubscriptionConcurrencyLeaseReleaseIgnoresCanceledRequestContext(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+		server.Close()
+	})
+
+	common.RedisEnabled = true
+	common.SubscriptionConcurrencyQueueCapacity = 0
+	evaler := redisClientEvaler{client: client}
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	const userID = 7511
+	const requestID = "req-canceled-before-release"
+
+	lease, err := acquireRedisUserConcurrencyWithEvaler(requestCtx, evaler, userID, requestID, 1, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
+	cancelRequest()
+
+	require.NoError(t, lease.Release(requestCtx))
+	_, err = client.ZScore(context.Background(), subscriptionConcurrencyKey(userID), requestID).Result()
+	require.ErrorIs(t, err, redis.Nil)
+
+	nextLease, err := acquireRedisUserConcurrencyWithEvaler(context.Background(), evaler, userID, "req-after-cancel-release", 1, 0)
+	require.NoError(t, err)
+	require.NoError(t, nextLease.Release(context.Background()))
+}
+
+func TestRedisSubscriptionConcurrencyLeaseHeartbeatRetriesTransientFailure(t *testing.T) {
+	resetSubscriptionConcurrencyForTest(t)
+	server, err := miniredis.Run()
+	require.NoError(t, err)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() {
+		_ = client.Close()
+		server.Close()
+	})
+
+	common.RedisEnabled = true
+	common.SubscriptionConcurrencyQueueCapacity = 0
+	common.SubscriptionConcurrencyTTLSeconds = 3
+	flakyEvaler := &transientHeartbeatRedisEvaler{delegate: redisClientEvaler{client: client}}
+	flakyEvaler.remainingFailures.Store(3)
+	ctx := context.Background()
+	const userID = 7512
+	const requestID = "req-transient-heartbeat"
+
+	lease, err := acquireRedisUserConcurrencyWithEvaler(ctx, flakyEvaler, userID, requestID, 1, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = lease.Release(context.Background()) })
+
+	activeKey := subscriptionConcurrencyKey(userID)
+	staleScore := float64(time.Now().Unix() - int64(common.SubscriptionConcurrencyTTLSeconds) - 10)
+	require.NoError(t, client.ZAdd(ctx, activeKey, &redis.Z{Score: staleScore, Member: requestID}).Err())
+	require.Eventually(t, func() bool {
+		score, scoreErr := client.ZScore(ctx, activeKey, requestID).Result()
+		return scoreErr == nil && flakyEvaler.heartbeatCalls.Load() >= 2 && score > float64(time.Now().Unix()-int64(common.SubscriptionConcurrencyTTLSeconds))
+	}, 4*time.Second, 25*time.Millisecond, "heartbeat did not recover after a transient Redis failure")
+
+	competingLease, err := acquireRedisUserConcurrencyWithEvaler(ctx, redisClientEvaler{client: client}, userID, "req-competing-after-heartbeat-retry", 1, 0)
+	assert.Nil(t, competingLease)
+	require.ErrorIs(t, err, ErrSubscriptionConcurrencyExceeded)
+	require.NoError(t, lease.Release(ctx))
 }
 
 func TestMemorySubscriptionConcurrencySnapshotReportsActiveAndQueued(t *testing.T) {

@@ -21,13 +21,15 @@ const (
 	logAggregationEventStatusProcessing = "processing"
 	logAggregationEventStatusApplied    = "applied"
 	logAggregationEventStatusFailed     = "failed"
+
+	logAggregationEventStatusIDIndex = "idx_log_aggregation_events_status_id"
 )
 
 type LogAggregationEvent struct {
-	Id            int    `json:"id"`
+	Id            int    `json:"id" gorm:"index:idx_log_aggregation_events_status_id,priority:2"`
 	LogID         int    `json:"log_id" gorm:"column:log_id;not null;uniqueIndex:idx_log_agg_event_unique,priority:1"`
 	AggregateName string `json:"aggregate_name" gorm:"type:varchar(64);not null;uniqueIndex:idx_log_agg_event_unique,priority:2"`
-	Status        string `json:"status" gorm:"type:varchar(16);not null;default:'pending';index"`
+	Status        string `json:"status" gorm:"type:varchar(16);not null;default:'pending';index;index:idx_log_aggregation_events_status_id,priority:1"`
 	Error         string `json:"error" gorm:"type:text"`
 	CreatedAt     int64  `json:"created_at" gorm:"bigint;not null;default:0"`
 	UpdatedAt     int64  `json:"updated_at" gorm:"bigint;not null;default:0"`
@@ -197,43 +199,45 @@ func applyPendingLogAggregationEventsBatch(limit int) (int, int, error) {
 	if limit <= 0 {
 		limit = logAggregationDrainBatchLimit
 	}
-	pendingEventIDs, err := logAggregationEventIDsByStatus(logAggregationEventStatusPending, limit)
+	events, pendingCount, err := logAggregationEventsForProcessing(limit)
 	if err != nil {
 		return 0, 0, err
 	}
-	eventIDs := pendingEventIDs
-	if remaining := limit - len(pendingEventIDs); remaining > 0 {
-		failedEventIDs, err := logAggregationEventIDsByStatus(logAggregationEventStatusFailed, remaining)
-		if err != nil {
-			return len(pendingEventIDs), len(eventIDs), err
-		}
-		eventIDs = append(eventIDs, failedEventIDs...)
-	}
 	var firstErr error
-	for _, eventID := range eventIDs {
-		if err := applyLogAggregationEventByID(eventID); err != nil && firstErr == nil {
+	for i := range events {
+		event := events[i]
+		if err := applyLogAggregationEventByID(event.Id, event.LogID, event.AggregateName); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
-	return len(pendingEventIDs), len(eventIDs), firstErr
+	return pendingCount, len(events), firstErr
 }
 
-func logAggregationEventIDsByStatus(status string, limit int) ([]int, error) {
+func logAggregationEventsForProcessing(limit int) ([]LogAggregationEvent, int, error) {
 	if limit <= 0 || !logAggregationEventsTableReady(LOG_DB) {
-		return nil, nil
+		return nil, 0, nil
 	}
-	var eventIDs []int
+	var events []LogAggregationEvent
 	if err := LOG_DB.Model(&LogAggregationEvent{}).
-		Where("status = ?", status).
-		Order("id ASC").
+		Where("status IN ?", []string{logAggregationEventStatusPending, logAggregationEventStatusFailed}).
+		Clauses(clause.OrderBy{Expression: clause.Expr{
+			SQL:  "CASE WHEN status = ? THEN 0 ELSE 1 END, id ASC",
+			Vars: []interface{}{logAggregationEventStatusPending},
+		}}).
 		Limit(limit).
-		Pluck("id", &eventIDs).Error; err != nil {
-		return nil, err
+		Find(&events).Error; err != nil {
+		return nil, 0, err
 	}
-	return eventIDs, nil
+	pendingCount := 0
+	for i := range events {
+		if events[i].Status == logAggregationEventStatusPending {
+			pendingCount++
+		}
+	}
+	return events, pendingCount, nil
 }
 
-func applyLogAggregationEventByID(eventID int) error {
+func applyLogAggregationEventByID(eventID int, logID int, aggregateName string) error {
 	return LOG_DB.Transaction(func(tx *gorm.DB) error {
 		now := common.GetTimestamp()
 		res := tx.Model(&LogAggregationEvent{}).
@@ -250,30 +254,26 @@ func applyLogAggregationEventByID(eventID int) error {
 			return nil
 		}
 
-		var event LogAggregationEvent
-		if err := tx.First(&event, eventID).Error; err != nil {
-			return err
-		}
 		var log Log
-		if err := tx.First(&log, event.LogID).Error; err != nil {
-			return markLogAggregationEventFailedTx(tx, event.Id, err)
+		if err := tx.First(&log, logID).Error; err != nil {
+			return markLogAggregationEventFailedTx(tx, eventID, err)
 		}
 		fillLogDerivedFields(&log)
 
 		var err error
-		switch event.AggregateName {
+		switch aggregateName {
 		case logAggregationNameLogUsageHourly:
 			err = applyLogUsageHourlyAggregationEventTx(tx, &log)
 		case logAggregationNameFreeSubscriptionUsageHourly:
 			err = applyFreeSubscriptionUsageHourlyAggregationEventTx(tx, &log)
 		default:
-			err = fmt.Errorf("unknown log aggregation %q", event.AggregateName)
+			err = fmt.Errorf("unknown log aggregation %q", aggregateName)
 		}
 		if err != nil {
-			return markLogAggregationEventFailedTx(tx, event.Id, err)
+			return markLogAggregationEventFailedTx(tx, eventID, err)
 		}
 		return tx.Model(&LogAggregationEvent{}).
-			Where("id = ?", event.Id).
+			Where("id = ?", eventID).
 			Updates(map[string]interface{}{
 				"status":     logAggregationEventStatusApplied,
 				"error":      "",

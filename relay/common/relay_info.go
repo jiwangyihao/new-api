@@ -19,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -1249,8 +1250,38 @@ func FailTaskInfo(reason string) *TaskInfo {
 // store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
 // safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
+// hasDisabledFields 使用 GJSON 只探测可能被移除的顶层字段，避免无目标字段的请求进入完整 map 解码和重新序列化。
+func hasDisabledFields(jsonData []byte, settings dto.ChannelOtherSettings) bool {
+	root := gjson.ParseBytes(jsonData)
+	if !settings.AllowServiceTier && root.Get("service_tier").Exists() {
+		return true
+	}
+	if !settings.AllowInferenceGeo && root.Get("inference_geo").Exists() {
+		return true
+	}
+	if !settings.AllowSpeed && root.Get("speed").Exists() {
+		return true
+	}
+	if settings.DisableStore && root.Get("store").Exists() {
+		return true
+	}
+	if !settings.AllowSafetyIdentifier && root.Get("safety_identifier").Exists() {
+		return true
+	}
+	if !settings.AllowIncludeObfuscation {
+		streamOptions := root.Get("stream_options")
+		if streamOptions.Type == gjson.JSON && strings.HasPrefix(strings.TrimSpace(streamOptions.Raw), "{") && streamOptions.Get("include_obfuscation").Exists() {
+			return true
+		}
+	}
+	return false
+}
+
 func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
+		return jsonData, nil
+	}
+	if !hasDisabledFields(jsonData, channelOtherSettings) {
 		return jsonData, nil
 	}
 

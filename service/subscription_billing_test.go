@@ -993,6 +993,9 @@ func TestTokenLimitDoesNotChargeWhenUsageMissing(t *testing.T) {
 }
 
 func TestSubscriptionBillingDoesNotChargeLocalCountUsage(t *testing.T) {
+	oldCountToken := constant.CountToken
+	constant.CountToken = true
+	t.Cleanup(func() { constant.CountToken = oldCountToken })
 	truncate(t)
 	const userID = 8021
 	const tokenID = 8022

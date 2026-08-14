@@ -75,7 +75,7 @@ type topUpCentsProviderCase struct {
 func setupTopUpCentsTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db := setupModelListControllerTestDB(t)
-	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.Log{}, &model.Option{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.TopUp{}, &model.Log{}, &model.Option{}, &model.SubscriptionPlan{}, &model.SubscriptionOrder{}, &model.UserSubscription{}, &model.InvitationMonthlyEntitlement{}, &model.PaymentProviderOrder{}, &model.PaymentProviderEvent{}))
 	require.NoError(t, db.Create(&model.User{Id: topUpCentsUserID, Username: "topup-cents", Email: "topup-cents@example.com", Status: common.UserStatusEnabled, AffCode: "topup-cents"}).Error)
 
 	oldPayAddress := operation_setting.PayAddress

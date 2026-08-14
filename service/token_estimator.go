@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/QuantumNous/new-api/constant"
 )
 
 // Provider 定义模型厂商大类
@@ -214,6 +216,9 @@ func isURLDelim(r rune) bool {
 }
 
 func EstimateTokenByModel(model, text string) int {
+	if !constant.CountToken {
+		return 0
+	}
 	// strings.Contains(model, "gpt-4o")
 	if text == "" {
 		return 0

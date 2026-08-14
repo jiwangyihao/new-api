@@ -3,6 +3,7 @@ package helper
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
@@ -79,11 +80,20 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 	if c.Request != nil && c.Request.Context().Err() != nil {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
-	if _, err := c.Writer.Write([]byte(fmt.Sprintf("event: %s\n", resp.Type))); err != nil {
-		return fmt.Errorf("write response event failed: %w", err)
+
+	frame := make([]byte, 0, len("event: ")+len(resp.Type)+len("\ndata: ")+len(data)+len("\n\n"))
+	frame = append(frame, "event: "...)
+	frame = append(frame, resp.Type...)
+	frame = append(frame, '\n')
+	frame = append(frame, "data: "...)
+	frame = append(frame, data...)
+	frame = append(frame, '\n', '\n')
+	n, err := c.Writer.Write(frame)
+	if err != nil {
+		return fmt.Errorf("write response frame failed: %w", err)
 	}
-	if _, err := c.Writer.Write([]byte(fmt.Sprintf("data: %s\n\n", data))); err != nil {
-		return fmt.Errorf("write response data failed: %w", err)
+	if n != len(frame) {
+		return fmt.Errorf("write response frame failed: %w", io.ErrShortWrite)
 	}
 	return FlushWriter(c)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -54,13 +55,7 @@ type KyrenPayRequest struct {
 	ProductId string `json:"product_id"`
 }
 
-type kyrenTopUpSnapshot struct {
-	LocalTopUpID string `json:"local_topup_id"`
-	ProductID    string `json:"product_id"`
-	Amount       string `json:"amount"`
-	Currency     string `json:"currency"`
-	Quota        int64  `json:"quota"`
-}
+type kyrenTopUpSnapshot = model.KyrenTopUpSnapshot
 
 func RequestKyrenPay(c *gin.Context) {
 	var req KyrenPayRequest
@@ -132,7 +127,7 @@ func RequestKyrenPay(c *gin.Context) {
 		Status:          common.TopUpStatusPending,
 		KyrenSnapshot:   snapshot,
 	}
-	if err := topUp.Insert(); err != nil {
+	if err := service.CreateKyrenTopUpPaymentOrder(topUp); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -155,8 +150,14 @@ func RequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
-	if checkout == nil || strings.TrimSpace(checkout.URL) == "" {
+	if checkout == nil || strings.TrimSpace(checkout.ID) == "" || strings.TrimSpace(checkout.URL) == "" {
 		_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderKyren, common.TopUpStatusExpired)
+		common.ApiErrorMsg(c, "拉起支付失败")
+		return
+	}
+	if err := service.BindKyrenPaymentCheckout(tradeNo, checkout.ID); err != nil {
+		_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderKyren, common.TopUpStatusExpired)
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定充值 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
@@ -164,125 +165,11 @@ func RequestKyrenPay(c *gin.Context) {
 }
 
 func marshalKyrenTopUpSnapshot(snapshot kyrenTopUpSnapshot) (string, error) {
-	payload, err := common.Marshal(snapshot)
-	if err != nil {
-		return "", err
-	}
-	return string(payload), nil
+	return model.MarshalKyrenTopUpSnapshot(snapshot)
 }
 
 func unmarshalKyrenTopUpSnapshot(payload string) (kyrenTopUpSnapshot, error) {
-	var snapshot kyrenTopUpSnapshot
-	if err := common.UnmarshalJsonStr(payload, &snapshot); err != nil {
-		return kyrenTopUpSnapshot{}, err
-	}
-	return snapshot, nil
-}
-
-func completeKyrenTopUpWithSnapshot(tradeNo string, event kyrenWebhookEvent, callerIP string) error {
-	if tradeNo == "" {
-		return errors.New("未提供支付单号")
-	}
-	claimed, err := model.ClaimPendingKyrenTopUp(tradeNo)
-	if err != nil {
-		return err
-	}
-	if !claimed {
-		topUp, lookupErr := findKyrenTopUpByTradeNo(tradeNo)
-		if lookupErr != nil {
-			return lookupErr
-		}
-		if topUp == nil {
-			return model.ErrTopUpNotFound
-		}
-		if topUp.PaymentProvider != model.PaymentProviderKyren {
-			return model.ErrPaymentMethodMismatch
-		}
-		if topUp.Status == common.TopUpStatusSuccess {
-			return nil
-		}
-		return model.ErrTopUpStatusInvalid
-	}
-	defer func() {
-		if err != nil {
-			_ = model.RestoreClaimedKyrenTopUp(tradeNo)
-		}
-	}()
-	var creditedQuota int64
-	var topUpUserID int
-	var topUpMoney float64
-	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		var topUp model.TopUp
-		if err := tx.Where("trade_no = ?", tradeNo).First(&topUp).Error; err != nil {
-			return err
-		}
-		if topUp.PaymentProvider != model.PaymentProviderKyren {
-			return model.ErrPaymentMethodMismatch
-		}
-		if topUp.Status != common.TopUpStatusFailed {
-			return model.ErrTopUpStatusInvalid
-		}
-		snapshot, err := unmarshalKyrenTopUpSnapshot(topUp.KyrenSnapshot)
-		if err != nil {
-			return fmt.Errorf("%w: Kyren 充值订单快照无效: %v", errKyrenPermanentFulfillmentFailure, err)
-		}
-		if !kyrenTopUpSnapshotMatches(snapshot, event.Data.kyrenProductID(), event.Data.Amount, event.Data.Currency) {
-			return fmt.Errorf("%w: Kyren 充值订单金额、币种或产品不匹配", errKyrenPermanentFulfillmentFailure)
-		}
-		if snapshot.Quota <= 0 {
-			return fmt.Errorf("%w: 无效的充值额度", errKyrenPermanentFulfillmentFailure)
-		}
-		amountToCredit := int(snapshot.Quota)
-		topUp.Amount = snapshot.Quota
-		topUp.AmountUnit = model.TopUpAmountUnitAccountBalanceCents
-		topUp.CompleteTime = common.GetTimestamp()
-		topUp.Status = common.TopUpStatusSuccess
-		result := tx.Model(&model.TopUp{}).
-			Where("trade_no = ? AND payment_provider = ? AND status = ?", topUp.TradeNo, model.PaymentProviderKyren, common.TopUpStatusFailed).
-			Updates(map[string]any{
-				"amount":        topUp.Amount,
-				"amount_unit":   model.TopUpAmountUnitAccountBalanceCents,
-				"complete_time": topUp.CompleteTime,
-				"status":        common.TopUpStatusSuccess,
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return model.ErrTopUpStatusInvalid
-		}
-		if err := model.IncreaseUserAccountBalanceTx(tx, topUp.UserId, amountToCredit); err != nil {
-			return err
-		}
-		creditedQuota = snapshot.Quota
-		topUpUserID = topUp.UserId
-		topUpMoney = topUp.Money
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	if topUpUserID <= 0 || creditedQuota <= 0 {
-		return nil
-	}
-	invalidateKyrenTopUpUserCacheAfterCommit(topUpUserID, tradeNo)
-	if creditedQuota > 0 {
-		balanceCNY := model.AccountBalanceCNYFromCents(int(creditedQuota)).StringFixed(2)
-		model.RecordTopupLog(topUpUserID, fmt.Sprintf("Kyren充值成功，充值额度: %s，支付金额: %.2f", balanceCNY, topUpMoney), callerIP, model.PaymentMethodKyren, model.PaymentMethodKyren)
-	}
-	return nil
-}
-
-func invalidateKyrenTopUpUserCacheAfterCommit(userID int, tradeNo string) {
-	if err := model.InvalidateUserCache(userID); err != nil {
-		common.SysLog(fmt.Sprintf("failed to invalidate user cache after Kyren topup commit user_id=%d trade_no=%s: %s", userID, tradeNo, err.Error()))
-	}
-}
-
-func kyrenTopUpSnapshotMatches(snapshot kyrenTopUpSnapshot, productID string, amount string, currency string) bool {
-	return strings.TrimSpace(snapshot.ProductID) == strings.TrimSpace(productID) &&
-		kyrenDecimalEqual(snapshot.Amount, amount) &&
-		strings.EqualFold(strings.TrimSpace(snapshot.Currency), strings.TrimSpace(currency))
+	return model.UnmarshalKyrenTopUpSnapshot(payload)
 }
 
 func AdminListKyrenTopUpProducts(c *gin.Context) {

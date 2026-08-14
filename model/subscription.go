@@ -408,78 +408,8 @@ func GetSubscriptionOrderByTradeNo(tradeNo string) *SubscriptionOrder {
 	return &order
 }
 
-var ErrKyrenSubscriptionOrderLeaseMismatch = errors.New("kyren subscription order lease mismatch")
-
-func ClaimPendingKyrenSubscriptionOrder(tradeNo string) (bool, int64, error) {
-	if tradeNo == "" {
-		return false, 0, ErrSubscriptionOrderNotFound
-	}
-	leaseTime := common.GetTimestamp()
-	result := DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusPending).
-		Updates(map[string]any{"status": common.TopUpStatusFailed, "complete_time": leaseTime})
-	if result.Error != nil {
-		return false, 0, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return false, 0, nil
-	}
-	return true, leaseTime, nil
-}
-
-func RecoverStaleClaimedKyrenSubscriptionOrder(tradeNo string, staleBefore int64) (bool, int64, error) {
-	if tradeNo == "" {
-		return false, 0, ErrSubscriptionOrderNotFound
-	}
-	leaseTime := common.GetTimestamp()
-	result := DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time > 0 AND complete_time <= ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed, staleBefore).
-		Update("complete_time", leaseTime)
-	if result.Error != nil {
-		return false, 0, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return false, 0, nil
-	}
-	return true, leaseTime, nil
-}
-
-func MarkClaimedKyrenSubscriptionOrderSuccessTx(tx *gorm.DB, order *SubscriptionOrder, leaseTime int64) error {
-	if tx == nil || order == nil || order.TradeNo == "" || leaseTime <= 0 {
-		return errors.New("invalid subscription order")
-	}
-	updates := map[string]any{
-		"status":        common.TopUpStatusSuccess,
-		"complete_time": order.CompleteTime,
-	}
-	if order.ProviderPayload != "" {
-		updates["provider_payload"] = order.ProviderPayload
-	}
-	if order.PaymentMethod != "" {
-		updates["payment_method"] = order.PaymentMethod
-	}
-	result := tx.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time = ?", order.TradeNo, PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
-		Updates(updates)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrKyrenSubscriptionOrderLeaseMismatch
-	}
-	order.Status = common.TopUpStatusSuccess
-	return nil
-}
-
-func RestoreClaimedKyrenSubscriptionOrder(tradeNo string, leaseTime int64) error {
-	if tradeNo == "" || leaseTime <= 0 {
-		return nil
-	}
-	updates := map[string]any{"status": common.TopUpStatusPending, "complete_time": int64(0)}
-	return DB.Model(&SubscriptionOrder{}).
-		Where("trade_no = ? AND payment_provider = ? AND status = ? AND complete_time = ?", tradeNo, PaymentProviderKyren, common.TopUpStatusFailed, leaseTime).
-		Updates(updates).Error
-}
+// Kyren webhook ownership is persisted in PaymentProviderEvent. Local orders
+// remain a simple pending-to-terminal state machine guarded by row locks.
 
 // User subscription instance
 type UserSubscription struct {
@@ -1518,7 +1448,7 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var order SubscriptionOrder
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
+		if err := lockForUpdate(tx).Where(refCol+" = ?", tradeNo).First(&order).Error; err != nil {
 			return ErrSubscriptionOrderNotFound
 		}
 		if expectedPaymentProvider != "" && order.PaymentProvider != expectedPaymentProvider {
@@ -1527,9 +1457,16 @@ func ExpireSubscriptionOrder(tradeNo string, expectedPaymentProvider string) err
 		if order.Status != common.TopUpStatusPending {
 			return nil
 		}
-		order.Status = common.TopUpStatusExpired
-		order.CompleteTime = common.GetTimestamp()
-		return tx.Save(&order).Error
+		result := tx.Model(&SubscriptionOrder{}).
+			Where("id = ? AND status = ?", order.Id, common.TopUpStatusPending).
+			Updates(map[string]any{"status": common.TopUpStatusExpired, "complete_time": common.GetTimestamp()})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrSubscriptionOrderStatusInvalid
+		}
+		return nil
 	})
 }
 
@@ -1578,30 +1515,39 @@ func GetAllActiveUserSubscriptions(userId int) ([]SubscriptionSummary, error) {
 }
 
 // HasActiveUserSubscription returns whether the user has any billable active subscription.
-// Subscription plans do not restrict models; API-key model restrictions remain independent.
+// It is a read-only relay precheck: quota resets and stale active-subscription repairs are
+// projected in memory. The locked pre-consume path remains authoritative and persists them.
 func HasActiveUserSubscription(userId int) (bool, error) {
 	if userId <= 0 {
 		return false, errors.New("invalid userId")
 	}
 	now := GetDBTimestamp()
-	var repairedSettingJSON string
-	hasSubscription := false
-	err := transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
-		outcome, err := selectPrimaryBillableSubscriptionTx(tx, userId, now, 1, true, true)
-		if err != nil {
-			return err
-		}
-		repairedSettingJSON = outcome.RepairedSettingJSON
-		hasSubscription = outcome.Selection != nil
-		return nil
-	})
+	setting, err := GetUserSetting(userId, false)
 	if err != nil {
 		return false, err
 	}
-	if repairedSettingJSON != "" {
-		syncSubscriptionSelectionSettingCacheAfterCommit(userId, repairedSettingJSON)
+	candidates, err := loadBillableSubscriptionCandidatesTx(DB, userId, now, false, false)
+	if err != nil {
+		return false, err
 	}
-	return hasSubscription, nil
+	for i := range candidates {
+		if _, err := projectUserSubscriptionQuotaReset(&candidates[i].sub, candidates[i].plan, now); err != nil {
+			return false, err
+		}
+	}
+	automaticOrder := automaticBillingCandidateOrder(candidates)
+	activeCandidate, activeFound := findBillableSubscriptionCandidate(candidates, setting.ActiveSubscriptionId)
+	if !activeFound && len(automaticOrder) > 0 {
+		activeCandidate = automaticOrder[0]
+		activeFound = true
+	}
+	ordered := orderBillingStrategyCandidates(NormalizeSubscriptionBillingStrategy(setting.SubscriptionBillingStrategy), activeCandidate, activeFound, automaticOrder)
+	for i := range ordered {
+		if billable, _ := isBillableSubscriptionCandidate(&ordered[i].sub, ordered[i].plan, 1); billable {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type ActiveSubscriptionUsage struct {
@@ -2769,18 +2715,18 @@ func livePlanQueueCapacity(plan *SubscriptionPlan) int {
 	}
 	return 0
 }
-func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
-	if tx == nil || sub == nil || plan == nil {
-		return errors.New("invalid reset args")
+func projectUserSubscriptionQuotaReset(sub *UserSubscription, plan *SubscriptionPlan, now int64) (bool, error) {
+	if sub == nil || plan == nil {
+		return false, errors.New("invalid reset args")
 	}
 	if sub.EntitlementType == SubscriptionEntitlementCreditBalance || plan.EntitlementType == SubscriptionEntitlementCreditBalance {
-		return nil
+		return false, nil
 	}
 	if sub.NextResetTime > 0 && sub.NextResetTime > now {
-		return nil
+		return false, nil
 	}
 	if NormalizeResetPeriod(plan.QuotaResetPeriod) == SubscriptionResetNever {
-		return nil
+		return false, nil
 	}
 	baseUnix := sub.LastResetTime
 	if baseUnix <= 0 {
@@ -2798,14 +2744,25 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 		if sub.NextResetTime == 0 && next > 0 {
 			sub.NextResetTime = next
 			sub.LastResetTime = base.Unix()
-			return tx.Save(sub).Error
+			return true, nil
 		}
-		return nil
+		return false, nil
 	}
 	sub.AmountUsed = 0
 	sub.TokenUsed = 0
 	sub.LastResetTime = base.Unix()
 	sub.NextResetTime = next
+	return true, nil
+}
+
+func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, plan *SubscriptionPlan, now int64) error {
+	if tx == nil {
+		return errors.New("invalid reset args")
+	}
+	changed, err := projectUserSubscriptionQuotaReset(sub, plan, now)
+	if err != nil || !changed {
+		return err
+	}
 	return tx.Save(sub).Error
 }
 

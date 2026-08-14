@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"sort"
@@ -26,9 +25,12 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
+	"github.com/tidwall/gjson"
 )
 
-var GPTAbuseRepeatBlockEnabled = true
+const gptAbuseRepeatBlockEnabledEnv = "GPT_ABUSE_REPEAT_BLOCK_ENABLED"
+
+var GPTAbuseRepeatBlockEnabled = gptAbuseRepeatBlockEnabledFromEnv()
 var GPTAbuseRepeatBlockTTLSeconds = 900
 var GPTAbuseRepeatBlockRequireRedis = false
 
@@ -78,6 +80,10 @@ var gptAbuseRepeatBlockMemoryCache = struct {
 	items map[string]gptAbuseRepeatBlockMemoryEntry
 }{items: map[string]gptAbuseRepeatBlockMemoryEntry{}}
 
+func gptAbuseRepeatBlockEnabledFromEnv() bool {
+	return common.GetEnvOrDefaultBool(gptAbuseRepeatBlockEnabledEnv, false)
+}
+
 func BuildGPTAbuseRepeatBlockFingerprint(userID int, tokenID int, endpointPath string, relayMode int, originModel string, contentType string, body []byte) (GPTAbuseRepeatBlockFingerprint, error) {
 	contentTypeSemantic, jsonBody := gptAbuseRepeatBlockContentTypeSemantic(contentType)
 	bodyForDigest := body
@@ -107,13 +113,10 @@ func BuildGPTAbuseRepeatBlockFingerprint(userID int, tokenID int, endpointPath s
 }
 
 func CaptureGPTAbuseRepeatBlockFingerprint(c *gin.Context, info *relaycommon.RelayInfo, bodyStorage common.BodyStorage) error {
-	if c == nil {
+	if !GPTAbuseRepeatBlockEnabled || c == nil {
 		return nil
 	}
 	if _, ok := GPTAbuseRepeatBlockContextFromGin(c); ok {
-		return nil
-	}
-	if !GPTAbuseRepeatBlockEnabled {
 		return nil
 	}
 	if !shouldCaptureGPTAbuseRepeatBlock(info) {
@@ -289,59 +292,65 @@ func gptAbuseRepeatBlockContentTypeSemantic(contentType string) (string, bool) {
 }
 
 func canonicalGPTAbuseRepeatBlockJSON(body []byte) ([]byte, bool) {
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, false
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
+	if !gjson.ValidBytes(body) {
 		return nil, false
 	}
 	var buffer bytes.Buffer
-	if err := writeCanonicalGPTAbuseRepeatBlockJSONValue(&buffer, value); err != nil {
+	buffer.Grow(len(body))
+	if err := writeCanonicalGPTAbuseRepeatBlockJSONValue(&buffer, gjson.ParseBytes(body)); err != nil {
 		return nil, false
 	}
 	return buffer.Bytes(), true
 }
 
-func writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer *bytes.Buffer, value any) error {
-	switch typed := value.(type) {
-	case nil:
+func writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer *bytes.Buffer, value gjson.Result) error {
+	switch value.Type {
+	case gjson.Null:
 		buffer.WriteString("null")
-	case bool:
-		if typed {
-			buffer.WriteString("true")
-		} else {
-			buffer.WriteString("false")
-		}
-	case string:
-		encoded, err := common.Marshal(typed)
+	case gjson.True:
+		buffer.WriteString("true")
+	case gjson.False:
+		buffer.WriteString("false")
+	case gjson.String:
+		encoded, err := common.Marshal(value.String())
 		if err != nil {
 			return err
 		}
 		buffer.Write(encoded)
-	case json.Number:
-		normalized, err := canonicalGPTAbuseRepeatBlockJSONNumber(typed)
+	case gjson.Number:
+		normalized, err := canonicalGPTAbuseRepeatBlockJSONNumber(json.Number(value.Raw))
 		if err != nil {
 			return err
 		}
 		buffer.WriteString(normalized)
-	case []any:
-		buffer.WriteByte('[')
-		for i, item := range typed {
-			if i > 0 {
-				buffer.WriteByte(',')
+	case gjson.JSON:
+		trimmed := strings.TrimSpace(value.Raw)
+		if strings.HasPrefix(trimmed, "[") {
+			buffer.WriteByte('[')
+			first := true
+			var writeErr error
+			value.ForEach(func(_, item gjson.Result) bool {
+				if !first {
+					buffer.WriteByte(',')
+				}
+				first = false
+				writeErr = writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer, item)
+				return writeErr == nil
+			})
+			if writeErr != nil {
+				return writeErr
 			}
-			if err := writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer, item); err != nil {
-				return err
-			}
+			buffer.WriteByte(']')
+			return nil
 		}
-		buffer.WriteByte(']')
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
+
+		fields := make(map[string]gjson.Result)
+		value.ForEach(func(key, item gjson.Result) bool {
+			fields[key.String()] = item
+			return true
+		})
+		keys := make([]string, 0, len(fields))
+		for key := range fields {
 			keys = append(keys, key)
 		}
 		sort.Strings(keys)
@@ -356,13 +365,11 @@ func writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer *bytes.Buffer, value any)
 			}
 			buffer.Write(encodedKey)
 			buffer.WriteByte(':')
-			if err := writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer, typed[key]); err != nil {
+			if err := writeCanonicalGPTAbuseRepeatBlockJSONValue(buffer, fields[key]); err != nil {
 				return err
 			}
 		}
 		buffer.WriteByte('}')
-	default:
-		return fmt.Errorf("unsupported canonical JSON value type %T", value)
 	}
 	return nil
 }

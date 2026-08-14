@@ -41,6 +41,40 @@ func setupGPTAbuseRepeatBlockServiceTest(t *testing.T) {
 	})
 }
 
+func TestGPTAbuseRepeatBlockFeatureFlagDefaultsDisabled(t *testing.T) {
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "")
+	assert.False(t, gptAbuseRepeatBlockEnabledFromEnv())
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "false")
+	assert.False(t, gptAbuseRepeatBlockEnabledFromEnv())
+	t.Setenv(gptAbuseRepeatBlockEnabledEnv, "true")
+	assert.True(t, gptAbuseRepeatBlockEnabledFromEnv())
+}
+
+func TestGPTAbuseRepeatBlockDisabledShortCircuitsCaptureCheckAndStore(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setupGPTAbuseRepeatBlockServiceTest(t)
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader("not read"))
+	closedStorage, err := common.CreateBodyStorage([]byte("not read"))
+	require.NoError(t, err)
+	require.NoError(t, closedStorage.Close())
+	info := newGPTAbuseSignalTestRelayInfo()
+	GPTAbuseRepeatBlockEnabled = false
+	require.NoError(t, CaptureGPTAbuseRepeatBlockFingerprint(c, info, closedStorage))
+	_, captured := GPTAbuseRepeatBlockContextFromGin(c)
+	assert.False(t, captured)
+
+	GPTAbuseRepeatBlockEnabled = true
+	c, info = newGPTAbuseRepeatBlockContext(t, `{"model":"gpt-4o","messages":[{"role":"user","content":"blocked"}]}`)
+	GPTAbuseRepeatBlockEnabled = false
+	StoreGPTAbuseRepeatBlock(c, info, &model.GPTAbuseSignalLog{Id: 100, CreatedAt: 1700000000, CountEligible: true})
+	assert.Nil(t, CheckGPTAbuseRepeatBlock(c, info))
+	GPTAbuseRepeatBlockEnabled = true
+	assert.Nil(t, CheckGPTAbuseRepeatBlock(c, info), "disabled Store must not populate the repeat-block cache")
+}
+
 func newGPTAbuseRepeatBlockContext(t *testing.T, body string) (*gin.Context, *relaycommon.RelayInfo) {
 	t.Helper()
 	recorder := httptest.NewRecorder()
@@ -80,6 +114,40 @@ func TestGPTAbuseRepeatBlockFingerprintCanonicalizesEquivalentJSONNumbers(t *tes
 	fpB, err := BuildGPTAbuseRepeatBlockFingerprint(7001, 8001, "/v1/responses", 0, "gpt-5.5", "application/json", b)
 	require.NoError(t, err)
 	assert.Equal(t, fpA.Value, fpB.Value)
+}
+
+func TestCanonicalGPTAbuseRepeatBlockJSONPreservesFingerprintSemantics(t *testing.T) {
+	testCases := []struct {
+		name      string
+		input     string
+		canonical string
+		valid     bool
+	}{
+		{name: "object order", input: `{"b":2,"a":1}`, canonical: `{"a":1,"b":2}`, valid: true},
+		{name: "nested values", input: ` { "z":[{"b":true,"a":null},3.0], "a":"x" } `, canonical: `{"a":"x","z":[{"a":null,"b":true},3]}`, valid: true},
+		{name: "equivalent numbers", input: `{"d":-0.0,"c":1e3,"b":1.2300,"a":1.0}`, canonical: `{"a":1,"b":1.23,"c":1000,"d":0}`, valid: true},
+		{name: "large precise numbers", input: `{"n":9007199254740993,"d":0.123456789012345678901234567890}`, canonical: `{"d":0.12345678901234567890123456789,"n":9007199254740993}`, valid: true},
+		{name: "large exponents", input: `{"small":1e-1025,"large":1e1025}`, canonical: `{"large":1e1025,"small":1e-1025}`, valid: true},
+		{name: "duplicate key last wins", input: `{"a":1,"a":2}`, canonical: `{"a":2}`, valid: true},
+		{name: "escaped duplicate key last wins", input: `{"a":1,"\u0061":2}`, canonical: `{"a":2}`, valid: true},
+		{name: "escaped strings", input: `{"s":"<tag>&\u2028\\\""}`, canonical: `{"s":"\u003ctag\u003e\u0026\u2028\\\""}`, valid: true},
+		{name: "root array", input: `[3.0,{"b":2,"a":1},false]`, canonical: `[3,{"a":1,"b":2},false]`, valid: true},
+		{name: "root scalar", input: `1.2300`, canonical: `1.23`, valid: true},
+		{name: "invalid truncated", input: `{"a":`, valid: false},
+		{name: "invalid trailing value", input: `{"a":1} {"b":2}`, valid: false},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			canonical, ok := canonicalGPTAbuseRepeatBlockJSON([]byte(testCase.input))
+			require.Equal(t, testCase.valid, ok)
+			if !testCase.valid {
+				require.Nil(t, canonical)
+				return
+			}
+			require.Equal(t, testCase.canonical, string(canonical))
+		})
+	}
 }
 
 func TestCaptureGPTAbuseRepeatBlockSkipsNonGPTTargetWithoutReadingBody(t *testing.T) {

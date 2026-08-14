@@ -577,7 +577,7 @@ func OpenaiRealtimeHandler(c *gin.Context, info *relaycommon.RelayInfo) (*types.
 }
 
 func shouldTrustRealtimeLocalUsage(info *relaycommon.RelayInfo) bool {
-	return info == nil || info.FrozenCreditBillingMode() != creditbilling.ModeFixedRequest
+	return constant.CountToken && (info == nil || info.FrozenCreditBillingMode() != creditbilling.ModeFixedRequest)
 }
 
 func realtimeErrorFromErrChan(err error, info *relaycommon.RelayInfo, usages ...*dto.RealtimeUsage) (*types.NewAPIError, *dto.RealtimeUsage) {

@@ -195,7 +195,7 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		KyrenSnapshot:       kyrenSnapshot,
 		EntitlementSnapshot: entitlementSnapshot,
 	}
-	if err := order.Insert(); err != nil {
+	if err := service.CreateKyrenSubscriptionPaymentOrder(order); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -218,8 +218,14 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
-	if checkout == nil || strings.TrimSpace(checkout.URL) == "" {
+	if checkout == nil || strings.TrimSpace(checkout.ID) == "" || strings.TrimSpace(checkout.URL) == "" {
 		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
+		common.ApiErrorMsg(c, "拉起支付失败")
+		return
+	}
+	if err := service.BindKyrenPaymentCheckout(tradeNo, checkout.ID); err != nil {
+		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
+		logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定订阅 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
@@ -243,65 +249,38 @@ func KyrenWebhook(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.Type) == "" {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren webhook 缺少事件标识 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
+		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
 	metadata := event.Data.Metadata
-	tradeNo := strings.TrimSpace(metadata["trade_no"])
-	kind := strings.TrimSpace(metadata["kind"])
-	if tradeNo == "" || kind == "" {
-		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren webhook 缺少 metadata event_id=%s event_type=%s", event.ID, event.Type))
-		c.Status(http.StatusOK)
+	metadataUserID, _ := strconv.Atoi(strings.TrimSpace(metadata["user_id"]))
+	metadataPlanID, _ := strconv.Atoi(strings.TrimSpace(metadata["plan_id"]))
+	payloadHash := sha256.Sum256(payload)
+	result, err := service.ProcessKyrenPaymentEvent(service.KyrenPaymentEventRequest{
+		EventID:                 event.ID,
+		EventType:               event.Type,
+		PayloadHash:             hex.EncodeToString(payloadHash[:]),
+		TradeNo:                 metadata["trade_no"],
+		OrderKind:               metadata["kind"],
+		ProviderOrderID:         event.Data.kyrenOrderID(),
+		ProductID:               event.Data.kyrenProductID(),
+		Amount:                  event.Data.Amount,
+		Currency:                event.Data.Currency,
+		ProviderPayload:         kyrenControlledProviderPayload(event),
+		CallerIP:                c.ClientIP(),
+		MetadataUserID:          metadataUserID,
+		MetadataPlanID:          metadataPlanID,
+		InvitationRewardHandler: handleInvitationRewardForCompletedSubscriptionOrder,
+	})
+	if err != nil {
+		logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren webhook 处理未完成 event_id=%s event_type=%s trade_no=%s error=%q", event.ID, event.Type, strings.TrimSpace(metadata["trade_no"]), err.Error()))
+		c.AbortWithStatus(http.StatusInternalServerError)
 		return
 	}
-	LockOrder(tradeNo)
-	defer UnlockOrder(tradeNo)
-	summary := kyrenControlledProviderPayload(event)
-	if !isSupportedKyrenWebhookKind(kind) {
-		recordKyrenUnsupportedKindManualAction(kind, tradeNo)
-		c.Status(http.StatusOK)
-		return
-	}
-	switch event.Type {
-	case "order.paid":
-		if kind == "subscription" {
-			if err := handleKyrenSubscriptionPaid(tradeNo, event, summary); err != nil {
-				logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 订阅入账未完成 trade_no=%s error=%q", tradeNo, err.Error()))
-				if isKyrenRetryableFulfillmentError(err) {
-					c.AbortWithStatus(http.StatusInternalServerError)
-					return
-				}
-			}
-		} else if kind == "topup" {
-			if err := completeKyrenTopUpWithSnapshot(tradeNo, event, c.ClientIP()); err != nil {
-				logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 充值入账未完成 trade_no=%s error=%q", tradeNo, err.Error()))
-				if isKyrenRetryableFulfillmentError(err) {
-					c.AbortWithStatus(http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-	case "order.closed":
-		if kind == "subscription" {
-			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
-		} else if kind == "topup" {
-			_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderKyren, common.TopUpStatusExpired)
-		}
-	case "order.refunded":
-		if kind == "subscription" {
-			if _, err := service.RecoverSubscriptionOrder(service.SubscriptionOrderRecoveryRequest{
-				TradeNo: tradeNo, ExpectedPaymentProvider: model.PaymentProviderKyren,
-				RecoveryType: service.SubscriptionOrderRecoveryRefund, ProviderPayload: summary,
-				Reason: "Kyren provider refund", CreditRecoveryOnly: true,
-			}); errors.Is(err, model.ErrSubscriptionOrderCreditRecoveryNotApplicable) {
-				recordKyrenRefundManualAction(kind, tradeNo)
-			} else if err != nil {
-				logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 订阅退款回收失败 trade_no=%s error=%q", tradeNo, err.Error()))
-				c.AbortWithStatus(http.StatusInternalServerError)
-				return
-			}
-		} else {
-			recordKyrenRefundManualAction(kind, tradeNo)
-		}
-	default:
-		logger.LogInfo(c.Request.Context(), fmt.Sprintf("Kyren webhook 忽略事件 event_type=%s trade_no=%s", event.Type, tradeNo))
+	if result != nil && result.NeedsManualAction {
+		recordKyrenPaymentManualAction(result.UserID, result.TradeNo, result.EventType, result.ManualActionReason)
 	}
 	c.Status(http.StatusOK)
 }
@@ -344,48 +323,6 @@ func validateKyrenRemoteProduct(ctx context.Context, client kyrenAPI, productID 
 	return nil
 }
 
-var errKyrenPermanentFulfillmentFailure = errors.New("permanent Kyren fulfillment failure")
-var errKyrenSubscriptionOrderClaimed = errors.New("kyren subscription order is already being processed")
-
-func isKyrenRetryableFulfillmentError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return !errors.Is(err, errKyrenPermanentFulfillmentFailure) &&
-		!errors.Is(err, model.ErrSubscriptionOrderNotFound) &&
-		!errors.Is(err, model.ErrSubscriptionOrderStatusInvalid) &&
-		!errors.Is(err, model.ErrTopUpNotFound) &&
-		!errors.Is(err, model.ErrTopUpStatusInvalid) &&
-		!errors.Is(err, model.ErrPaymentMethodMismatch)
-}
-
-func handleKyrenSubscriptionPaid(tradeNo string, event kyrenWebhookEvent, providerPayload string) error {
-	order, err := findKyrenSubscriptionOrderByTradeNo(tradeNo)
-	if err != nil {
-		return err
-	}
-	if order == nil {
-		return model.ErrSubscriptionOrderNotFound
-	}
-	if order.PaymentProvider != model.PaymentProviderKyren {
-		return model.ErrPaymentMethodMismatch
-	}
-	snapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
-	if err != nil {
-		return fmt.Errorf("%w: Kyren 订阅订单快照无效: %v", errKyrenPermanentFulfillmentFailure, err)
-	}
-	if !kyrenPaymentSnapshotMatches(snapshot, event.Data.kyrenProductID(), event.Data.Amount, event.Data.Currency) {
-		return fmt.Errorf("%w: Kyren 订阅订单金额、币种或产品不匹配", errKyrenPermanentFulfillmentFailure)
-	}
-	return completeKyrenSubscriptionOrderWithSnapshotAndEvaluateInvitation(tradeNo, providerPayload, model.PaymentProviderKyren, model.PaymentMethodKyren)
-}
-
-func kyrenPaymentSnapshotMatches(snapshot model.KyrenPaymentSnapshot, productID string, amount string, currency string) bool {
-	return strings.TrimSpace(snapshot.ProductID) == strings.TrimSpace(productID) &&
-		kyrenDecimalEqual(snapshot.Amount, amount) &&
-		strings.EqualFold(strings.TrimSpace(snapshot.Currency), strings.TrimSpace(currency))
-}
-
 func kyrenControlledProviderPayload(event kyrenWebhookEvent) string {
 	payload := map[string]any{
 		"event_id":   event.ID,
@@ -409,6 +346,17 @@ func isSupportedKyrenWebhookKind(kind string) bool {
 func recordKyrenUnsupportedKindManualAction(kind string, tradeNo string) {
 	userID := findKyrenTradeUserID(tradeNo)
 	model.RecordLog(userID, model.LogTypeError, fmt.Sprintf("Kyren webhook 类型无法自动处理，订单号：%s，类型：%s", tradeNo, kind))
+}
+
+func recordKyrenPaymentManualAction(userID int, tradeNo string, eventType string, reason string) {
+	if userID <= 0 {
+		userID = findKyrenTradeUserID(tradeNo)
+	}
+	logType := model.LogTypeError
+	if eventType == service.KyrenPaymentEventRefunded {
+		logType = model.LogTypeRefund
+	}
+	model.RecordLog(userID, logType, fmt.Sprintf("Kyren webhook 需人工处理，订单号：%s，事件：%s，原因：%s", tradeNo, eventType, reason))
 }
 
 func findKyrenTradeUserID(tradeNo string) int {

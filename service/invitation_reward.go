@@ -183,27 +183,43 @@ func GetInvitationEntitlementStatus(inviterId int, at time.Time) (*InvitationEnt
 }
 
 func RunMonthlyInvitationEntitlementSweep(at time.Time, limit int) (int, error) {
+	processed, _, err := runMonthlyInvitationEntitlementSweepBatch(at, limit, 0)
+	return processed, err
+}
+
+func runMonthlyInvitationEntitlementSweepBatch(at time.Time, limit int, afterInviterId int) (int, int, error) {
+	return runMonthlyInvitationEntitlementSweepBatchWithProcessor(at, limit, afterInviterId, func(inviterId int, at time.Time) error {
+		_, err := EnsureMonthlyInvitationEntitlement(inviterId, at)
+		return err
+	})
+}
+
+func runMonthlyInvitationEntitlementSweepBatchWithProcessor(at time.Time, limit int, afterInviterId int, process func(int, time.Time) error) (int, int, error) {
 	if at.IsZero() {
 		at = time.Now()
 	}
 	query := model.DB.Table("users AS invitees").
 		Joins("JOIN users AS inviters ON inviters.id = invitees.inviter_id").
-		Where("invitees.inviter_id > 0").
+		Where("invitees.inviter_id > ?", afterInviterId).
 		Where("COALESCE(TRIM(inviters.invitation_reward_mode), '') <> ?", model.InvitationRewardModeCommission).
 		Distinct("invitees.inviter_id").Order("invitees.inviter_id asc")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
 	var inviterIds []int
-	if err := query.Pluck("inviter_id", &inviterIds).Error; err != nil {
-		return 0, err
+	if err := query.Pluck("invitees.inviter_id", &inviterIds).Error; err != nil {
+		return 0, afterInviterId, err
 	}
+	lastInviterId := afterInviterId
+	processedCount := 0
 	for _, inviterId := range inviterIds {
-		if _, err := EnsureMonthlyInvitationEntitlement(inviterId, at); err != nil {
-			return 0, err
+		if err := process(inviterId, at); err != nil {
+			return processedCount, lastInviterId, err
 		}
+		processedCount++
+		lastInviterId = inviterId
 	}
-	return len(inviterIds), nil
+	return processedCount, lastInviterId, nil
 }
 
 func StartInvitationEntitlementRefreshTask() {
@@ -230,19 +246,31 @@ func runInvitationEntitlementRefreshOnce() {
 	}
 	defer invitationEntitlementRefreshRunning.Store(false)
 
-	processed := 0
-	for {
-		n, err := RunMonthlyInvitationEntitlementSweep(time.Now(), invitationEntitlementSweepBatchSize)
-		if err != nil {
-			common.SysError(fmt.Sprintf("invitation entitlement refresh failed: %v", err))
-			return
-		}
-		processed += n
-		if n < invitationEntitlementSweepBatchSize {
-			break
-		}
+	processed, err := runInvitationEntitlementRefreshAt(time.Now(), invitationEntitlementSweepBatchSize, func(inviterId int, at time.Time) error {
+		_, err := EnsureMonthlyInvitationEntitlement(inviterId, at)
+		return err
+	})
+	if err != nil {
+		common.SysError(fmt.Sprintf("invitation entitlement refresh failed: %v", err))
+		return
 	}
 	common.SysLog(fmt.Sprintf("invitation entitlement refresh finished: processed=%d", processed))
+}
+
+func runInvitationEntitlementRefreshAt(at time.Time, batchSize int, process func(int, time.Time) error) (int, error) {
+	processed := 0
+	lastInviterId := 0
+	for {
+		n, nextInviterId, err := runMonthlyInvitationEntitlementSweepBatchWithProcessor(at, batchSize, lastInviterId, process)
+		if err != nil {
+			return processed + n, err
+		}
+		processed += n
+		if n == 0 {
+			return processed, nil
+		}
+		lastInviterId = nextInviterId
+	}
 }
 
 func nextInvitationEntitlementRefreshAt(now time.Time) time.Time {

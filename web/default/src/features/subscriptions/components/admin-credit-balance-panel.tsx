@@ -61,6 +61,11 @@ import type {
   PlanRecord,
   SubscriptionOrderRecoveryPreview,
 } from '../types'
+import {
+  reconcileCreditAdjustmentRetry,
+  type CreditAdjustmentFacts,
+  type CreditAdjustmentRetryState,
+} from './admin-credit-balance-retry'
 import { CreditBalanceLedger } from './credit-balance-ledger'
 
 interface AdminCreditBalancePanelProps {
@@ -235,15 +240,9 @@ export function AdminCreditBalancePanel({
   const [adjustmentPreview, setAdjustmentPreview] =
     useState<CreditBalanceAdjustmentPreviewResult | null>(null)
   const adjustmentFactsVersion = useRef(0)
-  const adjustmentIdempotency = useRef({
-    userId,
-    key: newIdempotencyKey(userId),
-  })
-  if (adjustmentIdempotency.current.userId !== userId) {
-    adjustmentIdempotency.current = {
-      userId,
-      key: newIdempotencyKey(userId),
-    }
+  const adjustmentRetry = useRef<CreditAdjustmentRetryState | null>(null)
+  if (adjustmentRetry.current?.facts.userId !== userId) {
+    adjustmentRetry.current = null
   }
   const [tradeNo, setTradeNo] = useState('')
   const [recoveryType, setRecoveryType] = useState<'refund' | 'chargeback'>(
@@ -270,34 +269,58 @@ export function AdminCreditBalancePanel({
     [eligiblePlans, selectedPlanId]
   )
 
-  const invalidateAdjustmentAttempt = () => {
+  const getAdjustmentFacts = (
+    overrides: Partial<CreditAdjustmentFacts> = {}
+  ): CreditAdjustmentFacts => ({
+    userId,
+    operation,
+    amount,
+    planId: selectedPlanId,
+    reason: adjustmentReason.trim(),
+    ...overrides,
+  })
+
+  const invalidateAdjustmentAttempt = (
+    facts: CreditAdjustmentFacts,
+    event: 'retry' | 'success' = 'retry'
+  ) => {
     adjustmentFactsVersion.current += 1
-    adjustmentIdempotency.current.key = newIdempotencyKey(userId)
+    adjustmentRetry.current = reconcileCreditAdjustmentRetry(
+      adjustmentRetry.current,
+      facts,
+      event,
+      () => newIdempotencyKey(userId)
+    )
     setAdjustmentPreview(null)
     setPreviewingAdjustment(false)
   }
 
   const changeOperation = (value: string | null) => {
     if (value === null || value === operation) return
-    setOperation(value as CreditBalanceAdjustmentOperation)
+    const nextOperation = value as CreditBalanceAdjustmentOperation
+    setOperation(nextOperation)
     setSelectedPlanId('')
-    invalidateAdjustmentAttempt()
+    invalidateAdjustmentAttempt(
+      getAdjustmentFacts({ operation: nextOperation, planId: '' })
+    )
   }
 
   const changePlan = (value: string | null) => {
     if (value === null || value === selectedPlanId) return
     setSelectedPlanId(value)
-    invalidateAdjustmentAttempt()
+    invalidateAdjustmentAttempt(getAdjustmentFacts({ planId: value }))
   }
 
   const changeAmount = (value: string) => {
     setAmount(value)
-    invalidateAdjustmentAttempt()
+    invalidateAdjustmentAttempt(getAdjustmentFacts({ amount: value }))
   }
 
   const changeAdjustmentReason = (value: string) => {
     setAdjustmentReason(value)
-    invalidateAdjustmentAttempt()
+    invalidateAdjustmentAttempt(
+      getAdjustmentFacts({ reason: value.trim() })
+    )
   }
 
   const previewAdjustment = async () => {
@@ -349,6 +372,13 @@ export function AdminCreditBalancePanel({
       )
       return
     }
+    const retryState = reconcileCreditAdjustmentRetry(
+      adjustmentRetry.current,
+      getAdjustmentFacts(),
+      'retry',
+      () => newIdempotencyKey(userId)
+    )
+    adjustmentRetry.current = retryState
     setAdjusting(true)
     try {
       const response = await adjustUserCreditBalance(userId, {
@@ -357,7 +387,7 @@ export function AdminCreditBalancePanel({
         ...(operation === 'increase' && selectedPlan
           ? { plan_id: selectedPlan.id }
           : {}),
-        idempotency_key: adjustmentIdempotency.current.key,
+        idempotency_key: retryState.idempotencyKey,
         reason: adjustmentReason.trim(),
       })
       if (!response.success || !response.data) {
@@ -395,7 +425,10 @@ export function AdminCreditBalancePanel({
       toast.success(message)
       setAmount('')
       setAdjustmentReason('')
-      invalidateAdjustmentAttempt()
+      invalidateAdjustmentAttempt(
+        getAdjustmentFacts({ amount: '', reason: '' }),
+        'success'
+      )
       setRefreshKey((value) => value + 1)
       onSuccess?.()
     } catch {

@@ -35,6 +35,10 @@ import {
   creditBalanceAdjustmentErrorKey,
   subscriptionOrderRecoveryErrorKey,
 } from './admin-credit-balance-panel'
+import {
+  reconcileCreditAdjustmentRetry,
+  type CreditAdjustmentFacts,
+} from './admin-credit-balance-retry'
 
 const originalAPIAdapter = api.defaults.adapter
 
@@ -151,6 +155,84 @@ function authoritativeAdjustmentResult(
 }
 
 describe('Admin Credit financial management', () => {
+  test('reconciles retry keys across every adjustment fact', () => {
+    const baseFacts: CreditAdjustmentFacts = {
+      userId: 8101,
+      operation: 'increase',
+      amount: '800',
+      planId: '9101',
+      reason: 'controlled retry',
+    }
+    const cases: Array<{
+      name: string
+      event: 'retry' | 'success'
+      facts: CreditAdjustmentFacts
+      reusesKey: boolean
+    }> = [
+      {
+        name: 'unchanged facts on failed retry',
+        event: 'retry',
+        facts: baseFacts,
+        reusesKey: true,
+      },
+      {
+        name: 'operation change',
+        event: 'retry',
+        facts: { ...baseFacts, operation: 'decrease' },
+        reusesKey: false,
+      },
+      {
+        name: 'amount change',
+        event: 'retry',
+        facts: { ...baseFacts, amount: '801' },
+        reusesKey: false,
+      },
+      {
+        name: 'plan change',
+        event: 'retry',
+        facts: { ...baseFacts, planId: '9102' },
+        reusesKey: false,
+      },
+      {
+        name: 'reason change',
+        event: 'retry',
+        facts: { ...baseFacts, reason: 'different reason' },
+        reusesKey: false,
+      },
+      {
+        name: 'user change',
+        event: 'retry',
+        facts: { ...baseFacts, userId: 8102 },
+        reusesKey: false,
+      },
+      {
+        name: 'successful request',
+        event: 'success',
+        facts: baseFacts,
+        reusesKey: false,
+      },
+    ]
+
+    for (const scenario of cases) {
+      let generated = 0
+      const previous = {
+        facts: baseFacts,
+        idempotencyKey: 'stable-key',
+      }
+      const next = reconcileCreditAdjustmentRetry(
+        previous,
+        scenario.facts,
+        scenario.event,
+        () => `generated-key-${++generated}`
+      )
+      assert.equal(
+        next.idempotencyKey,
+        scenario.reusesKey ? 'stable-key' : 'generated-key-1',
+        scenario.name
+      )
+      assert.deepEqual(next.facts, scenario.facts, scenario.name)
+    }
+  })
   test('keeps decrease errors separate from after-sales grant semantics', () => {
     const decreaseCodes = [
       'credit_valuation_plan_required',
@@ -292,7 +374,7 @@ describe('Admin Credit financial management', () => {
       )
     )
   }, 20_000)
-  test('keeps a failed retry key and replaces it after amount, plan, operation, and success changes', async () => {
+  test('reuses an unchanged failed retry and rotates after success facts change', async () => {
     const i18n = await createTestI18n()
     const user = userEvent.setup()
     const adjustments: Array<Record<string, unknown>> = []
@@ -301,22 +383,8 @@ describe('Admin Credit financial management', () => {
       if (config.url?.endsWith('/credit-balance/ledger')) {
         return response(config, { success: true, data: [] })
       }
-      if (config.url?.endsWith('/credit-balance/adjustments/preview')) {
-        return response(config, {
-          success: true,
-          data: authoritativeAdjustmentResult({
-            plan_id: Number(
-              (JSON.parse(String(config.data)) as Record<string, unknown>)
-                .plan_id
-            ),
-          }),
-        })
-      }
       if (config.url?.endsWith('/credit-balance/adjustments')) {
-        const payload = JSON.parse(String(config.data)) as Record<
-          string,
-          unknown
-        >
+        const payload = JSON.parse(String(config.data)) as Record<string, unknown>
         adjustments.push(payload)
         if (!allowSuccess) {
           return response(config, {
@@ -329,7 +397,6 @@ describe('Admin Credit financial management', () => {
         return response(config, {
           success: true,
           data: authoritativeAdjustmentResult({
-            plan_id: Number(payload.plan_id ?? 0),
             gross_credit: amount,
             net_credit: amount,
             available_credit: amount,
@@ -346,25 +413,15 @@ describe('Admin Credit financial management', () => {
               ledger_id: adjustments.length,
               created_at: 1_800_000_000,
             },
-            debt_formed: 0,
           }),
         })
       }
       throw new Error(`unexpected request: ${config.method} ${config.url}`)
     }
 
-    const secondPlan = afterSalesPlan({
-      id: 9102,
-      title: '50 CNY / 1,000 Credit',
-      price_amount: 50,
-      price_amount_micros: '50000000',
-    })
     const view = render(
       <I18nextProvider i18n={i18n}>
-        <AdminCreditBalancePanel
-          userId={8101}
-          plans={[afterSalesPlan(), secondPlan]}
-        />
+        <AdminCreditBalancePanel userId={8101} plans={[afterSalesPlan()]} />
       </I18nextProvider>
     )
     await waitFor(() => assert.ok(view.getByText('No Credit balance history')))
@@ -374,6 +431,13 @@ describe('Admin Credit financial management', () => {
     })
     plan.focus()
     await user.keyboard('{Enter}{ArrowDown}{Enter}')
+    await waitFor(() => {
+      const details =
+        view.getByText('Selected after-sales grant plan').parentElement
+          ?.textContent || ''
+      assert.match(details, /¥40\.00/)
+    })
+
     const amount = view.getByLabelText('Credit amount')
     const reason = view.getAllByLabelText('Reason')[0]
     fireEvent.change(amount, { target: { value: '800' } })
@@ -391,90 +455,29 @@ describe('Admin Credit financial management', () => {
       )
     }
 
+    const submitSuccessfulAttempt = async (expectedCount: number) => {
+      assert.equal((submit as HTMLButtonElement).disabled, false)
+      fireEvent.click(submit)
+      await waitFor(() => assert.equal(adjustments.length, expectedCount))
+      await waitFor(() => {
+        assert.equal((amount as HTMLInputElement).value, '')
+        assert.equal((reason as HTMLTextAreaElement).value, '')
+        assert.equal((submit as HTMLButtonElement).disabled, true)
+      })
+    }
+
     await submitFailedAttempt(1)
     await submitFailedAttempt(2)
     assert.equal(adjustments[1].idempotency_key, adjustments[0].idempotency_key)
-    fireEvent.change(amount, { target: { value: '801' } })
-    await submitFailedAttempt(3)
-    assert.equal(adjustments[2].amount, '801')
-    assert.notEqual(
-      adjustments[2].idempotency_key,
-      adjustments[1].idempotency_key
-    )
 
-    fireEvent.click(
-      view.getByRole('button', { name: 'Preview operational value' })
-    )
-    await waitFor(() =>
-      assert.ok(view.getByText('Authoritative operational value preview'))
-    )
-    await user.click(plan)
-    await user.click(
-      await view.findByRole('option', { name: '50 CNY / 1,000 Credit' })
-    )
-    await waitFor(() => {
-      const selectedPlanDetails =
-        view.getByText('Selected after-sales grant plan').parentElement
-          ?.textContent || ''
-      assert.match(selectedPlanDetails, /¥50\.00/)
-    })
-    await waitFor(() =>
-      assert.equal(
-        view.queryByText('Authoritative operational value preview') === null,
-        true
-      )
-    )
-    await submitFailedAttempt(4)
-    assert.equal(adjustments[3].plan_id, 9102)
-    assert.notEqual(
-      adjustments[3].idempotency_key,
-      adjustments[2].idempotency_key
-    )
-
-    fireEvent.click(
-      view.getByRole('button', { name: 'Preview operational value' })
-    )
-    await waitFor(() =>
-      assert.ok(view.getByText('Authoritative operational value preview'))
-    )
-    const operation = view.getByRole('combobox', {
-      name: 'Credit adjustment operation',
-    })
-    await user.click(operation)
-    await user.click(await view.findByRole('option', { name: 'Decrease Credit' }))
-    await waitFor(() => {
-      assert.equal(view.queryByLabelText('After-sales grant plan') === null, true)
-      assert.equal(
-        view.queryByText('Authoritative operational value preview') === null,
-        true
-      )
-    })
     allowSuccess = true
-    assert.equal((submit as HTMLButtonElement).disabled, false)
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 5))
-    await waitFor(() => {
-      assert.equal((amount as HTMLInputElement).value, '')
-      assert.equal((reason as HTMLTextAreaElement).value, '')
-    })
-    assert.equal(adjustments[4].operation, 'decrease')
-    assert.equal('plan_id' in adjustments[4], false)
-    assert.notEqual(
-      adjustments[4].idempotency_key,
-      adjustments[3].idempotency_key
-    )
+    await submitSuccessfulAttempt(3)
+    assert.equal(adjustments[2].idempotency_key, adjustments[1].idempotency_key)
 
     fireEvent.change(amount, { target: { value: '801' } })
-    fireEvent.change(reason, { target: { value: 'controlled retry' } })
-    await waitFor(() =>
-      assert.equal((submit as HTMLButtonElement).disabled, false)
-    )
-    fireEvent.click(submit)
-    await waitFor(() => assert.equal(adjustments.length, 6))
-    assert.notEqual(
-      adjustments[5].idempotency_key,
-      adjustments[4].idempotency_key
-    )
+    fireEvent.change(reason, { target: { value: 'after success' } })
+    await submitSuccessfulAttempt(4)
+    assert.notEqual(adjustments[3].idempotency_key, adjustments[2].idempotency_key)
   }, 30_000)
 
   test('submits plan-bound increases and plan-free decreases from the keyboard', async () => {
@@ -586,6 +589,16 @@ describe('Admin Credit financial management', () => {
     assert.equal(adjustments[0].reason, 'approved increase')
     assert.match(String(adjustments[0].idempotency_key), /^admin-credit-8101-/)
 
+    fireEvent.change(amount, { target: { value: '126' } })
+    fireEvent.change(reason, { target: { value: 'approved retry change' } })
+    submit.focus()
+    await user.keyboard('{Enter}')
+    await waitFor(() => assert.equal(adjustments.length, 2))
+    assert.notEqual(
+      adjustments[1].idempotency_key,
+      adjustments[0].idempotency_key
+    )
+
     const operation = view.getByRole('combobox', {
       name: 'Credit adjustment operation',
     })
@@ -595,14 +608,14 @@ describe('Admin Credit financial management', () => {
     await user.type(reason, 'approved decrease')
     submit.focus()
     await user.keyboard('{Enter}')
-    await waitFor(() => assert.equal(adjustments.length, 2))
-    assert.equal(adjustments[1].operation, 'decrease')
-    assert.equal(adjustments[1].amount, '75')
-    assert.equal('plan_id' in adjustments[1], false)
-    assert.equal(adjustments[1].reason, 'approved decrease')
+    await waitFor(() => assert.equal(adjustments.length, 3))
+    assert.equal(adjustments[2].operation, 'decrease')
+    assert.equal(adjustments[2].amount, '75')
+    assert.equal('plan_id' in adjustments[2], false)
+    assert.equal(adjustments[2].reason, 'approved decrease')
     assert.notEqual(
-      adjustments[1].idempotency_key,
-      adjustments[0].idempotency_key
+      adjustments[2].idempotency_key,
+      adjustments[1].idempotency_key
     )
     const decreaseResult = view
       .getAllByRole('status')

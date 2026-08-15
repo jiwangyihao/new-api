@@ -36,7 +36,7 @@ require_absolute_executable() {
 
 is_allowed_config_key() {
   case "$1" in
-    RELEASE_ID|EXPECTED_REVISION|TARGET_IMAGE|CURRENT_IMAGE|MIGRATION_VERSION|ROOT|COMPOSE_BASE|COMPOSE_NETWORK|COMPOSE_PRIMARY|COMPOSE_RELEASE|APP_ENV_FILE|DOCKER_NETWORK|WRITE_GATE_HOOK|READ_ONLY_PROBE_HOOK|CLONE_PROBE_HOOK|OBSERVE_HOOK|AUDIT_DIR|BACKUP_DIR|STATE_DIR|LOCK_FILE|POSTGRES_CONTAINER|POSTGRES_USER|POSTGRES_DB|BATCH_SIZE|HEALTH_TIMEOUT_SECONDS|OBSERVE_SECONDS|MUTATION_APPROVAL_FILE|OPEN_WRITES_APPROVAL_FILE|ROLLBACK_APPROVAL_FILE|SUSPEND_REASON)
+    RELEASE_ID|EXPECTED_REVISION|TARGET_IMAGE|CURRENT_IMAGE|MIGRATION_VERSION|MAINTENANCE_MODE|ROOT|COMPOSE_BASE|COMPOSE_NETWORK|COMPOSE_PRIMARY|COMPOSE_RELEASE|APP_ENV_FILE|DOCKER_NETWORK|WRITE_GATE_HOOK|READ_ONLY_PROBE_HOOK|CLONE_PROBE_HOOK|OBSERVE_HOOK|AUDIT_DIR|BACKUP_DIR|STATE_DIR|LOCK_FILE|POSTGRES_CONTAINER|POSTGRES_USER|POSTGRES_DB|BATCH_SIZE|HEALTH_TIMEOUT_SECONDS|OBSERVE_SECONDS|MUTATION_APPROVAL_FILE|OPEN_WRITES_APPROVAL_FILE|ROLLBACK_APPROVAL_FILE|SUSPEND_REASON)
       return 0
       ;;
     *)
@@ -73,7 +73,9 @@ validate_config() {
   require_value TARGET_IMAGE
   require_value CURRENT_IMAGE
   require_value MIGRATION_VERSION
+  require_value MAINTENANCE_MODE
   require_value DOCKER_NETWORK
+  [[ "$MAINTENANCE_MODE" == true ]] || contract_error 'MAINTENANCE_MODE must be true for the release state machine'
   require_absolute_directory ROOT
   require_absolute_file COMPOSE_BASE
   require_absolute_file COMPOSE_NETWORK
@@ -222,7 +224,6 @@ cleanup() {
   fi
   exit "$rc"
 }
-
 release_override_image() {
   local line image='' count=0
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -235,22 +236,140 @@ release_override_image() {
   printf '%s\n' "$image"
 }
 
+
 write_release_override() {
-  local image="$1" temporary="${COMPOSE_RELEASE}.tmp.$$" line prefix replaced=0 mode
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^([[:space:]]*image:[[:space:]]*).*$ ]]; then
-      prefix="${BASH_REMATCH[1]}"
-      printf '%s%s\n' "$prefix" "$image"
-      replaced=$((replaced + 1))
-    else
-      printf '%s\n' "$line"
-    fi
-  done < "$COMPOSE_RELEASE" > "$temporary"
-  [[ "$replaced" -eq 1 ]] || { rm -f "$temporary"; contract_error 'COMPOSE_RELEASE must contain exactly one image entry'; }
+  local image="$1" maintenance_mode="${2:-false}" temporary="${COMPOSE_RELEASE}.tmp.$$" mode
+  [[ "$maintenance_mode" == true || "$maintenance_mode" == false ]] || contract_error 'write_release_override maintenance mode must be true or false'
   mode="$(stat -c '%a' "$COMPOSE_RELEASE")"
+  awk -v image="$image" -v maintenance_mode="$maintenance_mode" '
+    function indent_of(value, spaces) {
+      spaces = value
+      sub(/[^[:space:]].*$/, "", spaces)
+      return length(spaces)
+    }
+    function padding(count) {
+      return sprintf("%*s", count, "")
+    }
+    function append_maintenance_entry() {
+      if (maintenance_mode != "true" || maintenance_present) {
+        return
+      }
+      if (environment_style == "list") {
+        print padding(environment_indent + 2) "- MAINTENANCE_MODE=true"
+      } else {
+        print padding(environment_indent + 2) "MAINTENANCE_MODE: \"true\""
+      }
+      maintenance_present = 1
+    }
+    function append_new_environment() {
+      if (maintenance_mode == "true") {
+        print padding(service_indent + 2) "environment:"
+        print padding(service_indent + 4) "MAINTENANCE_MODE: \"true\""
+        maintenance_present = 1
+      }
+    }
+    BEGIN {
+      in_services = 0
+      in_new_api = 0
+      in_environment = 0
+      pending_image = ""
+      image_count = 0
+      maintenance_present = 0
+      environment_style = ""
+    }
+    {
+      line = $0
+      indent = indent_of(line)
+
+      if (pending_image != "") {
+        if (in_new_api && line ~ /^[[:space:]]*environment:[[:space:]]*$/ && indent > service_indent) {
+          print pending_image
+          pending_image = ""
+          print line
+          in_environment = 1
+          environment_indent = indent
+          environment_style = ""
+          maintenance_present = 0
+          next
+        }
+        print pending_image
+        append_new_environment()
+        pending_image = ""
+      }
+
+      if (in_environment) {
+        if (line ~ /^[[:space:]]*$/) {
+          print line
+          next
+        }
+        if (indent > environment_indent) {
+          if (environment_style == "" && line ~ /^[[:space:]]*-[[:space:]]*/) {
+            environment_style = "list"
+          }
+          if (line ~ /^[[:space:]]*MAINTENANCE_MODE[[:space:]]*:/ || line ~ /^[[:space:]]*-[[:space:]]*MAINTENANCE_MODE([=:]|$)/) {
+            next
+          }
+          print line
+          next
+        }
+        append_maintenance_entry()
+        in_environment = 0
+      }
+
+      if (in_new_api && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        in_new_api = 0
+      }
+      if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent && line !~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 0
+      }
+      if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 1
+        services_indent = indent
+        print line
+        next
+      }
+      if (in_services && line ~ /^[[:space:]]*new-api:[[:space:]]*$/ && indent > services_indent) {
+        in_new_api = 1
+        service_indent = indent
+        print line
+        next
+      }
+      if (in_new_api && line ~ /^[[:space:]]*image:[[:space:]]*.*$/ && indent > service_indent) {
+        sub(/image:[[:space:]]*.*/, "image: " image, line)
+        pending_image = line
+        image_count++
+        next
+      }
+      if (in_new_api && line ~ /^[[:space:]]*environment:[[:space:]]*$/ && indent > service_indent) {
+        print line
+        in_environment = 1
+        environment_indent = indent
+        environment_style = ""
+        maintenance_present = 0
+        next
+      }
+      print line
+    }
+    END {
+      if (in_environment) {
+        append_maintenance_entry()
+      }
+      if (pending_image != "") {
+        print pending_image
+        append_new_environment()
+      }
+      if (image_count != 1 || (maintenance_mode == "true" && !maintenance_present)) {
+        exit 2
+      }
+    }
+  ' "$COMPOSE_RELEASE" > "$temporary" || {
+    rm -f "$temporary"
+    contract_error 'COMPOSE_RELEASE must contain exactly one new-api image and the required maintenance environment'
+  }
   chmod "$mode" "$temporary"
   mv -f "$temporary" "$COMPOSE_RELEASE"
 }
+
 
 restore_release_override() {
   local temporary="${COMPOSE_RELEASE}.tmp.$$" mode
@@ -524,6 +643,18 @@ require_gate_closed() {
   ' <<<"$output" >/dev/null || contract_error 'write gate is not closed and drained'
 }
 
+require_container_maintenance_mode() {
+  local environment expected="MAINTENANCE_MODE=$MAINTENANCE_MODE"
+  environment="$(docker inspect --format '{{json .Config.Env}}' new-api)" || contract_error 'unable to inspect running maintenance environment'
+  jq -e --arg expected "$expected" 'type == "array" and index($expected) != null' <<<"$environment" >/dev/null || contract_error 'running new-api container is not in explicit maintenance mode'
+}
+
+require_container_not_in_maintenance_mode() {
+  local environment expected="MAINTENANCE_MODE=$MAINTENANCE_MODE"
+  environment="$(docker inspect --format '{{json .Config.Env}}' new-api)" || contract_error 'unable to inspect running application environment'
+  jq -e --arg expected "$expected" 'type == "array" and index($expected) == null' <<<"$environment" >/dev/null || contract_error 'running new-api container retained maintenance mode'
+}
+
 run_migration_command() {
   local mode="$1" output="$2" error_output
   error_output="${output}.stderr"
@@ -537,7 +668,7 @@ run_migration_command() {
       arguments+=(--reason "$SUSPEND_REASON")
       ;;
   esac
-  if ! docker run --rm --network "$DOCKER_NETWORK" --env-file "$APP_ENV_FILE" "$TARGET_IMAGE" "${arguments[@]}" > "$output" 2> "$error_output"; then
+  if ! docker run --rm --network "$DOCKER_NETWORK" --env "MAINTENANCE_MODE=$MAINTENANCE_MODE" --env-file "$APP_ENV_FILE" "$TARGET_IMAGE" "${arguments[@]}" > "$output" 2> "$error_output"; then
     cat "$error_output" >&2
     return 1
   fi
@@ -623,8 +754,9 @@ run_stage_schema() {
   require_gate_closed "$status"
   verify_recorded_backup
   if [[ "$(state_value PHASE)" == stage-schema ]]; then
-    wait_for_health
+    wait_for_maintenance_readiness
     check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+    require_container_maintenance_mode
     echo "release=$RELEASE_ID phase=stage-schema result=no-op"
     return
   fi
@@ -635,15 +767,16 @@ run_stage_schema() {
   STATE_RELEASE_OVERRIDE_BACKUP="$override_backup"
   STATE_WRITE_GATE_STATE=closed
   write_state stage-schema-starting
-  write_release_override "$TARGET_IMAGE"
+  write_release_override "$TARGET_IMAGE" true
   "${COMPOSE[@]}" up -d --no-deps --force-recreate --pull never new-api
-  wait_for_health
+  wait_for_maintenance_readiness
   check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+  require_container_maintenance_mode
   status="$(write_gate_status)"
   require_gate_closed "$status"
   STATE_WRITE_GATE_STATE=closed
   write_state stage-schema
-  echo "release=$RELEASE_ID phase=stage-schema result=pass write_gate=closed"
+  echo "release=$RELEASE_ID phase=stage-schema result=pass write_gate=closed maintenance_mode=true"
 }
 
 run_read_only_dry_run() {
@@ -778,6 +911,19 @@ run_verify() {
   echo "release=$RELEASE_ID phase=verify result=pass checksum=$STATE_APPLY_CHECKSUM"
 }
 
+wait_for_maintenance_readiness() {
+  local started now
+  started="$(date +%s)"
+  while true; do
+    if docker exec new-api test -s /tmp/new-api-maintenance-ready >/dev/null 2>&1; then
+      return 0
+    fi
+    now="$(date +%s)"
+    (( now - started < HEALTH_TIMEOUT_SECONDS )) || contract_error 'new-api maintenance readiness did not become available while writes remained closed'
+    sleep 1
+  done
+}
+
 wait_for_health() {
   local started now status
   started="$(date +%s)"
@@ -809,19 +955,21 @@ run_start_closed() {
   if [[ "$(state_value PHASE)" == start-closed ]]; then
     wait_for_health
     check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+    require_container_not_in_maintenance_mode
     echo "release=$RELEASE_ID phase=start-closed result=no-op"
     return
   fi
   [[ -n "$STATE_RELEASE_OVERRIDE_BACKUP" && -f "$STATE_RELEASE_OVERRIDE_BACKUP" ]] || contract_error 'original Compose release overlay backup is missing'
-  write_release_override "$TARGET_IMAGE"
+  write_release_override "$TARGET_IMAGE" false
   "${COMPOSE[@]}" up -d --no-deps --force-recreate --pull never new-api
   wait_for_health
   check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+  require_container_not_in_maintenance_mode
   status="$(write_gate_status)"
   require_gate_closed "$status"
   STATE_WRITE_GATE_STATE=closed
   write_state start-closed
-  echo "release=$RELEASE_ID phase=start-closed result=pass"
+  echo "release=$RELEASE_ID phase=start-closed result=pass maintenance_mode=false"
 }
 
 run_probe() {

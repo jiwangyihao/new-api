@@ -102,3 +102,17 @@
 - 现有脚本依赖的 write-gate、生产只读探针、隔离克隆探针和 observe Hook 均未落地，因此不能执行生产状态机，也不记录适配器或发布干跑通过。
 - 部署远端已清理为仅 `main`：删除 `prd9-credit-activation-fix`、`prd9-integration`、`prd9-layout-fix`、`prd9-ui-fixes` 后，远端只剩 `refs/heads/main` 指向 `9ffa6391d`。
 - 生产仍运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976` 且只读健康；目标 digest 未拉取，部署、业务、观察和回滚验收均未完成。
+## 本轮本地交付物与证据（2026-08-15）
+
+- 修改文件：`main.go`、`main_task_startup_test.go`、`.scratch/agent-progress/issue-28/server-release.sh`、`.scratch/agent-progress/issue-28/server-release.test.sh`；`git diff --check` 通过。
+- 应用生命周期：维护模式在数据库初始化后保持进程存活，等待 `SIGINT`/`SIGTERM`；定向 Go 测试退出码 `0`。该测试覆盖启动开关全部关闭及终止信号等待，不冒充真实容器检查。
+- 发布脚本：`bash -n` 退出码 `0`；最新完整本地合同退出码 `0`，阶段输出包含 `stage-schema result=pass write_gate=closed maintenance_mode=true`、`start-closed result=pass maintenance_mode=false`、`probe`、`open-writes`、`observe`、`rollback-suspend` 与 `PASS: full pipeline only`。
+- `MAINTENANCE_MODE=true` 已纳入脚本配置白名单与必填校验；stage-schema 覆盖只作用于 `new-api`，恢复路径从原始 Compose 备份完整恢复；迁移 CLI 通过显式环境变量运行。
+- 证据边界：完整合同使用单服务 stub，未验证真实 Compose 多文件服务级环境归属；未验证真实 Nginx、PostgreSQL/Redis drain、容器退出/健康、生产 Hook 或远端迁移命令。
+- 生产结论：保持失败关闭；没有真实远端 Hook/容器/数据库只读证据，不得执行或宣称生产发布就绪；当前生产旧 digest 未被本轮修改。
+## 本轮阻断收口（2026-08-15）
+
+- readiness 测试 stub 已从 `running_env` 判定改为独立状态：maintenance Compose-up 创建 `$STUB_STATE.maintenance_ready`，探针执行 `test -s /tmp/new-api-maintenance-ready` 检查该状态，normal Compose-up 删除该状态。
+- `bash -n .scratch/agent-progress/issue-28/server-release.sh && TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 退出码为 `0`，阶段覆盖 maintenance readiness、幂等 dry-run/apply/verify、封闭启动、probe、observe 与 rollback-suspend。
+- 本地合同通过不构成生产发布证明；真实 write-gate、`production-probe`、`clone-probe`、`observe`、Nginx 切流和 PostgreSQL/Redis drain 仍未交付或验证。
+- 按失败关闭规则未执行任何生产远程写操作；生产仍运行旧 immutable digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，Issue #28 与父 Issue #19 保持 OPEN。

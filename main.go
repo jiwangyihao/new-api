@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -57,6 +59,81 @@ func pprofListenAddr() string {
 func pprofMonitorEnabled() bool {
 	return os.Getenv("ENABLE_PPROF_MONITOR") == "true"
 }
+func loadDotEnv() {
+	if err := godotenv.Load(".env"); err != nil && common.DebugEnabled {
+		common.SysLog("No .env file found, using default environment variables. If needed, please create a .env file and set the relevant variables.")
+	}
+}
+
+type runtimeStartupPlan struct {
+	maintenanceMode    bool
+	startApplication   bool
+	startRedis         bool
+	startBackground    bool
+	startSystemMonitor bool
+	startHTTP          bool
+}
+
+func maintenanceModeEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("MAINTENANCE_MODE")), "true")
+}
+
+func runtimeStartupPlanFor(maintenanceMode bool) runtimeStartupPlan {
+	return runtimeStartupPlan{
+		maintenanceMode:    maintenanceMode,
+		startApplication:   !maintenanceMode,
+		startRedis:         !maintenanceMode,
+		startBackground:    !maintenanceMode,
+		startSystemMonitor: !maintenanceMode,
+		startHTTP:          !maintenanceMode,
+	}
+}
+func waitForMaintenanceShutdown(signals <-chan os.Signal) {
+	<-signals
+}
+
+const maintenanceReadinessFile = "/tmp/new-api-maintenance-ready"
+
+func writeMaintenanceReadiness(path string) error {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if err := file.Chmod(0600); err != nil {
+		return err
+	}
+	_, err = file.WriteString("ready\n")
+	return err
+}
+
+func runMaintenanceSession(path string, signals <-chan os.Signal) error {
+	if err := writeMaintenanceReadiness(path); err != nil {
+		return fmt.Errorf("failed to write maintenance readiness: %w", err)
+	}
+	defer func() {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			common.SysError("failed to remove maintenance readiness: " + err.Error())
+		}
+	}()
+	waitForMaintenanceShutdown(signals)
+	return nil
+}
+
+func blockInMaintenanceMode() error {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	common.SysLog("maintenance mode enabled; skipped Redis, background tasks, system monitor, profiling, and HTTP server; waiting for termination signal")
+	return runMaintenanceSession(maintenanceReadinessFile, signals)
+}
+
+func closeRuntimeDatabases(maintenanceMode bool) error {
+	if maintenanceMode {
+		return model.CloseMaintenanceDB()
+	}
+	return model.CloseDB()
+}
 
 func channelUpdateFrequencyFromEnv(value string) (int, bool, error) {
 	if value == "" {
@@ -89,10 +166,25 @@ func main() {
 		os.Exit(RunCreditValuationCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
 	startTime := time.Now()
+	loadDotEnv()
+	startupPlan := runtimeStartupPlanFor(maintenanceModeEnabled())
 
 	err := InitResources()
 	if err != nil {
 		common.FatalLog("failed to initialize resources: " + err.Error())
+		return
+	}
+
+	defer func() {
+		if err := closeRuntimeDatabases(startupPlan.maintenanceMode); err != nil {
+			common.FatalLog("failed to close database: " + err.Error())
+		}
+	}()
+
+	if !startupPlan.startApplication {
+		if err := blockInMaintenanceMode(); err != nil {
+			common.FatalLog(err.Error())
+		}
 		return
 	}
 
@@ -103,13 +195,6 @@ func main() {
 	if common.DebugEnabled {
 		common.SysLog("running in debug mode")
 	}
-
-	defer func() {
-		err := model.CloseDB()
-		if err != nil {
-			common.FatalLog("failed to close database: " + err.Error())
-		}
-	}()
 
 	if common.RedisEnabled {
 		// for compatibility with old versions
@@ -325,14 +410,9 @@ func InjectGoogleAnalytics() {
 }
 
 func InitResources() error {
-	// Initialize resources here if needed
-	// This is a placeholder function for future resource initialization
-	err := godotenv.Load(".env")
-	if err != nil {
-		if common.DebugEnabled {
-			common.SysLog("No .env file found, using default environment variables. If needed, please create a .env file and set the relevant variables.")
-		}
-	}
+	// Load .env before reading startup-mode flags. Keep this idempotent because
+	// InitResources is also called independently by operational tooling.
+	loadDotEnv()
 
 	// 加载环境变量
 	common.InitEnv()
@@ -346,8 +426,19 @@ func InitResources() error {
 
 	service.InitTokenEncoders()
 
-	// Initialize SQL Database
-	err = model.InitDB()
+	maintenanceMode := maintenanceModeEnabled()
+	if maintenanceMode {
+		// InitDB runs schema migrations on a master node. Maintenance workers
+		// must use the dedicated non-migrating connection instead.
+		if _, err := model.InitMaintenanceDB(); err != nil {
+			return err
+		}
+		common.SysLog("maintenance mode enabled; maintenance database initialized; skipped mutable initialization, Redis, cache cleanup, metrics, system monitor, and HTTP startup")
+		return nil
+	}
+
+	// Initialize SQL Database and run the normal startup migrations.
+	err := model.InitDB()
 	if err != nil {
 		common.FatalLog("failed to initialize database: " + err.Error())
 		return err
@@ -394,18 +485,15 @@ func InitResources() error {
 	err = i18n.Init()
 	if err != nil {
 		common.SysError("failed to initialize i18n: " + err.Error())
-		// Don't return error, i18n is not critical
 	} else {
 		common.SysLog("i18n initialized with languages: " + strings.Join(i18n.SupportedLanguages(), ", "))
 	}
-	// Register user language loader for lazy loading
 	i18n.SetUserLangLoader(model.GetUserLanguage)
 
 	// Load custom OAuth providers from database
 	err = oauth.LoadCustomProviders()
 	if err != nil {
 		common.SysError("failed to load custom OAuth providers: " + err.Error())
-		// Don't return error, custom OAuth is not critical
 	}
 
 	return nil

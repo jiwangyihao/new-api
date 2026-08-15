@@ -2,12 +2,12 @@
 
 ## 当前阶段
 
-- 阶段：生产发布未完成；候选与不可变镜像已完成，部署远端仅保留 `main`
+- 阶段：生产发布已阻断并维持失败关闭；候选与不可变镜像已完成，部署远端仅保留 `main`
 - 用户授权：已明确要求立即直接部署并忽略 Orca 状态，同时要求部署远端仅保留 `main`
 - Orca 状态：仅保留为历史审计，不再作为当前授权阻断；直接用户授权不等于可以伪造缺失的生产 Hook 或跳过发布合同
 - 现网外部写流量：未核验（只读预检未证明关闭；不得记录为关闭）
 - 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；`deploy/main` 仍指向该提交
-- 下一动作：现有已审阅脚本缺真实 write-gate、生产/克隆探针和 observe Hook，无法执行安全状态机；保持生产不变
+- 下一动作：在真实 write-gate、生产/克隆探针和 observe Hook 交付并审阅前，保持生产不变，不执行任何远程写操作
 
 ## Read-back
 
@@ -83,3 +83,19 @@
 - 当前仓库没有已落地的真实 write-gate、生产只读探针、隔离克隆探针或 observe Hook；不得把状态机与 stub 合同测试当作生产能力。
 - 本次只完成部署远端分支清理和脱敏证据更新；不传输脚本、不拉取目标镜像、不停写、不备份、不迁移、不重启、不开放流量。
 - Issue #28 与父 #19 保持 OPEN；生产部署、业务验收、观察窗口和回滚演练均未完成。
+## 本轮恢复验证（2026-08-15）
+
+- 应用维护生命周期定向门禁：`gofmt -w main.go main_task_startup_test.go && go test . -run 'Test(Maintenance|RuntimeStartupPlan|MainStarts)' -count=1`，退出码 `0`。
+- 发布脚本语法：`bash -n .scratch/agent-progress/issue-28/server-release.sh`，退出码 `0`。
+- 本地完整状态机合同：`TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh`，最新退出码 `0`；覆盖 `stage-schema` 的 `maintenance_mode=true`、幂等 dry-run/apply/verify、`start-closed` 的 `maintenance_mode=false`、probe、open-writes、observe 与 rollback-suspend，并输出 `PASS: full pipeline only`。
+- 维护模式实际代码路径：加载 `.env` 后解析 `MAINTENANCE_MODE`；使用 `InitMaintenanceDB`；不启动 Redis、后台任务、系统监控、profiling 或 HTTP；进程等待 `SIGINT`/`SIGTERM` 后退出。迁移 CLI 仍在 `main` 资源初始化前独立执行。
+- 生产门禁仍为失败关闭：本轮未取得可核验的真实 write-gate drain、Compose 合并环境、Nginx 切流、数据库会话或生产容器生命周期证据；未执行生产写入、部署、重启、迁移、探针、放流或回滚。
+- 合同测试使用单服务 Compose stub；它证明本地状态机和覆盖文件归一化，不证明真实多服务 Compose 合并结果或生产 Hook 行为。Issue #28 与 #19 保持 OPEN。
+
+## 本轮阻断收口（2026-08-15）
+
+- readiness 合同已修正：本地 Docker stub 仅在 maintenance Compose-up 时创建独立的 `maintenance_ready` 状态，`docker exec new-api test -s /tmp/new-api-maintenance-ready` 只检查该状态；正常 Compose-up 会清理它。
+- `bash -n .scratch/agent-progress/issue-28/server-release.sh && TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 退出码为 `0`，完整本地 stub 状态机输出 `PASS: full pipeline only`。
+- 该结果只证明已审阅脚本的本地 stub 合同覆盖 readiness 创建、探针检查和清理；不证明真实 Compose、Nginx、数据库 drain 或生产 Hook。
+- 生产状态保持不变：未执行远程脚本传输、flock、stop-writes、备份、镜像拉取、Compose 修改、迁移、重启、生产探针、open-writes 或回滚；现网外部写流量仍未核验。
+- 真实 write-gate、`production-probe`、`clone-probe` 和 `observe` Hook 仍缺失；Issue #28 与父 Issue #19 保持 OPEN。

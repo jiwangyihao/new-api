@@ -258,6 +258,9 @@ if raw and ".report.checksum" in expr:
     print(report().get("checksum", "")); sys.exit(0)
 if "index($reference)" in expr:
     result = values.get("reference") in data
+elif "index($expected)" in expr:
+    present = isinstance(data, list) and values.get("expected") in data
+    result = present if "!= null" in expr else not present
 elif '.report.mode == "dry_run"' in expr:
     result = migration("dry_run")
 elif '.report.mode == "apply"' in expr:
@@ -364,15 +367,30 @@ elif [[ "$args" == "inspect --format {{.Image}} new-api" ]]; then
 elif [[ "$args" == "inspect --format {{index .Config.Labels \"org.opencontainers.image.revision\"}} new-api" ]]; then
   running="$(cat "$STUB_STATE.running_image" 2>/dev/null || printf '%s' "$CURRENT_IMAGE_STUB")"
   [[ "$running" == "$TARGET_IMAGE_STUB" ]] && printf '%s\n' "$EXPECTED_REVISION_STUB" || printf '%s\n' "$CURRENT_REVISION_STUB"
+elif [[ "$args" == "inspect --format {{json .Config.Env}} new-api" ]]; then
+  if [[ -s "$STUB_STATE.running_env" ]]; then
+    printf '["%s"]\n' "$(cat "$STUB_STATE.running_env")"
+  else
+    printf '[]\n'
+  fi
+elif [[ "$args" == "exec new-api test -s /tmp/new-api-maintenance-ready" ]]; then
+  [[ -s "$STUB_STATE.maintenance_ready" ]] || exit 1
 elif [[ "$args" == "inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}} new-api" ]]; then
   printf 'healthy\n'
-elif [[ "$args" == *"compose"*" up -d"* ]]; then
+elif [[ "$args" == *"compose"*"up -d"* ]]; then
   if [[ "${FAIL_MODE:-}" == stage ]]; then
     printf 'simulated startup failure\n' >&2
     exit 54
   fi
   awk '/image:/{print $2}' "$COMPOSE_RELEASE_STUB" >"$STUB_STATE.running_image"
-elif [[ "$args" == *"run --rm"*"credit-valuation-migrate --dry-run"* ]]; then
+  if awk '/MAINTENANCE_MODE/ && /true/ { found=1 } END { exit(found ? 0 : 1) }' "$COMPOSE_RELEASE_STUB"; then
+    printf 'MAINTENANCE_MODE=true' >"$STUB_STATE.running_env"
+    printf 'ready\n' >"$STUB_STATE.maintenance_ready"
+  else
+    : >"$STUB_STATE.running_env"
+    rm -f "$STUB_STATE.maintenance_ready"
+  fi
+elif [[ "$args" == *"credit-valuation-migrate --dry-run"* ]]; then
   printf '%s\n' "$DRY_REPORT_STUB"
 elif [[ "$args" == *"run --rm"*"credit-valuation-migrate --apply"* ]]; then
   [[ "${FAIL_MODE:-}" != apply ]] || { printf 'simulated apply failure\n' >&2; exit 55; }
@@ -445,6 +463,7 @@ EXPECTED_REVISION=$TEST_REVISION
 TARGET_IMAGE=$TEST_TARGET
 CURRENT_IMAGE=$TEST_CURRENT
 MIGRATION_VERSION=1
+MAINTENANCE_MODE=true
 ROOT=$TEST_ROOT
 COMPOSE_BASE=$TEST_ROOT/compose.yml
 COMPOSE_NETWORK=$TEST_ROOT/compose.network.yml
@@ -555,7 +574,17 @@ prepare_maintenance() {
   run_release backup
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
   run_release stage-schema
+  if [[ "$(cat "$TEST_STUB_STATE.running_env" 2>/dev/null || true)" != 'MAINTENANCE_MODE=true' ]]; then
+    printf 'rendered Compose release:\n' >&2
+    cat "$TEST_ROOT/compose.release.yml" >&2
+    fail 'stage-schema did not render MAINTENANCE_MODE=true'
+  fi
+  [[ "$(awk '/MAINTENANCE_MODE/ { count++ } END { print count + 0 }' "$TEST_ROOT/compose.release.yml")" -eq 1 ]] || fail 'stage-schema maintenance override was not normalized to exactly one entry'
+  [[ "$(awk 'index($0, "docker exec new-api test -s /tmp/new-api-maintenance-ready") { count++ } END { print count + 0 }' "$TEST_CALLS")" -ge 1 ]] || fail 'stage-schema did not use maintenance readiness probe'
+  [[ -s "$TEST_STUB_STATE.maintenance_ready" ]] || fail 'maintenance compose-up did not create independent readiness state'
   run_release stage-schema
+  [[ "$(cat "$TEST_STUB_STATE.running_env" 2>/dev/null || true)" == 'MAINTENANCE_MODE=true' ]] || fail 'stage-schema did not render MAINTENANCE_MODE=true'
+
   run_release read-only-dry-run
   write_approval "$TEST_TMP/mutation.approval" apply-migration
 }
@@ -567,6 +596,9 @@ test_full_pipeline_and_idempotence() {
   run_release apply
   run_release verify
   run_release start-closed
+  [[ ! -s "$TEST_STUB_STATE.running_env" ]] || fail 'start-closed retained MAINTENANCE_MODE=true'
+  [[ ! -e "$TEST_STUB_STATE.maintenance_ready" ]] || fail 'normal compose-up did not clear independent readiness state'
+  [[ "$(awk 'index($0, "maintenance-ready") { count++ } END { print count + 0 }' "$TEST_ROOT/compose.release.yml")" -eq 0 ]] || fail 'normal Compose retained maintenance readiness probe'
   run_release start-closed
   run_release probe
   write_approval "$TEST_TMP/open.approval" open-writes

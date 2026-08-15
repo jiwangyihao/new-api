@@ -148,9 +148,12 @@ func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest
 }
 
 func GetAndValidateResponsesCompactionRequest(c *gin.Context) (*dto.OpenAIResponsesCompactionRequest, error) {
-	request := &dto.OpenAIResponsesCompactionRequest{}
-	if err := common.UnmarshalBodyReusable(c, request); err != nil {
-		return nil, err
+	request, ok := common.GetContextKeyType[*dto.OpenAIResponsesCompactionRequest](c, constant.ContextKeyOpenAIResponsesCompactionRequest)
+	if !ok || request == nil {
+		request = &dto.OpenAIResponsesCompactionRequest{}
+		if err := common.UnmarshalBodyReusable(c, request); err != nil {
+			return nil, err
+		}
 	}
 	if request.Model == "" {
 		return nil, errors.New("model is required")

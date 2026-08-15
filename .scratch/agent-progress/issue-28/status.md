@@ -2,21 +2,21 @@
 
 ## 当前阶段
 
-- 阶段：最终候选提交与远端 `main` 推送
+- 阶段：生产发布未完成；候选与不可变镜像已完成，生产写未放行
 - 用户授权：已明确授权推送 `jiwangyihao/new-api` 远端 `main` 并通过 CI 构建，目标生产实例为 `netcup-ows-migrate`
-- Orca 生产写操作授权：仍显示冻结/未授权；在该状态实际更新前，禁止生产 pull/up、停写、备份、迁移或其他远端变更
+- Orca 生产写操作授权：权威 Dispatch `ctx_b4eb0587374d` 为 `failed/stopped`，capability 已于 `2026-08-11 19:51:21` 撤销；当前无 dispatched task、decision gate 或授权消息
 - 现网外部写流量：未核验（只读预检未证明关闭；不得记录为关闭）
-- 合并候选 HEAD：`989d91d1e961fbeef27880fb57a3042f97588865`；已包含 `deploy/main` 的 `0a6995369c5f3755508567eaa2db5f363eb1d22f`
-- 下一动作：提交合并后门禁证据与经典前端锁文件，记录最终 SHA，推送到远端 `main`
+- 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；已推送远端 `main`
+- 下一动作：本次停止维护模式/迁移 CLI 与真实 Hook 设计；等待新的协调器授权和明确运维适配器输入，不执行生产变更
 
 ## Read-back
 
-- 当前 Worker HEAD：`989d91d1e961fbeef27880fb57a3042f97588865`（合并后门禁证据与锁文件尚待提交）
+- 候选与镜像源码 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；本次仅将脱敏阻断证据另行提交到本地发布分支，不推送、不改变已构建镜像内容
 - 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
 - 已合并 `deploy/main`：`0a6995369c5f3755508567eaa2db5f363eb1d22f` 是当前候选祖先
 - Issue #27 验收提交：`e6ec1072104a826a7a572dd55cf9c0422f2b3d8d`
 - #27 集成关系：`e6ec10721` 是当前候选祖先；#27 历史三库零 SKIP 证据有效，但不能替代最终候选 Gate F 重跑
-- 工作树：仅含待提交的合并后证据与 `web/classic/bun.lock` 一致性修复；提交后必须 clean
+- 工作树：最终候选提交时 clean；本次仅更新脱敏状态与证据，不改变已构建镜像内容
 - #28 指令 SHA-256：`80dde8437e7ffece26dc1718b6d1bf0b3775f84dd607c29d7869b43a03f3ad8b`
 - #28 验收 SHA-256：`89f05b563b69f0622eff4e2e2a673b7bca4e239619da06a6aaeec019cb4d30ff`
 - #27 交接 SHA-256：`3db9d7d1481a32aa9a6cbb7013554d51d291223a41ab57dd420a574f8c9b622b`
@@ -38,6 +38,10 @@
 - 主机只读身份：SSH alias=`netcup-ows-migrate`，hostname=`netcup-ows-migrate`，vendor=`netcup`，product=`KVM Server`
 - `/api/status`：`127.0.0.1:13080` 返回 `success=true`，版本 `deploy-20260813-0a69953`
 - 未执行：远程脚本创建/传输、flock、停写、备份、镜像 pull、修改 compose、apply、verify、重启、写探针、开放流量
+- 目标镜像：CI run `31810007737` 成功，revision=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`；目标 digest 尚未拉到服务器
+- 生产 PostgreSQL 尚无 `credit_valuation%` 表；符合旧镜像尚未执行 schema stage 的状态
+- `/opt/new-api/migration-prep` 与仓库均缺真实 Issue #28 write-gate、production-probe、clone-probe、observe Hook 适配器；现有 `server-release.test.sh` 只提供 stub 合同
+
 
 ## 故障恢复规则
 
@@ -57,10 +61,23 @@
 - 本地 Linux/WSL 测试按用户决定取消；严格 `0600` 权限检查未放宽，由获授权后的目标 Linux 发布流程满足
 - `git diff --check` 通过；CI 工作流只构建镜像、不运行上述测试，因此 CI 成功仅证明构建成功，不证明 Gate F 或发布安全
 
+## 当前生产阻断
+
+- 授权阻断：不存在有效的生产写 Dispatch、decision gate 或授权消息，不能执行 pull、停写、备份、迁移、重启或放流
+- 能力阻断：现网 Nginx 直接反代 `127.0.0.1:13080`，没有 write-gate include；应用启用后台任务且 Compose 设置 `BATCH_UPDATE_ENABLED=true`，尚无可证明 writer drain 的生产 Hook
+- 验收阻断：生产只读探针、最新备份隔离克隆 32 CNY tracer、真实认证前端探针和开放写后的观察 Hook 均未实现或执行
+- 门禁边界：最终候选只完成显式跳过 external matrix 的 Go 非矩阵全套；只能引用 #27 历史三库 `SKIP=0`，不得宣称最终候选新鲜三库全套
+
 ## 发布结论
 
-- 候选推送与 CI 构建：已获用户授权，可以继续
-- CI 产物必须绑定最终推送到 `main` 的确切 SHA；仅接受该 SHA 对应成功 run 产生的 GHCR immutable digest，禁止以 `latest` 或 CI 绿灯替代 digest 绑定
-- 生产远程写：Orca 协调器授权状态仍冻结/未授权；状态更新前禁止生产 pull/up、停写、备份、迁移、重启或开放流量
-- 获授权后严格按 dry-run→stop-writes→backup→apply/verify→start-closed→probe→open-writes→observe 执行；部署后核对 digest、OCI revision、健康/API 与 migration version/status
+- 候选推送与 CI 构建已完成：`main`=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，run=`31810007737`，immutable digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`
+- 生产远程写：未获有效 Orca 授权，且真实生产 Hook 缺失；不得进入 dry-run、stop-writes、backup、apply/verify、start-closed、probe、open-writes 或 observe
+- 当前生产继续运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，健康且未被本次核验修改
+- Issue #28 与父 #19 必须保持 OPEN；生产部署、业务验证、观察和回滚演练均未完成
 - 尚未发生任何生产写操作
+## 本次收口决定
+
+- 按最新协调器裁决，`CONTEXT.md` 仅定义领域术语，不授权本次改造应用或继续设计迁移 CLI。
+- 当前仓库没有已落地的真实 write-gate、生产只读探针、隔离克隆探针或 observe Hook；不得把状态机与 stub 合同测试当作生产能力。
+- 本次只保存脱敏状态/证据更新；不创建适配器、不传输脚本、不拉取目标镜像、不停写、不备份、不迁移、不重启、不开放流量。
+- Issue #28 与父 #19 保持 OPEN；生产部署、业务验收、观察窗口和回滚演练均未完成。

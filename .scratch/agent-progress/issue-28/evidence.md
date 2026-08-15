@@ -15,9 +15,9 @@
 
 ## 强制 Read-back 与主机身份
 
-- 合并候选 HEAD：`989d91d1e961fbeef27880fb57a3042f97588865`（合并后门禁证据与经典前端锁文件尚待提交）
+- 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`
 - 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
-- 最新 `deploy/main` 提交 `0a6995369c5f3755508567eaa2db5f363eb1d22f` 已成为候选祖先；最终推送 SHA 待证据提交后记录
+- `deploy/main` 提交 `0a6995369c5f3755508567eaa2db5f363eb1d22f` 是最终候选祖先；最终候选已推送到远端 `main`
 - SSH 别名：`netcup-ows-migrate`
 - 远端原始只读输出：`hostname=netcup-ows-migrate`、`sys_vendor=netcup`、`product_name=KVM Server`
 - 目标裁决：协调器已明确接受 Netcup 为现行生产目标；旧 RackNerd/AutoDLChen 目标禁止访问
@@ -38,11 +38,16 @@
 
 ## 生产只读预检
 
-- 目标：仅 SSH `netcup-ows-migrate`；最新只读身份输出为 `netcup-ows-migrate` / `netcup` / `KVM Server`。
-- 当前生产：`new-api` digest=`sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，revision=`0a6995369c5f3755508567eaa2db5f363eb1d22f`，容器 `running healthy`，`RestartCount=0`；`127.0.0.1:13080/api/status` 返回 `success=true`，版本 `deploy-20260813-0a69953`。
-- 当前 `/opt/new-api/compose.release.yml` 固定上述 immutable digest；生产目录存在基础/network/primary/replica/release Compose、audits、backups 与 migration-prep。
-- 现网外部写流量未核验；Orca 生产写操作授权仍冻结/未授权。用户已授权推送与 CI，但这不等于 Orca 生产写放行。
-- 未执行：远程脚本传输、flock、stop-writes、备份、镜像 pull、compose 修改、apply、verify、重启、生产写探针、open-writes。
+- 目标：仅 SSH `netcup-ows-migrate`；最新只读身份输出为 `netcup-ows-migrate` / `netcup` / `KVM Server`
+- 当前生产：`new-api` digest=`sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，revision=`0a6995369c5f3755508567eaa2db5f363eb1d22f`，容器 `running healthy`，`RestartCount=0`；`127.0.0.1:13080/api/status` 返回 `success=true`，版本 `deploy-20260813-0a69953`
+- 当前 `/opt/new-api/compose.release.yml` 固定上述 immutable digest；生产目录存在基础/network/primary/replica/release Compose、audits、backups 与 migration-prep
+- 现网外部写流量未核验；权威 Orca Dispatch 已失败并撤销 capability，当前无 dispatched task、decision gate 或授权消息
+- 未执行：远程脚本传输、flock、stop-writes、备份、镜像 pull、compose 修改、apply、verify、重启、生产写探针、open-writes
+- 最终候选镜像：GitHub Actions run `31810007737` 成功；OCI revision=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；immutable digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`；目标 digest 尚未拉到生产主机
+- 生产 PostgreSQL 只读检查未发现 `credit_valuation%` 表，符合旧镜像尚未 stage schema；这不是迁移通过证据
+- `/opt/new-api/migration-prep` 仅有旧 PRD9 脚本；没有 Issue #28 config、`server-release.sh`、write-gate、production-probe、clone-probe、observe Hook 或 approval 文件
+- 仓库只有通用发布状态机与 stub 合同测试，没有真实 Hook adapter；现网 Nginx 直接反代 `127.0.0.1:13080`，Compose 启用 `BATCH_UPDATE_ENABLED=true`，因此尚不能证明 HTTP/后台 writer 完整关闭与 drain
+
 
 ## 业务、浏览器与监控
 
@@ -56,11 +61,11 @@
 
 ## 当前结论
 
-- 候选推送与 CI 构建已获用户授权；生产远程写仍被 Orca 协调器授权状态冻结。
-- 最终 CI 产物必须绑定推送到 `deploy/main` 的确切 SHA：等待该 SHA 对应 `Build deployment image` run 成功并取得 `ghcr.io/jiwangyihao/new-api@sha256:<digest>`；禁止使用 `latest` 或仅凭 CI 绿灯。
-- 获生产写授权后，必须按 dry-run→stop-writes→backup→apply/verify→start-closed→probe→open-writes→observe 状态机执行，不能直接套通用 pull/up。
-- 部署后必须同时验证容器 digest、OCI revision、健康/API 探针与 `credit_valuation_migrations` 目标 version/status；任一不一致保持写关闭。
-- 当前尚未发生任何生产写操作，也未关闭 Issue #28 或父 #19。
+- 候选推送与镜像构建已完成：`main`=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，run=`31810007737`，digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`
+- 生产写授权未生效，真实 write-gate / production-probe / clone-probe / observe Hook 也未交付；不能进入生产状态机
+- 当前生产仍运行旧 digest，健康且未被修改；目标 digest 未拉取，迁移 schema 未 stage
+- Issue #28 与父 #19 保持 OPEN；生产部署、32 CNY 隔离克隆、认证前端、观察窗口和回滚演练均未完成
+- 当前尚未发生任何生产写操作
 
 
 ## Windows 权限语义历史证据（本地 Linux 验收已取消）
@@ -80,13 +85,20 @@
 - 生产脚本仍严格要求 state、checksum sidecar、approval 为 `0600`；未为 Windows 放宽权限检查。
 ## 编排失败交接
 
-- 已按 `worker_done --outcome failed` 尝试发送任务 `task_d53f2a82f939`，使用的 Dispatch 为 `ctx_b4eb0587374d`。
-- Orca 明确拒绝：`dispatch_capability_invalid`，原因是该 Dispatch capability 已撤销；`dispatch-show` 同时确认 Dispatch 状态为 `failed`，`task-list --status dispatched` 为空。
-- 因无有效 Dispatch 身份，无法发送被接受的 `worker_done`；该失败交接事实不视为成功，也不改变 `blocked/failed` 结论。
+- 原续作使用 Dispatch `ctx_b4eb0587374d`；权威 `dispatch-show` 当前为 `failed/stopped`，capability 已于 `2026-08-11 19:51:21` 撤销
+- `task-list --status dispatched`、`gate-list` 与相关收件箱均为空；不存在可用于生产写的有效授权
+- 历史 `worker_done` 拒绝与当前权威状态一致；不得把旧 heartbeat 或相似终端句柄解释为授权恢复
 
 ## 用户决定（2026-08-14）
 
 - 用户明确要求不进行本地 Linux 测试；本地 POSIX `0600` 验收任务已取消，不再作为当前发布阻断。
 - 不再轮询 WSL/Linux 环境；严格 `0600` 合同仍由获授权后的目标 Linux 发布流程执行。
-- 生产写授权保持冻结。
-- 实际未提交改动：`.scratch/agent-progress/issue-28/evidence.md`、`.scratch/agent-progress/issue-28/status.md`、`.scratch/agent-progress/issue-28/server-release.sh`、`.scratch/agent-progress/issue-28/server-release.test.sh`。未 commit、stash 或删除证据。
+- 生产写授权保持未生效；本次只读核验未执行任何生产变更
+- 后续最终候选 `9ffa6391d` 已推送并成功构建不可变镜像；此事实不授予生产写权限，也不补齐真实生产 Hook
+
+## 本次收口决定
+
+- 按最新协调器裁决，停止继续设计维护模式、迁移 CLI 或真实 Hook；`CONTEXT.md` 仅定义领域术语，不能作为应用改造授权。
+- 未发现已落地的真实发布适配器；本地没有可验证的 write-gate、生产只读探针、隔离克隆探针或 observe Hook，因此不记录适配器或发布干跑通过。
+- 本次仅更新本地脱敏证据并保留 Issue #28 / #19 OPEN；不推送、不创建或传输服务器文件、不执行任何生产写操作。
+- 生产仍运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976` 且只读健康；目标 digest 未拉取，部署、业务、观察和回滚验收均未完成。

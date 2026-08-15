@@ -2,12 +2,12 @@
 
 ## 当前阶段
 
-- 阶段：生产发布未完成；候选与不可变镜像已完成，生产写未放行
-- 用户授权：已明确授权推送 `jiwangyihao/new-api` 远端 `main` 并通过 CI 构建，目标生产实例为 `netcup-ows-migrate`
-- Orca 生产写操作授权：权威 Dispatch `ctx_b4eb0587374d` 为 `failed/stopped`，capability 已于 `2026-08-11 19:51:21` 撤销；当前无 dispatched task、decision gate 或授权消息
+- 阶段：生产发布未完成；候选与不可变镜像已完成，部署远端仅保留 `main`
+- 用户授权：已明确要求立即直接部署并忽略 Orca 状态，同时要求部署远端仅保留 `main`
+- Orca 状态：仅保留为历史审计，不再作为当前授权阻断；直接用户授权不等于可以伪造缺失的生产 Hook 或跳过发布合同
 - 现网外部写流量：未核验（只读预检未证明关闭；不得记录为关闭）
-- 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；已推送远端 `main`
-- 下一动作：本次停止维护模式/迁移 CLI 与真实 Hook 设计；等待新的协调器授权和明确运维适配器输入，不执行生产变更
+- 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；`deploy/main` 仍指向该提交
+- 下一动作：现有已审阅脚本缺真实 write-gate、生产/克隆探针和 observe Hook，无法执行安全状态机；保持生产不变
 
 ## Read-back
 
@@ -63,21 +63,23 @@
 
 ## 当前生产阻断
 
-- 授权阻断：不存在有效的生产写 Dispatch、decision gate 或授权消息，不能执行 pull、停写、备份、迁移、重启或放流
-- 能力阻断：现网 Nginx 直接反代 `127.0.0.1:13080`，没有 write-gate include；应用启用后台任务且 Compose 设置 `BATCH_UPDATE_ENABLED=true`，尚无可证明 writer drain 的生产 Hook
-- 验收阻断：生产只读探针、最新备份隔离克隆 32 CNY tracer、真实认证前端探针和开放写后的观察 Hook 均未实现或执行
+- 授权状态：用户已直接授权生产发布；Orca 不再作为当前阻断理由
+- 能力阻断：现有 `server-release.sh` 强制依赖真实 write-gate、production-probe、clone-probe、observe Hook，但仓库与服务器均不存在这些适配器；不得用 stub 或临时脚本替代
+- 安全阻断：现网 Nginx 没有 write-gate include，应用启用后台任务且 Compose 设置 `BATCH_UPDATE_ENABLED=true`，无法证明 HTTP/后台 writer 完整关闭与 drain
+- 验收阻断：最新备份隔离克隆 32 CNY tracer、真实认证前端探针、开放写观察和三阶段回滚均没有可执行实现或证据
 - 门禁边界：最终候选只完成显式跳过 external matrix 的 Go 非矩阵全套；只能引用 #27 历史三库 `SKIP=0`，不得宣称最终候选新鲜三库全套
 
 ## 发布结论
 
 - 候选推送与 CI 构建已完成：`main`=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，run=`31810007737`，immutable digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`
-- 生产远程写：未获有效 Orca 授权，且真实生产 Hook 缺失；不得进入 dry-run、stop-writes、backup、apply/verify、start-closed、probe、open-writes 或 observe
-- 当前生产继续运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，健康且未被本次核验修改
+- 远端分支清理已完成：`deploy` 明确指向 `jiwangyihao/new-api`，默认分支为 `main`；删除四个 `prd9-*` 分支后，`git ls-remote --heads deploy` 只返回 `refs/heads/main`
+- 生产远程写：直接用户授权已收到，但现有已审阅发布脚本因真实 Hook 缺失无法执行完整安全状态机；未部署
+- 当前生产继续运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，健康且未被本次操作修改
 - Issue #28 与父 #19 必须保持 OPEN；生产部署、业务验证、观察和回滚演练均未完成
 - 尚未发生任何生产写操作
 ## 本次收口决定
 
-- 按最新协调器裁决，`CONTEXT.md` 仅定义领域术语，不授权本次改造应用或继续设计迁移 CLI。
+- 用户已直接授权立即发布并要求忽略 Orca，但没有授权以 stub、伪造探针或不完整状态机冒充安全发布。
 - 当前仓库没有已落地的真实 write-gate、生产只读探针、隔离克隆探针或 observe Hook；不得把状态机与 stub 合同测试当作生产能力。
-- 本次只保存脱敏状态/证据更新；不创建适配器、不传输脚本、不拉取目标镜像、不停写、不备份、不迁移、不重启、不开放流量。
+- 本次只完成部署远端分支清理和脱敏证据更新；不传输脚本、不拉取目标镜像、不停写、不备份、不迁移、不重启、不开放流量。
 - Issue #28 与父 #19 保持 OPEN；生产部署、业务验收、观察窗口和回滚演练均未完成。

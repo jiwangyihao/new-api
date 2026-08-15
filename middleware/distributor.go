@@ -32,10 +32,10 @@ func endpointTypeFromRequest(c *gin.Context) (constant.EndpointType, bool) {
 		return "", false
 	}
 	path := c.Request.URL.Path
-	switch {
-	case strings.HasPrefix(path, "/v1/responses/compact"):
+	switch path {
+	case "/v1/responses/compact":
 		return constant.EndpointTypeOpenAIResponseCompact, true
-	case strings.HasPrefix(path, "/v1/responses"):
+	case "/v1/responses":
 		return constant.EndpointTypeOpenAIResponse, true
 	default:
 		return "", false
@@ -162,11 +162,20 @@ func Distribute() func(c *gin.Context) {
 // - application/x-www-form-urlencoded
 // - multipart/form-data
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
-	if endpointType, ok := endpointTypeFromRequest(c); ok && endpointType == constant.EndpointTypeOpenAIResponse {
-		request := &dto.OpenAIResponsesRequest{}
-		if err := common.UnmarshalBodyReusable(c, request); err == nil {
-			common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
-			return &ModelRequest{Model: request.Model}, nil
+	if endpointType, ok := endpointTypeFromRequest(c); ok {
+		switch endpointType {
+		case constant.EndpointTypeOpenAIResponse:
+			request := &dto.OpenAIResponsesRequest{}
+			if err := common.UnmarshalBodyReusable(c, request); err == nil {
+				common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
+				return &ModelRequest{Model: request.Model}, nil
+			}
+		case constant.EndpointTypeOpenAIResponseCompact:
+			request := &dto.OpenAIResponsesCompactionRequest{}
+			if err := common.UnmarshalBodyReusable(c, request); err == nil {
+				common.SetContextKey(c, constant.ContextKeyOpenAIResponsesCompactionRequest, request)
+				return &ModelRequest{Model: request.Model}, nil
+			}
 		}
 	}
 

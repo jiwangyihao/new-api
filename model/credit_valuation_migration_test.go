@@ -251,6 +251,67 @@ func TestMigrationSnapshotUsesFXDirectionForUSDValuation(t *testing.T) {
 	require.Positive(t, fx.CapturedAt)
 }
 
+func TestMigrationSnapshotUsesPlanCurrencyAndIdentityFXWithoutExchangeRate(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &SubscriptionPlan{}, &UserSubscription{})
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_151, Title: "Legacy CNY Credit", Currency: "CNY",
+		EntitlementType: SubscriptionEntitlementCreditBalance, MonthlyTokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_152, UserId: 27_153, PlanId: 27_151,
+		EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status:          SubscriptionStatusActive, TokenLimit: 1_000, TokenUsed: 200,
+	}).Error)
+
+	fx, currency, blockers, err := migrationSnapshotInputs(db, CreditValuationMigration{}, false, true)
+	require.NoError(t, err)
+	require.Equal(t, "CNY", currency)
+	require.Empty(t, blockers)
+	require.Equal(t, CreditValuationMigrationFXSnapshot{
+		SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1,
+		CapturedAt: fx.CapturedAt,
+	}, fx)
+	require.Positive(t, fx.CapturedAt)
+}
+func TestMigrationSnapshotNormalizesLegacyCNYMarkerFX(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &SubscriptionPlan{}, &UserSubscription{})
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_161, Title: "Legacy CNY Marker", Currency: "CNY",
+		EntitlementType: SubscriptionEntitlementCreditBalance, MonthlyTokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_162, UserId: 27_163, PlanId: 27_161,
+		EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status:          SubscriptionStatusActive, TokenLimit: 1_000, TokenUsed: 200,
+	}).Error)
+
+	fx, currency, blockers, err := migrationSnapshotInputs(db, CreditValuationMigration{
+		Version: 1, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 73, FxRateDenominator: 10, FxCapturedAt: 123,
+	}, true, true)
+	require.NoError(t, err)
+	require.Equal(t, "CNY", currency)
+	require.Empty(t, blockers)
+	require.Equal(t, CreditValuationMigrationFXSnapshot{
+		SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: 123,
+	}, fx)
+}
+
+func TestEmptyMigrationSnapshotNormalizesLegacyCNYMarkerFX(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t)
+
+	fx, currency, blockers, err := migrationSnapshotInputs(db, CreditValuationMigration{
+		Version: 1, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 73, FxRateDenominator: 10, FxCapturedAt: 123,
+	}, true, true)
+	require.NoError(t, err)
+	require.Equal(t, "CNY", currency)
+	require.Empty(t, blockers)
+	require.Equal(t, CreditValuationMigrationFXSnapshot{
+		SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: 123,
+	}, fx)
+}
+
 func TestRepairMissingAsUnknownCanBeAppliedWithSameVersion(t *testing.T) {
 	db := setupCreditValuationMigrationLifecycleTestDB(t,
 		&Option{}, &SubscriptionPlan{}, &UserSubscription{}, &CreditValuationState{},
@@ -258,6 +319,7 @@ func TestRepairMissingAsUnknownCanBeAppliedWithSameVersion(t *testing.T) {
 	)
 	valuationCurrency := "CNY"
 	zeroMicros := int64(0)
+
 	require.NoError(t, db.Create(&SubscriptionPlan{
 		Id: 27_201, Title: "Repair Credit", PriceAmountMicros: &zeroMicros,
 		Currency: "CNY", ValuationCurrency: &valuationCurrency,
@@ -362,4 +424,53 @@ func TestFreshDatabaseDetectionIncludesTimedHistoryWithoutCredit(t *testing.T) {
 	var count int64
 	require.NoError(t, db.Model(&CreditValuationMigration{}).Count(&count).Error)
 	require.Zero(t, count)
+}
+
+func TestCreditValuationMigrationBlockersIgnoreLegacyConsumedWithoutActiveTask(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &SubscriptionPreConsumeRecord{}, &Task{})
+	require.NoError(t, db.Create(&SubscriptionPreConsumeRecord{
+		RequestId: "legacy-consumed-without-active-task", UserId: 27_401, UserSubscriptionId: 27_402,
+		PreConsumed: 100, Status: "consumed",
+	}).Error)
+
+	blockers, err := creditValuationMigrationBlockers(db)
+	require.NoError(t, err)
+	require.Empty(t, blockers)
+}
+
+func TestCreditValuationMigrationBlockersRejectActiveTaskNonTerminalRequest(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &SubscriptionPreConsumeRecord{}, &Task{})
+	const requestID = "active-task-non-terminal-request"
+	require.NoError(t, db.Create(&SubscriptionPreConsumeRecord{
+		RequestId: requestID, UserId: 27_411, UserSubscriptionId: 27_412,
+		PreConsumed: 100, Status: "consumed",
+	}).Error)
+	task := Task{
+		TaskID: "active-task-with-request-identity", Status: TaskStatusInProgress,
+		PrivateData: TaskPrivateData{
+			BillingSource: "subscription", SubscriptionId: 27_412, SubscriptionRequestId: requestID,
+		},
+	}
+	require.NoError(t, task.Insert())
+
+	blockers, err := creditValuationMigrationBlockers(db)
+	require.NoError(t, err)
+	require.Equal(t, []CreditValuationMigrationBlocker{{
+		Code: creditValuationMigrationBlockerPreConsume, Count: 1,
+	}}, blockers)
+}
+
+func TestCreditValuationMigrationBlockersRejectActiveSubscriptionTaskWithoutRequestIdentity(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &Task{})
+	task := Task{
+		TaskID: "active-task-without-request-identity", Status: TaskStatusInProgress,
+		PrivateData: TaskPrivateData{BillingSource: "subscription", SubscriptionId: 27_422},
+	}
+	require.NoError(t, task.Insert())
+
+	blockers, err := creditValuationMigrationBlockers(db)
+	require.NoError(t, err)
+	require.Equal(t, []CreditValuationMigrationBlocker{{
+		Code: creditValuationMigrationBlockerAsyncTaskIdentity, Count: 1,
+	}}, blockers)
 }

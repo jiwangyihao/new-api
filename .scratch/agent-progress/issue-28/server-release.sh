@@ -786,6 +786,7 @@ run_read_only_dry_run() {
   require_state_phase stage-schema read-only-dry-run
   gate="$(write_gate_status)"
   require_gate_closed "$gate"
+  docker exec new-api test -s /tmp/new-api-credit-valuation-schema-ready >/dev/null 2>&1 || contract_error 'maintenance schema readiness is missing before dry-run'
   run_migration_command --dry-run "$first"
   validate_dry_run_report "$first"
   run_migration_command --dry-run "$second"
@@ -798,8 +799,9 @@ run_read_only_dry_run() {
   STATE_DRY_RUN_REPORT_2="$second"
   STATE_WRITE_GATE_STATE="$(jq -r '.state' <<<"$gate")"
   write_state read-only-dry-run
-  echo "release=$RELEASE_ID phase=read-only-dry-run result=pass checksum=$checksum"
+  echo "release=$RELEASE_ID phase=read-only-dry-run result=pass checksum=$checksum schema_ready=true"
 }
+
 
 run_stop_writes() {
   local transition status
@@ -915,11 +917,11 @@ wait_for_maintenance_readiness() {
   local started now
   started="$(date +%s)"
   while true; do
-    if docker exec new-api test -s /tmp/new-api-maintenance-ready >/dev/null 2>&1; then
+    if docker exec new-api test -s /tmp/new-api-maintenance-ready >/dev/null 2>&1 && docker exec new-api test -s /tmp/new-api-credit-valuation-schema-ready >/dev/null 2>&1; then
       return 0
     fi
     now="$(date +%s)"
-    (( now - started < HEALTH_TIMEOUT_SECONDS )) || contract_error 'new-api maintenance readiness did not become available while writes remained closed'
+    (( now - started < HEALTH_TIMEOUT_SECONDS )) || contract_error 'new-api maintenance/schema readiness did not become available while writes remained closed'
     sleep 1
   done
 }

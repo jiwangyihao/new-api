@@ -375,6 +375,8 @@ elif [[ "$args" == "inspect --format {{json .Config.Env}} new-api" ]]; then
   fi
 elif [[ "$args" == "exec new-api test -s /tmp/new-api-maintenance-ready" ]]; then
   [[ -s "$STUB_STATE.maintenance_ready" ]] || exit 1
+elif [[ "$args" == "exec new-api test -s /tmp/new-api-credit-valuation-schema-ready" ]]; then
+  [[ -s "$STUB_STATE.maintenance_schema_ready" ]] || exit 1
 elif [[ "$args" == "inspect --format {{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}} new-api" ]]; then
   printf 'healthy\n'
 elif [[ "$args" == *"compose"*"up -d"* ]]; then
@@ -386,11 +388,13 @@ elif [[ "$args" == *"compose"*"up -d"* ]]; then
   if awk '/MAINTENANCE_MODE/ && /true/ { found=1 } END { exit(found ? 0 : 1) }' "$COMPOSE_RELEASE_STUB"; then
     printf 'MAINTENANCE_MODE=true' >"$STUB_STATE.running_env"
     printf 'ready\n' >"$STUB_STATE.maintenance_ready"
+    printf 'ready\n' >"$STUB_STATE.maintenance_schema_ready"
   else
     : >"$STUB_STATE.running_env"
-    rm -f "$STUB_STATE.maintenance_ready"
+    rm -f "$STUB_STATE.maintenance_ready" "$STUB_STATE.maintenance_schema_ready"
   fi
 elif [[ "$args" == *"credit-valuation-migrate --dry-run"* ]]; then
+  [[ -s "$STUB_STATE.maintenance_schema_ready" ]] || { printf 'maintenance schema is not staged\n' >&2; exit 58; }
   printf '%s\n' "$DRY_REPORT_STUB"
 elif [[ "$args" == *"run --rm"*"credit-valuation-migrate --apply"* ]]; then
   [[ "${FAIL_MODE:-}" != apply ]] || { printf 'simulated apply failure\n' >&2; exit 55; }
@@ -581,6 +585,8 @@ prepare_maintenance() {
   fi
   [[ "$(awk '/MAINTENANCE_MODE/ { count++ } END { print count + 0 }' "$TEST_ROOT/compose.release.yml")" -eq 1 ]] || fail 'stage-schema maintenance override was not normalized to exactly one entry'
   [[ "$(awk 'index($0, "docker exec new-api test -s /tmp/new-api-maintenance-ready") { count++ } END { print count + 0 }' "$TEST_CALLS")" -ge 1 ]] || fail 'stage-schema did not use maintenance readiness probe'
+  [[ "$(awk 'index($0, "docker exec new-api test -s /tmp/new-api-credit-valuation-schema-ready") { count++ } END { print count + 0 }' "$TEST_CALLS")" -ge 1 ]] || fail 'stage-schema did not verify Credit valuation schema readiness'
+  [[ -s "$TEST_STUB_STATE.maintenance_schema_ready" ]] || fail 'stage-schema did not create Credit valuation schema readiness state'
   [[ -s "$TEST_STUB_STATE.maintenance_ready" ]] || fail 'maintenance compose-up did not create independent readiness state'
   run_release stage-schema
   [[ "$(cat "$TEST_STUB_STATE.running_env" 2>/dev/null || true)" == 'MAINTENANCE_MODE=true' ]] || fail 'stage-schema did not render MAINTENANCE_MODE=true'
@@ -598,6 +604,7 @@ test_full_pipeline_and_idempotence() {
   run_release start-closed
   [[ ! -s "$TEST_STUB_STATE.running_env" ]] || fail 'start-closed retained MAINTENANCE_MODE=true'
   [[ ! -e "$TEST_STUB_STATE.maintenance_ready" ]] || fail 'normal compose-up did not clear independent readiness state'
+  [[ ! -e "$TEST_STUB_STATE.maintenance_schema_ready" ]] || fail 'normal compose-up did not clear Credit valuation schema readiness state'
   [[ "$(awk 'index($0, "maintenance-ready") { count++ } END { print count + 0 }' "$TEST_ROOT/compose.release.yml")" -eq 0 ]] || fail 'normal Compose retained maintenance readiness probe'
   run_release start-closed
   run_release probe

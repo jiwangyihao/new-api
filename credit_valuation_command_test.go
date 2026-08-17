@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -207,4 +208,86 @@ func TestRunCreditValuationCommandReportsCloseFailureAfterMigrationFailure(t *te
 	require.Contains(t, output.Message, "close failed")
 	require.NotNil(t, output.Report)
 	require.Equal(t, 1, output.Report.Version)
+}
+
+func TestRunCreditValuationCommandDryRunDoesNotCreateSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if sqlDB, dbErr := db.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	require.False(t, db.Migrator().HasTable(&model.CreditValuationMigration{}))
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := runCreditValuationCommand(
+		[]string{"--dry-run", "--version", "1"},
+		&stdout,
+		&stderr,
+		creditValuationCommandDependencies{
+			initMaintenanceDB:  func() (*gorm.DB, error) { return db, nil },
+			closeMaintenanceDB: func() error { return nil },
+			runMigration:       model.RunCreditValuationMigration,
+		},
+	)
+
+	require.Equal(t, 1, exitCode)
+	require.Empty(t, stdout.String())
+	require.NotEmpty(t, stderr.String())
+	require.False(t, db.Migrator().HasTable(&model.CreditValuationMigration{}), "read-only dry-run must not create schema")
+}
+
+func TestRunCreditValuationCommandDryRunAndVerifyAreReadOnlyWithExistingSchema(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:"+t.Name()+"?mode=memory&cache=shared"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionPlan{}, &model.UserSubscription{}))
+	require.NoError(t, model.MigrateCreditValuationSchema(db))
+	require.NoError(t, db.Create(&model.CreditValuationMigration{
+		Version: 1, Status: model.CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: 1,
+	}).Error)
+	dryRun, err := model.RunCreditValuationMigration(db, model.CreditValuationMigrationRequest{
+		Mode: model.CreditValuationMigrationModeDryRun, Version: 1, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Model(&model.CreditValuationMigration{}).Where("version = ?", 1).Update("checksum", dryRun.Checksum).Error)
+
+	var changesBefore int64
+	require.NoError(t, db.Raw("SELECT total_changes()").Scan(&changesBefore).Error)
+	require.NoError(t, db.Exec("PRAGMA query_only = ON").Error)
+	for _, flag := range []string{"--dry-run", "--verify"} {
+		t.Run(flag, func(t *testing.T) {
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			exitCode := runCreditValuationCommand(
+				[]string{flag, "--version", "1"},
+				&stdout,
+				&stderr,
+				creditValuationCommandDependencies{
+					initMaintenanceDB:  func() (*gorm.DB, error) { return db, nil },
+					closeMaintenanceDB: func() error { return nil },
+					runMigration:       model.RunCreditValuationMigration,
+				},
+			)
+
+			require.Zero(t, exitCode)
+			require.Empty(t, stderr.String())
+			var output creditValuationCommandSuccessOutput
+			require.NoError(t, common.Unmarshal(stdout.Bytes(), &output))
+			require.True(t, output.Success)
+			require.True(t, output.Report.ReadOnly)
+			require.False(t, output.Report.Changed)
+			require.Equal(t, dryRun.Checksum, output.Report.Checksum)
+			var changesAfter int64
+			require.NoError(t, db.Raw("SELECT total_changes()").Scan(&changesAfter).Error)
+			require.Equal(t, changesBefore, changesAfter)
+		})
+	}
 }

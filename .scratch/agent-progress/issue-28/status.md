@@ -99,3 +99,21 @@
 - 该结果只证明已审阅脚本的本地 stub 合同覆盖 readiness 创建、探针检查和清理；不证明真实 Compose、Nginx、数据库 drain 或生产 Hook。
 - 生产状态保持不变：未执行远程脚本传输、flock、stop-writes、备份、镜像拉取、Compose 修改、迁移、重启、生产探针、open-writes 或回滚；现网外部写流量仍未核验。
 - 真实 write-gate、`production-probe`、`clone-probe` 和 `observe` Hook 仍缺失；Issue #28 与父 Issue #19 保持 OPEN。
+## 本轮最终阻断收口（2026-08-15）
+
+- 本轮仅完成 `production-probe-hook.sh`、`clone-probe-hook.sh`、`observe-hook.sh` 的目标性修复与只读 `read`/`grep` 复核；这不是运行验证，也不构成发布通过。
+- 本轮明确未运行 `bash -n`、任何测试或 fixture、`git`、formatter；不得将本轮结果或历史 stub 合同结果宣称为 `PASS`、生产就绪或完整门禁通过。
+- `write-gate-hook.sh` 与 `write-gate-hook.test.sh` 本轮未修改，继续冻结；真实生产 write-gate、Nginx 切流、数据库/后台 writer drain 仍无可核验证据。
+- 未执行远程脚本传输、flock、停写、备份、镜像拉取、Compose 修改、迁移、重启、生产探针、业务/前端验证、开放流量、观察窗口或回滚演练。
+- 生产继续按失败关闭规则处理；现网旧 immutable digest 未被本轮修改。Issue #28 与父 Issue #19 保持 OPEN。
+- 本轮未达到生产发布就绪条件；所有未完成发布任务均取消，等待后续解除限制并重新取得真实 Hook 与新鲜门禁证据。
+
+## 本轮远端只读 preflight 阻断（2026-08-15）
+
+- 目标仅为 SSH 别名 `netcup-ows-migrate`；本轮未访问旧 RackNerd/AutoDLChen 目标。
+- 候选身份为 revision=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`、immutable image=`ghcr.io/jiwangyihao/new-api@sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`；远端 `compose.release.yml` 声明 digest=`sha256:6af45b7c97c1d5c910501baa06514263aaf08a89ec28077dfa08f89a24bb9e7a`，身份不一致，部署阻断。
+- 本轮未取得远端实际 `docker inspect` 的 OCI revision、容器 digest、health 或 restart 结果；既有历史记录不替代本轮新鲜证据。
+- 具体 Nginx site 内容未发现 `write-gate`/`NEW_API_WRITE_GATE_*` managed include；`newapi-origin-allowlist.conf` 是访问控制 include，不是 write-gate。递归 grep 因 SSH 目录不支持该用法失败，未将其当作递归搜索通过。
+- `/opt/new-api/backups/new_api_final.dump.sha256` 与 `/opt/new-api/backups/new_api.dump.sha256` 读取均失败；没有可核验 checksum sidecar、可恢复性或回滚备份证据，读取失败不等于校验通过。
+- `/opt/new-api/migration-prep` 清单未显示真实 Issue #28 write-gate、production-probe、clone-probe、observe Hook 或对应 approval/config；本地 scratch 适配器不能替代远端真实 Hook。
+- 保持失败关闭：禁止 install、stop-writes、pull、Compose 修改、迁移、重启、业务探针、open-writes、observe 和 rollback；本轮未执行生产写操作。

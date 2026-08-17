@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"strings"
@@ -82,6 +83,64 @@ func TestMaintenanceModeRegistersTerminationSignals(t *testing.T) {
 	require.Contains(t, source, "signal.Notify(signals, os.Interrupt, syscall.SIGTERM)")
 	require.Contains(t, source, "defer signal.Stop(signals)")
 	require.Contains(t, source, "blockInMaintenanceMode()")
+}
+func TestMaintenanceSchemaFailureDoesNotPublishReadiness(t *testing.T) {
+	path := t.TempDir() + "/schema-ready"
+	closeCalled := false
+	err := stageMaintenanceSchema(path, func() error {
+		_, statErr := os.Stat(path)
+		require.True(t, os.IsNotExist(statErr))
+		return errors.New("migration failed")
+	}, func() error {
+		closeCalled = true
+		return nil
+	})
+
+	require.ErrorContains(t, err, "migration failed")
+	require.True(t, closeCalled)
+	_, statErr := os.Stat(path)
+	require.True(t, os.IsNotExist(statErr))
+}
+
+func TestMaintenanceSchemaReadinessPublishesAfterMigrationAndCleansOnExit(t *testing.T) {
+	directory := t.TempDir()
+	schemaPath := directory + "/schema-ready"
+	runtimePath := directory + "/maintenance-ready"
+	migrated := false
+	require.NoError(t, stageMaintenanceSchema(schemaPath, func() error {
+		_, statErr := os.Stat(schemaPath)
+		require.True(t, os.IsNotExist(statErr))
+		migrated = true
+		return nil
+	}, func() error {
+		t.Fatal("successful schema staging must not close the maintenance database")
+		return nil
+	}))
+	require.True(t, migrated)
+	require.FileExists(t, schemaPath)
+
+	signals := make(chan os.Signal, 1)
+	done := make(chan error, 1)
+	go func() {
+		done <- runMaintenanceModeSession(runtimePath, schemaPath, signals)
+	}()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, statErr := os.Stat(runtimePath); statErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("maintenance readiness file was not created")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	signals <- os.Interrupt
+	require.NoError(t, <-done)
+	for _, path := range []string{runtimePath, schemaPath} {
+		_, statErr := os.Stat(path)
+		require.True(t, os.IsNotExist(statErr), "%s was not removed: %v", path, statErr)
+	}
 }
 
 func TestMaintenanceReadinessFileIsCreatedWithPrivatePermissions(t *testing.T) {

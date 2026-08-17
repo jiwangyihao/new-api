@@ -116,3 +116,18 @@
 - `bash -n .scratch/agent-progress/issue-28/server-release.sh && TEST_FILTER=full bash .scratch/agent-progress/issue-28/server-release.test.sh` 退出码为 `0`，阶段覆盖 maintenance readiness、幂等 dry-run/apply/verify、封闭启动、probe、observe 与 rollback-suspend。
 - 本地合同通过不构成生产发布证明；真实 write-gate、`production-probe`、`clone-probe`、`observe`、Nginx 切流和 PostgreSQL/Redis drain 仍未交付或验证。
 - 按失败关闭规则未执行任何生产远程写操作；生产仍运行旧 immutable digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，Issue #28 与父 Issue #19 保持 OPEN。
+## 本轮最终阻断证据（2026-08-15）
+
+- 证据范围：仅对 `production-probe-hook.sh`、`clone-probe-hook.sh`、`observe-hook.sh` 进行了目标性编辑后的 `read`/`grep` 复核；未执行脚本、fixture、测试或生产运行时验证。
+- 明确未运行：`bash -n`、任何测试、fixture、`git`、formatter。因此不得宣称脚本语法通过、fixture PASS、完整门禁 PASS 或生产发布就绪。
+- `write-gate-hook.sh` 与 `write-gate-hook.test.sh` 未修改；write-gate 适配器保持冻结。本地合同或历史记录不替代真实生产 Hook 证据。
+- 明确未执行生产副作用：无远程写入、flock、停写、备份、镜像拉取、Compose/迁移修改、重启、业务或前端验证、开放写流量、观察窗口及回滚演练。
+- 当前结论：Issue #28 发布阻断继续有效；生产保持失败关闭，Issue #28 与父 Issue #19 保持 OPEN。剩余工作需在解除限制后重新执行并取得可复核证据。
+## 本轮远端只读 preflight 阻断证据（2026-08-15）
+
+- 目标主机仅为 `netcup-ows-migrate`。本轮只读读取了远端 Compose、具体 Nginx site 文件、snippets、备份目录和 migration-prep 目录；没有执行远程写入。
+- 候选与远端 release 配置不一致：候选 revision=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a` / digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`；远端 `compose.release.yml` 声明 digest=`sha256:6af45b7c97c1d5c910501baa06514263aaf08a89ec28077dfa08f89a24bb9e7a`。这是安全阻断，不是部署成功或当前容器实际 digest 证据。
+- 具体 Nginx site 读取结果：`api.pqapi.shop` 与 `newapi-direct-ip` 反代 `127.0.0.1:13080`，使用 `newapi-origin-allowlist.conf`；未看到 `write-gate` include 或 `NEW_API_WRITE_GATE_*` 标记。`aws-g.pqapi.shop` 与 `ows-router-internal` 指向其他 upstream。递归 grep 因 SSH 目录不支持而失败，未将其当作全树搜索通过。
+- `/opt/new-api/backups/new_api_final.dump.sha256` 与 `/opt/new-api/backups/new_api.dump.sha256` 读取失败；没有 sidecar checksum，也没有本轮一致备份的可读/可恢复验证。不得把读取失败记为备份通过。
+- `/opt/new-api/migration-prep` 清单未显示 Issue #28 的真实 Hook、write-gate 配置或 approval 文件；本地 `production-probe-hook.sh`、`clone-probe-hook.sh`、`observe-hook.sh` 只做过 read/grep 复核，未运行语法或 fixture 验证，且 `write-gate-hook.sh` 未修改。
+- 本轮未执行 install、stop-writes、pull、Compose 修改、迁移、重启、业务/前端验证、open-writes、观察窗口或回滚；生产保持失败关闭，Issue #28 与父 Issue #19 保持 OPEN。

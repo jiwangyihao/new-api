@@ -3,6 +3,7 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -18,8 +19,8 @@ func TestCreditValuationSchemaSQLiteMigrationIsAdditiveAndRepeatable(t *testing.
 		}
 	})
 
-	require.NoError(t, migrateCreditValuationSchema(db))
-	require.NoError(t, migrateCreditValuationSchema(db))
+	require.NoError(t, MigrateCreditValuationSchema(db))
+	require.NoError(t, MigrateCreditValuationSchema(db))
 	for _, modelValue := range []any{&CreditValuationState{}, &CreditValuationMigration{}, &TimedSubscriptionValuationGrant{}} {
 		require.True(t, db.Migrator().HasTable(modelValue))
 	}
@@ -56,7 +57,7 @@ func TestCreditValuationSchemaSQLiteUniqueConstraints(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
-	require.NoError(t, migrateCreditValuationSchema(db))
+	require.NoError(t, MigrateCreditValuationSchema(db))
 
 	state := CreditValuationState{UserSubscriptionId: 101, UserId: 201, Currency: "CNY", RuleVersion: 1, StateVersion: 1}
 	require.NoError(t, db.Create(&state).Error)
@@ -70,4 +71,24 @@ func TestCreditValuationSchemaSQLiteUniqueConstraints(t *testing.T) {
 	grant.IdempotencyKey = "grant-key-2"
 	grant.SourceKey = "order:1"
 	require.Error(t, db.Create(&grant).Error)
+}
+
+func TestInitMaintenanceDBIsConnectionOnly(t *testing.T) {
+	require.Nil(t, maintenanceDB)
+	previousSQLitePath := common.SQLitePath
+	previousUsingSQLite, previousUsingMySQL, previousUsingPostgreSQL := common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL
+	common.SQLitePath = t.TempDir() + "/maintenance.sqlite"
+	common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = true, false, false
+	t.Setenv("SQL_DSN", "")
+	t.Setenv("SQLITE_PATH", common.SQLitePath)
+	t.Cleanup(func() {
+		_ = CloseMaintenanceDB()
+		common.SQLitePath = previousSQLitePath
+		common.UsingSQLite, common.UsingMySQL, common.UsingPostgreSQL = previousUsingSQLite, previousUsingMySQL, previousUsingPostgreSQL
+	})
+
+	db, err := InitMaintenanceDB()
+	require.NoError(t, err)
+	require.False(t, db.Migrator().HasTable(&CreditValuationMigration{}), "connection-only maintenance initialization must not execute DDL")
+	require.NoError(t, CloseMaintenanceDB())
 }

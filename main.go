@@ -93,6 +93,7 @@ func waitForMaintenanceShutdown(signals <-chan os.Signal) {
 }
 
 const maintenanceReadinessFile = "/tmp/new-api-maintenance-ready"
+const maintenanceSchemaReadinessFile = "/tmp/new-api-credit-valuation-schema-ready"
 
 func writeMaintenanceReadiness(path string) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
@@ -120,12 +121,40 @@ func runMaintenanceSession(path string, signals <-chan os.Signal) error {
 	return nil
 }
 
+func runMaintenanceModeSession(readinessPath string, schemaReadinessPath string, signals <-chan os.Signal) error {
+	defer func() {
+		if err := os.Remove(schemaReadinessPath); err != nil && !os.IsNotExist(err) {
+			common.SysError("failed to remove maintenance schema readiness: " + err.Error())
+		}
+	}()
+	return runMaintenanceSession(readinessPath, signals)
+}
+
 func blockInMaintenanceMode() error {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
 	common.SysLog("maintenance mode enabled; skipped Redis, background tasks, system monitor, profiling, and HTTP server; waiting for termination signal")
-	return runMaintenanceSession(maintenanceReadinessFile, signals)
+	return runMaintenanceModeSession(maintenanceReadinessFile, maintenanceSchemaReadinessFile, signals)
+}
+
+func stageMaintenanceSchema(readinessPath string, initializeAndMigrate func() error, closeDatabase func() error) error {
+	if err := os.Remove(readinessPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to clear maintenance schema readiness: %w", err)
+	}
+	if err := initializeAndMigrate(); err != nil {
+		if closeErr := closeDatabase(); closeErr != nil {
+			return fmt.Errorf("failed to initialize maintenance schema: %w; failed to close maintenance database: %v", err, closeErr)
+		}
+		return fmt.Errorf("failed to initialize maintenance schema: %w", err)
+	}
+	if err := writeMaintenanceReadiness(readinessPath); err != nil {
+		if closeErr := closeDatabase(); closeErr != nil {
+			return fmt.Errorf("failed to publish maintenance schema readiness: %w; failed to close maintenance database: %v", err, closeErr)
+		}
+		return fmt.Errorf("failed to publish maintenance schema readiness: %w", err)
+	}
+	return nil
 }
 
 func closeRuntimeDatabases(maintenanceMode bool) error {
@@ -428,12 +457,19 @@ func InitResources() error {
 
 	maintenanceMode := maintenanceModeEnabled()
 	if maintenanceMode {
-		// InitDB runs schema migrations on a master node. Maintenance workers
-		// must use the dedicated non-migrating connection instead.
-		if _, err := model.InitMaintenanceDB(); err != nil {
+		// This is the explicit DDL boundary. Maintenance database initialization
+		// remains connection-only so dry-run and verify commands cannot migrate.
+		err := stageMaintenanceSchema(maintenanceSchemaReadinessFile, func() error {
+			maintenanceDB, err := model.InitMaintenanceDB()
+			if err != nil {
+				return err
+			}
+			return model.MigrateCreditValuationSchema(maintenanceDB)
+		}, model.CloseMaintenanceDB)
+		if err != nil {
 			return err
 		}
-		common.SysLog("maintenance mode enabled; maintenance database initialized; skipped mutable initialization, Redis, cache cleanup, metrics, system monitor, and HTTP startup")
+		common.SysLog("maintenance mode enabled; maintenance schema initialized; skipped mutable initialization, Redis, cache cleanup, metrics, system monitor, and HTTP startup")
 		return nil
 	}
 

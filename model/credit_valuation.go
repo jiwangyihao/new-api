@@ -981,3 +981,9 @@ func migrateCreditValuationSchema(db *gorm.DB) error {
 		&SubscriptionConversionQuote{},
 	)
 }
+
+// MigrateCreditValuationSchema applies only the additive Credit valuation schema.
+// Callers must invoke it explicitly; maintenance database initialization remains connection-only so read-only migration commands do not execute DDL.
+func MigrateCreditValuationSchema(db *gorm.DB) error {
+	return migrateCreditValuationSchema(db)
+}

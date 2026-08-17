@@ -449,16 +449,15 @@ func migrationSnapshotInputs(db *gorm.DB, marker CreditValuationMigration, marke
 	}
 	if empty {
 		fx := CreditValuationMigrationFXSnapshot{}
+		currency := strings.TrimSpace(marker.ValuationCurrency)
 		if markerFound {
-			fx = CreditValuationMigrationFXSnapshot{
-				SourceCurrency:    marker.ValuationCurrency,
-				ValuationCurrency: marker.ValuationCurrency,
-				Numerator:         marker.FxRateNumerator,
-				Denominator:       marker.FxRateDenominator,
-				CapturedAt:        marker.FxCapturedAt,
-			}
+			fx = creditValuationMigrationFXFromMarker(marker)
+			currency = fx.ValuationCurrency
 		}
-		return fx, strings.TrimSpace(marker.ValuationCurrency), blockers, nil
+		if normalized, normalizeErr := NormalizeCreditValuationCurrency(currency); normalizeErr == nil {
+			currency = normalized
+		}
+		return fx, currency, blockers, nil
 	}
 	currency, currencyBlockers, err := creditValuationMigrationCurrency(db, empty)
 	if err != nil {
@@ -468,6 +467,9 @@ func migrationSnapshotInputs(db *gorm.DB, marker CreditValuationMigration, marke
 	if markerFound && marker.FxRateNumerator > 0 && marker.FxRateDenominator > 0 {
 		if marker.ValuationCurrency != "" {
 			currency = marker.ValuationCurrency
+		}
+		if normalized, normalizeErr := NormalizeCreditValuationCurrency(currency); normalizeErr == nil {
+			currency = normalized
 		}
 		return creditValuationMigrationFXFromMarker(marker), currency, blockers, nil
 	}
@@ -485,6 +487,20 @@ func migrationSnapshotInputs(db *gorm.DB, marker CreditValuationMigration, marke
 }
 
 func creditValuationMigrationFXFromOption(db *gorm.DB, capturedAt int64, valuationCurrency string) (CreditValuationMigrationFXSnapshot, []CreditValuationMigrationBlocker, error) {
+	normalizedCurrency, err := NormalizeCreditValuationCurrency(valuationCurrency)
+	if err != nil {
+		return CreditValuationMigrationFXSnapshot{}, []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerValuationCurrency, Count: 1}}, nil
+	}
+	parseCapturedAt := capturedAt
+	if parseCapturedAt <= 0 {
+		parseCapturedAt = 1
+	}
+	if normalizedCurrency == "CNY" {
+		return CreditValuationMigrationFXSnapshot{
+			SourceCurrency: "CNY", ValuationCurrency: "CNY",
+			Numerator: 1, Denominator: 1, CapturedAt: parseCapturedAt,
+		}, nil, nil
+	}
 	if !db.Migrator().HasTable(&Option{}) {
 		return CreditValuationMigrationFXSnapshot{}, []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerFXMissing, Count: 1}}, nil
 	}
@@ -496,11 +512,7 @@ func creditValuationMigrationFXFromOption(db *gorm.DB, capturedAt int64, valuati
 	if query.RowsAffected != 1 || strings.TrimSpace(option.Value) == "" {
 		return CreditValuationMigrationFXSnapshot{}, []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerFXMissing, Count: 1}}, nil
 	}
-	parseCapturedAt := capturedAt
-	if parseCapturedAt <= 0 {
-		parseCapturedAt = 1
-	}
-	sourceCurrency, targetCurrency := creditValuationMigrationFXCurrencies(valuationCurrency)
+	sourceCurrency, targetCurrency := creditValuationMigrationFXCurrencies(normalizedCurrency)
 	parsed, err := ParseCreditFXRateSnapshot(CreditFXRateSnapshotInput{
 		SourceCurrency: sourceCurrency, ValuationCurrency: targetCurrency,
 		Direction: creditFXDirection(sourceCurrency, targetCurrency), RateText: &option.Value,
@@ -511,27 +523,31 @@ func creditValuationMigrationFXFromOption(db *gorm.DB, capturedAt int64, valuati
 	}
 	return CreditValuationMigrationFXSnapshot{
 		SourceCurrency: parsed.SourceCurrency, ValuationCurrency: parsed.ValuationCurrency,
-		Numerator: parsed.Numerator, Denominator: parsed.Denominator, CapturedAt: capturedAt,
+		Numerator: parsed.Numerator, Denominator: parsed.Denominator, CapturedAt: parseCapturedAt,
 	}, nil, nil
 }
 
-func creditValuationMigrationFXCurrencies(valuationCurrency string) (string, string) {
-	if strings.EqualFold(strings.TrimSpace(valuationCurrency), "USD") {
-		return "CNY", "USD"
-	}
-	return "USD", "CNY"
-}
-
 func creditValuationMigrationFXFromMarker(marker CreditValuationMigration) CreditValuationMigrationFXSnapshot {
+	valuationCurrency := strings.TrimSpace(marker.ValuationCurrency)
+	if normalized, err := NormalizeCreditValuationCurrency(valuationCurrency); err == nil {
+		valuationCurrency = normalized
+	}
+	if valuationCurrency == "CNY" {
+		return CreditValuationMigrationFXSnapshot{
+			SourceCurrency: "CNY", ValuationCurrency: "CNY",
+			Numerator: 1, Denominator: 1,
+			CapturedAt: marker.FxCapturedAt,
+		}
+	}
 	if marker.FxCapturedAt <= 0 {
 		return CreditValuationMigrationFXSnapshot{
-			ValuationCurrency: marker.ValuationCurrency, Numerator: marker.FxRateNumerator,
+			ValuationCurrency: valuationCurrency, Numerator: marker.FxRateNumerator,
 			Denominator: marker.FxRateDenominator, CapturedAt: marker.FxCapturedAt,
 		}
 	}
-	sourceCurrency, valuationCurrency := creditValuationMigrationFXCurrencies(marker.ValuationCurrency)
+	sourceCurrency, targetCurrency := creditValuationMigrationFXCurrencies(valuationCurrency)
 	return CreditValuationMigrationFXSnapshot{
-		SourceCurrency: sourceCurrency, ValuationCurrency: valuationCurrency,
+		SourceCurrency: sourceCurrency, ValuationCurrency: targetCurrency,
 		Numerator: marker.FxRateNumerator, Denominator: marker.FxRateDenominator,
 		CapturedAt: marker.FxCapturedAt,
 	}
@@ -557,17 +573,22 @@ func creditValuationMigrationCurrency(db *gorm.DB, empty bool) (string, []Credit
 	if len(plans) != 1 {
 		return "", []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerCreditPlanAmbiguous, Count: int64(len(plans))}}, nil
 	}
-	currency := plans[0].Currency
-	if plans[0].ValuationCurrency != nil {
-		currency = *plans[0].ValuationCurrency
-	} else if !empty {
-		return "", []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerValuationCurrency, Count: 1}}, nil
+	currency := strings.TrimSpace(plans[0].Currency)
+	if plans[0].ValuationCurrency != nil && strings.TrimSpace(*plans[0].ValuationCurrency) != "" {
+		currency = strings.TrimSpace(*plans[0].ValuationCurrency)
 	}
 	currency, err := NormalizeCreditValuationCurrency(currency)
 	if err != nil {
 		return "", []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerValuationCurrency, Count: 1}}, nil
 	}
 	return currency, nil, nil
+}
+
+func creditValuationMigrationFXCurrencies(valuationCurrency string) (string, string) {
+	if strings.EqualFold(strings.TrimSpace(valuationCurrency), "USD") {
+		return "CNY", "USD"
+	}
+	return "USD", "CNY"
 }
 
 func buildCreditValuationMigrationSnapshot(db *gorm.DB, request CreditValuationMigrationRequest, currency string, fx CreditValuationMigrationFXSnapshot, initialBlockers []CreditValuationMigrationBlocker, includeVerification bool) (creditValuationMigrationSnapshot, error) {
@@ -638,10 +659,16 @@ func buildCreditValuationMigrationSnapshot(db *gorm.DB, request CreditValuationM
 
 func creditValuationMigrationBlockers(db *gorm.DB) ([]CreditValuationMigrationBlocker, error) {
 	blockers := make([]CreditValuationMigrationBlocker, 0, 3)
-	if db.Migrator().HasTable(&SubscriptionPreConsumeRecord{}) {
+	if db.Migrator().HasTable(&SubscriptionPreConsumeRecord{}) && db.Migrator().HasTable(&Task{}) {
+		activeTaskReference := db.Model(&Task{}).
+			Select("1").
+			Where("tasks.status IN ?", []TaskStatus{TaskStatusQueued, TaskStatusSubmitted, TaskStatusInProgress}).
+			Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
 		var count int64
 		if err := db.Model(&SubscriptionPreConsumeRecord{}).
-			Where("status IS NULL OR status NOT IN ?", []string{"settled", "refunded"}).Count(&count).Error; err != nil {
+			Where("status IS NULL OR status NOT IN ?", []string{"settled", "refunded"}).
+			Where("EXISTS (?)", activeTaskReference).
+			Count(&count).Error; err != nil {
 			return nil, err
 		}
 		if count > 0 {

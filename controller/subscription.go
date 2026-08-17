@@ -3,12 +3,14 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -187,7 +189,7 @@ func GetSubscriptionOrderStatus(c *gin.Context) {
 		return
 	}
 	var order model.SubscriptionOrder
-	if err := model.DB.Select("id", "user_id", "plan_id", "trade_no", "payment_method", "payment_provider", "status", "create_time", "complete_time", "entitlement_snapshot").
+	if err := model.DB.Select("id", "user_id", "plan_id", "trade_no", "payment_method", "payment_provider", "status", "create_time", "complete_time", "amount_cents", "currency", "kyren_snapshot", "entitlement_snapshot").
 		Where("user_id = ? AND trade_no = ?", userId, tradeNo).
 		First(&order).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -196,6 +198,17 @@ func GetSubscriptionOrderStatus(c *gin.Context) {
 		}
 		common.ApiError(c, err)
 		return
+	}
+	if order.Status == common.TopUpStatusPending && order.PaymentProvider == model.PaymentProviderKyren {
+		if err := reconcilePendingKyrenSubscriptionOrder(c.Request.Context(), &order, c.ClientIP()); err != nil {
+			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 订阅订单主动对账失败 user_id=%d trade_no=%s error=%q", userId, tradeNo, err.Error()))
+		}
+		if err := model.DB.Select("id", "user_id", "plan_id", "trade_no", "payment_method", "payment_provider", "status", "create_time", "complete_time", "amount_cents", "currency", "kyren_snapshot", "entitlement_snapshot").
+			Where("user_id = ? AND trade_no = ?", userId, tradeNo).
+			First(&order).Error; err != nil {
+			common.ApiError(c, err)
+			return
+		}
 	}
 	purchaseMode := model.SubscriptionPurchaseModeTimed
 	var snapshot model.SubscriptionEntitlementSnapshot

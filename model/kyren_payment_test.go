@@ -240,6 +240,53 @@ func TestClaimPaymentProviderEventConflictPreservesAppliedTerminalState(t *testi
 	assert.Equal(t, PaymentProviderEventApplied, event.Status)
 }
 
+func TestClaimPaymentProviderReconciliationUsesSharedMappingTimestamp(t *testing.T) {
+	truncateTables(t)
+	checkoutID := "cs_reconciliation_claim"
+	mapping := PaymentProviderOrder{
+		Provider: PaymentProviderKyren, OrderKind: PaymentOrderKindSubscription,
+		LocalOrderID: 701, TradeNo: "trade_reconciliation_claim", UserID: 702, PlanID: 703,
+		ProviderCheckoutID: &checkoutID, CreatedAt: common.GetTimestamp() - 60, UpdatedAt: common.GetTimestamp() - 60,
+	}
+	require.NoError(t, DB.Create(&mapping).Error)
+
+	claimedMapping, claimed, err := ClaimPaymentProviderReconciliation(
+		PaymentProviderKyren, PaymentOrderKindSubscription, mapping.TradeNo, 15,
+	)
+	require.NoError(t, err)
+	require.True(t, claimed)
+	require.NotNil(t, claimedMapping)
+	assert.Equal(t, mapping.ID, claimedMapping.ID)
+	assert.Greater(t, claimedMapping.UpdatedAt, mapping.UpdatedAt)
+
+	throttledMapping, claimed, err := ClaimPaymentProviderReconciliation(
+		PaymentProviderKyren, PaymentOrderKindSubscription, mapping.TradeNo, 15,
+	)
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	require.NotNil(t, throttledMapping)
+	assert.Equal(t, claimedMapping.UpdatedAt, throttledMapping.UpdatedAt)
+}
+
+func TestClaimPaymentProviderReconciliationRequiresCheckoutBinding(t *testing.T) {
+	truncateTables(t)
+	mapping := PaymentProviderOrder{
+		Provider: PaymentProviderKyren, OrderKind: PaymentOrderKindSubscription,
+		LocalOrderID: 711, TradeNo: "trade_reconciliation_no_checkout", UserID: 712, PlanID: 713,
+		CreatedAt: common.GetTimestamp() - 60, UpdatedAt: common.GetTimestamp() - 60,
+	}
+	require.NoError(t, DB.Create(&mapping).Error)
+
+	got, claimed, err := ClaimPaymentProviderReconciliation(
+		PaymentProviderKyren, PaymentOrderKindSubscription, mapping.TradeNo, 15,
+	)
+
+	require.NoError(t, err)
+	assert.False(t, claimed)
+	require.NotNil(t, got)
+	assert.Nil(t, got.ProviderCheckoutID)
+}
+
 func TestPaymentProviderSchemaEnforcesIdentityIndexesSQLite(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
 	require.NoError(t, err)

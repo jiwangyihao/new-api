@@ -262,6 +262,63 @@ func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID s
 	})
 }
 
+// ClaimPaymentProviderReconciliation atomically reserves a Kyren mapping for a
+// provider status lookup. The mapping timestamp is the shared cross-instance
+// throttle; callers must not perform the provider request before this claim.
+func ClaimPaymentProviderReconciliation(provider string, orderKind string, tradeNo string, minIntervalSeconds int64) (*PaymentProviderOrder, bool, error) {
+	provider = strings.TrimSpace(provider)
+	orderKind = strings.TrimSpace(orderKind)
+	tradeNo = strings.TrimSpace(tradeNo)
+	if DB == nil || provider == "" || tradeNo == "" {
+		return nil, false, ErrPaymentProviderOrderNotFound
+	}
+	var mapping PaymentProviderOrder
+	claimed := false
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var current PaymentProviderOrder
+		if err := LockForUpdate(tx).
+			Where("provider = ? AND order_kind = ? AND trade_no = ?", provider, orderKind, tradeNo).
+			First(&current).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil
+			}
+			return err
+		}
+		if current.ProviderCheckoutID == nil || strings.TrimSpace(*current.ProviderCheckoutID) == "" {
+			mapping = current
+			return nil
+		}
+		now, err := getDBTimestampStrictTx(tx)
+		if err != nil {
+			return err
+		}
+		if minIntervalSeconds > 0 && current.UpdatedAt > 0 && now-current.UpdatedAt < minIntervalSeconds {
+			mapping = current
+			return nil
+		}
+		update := tx.Model(&PaymentProviderOrder{}).
+			Where("id = ? AND updated_at = ?", current.ID, current.UpdatedAt).
+			Updates(map[string]any{"updated_at": now})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return ErrPaymentProviderOrderConflict
+		}
+		current.UpdatedAt = now
+		mapping = current
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	if mapping.ID <= 0 {
+		return nil, false, nil
+	}
+	return &mapping, claimed, nil
+}
+
 func nonEmptyStringPointer(value string) *string {
 	value = strings.TrimSpace(value)
 	if value == "" {

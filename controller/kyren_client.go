@@ -42,6 +42,8 @@ type kyrenAPI interface {
 	retrieveProduct(ctx context.Context, id string) (*kyrenProduct, error)
 	listProducts(ctx context.Context, status string, page int, size int) (*kyrenProductList, error)
 	createCheckout(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error)
+	retrieveCheckout(ctx context.Context, id string) (*kyrenCheckoutSession, error)
+	retrieveOrder(ctx context.Context, id string) (*kyrenOrder, error)
 }
 
 type kyrenClient struct {
@@ -100,6 +102,14 @@ func (c *kyrenClient) listProducts(ctx context.Context, status string, page int,
 
 func (c *kyrenClient) createCheckout(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {
 	return kyrenDo[kyrenCheckoutSession](ctx, c, http.MethodPost, "/v1/checkouts", nil, req)
+}
+
+func (c *kyrenClient) retrieveCheckout(ctx context.Context, id string) (*kyrenCheckoutSession, error) {
+	return kyrenDo[kyrenCheckoutSession](ctx, c, http.MethodGet, "/v1/checkouts/"+url.PathEscape(strings.TrimSpace(id)), nil, nil)
+}
+
+func (c *kyrenClient) retrieveOrder(ctx context.Context, id string) (*kyrenOrder, error) {
+	return kyrenDo[kyrenOrder](ctx, c, http.MethodGet, "/v1/orders/"+url.PathEscape(strings.TrimSpace(id)), nil, nil)
 }
 
 func kyrenDo[T any](ctx context.Context, c *kyrenClient, method string, path string, query url.Values, payload any) (*T, error) {

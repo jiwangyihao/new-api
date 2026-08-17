@@ -50,9 +50,28 @@ type kyrenCreateCheckoutRequest struct {
 
 type kyrenCheckoutSession struct {
 	ID        string `json:"id"`
-	URL       string `json:"url"`
+	ProductID string `json:"productId"`
+	Amount    string `json:"amount"`
+	Currency  string `json:"currency"`
 	Status    string `json:"status"`
+	OrderID   string `json:"orderId"`
+	URL       string `json:"url"`
 	ExpiresAt int64  `json:"expiresAt"`
+	CreatedAt int64  `json:"createdAt"`
+}
+
+type kyrenOrder struct {
+	ID                string            `json:"id"`
+	CheckoutSessionID string            `json:"checkoutSessionId"`
+	ProductID         string            `json:"productId"`
+	Amount            string            `json:"amount"`
+	Currency          string            `json:"currency"`
+	Status            string            `json:"status"`
+	Metadata          map[string]string `json:"metadata"`
+	PaidAt            int64             `json:"paidAt"`
+	SettledAt         int64             `json:"settledAt"`
+	CreatedAt         int64             `json:"createdAt"`
+	UpdatedAt         int64             `json:"updatedAt"`
 }
 
 type kyrenTopUpProduct = setting.KyrenTopUpProduct

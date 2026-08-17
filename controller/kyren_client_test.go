@@ -8,6 +8,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNormalizeKyrenBaseURL(t *testing.T) {
@@ -136,4 +138,62 @@ func TestKyrenClientCreateProductUsesAPIKey(t *testing.T) {
 	if product == nil || product.ID != "prod_kyren_basic" || product.Status != "ACTIVE" {
 		t.Fatalf("unexpected product response: %+v", product)
 	}
+}
+
+func TestKyrenClientRetrievesCheckoutAndOrder(t *testing.T) {
+	requestedPaths := make([]string, 0, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPaths = append(requestedPaths, r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "kyren_live_test", r.Header.Get("x-api-key"))
+
+		var payload []byte
+		var err error
+		switch r.URL.Path {
+		case "/v1/checkouts/cs_retrieve":
+			payload, err = common.Marshal(kyrenAPIResponse[kyrenCheckoutSession]{
+				Code: 0, Message: "success",
+				Data: kyrenCheckoutSession{
+					ID: "cs_retrieve", ProductID: "prod_retrieve", Amount: "40.00",
+					Currency: "CNY", Status: "COMPLETE", OrderID: "order_retrieve",
+					ExpiresAt: 1736934000000, CreatedAt: 1736932200000,
+				},
+			})
+		case "/v1/orders/order_retrieve":
+			payload, err = common.Marshal(kyrenAPIResponse[kyrenOrder]{
+				Code: 0, Message: "success",
+				Data: kyrenOrder{
+					ID: "order_retrieve", CheckoutSessionID: "cs_retrieve", ProductID: "prod_retrieve",
+					Amount: "40.00", Currency: "CNY", Status: "PAID", PaidAt: 1736932500000,
+					Metadata: map[string]string{"kind": "subscription", "trade_no": "trade_retrieve"},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+	client := &kyrenClient{baseURL: server.URL, apiKey: "kyren_live_test", httpClient: server.Client()}
+
+	checkout, err := client.retrieveCheckout(context.Background(), "cs_retrieve")
+	require.NoError(t, err)
+	require.NotNil(t, checkout)
+	assert.Equal(t, "order_retrieve", checkout.OrderID)
+	assert.Equal(t, "prod_retrieve", checkout.ProductID)
+	assert.Equal(t, "40.00", checkout.Amount)
+
+	order, err := client.retrieveOrder(context.Background(), checkout.OrderID)
+	require.NoError(t, err)
+	require.NotNil(t, order)
+	assert.Equal(t, "cs_retrieve", order.CheckoutSessionID)
+	assert.Equal(t, "PAID", order.Status)
+	assert.Equal(t, "trade_retrieve", order.Metadata["trade_no"])
+	assert.Equal(t, []string{"/v1/checkouts/cs_retrieve", "/v1/orders/order_retrieve"}, requestedPaths)
 }

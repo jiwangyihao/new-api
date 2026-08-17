@@ -26,19 +26,20 @@ var (
 )
 
 type KyrenPaymentEventRequest struct {
-	EventID         string
-	EventType       string
-	PayloadHash     string
-	TradeNo         string
-	OrderKind       string
-	ProviderOrderID string
-	ProductID       string
-	Amount          string
-	Currency        string
-	ProviderPayload string
-	CallerIP        string
-	MetadataUserID  int
-	MetadataPlanID  int
+	EventID                     string
+	EventType                   string
+	PayloadHash                 string
+	TradeNo                     string
+	OrderKind                   string
+	ProviderOrderID             string
+	ProductID                   string
+	Amount                      string
+	Currency                    string
+	ProviderPayload             string
+	CallerIP                    string
+	MetadataUserID              int
+	MetadataPlanID              int
+	AllowMissingProviderOrderID bool
 
 	InvitationRewardHandler func(orderID int) error
 }
@@ -148,14 +149,16 @@ func ProcessKyrenPaymentEvent(request KyrenPaymentEventRequest) (*KyrenPaymentEv
 			}
 			return err
 		}
-		if request.ProviderOrderID == "" {
+		if request.ProviderOrderID == "" && !(request.EventType == KyrenPaymentEventClosed && request.AllowMissingProviderOrderID) {
 			return conflictKyrenPaymentEventTx(tx, event, result, "provider order ID is missing")
 		}
-		if err := model.BindPaymentProviderOrderIDTx(tx, mapping, request.ProviderOrderID); err != nil {
-			if errors.Is(err, model.ErrPaymentProviderOrderConflict) {
-				return conflictKyrenPaymentEventTx(tx, event, result, "provider order ID conflicts with local mapping")
+		if request.ProviderOrderID != "" {
+			if err := model.BindPaymentProviderOrderIDTx(tx, mapping, request.ProviderOrderID); err != nil {
+				if errors.Is(err, model.ErrPaymentProviderOrderConflict) {
+					return conflictKyrenPaymentEventTx(tx, event, result, "provider order ID conflicts with local mapping")
+				}
+				return err
 			}
-			return err
 		}
 		if request.MetadataUserID > 0 && request.MetadataUserID != mapping.UserID {
 			return conflictKyrenPaymentEventTx(tx, event, result, "metadata user ID conflicts with local mapping")
@@ -178,6 +181,15 @@ func ProcessKyrenPaymentEvent(request KyrenPaymentEventRequest) (*KyrenPaymentEv
 		case KyrenPaymentEventClosed:
 			return processKyrenTerminalEventTx(tx, event, mapping, common.TopUpStatusExpired, request, result)
 		case KyrenPaymentEventRefunded:
+			if request.OrderKind == model.PaymentOrderKindSubscription {
+				handled, err := processKyrenPendingSubscriptionRefundTx(tx, event, mapping, request, result)
+				if err != nil {
+					return err
+				}
+				if handled {
+					return nil
+				}
+			}
 			if request.OrderKind == model.PaymentOrderKindTopUp {
 				result.NeedsManualAction = true
 				result.ManualActionReason = "top-up refund requires manual balance recovery"
@@ -408,6 +420,46 @@ func decimalMoneyStringToCents(raw string) (int64, bool) {
 		return 0, false
 	}
 	return cents.IntPart(), true
+}
+
+func processKyrenPendingSubscriptionRefundTx(tx *gorm.DB, event *model.PaymentProviderEvent, mapping *model.PaymentProviderOrder, request KyrenPaymentEventRequest, result *KyrenPaymentEventResult) (bool, error) {
+	if tx == nil || event == nil || mapping == nil || result == nil || mapping.OrderKind != model.PaymentOrderKindSubscription {
+		return false, nil
+	}
+	var order model.SubscriptionOrder
+	if err := model.LockForUpdate(tx).Where("id = ?", mapping.LocalOrderID).First(&order).Error; err != nil {
+		return false, err
+	}
+	if order.TradeNo != mapping.TradeNo || order.UserId != mapping.UserID || order.PlanId != mapping.PlanID || order.PaymentProvider != model.PaymentProviderKyren {
+		return false, conflictKyrenPaymentEventTx(tx, event, result, "subscription order conflicts with provider mapping")
+	}
+	snapshot, err := model.UnmarshalKyrenPaymentSnapshot(order.KyrenSnapshot)
+	if err != nil || !kyrenPaymentSnapshotMatches(snapshot.ProductID, snapshot.Amount, snapshot.Currency, request) {
+		return false, conflictKyrenPaymentEventTx(tx, event, result, "subscription refund snapshot does not match provider event")
+	}
+	amountCents, ok := decimalMoneyStringToCents(snapshot.Amount)
+	currency := strings.ToUpper(strings.TrimSpace(snapshot.Currency))
+	if !ok || amountCents <= 0 || currency == "" || (order.AmountCents > 0 && order.AmountCents != amountCents) || (strings.TrimSpace(order.Currency) != "" && !strings.EqualFold(order.Currency, currency)) {
+		return false, conflictKyrenPaymentEventTx(tx, event, result, "subscription refund snapshot is invalid")
+	}
+	if order.Status != common.TopUpStatusPending {
+		return false, nil
+	}
+	now := common.GetTimestamp()
+	claim := tx.Model(&model.SubscriptionOrder{}).
+		Where("id = ? AND payment_provider = ? AND status = ?", order.Id, model.PaymentProviderKyren, common.TopUpStatusPending).
+		Updates(map[string]any{"status": common.TopUpStatusRefunded, "complete_time": now})
+	if claim.Error != nil {
+		return false, claim.Error
+	}
+	if claim.RowsAffected != 1 {
+		return false, errors.New("Kyren subscription order changed while applying refund")
+	}
+	result.Transitioned = true
+	if err := finishKyrenPaymentEventTx(tx, event, result, model.PaymentProviderEventApplied, "subscription refund recorded before fulfillment", ""); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func processKyrenTerminalEventTx(tx *gorm.DB, event *model.PaymentProviderEvent, mapping *model.PaymentProviderOrder, targetStatus string, request KyrenPaymentEventRequest, result *KyrenPaymentEventResult) error {

@@ -72,6 +72,14 @@ func (f *fakeKyrenAPI) createCheckout(context.Context, kyrenCreateCheckoutReques
 	return nil, errors.New("unexpected createCheckout call")
 }
 
+func (f *fakeKyrenAPI) retrieveCheckout(context.Context, string) (*kyrenCheckoutSession, error) {
+	return nil, errors.New("unexpected retrieveCheckout call")
+}
+
+func (f *fakeKyrenAPI) retrieveOrder(context.Context, string) (*kyrenOrder, error) {
+	return nil, errors.New("unexpected retrieveOrder call")
+}
+
 type kyrenControllerResponse[T any] struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`

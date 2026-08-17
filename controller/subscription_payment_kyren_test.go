@@ -64,6 +64,14 @@ func (f *kyrenCheckoutFakeAPI) createCheckout(ctx context.Context, req kyrenCrea
 	return &kyrenCheckoutSession{ID: "chk_test", URL: "https://pay.kyren.test/checkout", Status: "open", ExpiresAt: time.Now().Add(time.Hour).Unix()}, nil
 }
 
+func (f *kyrenCheckoutFakeAPI) retrieveCheckout(context.Context, string) (*kyrenCheckoutSession, error) {
+	return nil, errors.New("unexpected retrieveCheckout call")
+}
+
+func (f *kyrenCheckoutFakeAPI) retrieveOrder(context.Context, string) (*kyrenOrder, error) {
+	return nil, errors.New("unexpected retrieveOrder call")
+}
+
 func withKyrenCheckoutFakeControllerClient(t *testing.T, fake kyrenAPI) {
 	t.Helper()
 	original := newKyrenClientForController

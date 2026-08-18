@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -106,6 +107,97 @@ func TestConcurrentKyrenPaidAndFailedEventsReachOneTerminalOutcome(t *testing.T)
 	assert.Equal(t, 1, conflicted)
 }
 
+func TestClaimKyrenSubscriptionPaymentOrderReusesSinglePendingCheckout(t *testing.T) {
+	db := setupKyrenPaymentServiceTestDB(t)
+	require.NoError(t, db.AutoMigrate(&model.SubscriptionOrder{}, &model.SubscriptionPlan{}))
+	userID := 9711
+	planID := 9712
+	require.NoError(t, db.Create(&model.User{Id: userID, Username: "kyren-claim-user", Status: common.UserStatusEnabled, AffCode: "kyren-claim-user"}).Error)
+	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.SubscriptionEntitlementSnapshot{
+		PurchaseMode: model.SubscriptionPurchaseModeTimed, PlanID: planID,
+	})
+	require.NoError(t, err)
+	paymentSnapshot, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: "prod_claim", Amount: "40.00", Currency: "CNY"})
+	require.NoError(t, err)
+	newOrder := func(tradeNo string) *model.SubscriptionOrder {
+		return &model.SubscriptionOrder{
+			UserId: userID, PlanId: planID, TradeNo: tradeNo,
+			PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+			Status: common.TopUpStatusPending, KyrenSnapshot: paymentSnapshot, EntitlementSnapshot: snapshot,
+		}
+	}
+
+	first, err := ClaimKyrenSubscriptionPaymentOrder(newOrder("kyren-claim-first"), model.SubscriptionPurchaseModeTimed)
+	require.NoError(t, err)
+	require.True(t, first.Created)
+	require.NoError(t, BindKyrenPaymentCheckout(first.Order.TradeNo, "cs_claim_reuse"))
+	second, err := ClaimKyrenSubscriptionPaymentOrder(newOrder("kyren-claim-second"), model.SubscriptionPurchaseModeTimed)
+	require.NoError(t, err)
+
+	assert.False(t, second.Created)
+	assert.False(t, second.InProgress)
+	assert.Equal(t, first.Order.Id, second.Order.Id)
+	assert.Equal(t, "cs_claim_reuse", second.CheckoutID)
+	var count int64
+	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ? AND status = ?", userID, planID, common.TopUpStatusPending).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestConcurrentKyrenSubscriptionClaimsCreateOnePendingOrder(t *testing.T) {
+	db := setupKyrenPaymentServiceTestDB(t)
+	userID := 9721
+	planID := 9722
+	require.NoError(t, db.Create(&model.User{Id: userID, Username: "kyren-concurrent-claim", Status: common.UserStatusEnabled, AffCode: "kyren-concurrent-claim"}).Error)
+	snapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.SubscriptionEntitlementSnapshot{
+		PurchaseMode: model.SubscriptionPurchaseModeTimed, PlanID: planID,
+	})
+	require.NoError(t, err)
+	paymentSnapshot, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: "prod_concurrent_claim", Amount: "40.00", Currency: "CNY"})
+	require.NoError(t, err)
+	start := make(chan struct{})
+	claims := make(chan *KyrenSubscriptionPaymentOrderClaim, 2)
+	errorsByClaim := make(chan error, 2)
+	var waitGroup sync.WaitGroup
+	for index := range 2 {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			claim, claimErr := ClaimKyrenSubscriptionPaymentOrder(&model.SubscriptionOrder{
+				UserId: userID, PlanId: planID, TradeNo: fmt.Sprintf("kyren-concurrent-claim-%d", index),
+				PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+				Status: common.TopUpStatusPending, KyrenSnapshot: paymentSnapshot, EntitlementSnapshot: snapshot,
+			}, model.SubscriptionPurchaseModeTimed)
+			claims <- claim
+			errorsByClaim <- claimErr
+		}(index)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(claims)
+	close(errorsByClaim)
+
+	for claimErr := range errorsByClaim {
+		require.NoError(t, claimErr)
+	}
+	created := 0
+	inProgress := 0
+	for claim := range claims {
+		require.NotNil(t, claim)
+		if claim.Created {
+			created++
+		}
+		if claim.InProgress {
+			inProgress++
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, 1, inProgress)
+	var count int64
+	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ? AND status = ?", userID, planID, common.TopUpStatusPending).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
 func setupKyrenPaymentServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	oldDB := model.DB
@@ -129,7 +221,8 @@ func setupKyrenPaymentServiceTestDB(t *testing.T) *gorm.DB {
 	common.RedisEnabled = false
 	require.NoError(t, db.AutoMigrate(
 		&model.User{}, &model.TopUp{}, &model.Log{},
-		&model.PaymentProviderOrder{}, &model.PaymentProviderEvent{},
+		&model.SubscriptionOrder{}, &model.SubscriptionPlan{},
+		&model.PaymentProviderOrder{}, &model.PaymentProviderCreationLock{}, &model.PaymentProviderEvent{},
 	))
 
 	t.Cleanup(func() {

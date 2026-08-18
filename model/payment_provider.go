@@ -35,11 +35,17 @@ type PaymentProviderOrder struct {
 	UserID       int    `json:"user_id" gorm:"not null;index"`
 	PlanID       int    `json:"plan_id" gorm:"not null;default:0;index"`
 
-	ProviderOrderID    *string `json:"provider_order_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_provider_order_id,priority:2"`
-	ProviderCheckoutID *string `json:"provider_checkout_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_provider_checkout_id,priority:2"`
+	ProviderOrderID     *string `json:"provider_order_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_provider_order_id,priority:2"`
+	ProviderCheckoutID  *string `json:"provider_checkout_id,omitempty" gorm:"type:varchar(255);uniqueIndex:idx_provider_checkout_id,priority:2"`
+	ProviderCheckoutURL *string `json:"-" gorm:"type:varchar(2048)"`
 
 	CreatedAt int64 `json:"created_at" gorm:"type:bigint;not null"`
 	UpdatedAt int64 `json:"updated_at" gorm:"type:bigint;not null"`
+}
+
+type PaymentProviderCreationLock struct {
+	LockKey   string `json:"-" gorm:"primaryKey;type:varchar(255)"`
+	CreatedAt int64  `json:"-" gorm:"type:bigint;not null"`
 }
 
 type PaymentProviderEvent struct {
@@ -69,6 +75,22 @@ type PaymentProviderEvent struct {
 
 	CreatedAt int64 `json:"created_at" gorm:"type:bigint;not null"`
 	UpdatedAt int64 `json:"updated_at" gorm:"type:bigint;not null"`
+}
+
+func LockPaymentProviderCreationTx(tx *gorm.DB, lockKey string) error {
+	lockKey = strings.TrimSpace(lockKey)
+	if tx == nil || lockKey == "" {
+		return errors.New("invalid payment provider creation lock")
+	}
+	now, err := getDBTimestampStrictTx(tx)
+	if err != nil {
+		return err
+	}
+	lock := PaymentProviderCreationLock{LockKey: lockKey, CreatedAt: now}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&lock).Error; err != nil {
+		return err
+	}
+	return LockForUpdate(tx).Where("lock_key = ?", lockKey).First(&lock).Error
 }
 
 func CreatePaymentProviderOrderTx(tx *gorm.DB, order *PaymentProviderOrder) error {
@@ -216,10 +238,11 @@ func BindPaymentProviderOrderIDTx(tx *gorm.DB, mapping *PaymentProviderOrder, pr
 	return nil
 }
 
-func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID string) error {
+func BindPaymentProviderCheckout(provider string, tradeNo string, checkoutID string, checkoutURL string) error {
 	provider = strings.TrimSpace(provider)
 	tradeNo = strings.TrimSpace(tradeNo)
 	checkoutID = strings.TrimSpace(checkoutID)
+	checkoutURL = strings.TrimSpace(checkoutURL)
 	if provider == "" || tradeNo == "" || checkoutID == "" {
 		return ErrPaymentProviderOrderConflict
 	}
@@ -231,10 +254,7 @@ func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID s
 			}
 			return err
 		}
-		if mapping.ProviderCheckoutID != nil {
-			if *mapping.ProviderCheckoutID == checkoutID {
-				return nil
-			}
+		if mapping.ProviderCheckoutID != nil && *mapping.ProviderCheckoutID != checkoutID {
 			return ErrPaymentProviderOrderConflict
 		}
 		var conflicting PaymentProviderOrder
@@ -249,9 +269,13 @@ func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID s
 		if err != nil {
 			return err
 		}
+		updates := map[string]any{"provider_checkout_id": checkoutID, "updated_at": now}
+		if checkoutURL != "" {
+			updates["provider_checkout_url"] = checkoutURL
+		}
 		result := tx.Model(&PaymentProviderOrder{}).
-			Where("id = ? AND provider_checkout_id IS NULL", mapping.ID).
-			Updates(map[string]any{"provider_checkout_id": checkoutID, "updated_at": now})
+			Where("id = ? AND (provider_checkout_id IS NULL OR provider_checkout_id = ?)", mapping.ID, checkoutID).
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -260,6 +284,10 @@ func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID s
 		}
 		return nil
 	})
+}
+
+func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID string) error {
+	return BindPaymentProviderCheckout(provider, tradeNo, checkoutID, "")
 }
 
 // ClaimPaymentProviderReconciliation atomically reserves a Kyren mapping for a

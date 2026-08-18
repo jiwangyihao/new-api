@@ -290,6 +290,8 @@ func main() {
 
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
+	// Kyren pending subscription reconciliation task
+	controller.StartKyrenReconciliationTask()
 
 	if common.IsMasterNode && constant.UpdateTask {
 		gopool.Go(func() {

@@ -24,6 +24,12 @@ func TestMainStartsInvitationRewardEventRetryTask(t *testing.T) {
 	assert.Greater(t, strings.Index(source, retryCall), strings.Index(source, entitlementCall))
 }
 
+func TestMainStartsKyrenReconciliationTask(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	require.NoError(t, err)
+	assert.Contains(t, string(content), "controller.StartKyrenReconciliationTask()")
+}
+
 func TestMaintenanceStartupPlanDisablesAllRuntimeStarts(t *testing.T) {
 	plan := runtimeStartupPlanFor(true)
 	require.True(t, plan.maintenanceMode)

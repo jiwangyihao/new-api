@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm"
 )
 
-const kyrenPaymentEventLeaseSeconds int64 = 5 * 60
+const (
+	kyrenPaymentEventLeaseSeconds                 int64 = 5 * 60
+	kyrenSubscriptionCheckoutCreationLeaseSeconds int64 = 60
+)
 
 const (
 	KyrenPaymentEventPaid     = "order.paid"
@@ -21,8 +24,10 @@ const (
 )
 
 var (
-	ErrKyrenPaymentEventConflict   = errors.New("kyren payment event identity or payment snapshot conflict")
-	ErrKyrenPaymentEventInProgress = errors.New("kyren payment event is already being processed")
+	ErrKyrenPaymentEventConflict                = errors.New("kyren payment event identity or payment snapshot conflict")
+	ErrKyrenPaymentEventInProgress              = errors.New("kyren payment event is already being processed")
+	ErrKyrenSubscriptionCheckoutInProgress      = errors.New("kyren subscription checkout is being created")
+	ErrKyrenSubscriptionPaymentIdentityConflict = errors.New("kyren subscription payment identity conflict")
 )
 
 type KyrenPaymentEventRequest struct {
@@ -65,19 +70,136 @@ type KyrenPaymentEventResult struct {
 	ManualActionReason            string
 }
 
-func CreateKyrenSubscriptionPaymentOrder(order *model.SubscriptionOrder) error {
+type KyrenSubscriptionPaymentOrderClaim struct {
+	Order      *model.SubscriptionOrder
+	CheckoutID string
+	Created    bool
+	InProgress bool
+}
+
+func ClaimKyrenSubscriptionPaymentOrder(order *model.SubscriptionOrder, purchaseMode string) (*KyrenSubscriptionPaymentOrderClaim, error) {
 	if order == nil || order.UserId <= 0 || order.PlanId <= 0 || strings.TrimSpace(order.TradeNo) == "" || order.PaymentProvider != model.PaymentProviderKyren || order.Status != common.TopUpStatusPending {
-		return errors.New("invalid Kyren subscription payment order")
+		return nil, errors.New("invalid Kyren subscription payment order")
 	}
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	purchaseMode, err := model.NormalizeSubscriptionPurchaseMode(purchaseMode)
+	if err != nil {
+		return nil, err
+	}
+	if order.CreateTime == 0 {
+		order.CreateTime = model.GetDBTimestamp()
+	}
+	now := model.GetDBTimestamp()
+	claim := &KyrenSubscriptionPaymentOrderClaim{}
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		lockKey := fmt.Sprintf("kyren:subscription:%d:%d:%s", order.UserId, order.PlanId, purchaseMode)
+		if err := model.LockPaymentProviderCreationTx(tx, lockKey); err != nil {
+			return err
+		}
+		var candidates []model.SubscriptionOrder
+		if err := tx.Where("user_id = ? AND plan_id = ? AND payment_provider = ? AND status = ?", order.UserId, order.PlanId, model.PaymentProviderKyren, common.TopUpStatusPending).
+			Order("id DESC").Find(&candidates).Error; err != nil {
+			return err
+		}
+		for index := range candidates {
+			candidate := &candidates[index]
+			var mapping model.PaymentProviderOrder
+			mappingQuery := model.LockForUpdate(tx).Where("provider = ? AND order_kind = ? AND local_order_id = ?", model.PaymentProviderKyren, model.PaymentOrderKindSubscription, candidate.Id).Limit(1).Find(&mapping)
+			if mappingQuery.Error != nil {
+				return mappingQuery.Error
+			}
+			snapshot, snapshotErr := model.UnmarshalSubscriptionEntitlementSnapshot(candidate.EntitlementSnapshot)
+			candidateMode, modeErr := model.NormalizeSubscriptionPurchaseMode(snapshot.PurchaseMode)
+			if snapshotErr != nil || modeErr != nil {
+				if mappingQuery.RowsAffected > 0 && mapping.ProviderCheckoutID != nil && strings.TrimSpace(*mapping.ProviderCheckoutID) != "" {
+					return ErrKyrenSubscriptionPaymentIdentityConflict
+				}
+				if now-candidate.CreateTime < kyrenSubscriptionCheckoutCreationLeaseSeconds {
+					claim.Order = candidate
+					claim.InProgress = true
+					return nil
+				}
+				if err := expireIncompleteKyrenSubscriptionOrderTx(tx, candidate.Id, now); err != nil {
+					return err
+				}
+				continue
+			}
+			if candidateMode != purchaseMode {
+				continue
+			}
+			if mappingQuery.RowsAffected > 0 && mapping.ProviderCheckoutID != nil && strings.TrimSpace(*mapping.ProviderCheckoutID) != "" {
+				if !kyrenSubscriptionPaymentOrderIdentityMatches(candidate, order) {
+					return ErrKyrenSubscriptionPaymentIdentityConflict
+				}
+				claim.Order = candidate
+				claim.CheckoutID = strings.TrimSpace(*mapping.ProviderCheckoutID)
+				return nil
+			}
+			leaseStartedAt := candidate.CreateTime
+			if mappingQuery.RowsAffected > 0 && mapping.UpdatedAt > leaseStartedAt {
+				leaseStartedAt = mapping.UpdatedAt
+			}
+			if now-leaseStartedAt < kyrenSubscriptionCheckoutCreationLeaseSeconds {
+				claim.Order = candidate
+				claim.InProgress = true
+				return nil
+			}
+			if err := expireIncompleteKyrenSubscriptionOrderTx(tx, candidate.Id, now); err != nil {
+				return err
+			}
+		}
 		if err := tx.Create(order).Error; err != nil {
 			return err
 		}
-		return model.CreatePaymentProviderOrderTx(tx, &model.PaymentProviderOrder{
+		if err := model.CreatePaymentProviderOrderTx(tx, &model.PaymentProviderOrder{
 			Provider: model.PaymentProviderKyren, OrderKind: model.PaymentOrderKindSubscription,
 			LocalOrderID: order.Id, TradeNo: order.TradeNo, UserID: order.UserId, PlanID: order.PlanId,
-		})
+		}); err != nil {
+			return err
+		}
+		claim.Order = order
+		claim.Created = true
+		return nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	if claim.Order == nil {
+		return nil, errors.New("Kyren subscription payment order claim returned no order")
+	}
+	return claim, nil
+}
+
+func expireIncompleteKyrenSubscriptionOrderTx(tx *gorm.DB, orderID int, now int64) error {
+	result := tx.Model(&model.SubscriptionOrder{}).
+		Where("id = ? AND status = ? AND complete_time = ?", orderID, common.TopUpStatusPending, 0).
+		Updates(map[string]any{"status": common.TopUpStatusExpired, "complete_time": now})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("Kyren subscription order changed while expiring incomplete checkout")
+	}
+	return nil
+}
+
+func kyrenSubscriptionPaymentOrderIdentityMatches(existing *model.SubscriptionOrder, requested *model.SubscriptionOrder) bool {
+	if existing == nil || requested == nil || existing.UserId != requested.UserId || existing.PlanId != requested.PlanId {
+		return false
+	}
+	existingSnapshot, existingErr := model.UnmarshalKyrenPaymentSnapshot(existing.KyrenSnapshot)
+	requestedSnapshot, requestedErr := model.UnmarshalKyrenPaymentSnapshot(requested.KyrenSnapshot)
+	if existingErr != nil || requestedErr != nil {
+		return false
+	}
+	return strings.TrimSpace(existingSnapshot.ProductID) == strings.TrimSpace(requestedSnapshot.ProductID) &&
+		strings.EqualFold(strings.TrimSpace(existingSnapshot.Currency), strings.TrimSpace(requestedSnapshot.Currency)) &&
+		kyrenPaymentAmountEqual(existingSnapshot.Amount, requestedSnapshot.Amount)
+}
+
+func kyrenPaymentAmountEqual(left string, right string) bool {
+	leftAmount, leftErr := decimal.NewFromString(strings.TrimSpace(left))
+	rightAmount, rightErr := decimal.NewFromString(strings.TrimSpace(right))
+	return leftErr == nil && rightErr == nil && leftAmount.Equal(rightAmount)
 }
 
 func CreateKyrenTopUpPaymentOrder(order *model.TopUp) error {
@@ -97,6 +219,10 @@ func CreateKyrenTopUpPaymentOrder(order *model.TopUp) error {
 
 func BindKyrenPaymentCheckout(tradeNo string, checkoutID string) error {
 	return model.BindPaymentProviderCheckoutID(model.PaymentProviderKyren, tradeNo, checkoutID)
+}
+
+func BindKyrenPaymentCheckoutURL(tradeNo string, checkoutID string, checkoutURL string) error {
+	return model.BindPaymentProviderCheckout(model.PaymentProviderKyren, tradeNo, checkoutID, checkoutURL)
 }
 
 func ProcessKyrenPaymentEvent(request KyrenPaymentEventRequest) (*KyrenPaymentEventResult, error) {

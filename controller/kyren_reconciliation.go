@@ -7,17 +7,29 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/shopspring/decimal"
 )
 
 const (
-	kyrenReconciliationSource             = "kyren_reconciliation"
-	kyrenReconciliationMinIntervalSeconds = int64(15)
+	kyrenReconciliationSource                     = "kyren_reconciliation"
+	kyrenReconciliationMinIntervalSeconds         = int64(15)
+	kyrenReconciliationTaskDefaultBatchSize       = 50
+	kyrenReconciliationTaskDefaultIntervalSeconds = 300
 )
+
+var kyrenReconciliationTaskOnce sync.Once
+
+type kyrenReconciliationSweepResult struct {
+	Scanned int
+	Failed  int
+}
 
 type kyrenReconciliationFact struct {
 	Source     string            `json:"source"`
@@ -32,9 +44,9 @@ type kyrenReconciliationFact struct {
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 
-func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *model.SubscriptionOrder, callerIP string) error {
+func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *model.SubscriptionOrder, callerIP string) (string, error) {
 	if localOrder == nil || localOrder.Id <= 0 || localOrder.Status != common.TopUpStatusPending || localOrder.PaymentProvider != model.PaymentProviderKyren {
-		return nil
+		return "", nil
 	}
 	mapping, claimed, err := model.ClaimPaymentProviderReconciliation(
 		model.PaymentProviderKyren,
@@ -42,33 +54,39 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 		localOrder.TradeNo,
 		kyrenReconciliationMinIntervalSeconds,
 	)
-	if err != nil || !claimed || mapping == nil {
-		return err
+	if err != nil || mapping == nil {
+		return "", err
 	}
 	if mapping.LocalOrderID != localOrder.Id || mapping.UserID != localOrder.UserId || mapping.PlanID != localOrder.PlanId || mapping.TradeNo != localOrder.TradeNo {
-		return fmt.Errorf("Kyren reconciliation local order identity mismatch")
+		return "", fmt.Errorf("Kyren reconciliation local order identity mismatch")
 	}
 	if mapping.ProviderCheckoutID == nil || strings.TrimSpace(*mapping.ProviderCheckoutID) == "" {
-		return nil
+		return "", nil
+	}
+	if !claimed {
+		if mapping.ProviderCheckoutURL != nil && safeKyrenCheckoutURL(*mapping.ProviderCheckoutURL) {
+			return strings.TrimSpace(*mapping.ProviderCheckoutURL), nil
+		}
+		return "", nil
 	}
 	checkoutID := strings.TrimSpace(*mapping.ProviderCheckoutID)
 	paymentSnapshot, err := model.UnmarshalKyrenPaymentSnapshot(localOrder.KyrenSnapshot)
 	if err != nil {
-		return fmt.Errorf("decode Kyren payment snapshot: %w", err)
+		return "", fmt.Errorf("decode Kyren payment snapshot: %w", err)
 	}
 	if err := validateKyrenReconciliationPaymentSnapshot(localOrder, paymentSnapshot); err != nil {
-		return err
+		return "", err
 	}
 	client, err := newKyrenClientForController()
 	if err != nil {
-		return err
+		return "", err
 	}
 	checkout, err := client.retrieveCheckout(ctx, checkoutID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := validateKyrenReconciliationCheckout(checkout, checkoutID, paymentSnapshot); err != nil {
-		return err
+		return "", err
 	}
 
 	providerOrderID := ""
@@ -77,7 +95,7 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 	}
 	checkoutOrderID := strings.TrimSpace(checkout.OrderID)
 	if providerOrderID != "" && checkoutOrderID != "" && providerOrderID != checkoutOrderID {
-		return fmt.Errorf("Kyren reconciliation checkout order identity mismatch")
+		return "", fmt.Errorf("Kyren reconciliation checkout order identity mismatch")
 	}
 	if checkoutOrderID != "" {
 		providerOrderID = checkoutOrderID
@@ -85,8 +103,14 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 
 	checkoutStatus := strings.ToUpper(strings.TrimSpace(checkout.Status))
 	if providerOrderID == "" {
+		if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
+			if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(checkout.URL), nil
+		}
 		if checkoutStatus != "EXPIRED" {
-			return nil
+			return "", nil
 		}
 		fact := kyrenReconciliationFact{
 			Source: kyrenReconciliationSource, EventType: service.KyrenPaymentEventClosed,
@@ -94,25 +118,31 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 			Amount: strings.TrimSpace(checkout.Amount), Currency: strings.ToUpper(strings.TrimSpace(checkout.Currency)),
 			Status: checkoutStatus, UpdatedAt: checkout.ExpiresAt,
 		}
-		return applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, true, "")
+		return "", applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, true, "")
 	}
 
 	providerOrder, err := client.retrieveOrder(ctx, providerOrderID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := validateKyrenReconciliationOrder(providerOrder, providerOrderID, checkoutID, paymentSnapshot, mapping); err != nil {
-		return err
+		return "", err
 	}
 	eventType, manualReason, err := kyrenReconciliationEventForOrderStatus(providerOrder.Status)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if eventType == "" && checkoutStatus == "EXPIRED" {
 		eventType = service.KyrenPaymentEventClosed
 	}
 	if eventType == "" {
-		return nil
+		if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
+			if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
+				return "", err
+			}
+			return strings.TrimSpace(checkout.URL), nil
+		}
+		return "", nil
 	}
 	updatedAt := providerOrder.UpdatedAt
 	if updatedAt <= 0 {
@@ -136,7 +166,7 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 		Currency: strings.ToUpper(strings.TrimSpace(providerOrder.Currency)), Status: factStatus,
 		UpdatedAt: updatedAt, Metadata: providerOrder.Metadata,
 	}
-	return applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, false, manualReason)
+	return "", applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, false, manualReason)
 }
 
 func validateKyrenReconciliationPaymentSnapshot(localOrder *model.SubscriptionOrder, snapshot model.KyrenPaymentSnapshot) error {
@@ -274,4 +304,84 @@ func marshalKyrenReconciliationFact(fact kyrenReconciliationFact) (string, strin
 	digest := sha256.Sum256(encoded)
 	payloadHash := hex.EncodeToString(digest[:])
 	return string(encoded), "reconcile_" + payloadHash, payloadHash, nil
+}
+
+func runKyrenReconciliationSweep(ctx context.Context, batchSize int) (kyrenReconciliationSweepResult, error) {
+	if batchSize < 1 {
+		batchSize = kyrenReconciliationTaskDefaultBatchSize
+	}
+	result := kyrenReconciliationSweepResult{}
+	lastID := 0
+	for {
+		var orders []model.SubscriptionOrder
+		query := model.DB.Table("subscription_orders AS so").
+			Select("so.*").
+			Joins("JOIN payment_provider_orders AS ppo ON ppo.provider = ? AND ppo.order_kind = ? AND ppo.local_order_id = so.id", model.PaymentProviderKyren, model.PaymentOrderKindSubscription).
+			Where("so.id > ? AND so.payment_provider = ? AND so.status = ?", lastID, model.PaymentProviderKyren, common.TopUpStatusPending).
+			Where("ppo.provider_checkout_id IS NOT NULL AND ppo.provider_checkout_id <> ?", "").
+			Order("so.id ASC").
+			Limit(batchSize).
+			Find(&orders)
+		if query.Error != nil {
+			return result, query.Error
+		}
+		if len(orders) == 0 {
+			return result, nil
+		}
+		for index := range orders {
+			order := &orders[index]
+			lastID = order.Id
+			result.Scanned++
+			_, err := reconcilePendingKyrenSubscriptionOrder(ctx, order, "")
+			if err != nil {
+				result.Failed++
+				logger.LogWarn(ctx, fmt.Sprintf("Kyren 后台对账单笔失败 local_order_id=%d trade_no=%s error=%q", order.Id, order.TradeNo, err.Error()))
+			}
+		}
+		if len(orders) < batchSize {
+			return result, nil
+		}
+	}
+}
+
+func runKyrenReconciliationTaskOnce(batchSize int) {
+	result, err := runKyrenReconciliationSweep(context.Background(), batchSize)
+	if err != nil {
+		logger.LogWarn(context.Background(), fmt.Sprintf("Kyren 后台对账批次失败 scanned=%d failed=%d error=%q", result.Scanned, result.Failed, err.Error()))
+		return
+	}
+	common.SysLog(fmt.Sprintf("Kyren 后台对账完成 scanned=%d failed=%d", result.Scanned, result.Failed))
+}
+
+func StartKyrenReconciliationTask() {
+	kyrenReconciliationTaskOnce.Do(func() {
+		if !common.IsMasterNode {
+			return
+		}
+		if !common.GetEnvOrDefaultBool("KYREN_RECONCILIATION_TASK_ENABLED", true) {
+			common.SysLog("Kyren reconciliation task disabled by KYREN_RECONCILIATION_TASK_ENABLED")
+			return
+		}
+		intervalSeconds := common.GetEnvOrDefault("KYREN_RECONCILIATION_TASK_INTERVAL_SECONDS", kyrenReconciliationTaskDefaultIntervalSeconds)
+		if intervalSeconds < int(kyrenReconciliationMinIntervalSeconds) {
+			intervalSeconds = kyrenReconciliationTaskDefaultIntervalSeconds
+		}
+		batchSize := common.GetEnvOrDefault("KYREN_RECONCILIATION_TASK_BATCH_SIZE", kyrenReconciliationTaskDefaultBatchSize)
+		if batchSize < 1 {
+			batchSize = kyrenReconciliationTaskDefaultBatchSize
+		}
+		if batchSize > 500 {
+			batchSize = 500
+		}
+		interval := time.Duration(intervalSeconds) * time.Second
+		go func() {
+			common.SysLog(fmt.Sprintf("Kyren reconciliation task started: interval=%s batch_size=%d", interval, batchSize))
+			runKyrenReconciliationTaskOnce(batchSize)
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for range ticker.C {
+				runKyrenReconciliationTaskOnce(batchSize)
+			}
+		}()
+	})
 }

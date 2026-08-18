@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -58,7 +59,13 @@ func setupSubscriptionTrialPurchaseTest(t *testing.T) {
 func seedSubscriptionPurchasePlan(t *testing.T, id int, trial bool, visible bool, price float64) {
 	t.Helper()
 	code := "plan_purchase_" + string(rune('a'+id%26))
-	plan := &model.SubscriptionPlan{Id: id, Title: "Purchase Plan", Enabled: true, PublicVisible: visible, IsTrial: trial, PriceAmount: price, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code, StripePriceId: "price_test", CreemProductId: "prod_test"}
+	var priceMicros *int64
+	if price > 0 {
+		parsed, err := model.ParseDecimalAmountMicros(strconv.FormatFloat(price, 'f', -1, 64))
+		require.NoError(t, err)
+		priceMicros = &parsed
+	}
+	plan := &model.SubscriptionPlan{Id: id, Title: "Purchase Plan", Enabled: true, PublicVisible: visible, IsTrial: trial, PriceAmount: price, PriceAmountMicros: priceMicros, Currency: "CNY", DurationUnit: model.SubscriptionDurationMonth, DurationValue: 1, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, RewardEligible: true, BusinessCode: &code, StripePriceId: "price_test", CreemProductId: "prod_test"}
 	require.NoError(t, model.DB.Create(plan).Error)
 	require.NoError(t, model.DB.Model(plan).Updates(map[string]interface{}{"is_trial": trial, "public_visible": visible}).Error)
 }

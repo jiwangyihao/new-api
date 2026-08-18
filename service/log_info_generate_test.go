@@ -52,6 +52,22 @@ func TestGenerateTextOtherInfoWritesRequestBufferTiming(t *testing.T) {
 	assert.Equal(t, int64(1250), int64FromOtherValue(t, other["request_buffer_time_ms"]))
 }
 
+func TestGenerateTextOtherInfoOmitsFirstResponseTimingBeforeResponse(t *testing.T) {
+	ctx := testBillingInfoContext(t)
+	common.SetContextKey(ctx, constant.ContextKeyRequestBufferTimeMs, 1250)
+	startTime := time.UnixMilli(1000)
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:         startTime,
+		FirstResponseTime: startTime.Add(-time.Second),
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 0, 0, 0, 0, 0)
+
+	assert.NotContains(t, other, "frt")
+	assert.Equal(t, int64(1250), int64FromOtherValue(t, other["request_buffer_time_ms"]))
+}
+
 func TestAppendBillingInfoWritesSubscriptionTokenFields(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{
 		BillingSource:                        "subscription",

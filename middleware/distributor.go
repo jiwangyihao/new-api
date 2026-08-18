@@ -3,6 +3,7 @@ package middleware
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"slices"
 	"strconv"
@@ -53,8 +54,31 @@ func tokenGroupsFromContext(c *gin.Context) []string {
 	return []string{model.DefaultChannelGroupName}
 }
 
+const (
+	proxyRequestBufferTimeHeader = "X-New-Api-Request-Buffer-Time"
+	maxProxyRequestBufferTime    = 10 * time.Minute
+)
+
+func requestTiming(c *gin.Context, now time.Time) (time.Time, int) {
+	if c == nil || c.Request == nil {
+		return now, 0
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(c.GetHeader(proxyRequestBufferTimeHeader)), 64)
+	if err != nil || math.IsNaN(seconds) || math.IsInf(seconds, 0) || seconds <= 0 {
+		return now, 0
+	}
+	bufferTime := time.Duration(seconds * float64(time.Second))
+	if bufferTime > maxProxyRequestBufferTime {
+		return now, 0
+	}
+	return now.Add(-bufferTime), int(bufferTime.Milliseconds())
+}
+
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		requestStartTime, requestBufferTimeMs := requestTiming(c, time.Now())
+		common.SetContextKey(c, constant.ContextKeyRequestStartTime, requestStartTime)
+		common.SetContextKey(c, constant.ContextKeyRequestBufferTimeMs, requestBufferTimeMs)
 		var channel *model.Channel
 		channelId, ok := common.GetContextKey(c, constant.ContextKeyTokenSpecificChannelId)
 		modelRequest, shouldSelectChannel, err := getModelRequest(c)
@@ -147,7 +171,6 @@ func Distribute() func(c *gin.Context) {
 				}
 			}
 		}
-		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {

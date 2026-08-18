@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +38,18 @@ func int64FromOtherValue(t *testing.T, value interface{}) int64 {
 		t.Fatalf("unexpected numeric type %T", value)
 		return 0
 	}
+}
+
+func TestGenerateTextOtherInfoWritesRequestBufferTiming(t *testing.T) {
+	ctx := testBillingInfoContext(t)
+	common.SetContextKey(ctx, constant.ContextKeyRequestBufferTimeMs, 1250)
+	relayInfo := &relaycommon.RelayInfo{}
+	testRelayInfoStartTimes(relayInfo)
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 0, 0, 0, 0, 0)
+
+	assert.Equal(t, int64(250), int64FromOtherValue(t, other["frt"]))
+	assert.Equal(t, int64(1250), int64FromOtherValue(t, other["request_buffer_time_ms"]))
 }
 
 func TestAppendBillingInfoWritesSubscriptionTokenFields(t *testing.T) {

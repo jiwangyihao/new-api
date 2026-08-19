@@ -95,14 +95,20 @@ func GetBodyStorage(c *gin.Context) (BodyStorage, error) {
 	return bs, nil
 }
 
-// CleanupBodyStorage 清理请求体存储（应在请求结束时调用）
+// CleanupBodyStorage closes the request body storage and removes every body
+// cache reference from the Gin context so large request buffers can be
+// reclaimed before a long-lived streaming response finishes.
 func CleanupBodyStorage(c *gin.Context) {
+	if c == nil {
+		return
+	}
 	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {
 		if bs, ok := storage.(BodyStorage); ok {
-			bs.Close()
+			_ = bs.Close()
 		}
-		c.Set(KeyBodyStorage, nil)
 	}
+	c.Set(KeyBodyStorage, nil)
+	c.Set(KeyRequestBody, nil)
 }
 
 func UnmarshalBodyReusable(c *gin.Context, v any) error {

@@ -67,6 +67,9 @@ func (m *memoryStorage) Close() error {
 	defer m.mu.Unlock()
 	if atomic.CompareAndSwapInt32(&m.closed, 0, 1) {
 		DecrementMemoryBuffers(m.size)
+		m.data = nil
+		m.reader = nil
+		m.size = 0
 	}
 	return nil
 }
@@ -81,6 +84,8 @@ func (m *memoryStorage) Bytes() ([]byte, error) {
 }
 
 func (m *memoryStorage) Size() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.size
 }
 
@@ -188,9 +193,19 @@ func (d *diskStorage) Close() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if atomic.CompareAndSwapInt32(&d.closed, 0, 1) {
-		d.file.Close()
-		os.Remove(d.filePath)
-		DecrementDiskFiles(d.size)
+		file := d.file
+		filePath := d.filePath
+		size := d.size
+		d.file = nil
+		d.filePath = ""
+		d.size = 0
+		if file != nil {
+			_ = file.Close()
+		}
+		if filePath != "" {
+			_ = os.Remove(filePath)
+		}
+		DecrementDiskFiles(size)
 	}
 	return nil
 }
@@ -230,6 +245,8 @@ func (d *diskStorage) Bytes() ([]byte, error) {
 }
 
 func (d *diskStorage) Size() int64 {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	return d.size
 }
 

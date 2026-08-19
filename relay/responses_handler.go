@@ -20,6 +20,25 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func releaseResponsesRequestResources(c *gin.Context, info *relaycommon.RelayInfo, httpResp *http.Response) {
+	common.CleanupBodyStorage(c)
+	if c != nil {
+		c.Set(string(appconstant.ContextKeyOpenAIResponsesRequest), nil)
+		c.Set(string(appconstant.ContextKeyOpenAIResponsesCompactionRequest), nil)
+	}
+	if info != nil {
+		info.Request = nil
+	}
+	if httpResp == nil || httpResp.Request == nil {
+		return
+	}
+	if httpResp.Request.Body != nil {
+		_ = httpResp.Request.Body.Close()
+		httpResp.Request.Body = nil
+	}
+	httpResp.Request.GetBody = nil
+}
+
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
@@ -113,15 +132,20 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
-	if resp != nil {
-		httpResp = resp.(*http.Response)
+	if resp == nil {
+		return types.NewOpenAIError(fmt.Errorf("upstream response is nil"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	httpResp, ok := resp.(*http.Response)
+	if !ok || httpResp == nil {
+		return types.NewOpenAIError(fmt.Errorf("unexpected upstream response type %T", resp), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	releaseResponsesRequestResources(c, info, httpResp)
 
-		if httpResp.StatusCode != http.StatusOK {
-			newAPIError = service.GPTAwareRelayErrorHandler(c, info, httpResp, false)
-			// reset status code 重置状态码
-			service.ResetStatusCode(newAPIError, statusCodeMappingStr)
-			return newAPIError
-		}
+	if httpResp.StatusCode != http.StatusOK {
+		newAPIError = service.GPTAwareRelayErrorHandler(c, info, httpResp, false)
+		// reset status code 重置状态码
+		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
+		return newAPIError
 	}
 
 	usage, newAPIError := adaptor.DoResponse(c, httpResp, info)

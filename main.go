@@ -449,6 +449,7 @@ func InitResources() error {
 	common.InitEnv()
 
 	logger.SetupLogger()
+	common.StartMemoryGuard()
 
 	// Initialize model settings
 	ratio_setting.InitRatioSettings()

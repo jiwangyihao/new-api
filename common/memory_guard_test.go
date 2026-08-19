@@ -21,6 +21,7 @@ func TestDetectCgroupMemorySourceV2UsesLowestFiniteBoundary(t *testing.T) {
 	v2Root := t.TempDir()
 	v1Root := t.TempDir()
 	usagePath := writeMemoryGuardTestFile(t, v2Root, "memory.current", "1024\n")
+	writeMemoryGuardTestFile(t, v2Root, "memory.stat", "anon 512\ninactive_file 256\n")
 	writeMemoryGuardTestFile(t, v2Root, "memory.high", "4096\n")
 	writeMemoryGuardTestFile(t, v2Root, "memory.max", "8192\n")
 
@@ -28,6 +29,8 @@ func TestDetectCgroupMemorySourceV2UsesLowestFiniteBoundary(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, usagePath, source.usagePath)
+	require.Equal(t, filepath.Join(v2Root, "memory.stat"), source.statPath)
+	require.Equal(t, "inactive_file", source.inactiveFileKey)
 	require.Equal(t, int64(4096), source.boundary)
 }
 
@@ -35,6 +38,7 @@ func TestDetectCgroupMemorySourceV2FallsBackFromMaxHigh(t *testing.T) {
 	v2Root := t.TempDir()
 	v1Root := t.TempDir()
 	usagePath := writeMemoryGuardTestFile(t, v2Root, "memory.current", "1024")
+	writeMemoryGuardTestFile(t, v2Root, "memory.stat", "inactive_file 256")
 	writeMemoryGuardTestFile(t, v2Root, "memory.high", "max")
 	writeMemoryGuardTestFile(t, v2Root, "memory.max", "8192")
 
@@ -49,6 +53,7 @@ func TestDetectCgroupMemorySourceV1IgnoresUnlimitedSoftLimit(t *testing.T) {
 	v2Root := t.TempDir()
 	v1Root := t.TempDir()
 	usagePath := writeMemoryGuardTestFile(t, v1Root, "memory.usage_in_bytes", "2048")
+	writeMemoryGuardTestFile(t, v1Root, "memory.stat", "total_inactive_file 512")
 	writeMemoryGuardTestFile(t, v1Root, "memory.soft_limit_in_bytes", "9223372036854771712")
 	writeMemoryGuardTestFile(t, v1Root, "memory.limit_in_bytes", "16384")
 
@@ -56,6 +61,7 @@ func TestDetectCgroupMemorySourceV1IgnoresUnlimitedSoftLimit(t *testing.T) {
 
 	require.True(t, ok)
 	require.Equal(t, usagePath, source.usagePath)
+	require.Equal(t, "total_inactive_file", source.inactiveFileKey)
 	require.Equal(t, int64(16384), source.boundary)
 }
 
@@ -63,12 +69,62 @@ func TestDetectCgroupMemorySourceWithoutFiniteBoundaryIsDisabled(t *testing.T) {
 	v2Root := t.TempDir()
 	v1Root := t.TempDir()
 	writeMemoryGuardTestFile(t, v2Root, "memory.current", "1024")
+	writeMemoryGuardTestFile(t, v2Root, "memory.stat", "inactive_file 256")
 	writeMemoryGuardTestFile(t, v2Root, "memory.high", "max")
 	writeMemoryGuardTestFile(t, v2Root, "memory.max", "max")
 
 	_, ok := detectCgroupMemorySource(os.ReadFile, v2Root, v1Root)
 
 	require.False(t, ok)
+}
+
+func TestDetectCgroupMemorySourceRetriesAfterBoundaryAppears(t *testing.T) {
+	v2Root := t.TempDir()
+	v1Root := t.TempDir()
+	writeMemoryGuardTestFile(t, v2Root, "memory.current", "1024")
+	writeMemoryGuardTestFile(t, v2Root, "memory.stat", "inactive_file 256")
+	writeMemoryGuardTestFile(t, v2Root, "memory.high", "max")
+	writeMemoryGuardTestFile(t, v2Root, "memory.max", "max")
+
+	_, ok := detectCgroupMemorySource(os.ReadFile, v2Root, v1Root)
+	require.False(t, ok)
+	writeMemoryGuardTestFile(t, v2Root, "memory.high", "4096")
+
+	source, ok := detectCgroupMemorySource(os.ReadFile, v2Root, v1Root)
+	require.True(t, ok)
+	require.Equal(t, int64(4096), source.boundary)
+}
+
+func TestReadCgroupWorkingSetSubtractsInactiveFile(t *testing.T) {
+	root := t.TempDir()
+	writeMemoryGuardTestFile(t, root, "memory.current", "1000")
+	writeMemoryGuardTestFile(t, root, "memory.stat", "anon 700\ninactive_file 600\n")
+	source := cgroupMemorySource{
+		usagePath:       filepath.Join(root, "memory.current"),
+		statPath:        filepath.Join(root, "memory.stat"),
+		inactiveFileKey: "inactive_file",
+	}
+
+	workingSet, ok := readCgroupWorkingSet(os.ReadFile, source)
+
+	require.True(t, ok)
+	require.Equal(t, int64(400), workingSet)
+}
+
+func TestReadCgroupWorkingSetClampsRacyStat(t *testing.T) {
+	root := t.TempDir()
+	writeMemoryGuardTestFile(t, root, "memory.current", "1000")
+	writeMemoryGuardTestFile(t, root, "memory.stat", "inactive_file 1200\n")
+	source := cgroupMemorySource{
+		usagePath:       filepath.Join(root, "memory.current"),
+		statPath:        filepath.Join(root, "memory.stat"),
+		inactiveFileKey: "inactive_file",
+	}
+
+	workingSet, ok := readCgroupWorkingSet(os.ReadFile, source)
+
+	require.True(t, ok)
+	require.Zero(t, workingSet)
 }
 
 func TestApplyRuntimeMemoryLimit(t *testing.T) {

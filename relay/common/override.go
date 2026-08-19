@@ -137,6 +137,12 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 	// 尝试断言为操作格式
 	if operations, ok := tryParseOperations(paramOverride); ok {
 		legacyOverride := buildLegacyParamOverride(paramOverride)
+		if len(legacyOverride) == 0 && lo.EveryBy(operations, isHeaderOnlyOperation) {
+			if err := applyHeaderOnlyOperations(operations, conditionContext); err != nil {
+				return nil, err
+			}
+			return jsonData, nil
+		}
 		workingJSON := jsonData
 		var err error
 		if len(legacyOverride) > 0 {
@@ -146,13 +152,88 @@ func ApplyParamOverride(jsonData []byte, paramOverride map[string]interface{}, c
 			}
 		}
 
-		// 使用新方法
 		result, err := applyOperations(string(workingJSON), operations, conditionContext)
 		return []byte(result), err
 	}
 
 	// 直接使用旧方法
 	return applyOperationsLegacy(jsonData, paramOverride, auditRecorder)
+}
+
+func isHeaderOnlyOperation(operation ParamOperation) bool {
+	if len(operation.Conditions) != 0 {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(operation.Mode)) {
+	case "set_header", "delete_header", "copy_header", "move_header", "pass_headers":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyHeaderOnlyOperations(operations []ParamOperation, conditionContext map[string]interface{}) error {
+	context := ensureContextMap(conditionContext)
+	auditRecorder := getParamOverrideAuditRecorder(context)
+	for _, operation := range operations {
+		var err error
+		switch strings.ToLower(strings.TrimSpace(operation.Mode)) {
+		case "set_header":
+			err = setHeaderOverrideInContext(context, operation.Path, operation.Value, operation.KeepOrigin)
+			if err == nil {
+				auditRecorder.recordOperation("set_header", operation.Path, "", "", operation.Value)
+			}
+		case "delete_header":
+			err = deleteHeaderOverrideInContext(context, operation.Path)
+			if err == nil {
+				auditRecorder.recordOperation("delete_header", operation.Path, "", "", nil)
+			}
+		case "copy_header", "move_header":
+			sourceHeader := strings.TrimSpace(operation.From)
+			targetHeader := strings.TrimSpace(operation.To)
+			if sourceHeader == "" {
+				sourceHeader = strings.TrimSpace(operation.Path)
+			}
+			if targetHeader == "" {
+				targetHeader = strings.TrimSpace(operation.Path)
+			}
+			if strings.EqualFold(operation.Mode, "copy_header") {
+				err = copyHeaderInContext(context, sourceHeader, targetHeader, operation.KeepOrigin)
+			} else {
+				err = moveHeaderInContext(context, sourceHeader, targetHeader, operation.KeepOrigin)
+			}
+			if errors.Is(err, errSourceHeaderNotFound) {
+				err = nil
+			}
+			if err == nil {
+				auditRecorder.recordOperation(strings.ToLower(operation.Mode), "", sourceHeader, targetHeader, nil)
+			}
+		case "pass_headers":
+			var headerNames []string
+			headerNames, err = parseHeaderPassThroughNames(operation.Value)
+			if err == nil {
+				for _, headerName := range headerNames {
+					err = copyHeaderInContext(context, headerName, headerName, operation.KeepOrigin)
+					if errors.Is(err, errSourceHeaderNotFound) {
+						err = nil
+						continue
+					}
+					if err != nil {
+						break
+					}
+				}
+			}
+			if err == nil {
+				auditRecorder.recordOperation("pass_headers", "", "", "", headerNames)
+			}
+		default:
+			return fmt.Errorf("unknown header-only operation: %s", operation.Mode)
+		}
+		if err != nil {
+			return fmt.Errorf("operation %s failed: %w", operation.Mode, err)
+		}
+	}
+	return nil
 }
 
 func buildLegacyParamOverride(paramOverride map[string]interface{}) map[string]interface{} {

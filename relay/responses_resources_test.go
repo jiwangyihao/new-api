@@ -185,6 +185,37 @@ func TestResponsesHelperKeepsRequestResourcesWhenDoRequestFails(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestDoResponsesRequestPreservesConvertedRequestBytes(t *testing.T) {
+	receivedBody := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		receivedBody <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}`)
+	}))
+	defer upstream.Close()
+
+	payload := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"role":"user","content":"hello"}],"metadata":{"trace":"keep"}}`)
+	c, request, _ := newResponsesResourceTestContext(t, upstream.URL, payload)
+	stream := false
+	request.Stream = &stream
+	request.Input = []byte(`[{"role":"user","content":"hello"}]`)
+	request.Metadata = []byte(`{"trace":"keep"}`)
+	info := newResponsesResourceTestInfo(request)
+	info.IsStream = false
+	info.InitChannelMeta(c)
+
+	_, httpResp, apiErr := doResponsesRequest(c, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, httpResp)
+	defer httpResp.Body.Close()
+	want, err := common.Marshal(request.Clone())
+	require.NoError(t, err)
+	require.JSONEq(t, string(want), string(<-receivedBody))
+}
+
 func BenchmarkReleaseResponsesRequestResources(b *testing.B) {
 	gin.SetMode(gin.TestMode)
 	payload := bytes.Repeat([]byte("x"), 1<<20)

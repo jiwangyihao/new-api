@@ -1,7 +1,6 @@
 package relay
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/relay/channel"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
@@ -39,6 +39,85 @@ func releaseResponsesRequestResources(c *gin.Context, info *relaycommon.RelayInf
 	httpResp.Request.GetBody = nil
 }
 
+func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Adaptor, *http.Response, *types.NewAPIError) {
+	var responsesReq *dto.OpenAIResponsesRequest
+	switch req := info.Request.(type) {
+	case *dto.OpenAIResponsesRequest:
+		responsesReq = req
+	case *dto.OpenAIResponsesCompactionRequest:
+		responsesReq = &dto.OpenAIResponsesRequest{
+			Model:              req.Model,
+			Input:              req.Input,
+			Instructions:       req.Instructions,
+			PreviousResponseID: req.PreviousResponseID,
+		}
+	default:
+		return nil, nil, types.NewErrorWithStatusCode(
+			fmt.Errorf("invalid request type, expected dto.OpenAIResponsesRequest or dto.OpenAIResponsesCompactionRequest, got %T", info.Request),
+			types.ErrorCodeInvalidRequest,
+			http.StatusBadRequest,
+			types.ErrOptionWithSkipRetry(),
+		)
+	}
+
+	request := responsesReq.Clone()
+	if err := helper.ModelMappedHelper(c, info, request); err != nil {
+		return nil, nil, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	}
+
+	adaptor := GetAdaptor(info.ApiType)
+	if adaptor == nil {
+		return nil, nil, types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
+	}
+	adaptor.Init(info)
+
+	var requestBody io.Reader
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
+		storage, err := common.GetBodyStorage(c)
+		if err != nil {
+			return nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
+		}
+		requestBody = common.ReaderOnly(storage)
+	} else {
+		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
+		if err != nil {
+			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
+		jsonData, err := common.Marshal(convertedRequest)
+		if err != nil {
+			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+		if err != nil {
+			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		if len(info.ParamOverride) > 0 {
+			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+			if err != nil {
+				return nil, nil, newAPIErrorFromParamOverride(err)
+			}
+		}
+		if common.DebugEnabled {
+			println("requestBody: ", string(jsonData))
+		}
+		requestBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
+	}
+
+	resp, err := adaptor.DoRequest(c, info, requestBody)
+	if err != nil {
+		return nil, nil, types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
+	}
+	if resp == nil {
+		return nil, nil, types.NewOpenAIError(fmt.Errorf("upstream response is nil"), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	httpResp, ok := resp.(*http.Response)
+	if !ok || httpResp == nil {
+		return nil, nil, types.NewOpenAIError(fmt.Errorf("unexpected upstream response type %T", resp), types.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	return adaptor, httpResp, nil
+}
+
 func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact {
@@ -54,91 +133,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		}
 	}
 
-	var responsesReq *dto.OpenAIResponsesRequest
-	switch req := info.Request.(type) {
-	case *dto.OpenAIResponsesRequest:
-		responsesReq = req
-	case *dto.OpenAIResponsesCompactionRequest:
-		responsesReq = &dto.OpenAIResponsesRequest{
-			Model:              req.Model,
-			Input:              req.Input,
-			Instructions:       req.Instructions,
-			PreviousResponseID: req.PreviousResponseID,
-		}
-	default:
-		return types.NewErrorWithStatusCode(
-			fmt.Errorf("invalid request type, expected dto.OpenAIResponsesRequest or dto.OpenAIResponsesCompactionRequest, got %T", info.Request),
-			types.ErrorCodeInvalidRequest,
-			http.StatusBadRequest,
-			types.ErrOptionWithSkipRetry(),
-		)
+	adaptor, httpResp, newAPIError := doResponsesRequest(c, info)
+	if newAPIError != nil {
+		return newAPIError
 	}
-
-	request := responsesReq.Clone()
-
-	err := helper.ModelMappedHelper(c, info, request)
-	if err != nil {
-		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
-	}
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
-	var requestBody io.Reader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.ReaderOnly(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// remove disabled fields for OpenAI Responses API
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-
-		// apply param override
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-			if err != nil {
-				return newAPIErrorFromParamOverride(err)
-			}
-		}
-
-		if common.DebugEnabled {
-			println("requestBody: ", string(jsonData))
-		}
-		requestBody = bytes.NewBuffer(jsonData)
-	}
-
-	var httpResp *http.Response
-	resp, err := adaptor.DoRequest(c, info, requestBody)
-	if err != nil {
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
-	}
-
 	statusCodeMappingStr := c.GetString("status_code_mapping")
-
-	if resp == nil {
-		return types.NewOpenAIError(fmt.Errorf("upstream response is nil"), types.ErrorCodeBadResponse, http.StatusBadGateway)
-	}
-	httpResp, ok := resp.(*http.Response)
-	if !ok || httpResp == nil {
-		return types.NewOpenAIError(fmt.Errorf("unexpected upstream response type %T", resp), types.ErrorCodeBadResponse, http.StatusBadGateway)
-	}
 	releaseResponsesRequestResources(c, info, httpResp)
 
 	if httpResp.StatusCode != http.StatusOK {

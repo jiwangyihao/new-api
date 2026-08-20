@@ -95,6 +95,19 @@ func TestStreamScannerHandler_EmptyBody(t *testing.T) {
 	assert.False(t, called.Load(), "handler should not be called for empty body")
 }
 
+func TestStreamScannerHandlerInitialBufferHandlesLargeSSELine(t *testing.T) {
+	t.Parallel()
+
+	data := strings.Repeat("x", InitialScannerBufferSize*2)
+	body := "data: {\"delta\":\"" + data + "\"}\ndata: [DONE]\n"
+	c, resp, info := setupStreamTest(t, strings.NewReader(body))
+	var received string
+	StreamScannerHandler(c, resp, info, func(data string, sr *StreamResult) {
+		received = data
+	})
+
+	require.Contains(t, received, data)
+}
 func TestStreamScannerHandler_1000Chunks(t *testing.T) {
 	t.Parallel()
 

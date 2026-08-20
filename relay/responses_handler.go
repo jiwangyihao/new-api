@@ -60,7 +60,7 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 		)
 	}
 
-	request := responsesReq.Clone()
+	request := responsesReq.CloneForRelay()
 	if err := helper.ModelMappedHelper(c, info, request); err != nil {
 		return nil, nil, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}

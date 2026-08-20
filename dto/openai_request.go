@@ -984,6 +984,50 @@ func (r *OpenAIResponsesRequest) Clone() *OpenAIResponsesRequest {
 	return &clone
 }
 
+// CloneForRelay creates an attempt-local request while retaining immutable
+// RawMessage backing buffers. Provider conversion must replace raw fields
+// rather than mutate their bytes in place.
+func (r *OpenAIResponsesRequest) CloneForRelay() *OpenAIResponsesRequest {
+	if r == nil {
+		return nil
+	}
+
+	clone := *r
+	if r.MaxOutputTokens != nil {
+		value := *r.MaxOutputTokens
+		clone.MaxOutputTokens = &value
+	}
+	if r.TopLogProbs != nil {
+		value := *r.TopLogProbs
+		clone.TopLogProbs = &value
+	}
+	if r.Reasoning != nil {
+		value := *r.Reasoning
+		clone.Reasoning = &value
+	}
+	if r.Stream != nil {
+		value := *r.Stream
+		clone.Stream = &value
+	}
+	if r.StreamOptions != nil {
+		value := *r.StreamOptions
+		clone.StreamOptions = &value
+	}
+	if r.Temperature != nil {
+		value := *r.Temperature
+		clone.Temperature = &value
+	}
+	if r.TopP != nil {
+		value := *r.TopP
+		clone.TopP = &value
+	}
+	if r.MaxToolCalls != nil {
+		value := *r.MaxToolCalls
+		clone.MaxToolCalls = &value
+	}
+	return &clone
+}
+
 func (r *OpenAIResponsesRequest) GetTokenCountMeta() *types.TokenCountMeta {
 	var fileMeta = make([]*types.FileMeta, 0)
 	var texts = make([]string, 0)

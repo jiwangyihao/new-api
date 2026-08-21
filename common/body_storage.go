@@ -297,13 +297,9 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 		return storage, nil
 	}
 
-	// 使用内存读取
-	data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+	data, err := readBodyStorageBytes(reader, contentLength, maxBytes)
 	if err != nil {
 		return nil, err
-	}
-	if int64(len(data)) > maxBytes {
-		return nil, ErrRequestBodyTooLarge
 	}
 
 	storage, err := CreateBodyStorage(data)
@@ -317,6 +313,51 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 		IncrementDiskCacheHits()
 	}
 	return storage, nil
+}
+
+func readBodyStorageBytes(reader io.Reader, contentLength, maxBytes int64) ([]byte, error) {
+	if contentLength <= 0 || contentLength > maxBytes || contentLength > int64(int(^uint(0)>>1))-1 {
+		data, err := io.ReadAll(io.LimitReader(reader, maxBytes+1))
+		if err != nil {
+			return nil, err
+		}
+		if int64(len(data)) > maxBytes {
+			return nil, ErrRequestBodyTooLarge
+		}
+		return data, nil
+	}
+
+	data := make([]byte, int(contentLength), int(contentLength)+1)
+	n, err := io.ReadFull(reader, data)
+	if err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return data[:n], nil
+		}
+		return nil, err
+	}
+
+	var extra [1]byte
+	n, err = io.ReadFull(reader, extra[:])
+	if err == io.EOF {
+		return data, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, extra[:n]...)
+	if int64(len(data)) > maxBytes {
+		return nil, ErrRequestBodyTooLarge
+	}
+
+	rest, err := io.ReadAll(io.LimitReader(reader, maxBytes-int64(len(data))+1))
+	if err != nil {
+		return nil, err
+	}
+	data = append(data, rest...)
+	if int64(len(data)) > maxBytes {
+		return nil, ErrRequestBodyTooLarge
+	}
+	return data, nil
 }
 
 // ReaderOnly wraps an io.Reader to hide io.Closer, preventing http.NewRequest

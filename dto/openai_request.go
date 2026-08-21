@@ -921,6 +921,73 @@ type OpenAIResponsesRequest struct {
 	Preset json.RawMessage `json:"preset,omitempty"`
 }
 
+// borrowedJSONValue retains the decoder's view into the stable request-body
+// buffer. Callers must keep that buffer alive until the request is released.
+type borrowedJSONValue []byte
+
+func (value *borrowedJSONValue) UnmarshalJSON(data []byte) error {
+	*value = data
+	return nil
+}
+
+type openAIResponsesRequestAlias OpenAIResponsesRequest
+
+type borrowedOpenAIResponsesRequest struct {
+	*openAIResponsesRequestAlias
+	Input                borrowedJSONValue `json:"input,omitempty"`
+	Include              borrowedJSONValue `json:"include,omitempty"`
+	Conversation         borrowedJSONValue `json:"conversation,omitempty"`
+	ContextManagement    borrowedJSONValue `json:"context_management,omitempty"`
+	Instructions         borrowedJSONValue `json:"instructions,omitempty"`
+	Metadata             borrowedJSONValue `json:"metadata,omitempty"`
+	ParallelToolCalls    borrowedJSONValue `json:"parallel_tool_calls,omitempty"`
+	Store                borrowedJSONValue `json:"store,omitempty"`
+	PromptCacheKey       borrowedJSONValue `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention borrowedJSONValue `json:"prompt_cache_retention,omitempty"`
+	SafetyIdentifier     borrowedJSONValue `json:"safety_identifier,omitempty"`
+	Text                 borrowedJSONValue `json:"text,omitempty"`
+	ToolChoice           borrowedJSONValue `json:"tool_choice,omitempty"`
+	Tools                borrowedJSONValue `json:"tools,omitempty"`
+	Truncation           borrowedJSONValue `json:"truncation,omitempty"`
+	User                 borrowedJSONValue `json:"user,omitempty"`
+	Prompt               borrowedJSONValue `json:"prompt,omitempty"`
+	EnableThinking       borrowedJSONValue `json:"enable_thinking,omitempty"`
+	Preset               borrowedJSONValue `json:"preset,omitempty"`
+}
+
+// UnmarshalOpenAIResponsesRequestBorrowed decodes a Responses request while
+// retaining read-only RawMessage views into data. data must remain immutable
+// and alive until the returned request is no longer used.
+func UnmarshalOpenAIResponsesRequestBorrowed(data []byte) (*OpenAIResponsesRequest, error) {
+	request := &OpenAIResponsesRequest{}
+	wire := borrowedOpenAIResponsesRequest{
+		openAIResponsesRequestAlias: (*openAIResponsesRequestAlias)(request),
+	}
+	if err := common.Unmarshal(data, &wire); err != nil {
+		return nil, err
+	}
+	request.Input = json.RawMessage(wire.Input)
+	request.Include = json.RawMessage(wire.Include)
+	request.Conversation = json.RawMessage(wire.Conversation)
+	request.ContextManagement = json.RawMessage(wire.ContextManagement)
+	request.Instructions = json.RawMessage(wire.Instructions)
+	request.Metadata = json.RawMessage(wire.Metadata)
+	request.ParallelToolCalls = json.RawMessage(wire.ParallelToolCalls)
+	request.Store = json.RawMessage(wire.Store)
+	request.PromptCacheKey = json.RawMessage(wire.PromptCacheKey)
+	request.PromptCacheRetention = json.RawMessage(wire.PromptCacheRetention)
+	request.SafetyIdentifier = json.RawMessage(wire.SafetyIdentifier)
+	request.Text = json.RawMessage(wire.Text)
+	request.ToolChoice = json.RawMessage(wire.ToolChoice)
+	request.Tools = json.RawMessage(wire.Tools)
+	request.Truncation = json.RawMessage(wire.Truncation)
+	request.User = json.RawMessage(wire.User)
+	request.Prompt = json.RawMessage(wire.Prompt)
+	request.EnableThinking = json.RawMessage(wire.EnableThinking)
+	request.Preset = json.RawMessage(wire.Preset)
+	return request, nil
+}
+
 // Clone returns a deep copy safe for provider-specific request conversion.
 func (r *OpenAIResponsesRequest) Clone() *OpenAIResponsesRequest {
 	if r == nil {

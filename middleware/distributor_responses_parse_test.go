@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,6 +44,28 @@ func TestResponsesModelPreludeAndFullValidationReuseSameBody(t *testing.T) {
 	bodyAfterValidation, err := storage.Bytes()
 	require.NoError(t, err)
 	require.Equal(t, body, string(bodyAfterValidation))
+}
+
+func TestResponsesModelPreludeCachesRawMessagesFromBodyStorage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := `{"model":"gpt-5.5","input":"` + strings.Repeat("x", 32<<10) + `","metadata":{"tenant":"a"}}`
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	t.Cleanup(func() { common.CleanupBodyStorage(ctx) })
+
+	modelRequest, err := getModelFromRequest(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.5", modelRequest.Model)
+	cachedRequest, ok := common.GetContextKeyType[*dto.OpenAIResponsesRequest](ctx, constant.ContextKeyOpenAIResponsesRequest)
+	require.True(t, ok)
+	storage, err := common.GetBodyStorage(ctx)
+	require.NoError(t, err)
+	stored, err := storage.Bytes()
+	require.NoError(t, err)
+	inputStart := bytes.Index(stored, cachedRequest.Input)
+	require.GreaterOrEqual(t, inputStart, 0)
+	require.Equal(t, &stored[inputStart], &cachedRequest.Input[0])
 }
 
 func TestResponsesCompactionModelPreludeAndValidationReuseSameRequest(t *testing.T) {

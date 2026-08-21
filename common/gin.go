@@ -142,6 +142,27 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	return nil
 }
 
+// UnmarshalBodyReusableWith decodes stable request-body bytes through fn.
+// fn may retain the provided slice until CleanupBodyStorage runs, but must not mutate it.
+func UnmarshalBodyReusableWith(c *gin.Context, fn func([]byte) error) error {
+	storage, err := GetBodyStorage(c)
+	if err != nil {
+		return err
+	}
+	requestBody, err := storage.Bytes()
+	if err != nil {
+		return err
+	}
+	if err := fn(requestBody); err != nil {
+		return err
+	}
+	if _, err := storage.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	c.Request.Body = io.NopCloser(storage)
+	return nil
+}
+
 func SetContextKey(c *gin.Context, key constant.ContextKey, value any) {
 	c.Set(string(key), value)
 }

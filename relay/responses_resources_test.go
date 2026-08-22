@@ -185,6 +185,95 @@ func TestResponsesHelperKeepsRequestResourcesWhenDoRequestFails(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func withForcedDiskCacheForResponsesTest(t *testing.T) {
+	t.Helper()
+	original := common.GetDiskCacheConfig()
+	common.SetDiskCacheConfig(common.DiskCacheConfig{
+		Enabled:     true,
+		ThresholdMB: 0,
+		MaxSizeMB:   1024,
+		Path:        t.TempDir(),
+	})
+	common.ResetDiskCacheUsage()
+	t.Cleanup(func() {
+		common.SetDiskCacheConfig(original)
+		common.ResetDiskCacheUsage()
+	})
+}
+
+func TestDoResponsesRequestDiskBodyReleasesConvertedFileAfterResponseHeaders(t *testing.T) {
+	withForcedDiskCacheForResponsesTest(t)
+	receivedBody := make(chan []byte, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		receivedBody <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"status":"completed","usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2},"output":[]}`)
+	}))
+	defer upstream.Close()
+
+	payload := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"role":"user","content":"hello"}]}`)
+	c, request, storage := newResponsesResourceTestContext(t, upstream.URL, payload)
+	t.Cleanup(func() { common.CleanupBodyStorage(c) })
+	originalFiles := common.GetDiskCacheStats().ActiveDiskFiles
+	require.Equal(t, int64(1), originalFiles)
+	stream := false
+	request.Stream = &stream
+	request.Input = []byte(`[{"role":"user","content":"hello"}]`)
+	info := newResponsesResourceTestInfo(request)
+	info.IsStream = false
+	info.InitChannelMeta(c)
+
+	_, httpResp, apiErr := doResponsesRequest(c, info)
+
+	require.Nil(t, apiErr)
+	require.NotNil(t, httpResp)
+	defer httpResp.Body.Close()
+	require.Eventually(t, func() bool {
+		return common.GetDiskCacheStats().ActiveDiskFiles == originalFiles
+	}, time.Second, 10*time.Millisecond)
+	want, err := common.Marshal(request.Clone())
+	require.NoError(t, err)
+	require.JSONEq(t, string(want), string(<-receivedBody))
+	_, err = storage.Bytes()
+	require.NoError(t, err)
+
+	releaseResponsesRequestResources(c, info, httpResp)
+	require.Eventually(t, func() bool {
+		return common.GetDiskCacheStats().ActiveDiskFiles == 0
+	}, time.Second, 10*time.Millisecond)
+	require.ErrorIs(t, func() error { _, err := storage.Bytes(); return err }(), common.ErrStorageClosed)
+}
+
+func TestDoResponsesRequestDiskBodyFailureDeletesConvertedFileButKeepsOriginalRequest(t *testing.T) {
+	withForcedDiskCacheForResponsesTest(t)
+	payload := []byte(`{"model":"gpt-5.4","stream":true,"input":[]}`)
+	c, request, storage := newResponsesResourceTestContext(t, "http://127.0.0.1:1", payload)
+	t.Cleanup(func() { common.CleanupBodyStorage(c) })
+	originalFiles := common.GetDiskCacheStats().ActiveDiskFiles
+	require.Equal(t, int64(1), originalFiles)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), time.Second)
+	defer cancel()
+	c.Request = c.Request.WithContext(ctx)
+	info := newResponsesResourceTestInfo(request)
+	info.InitChannelMeta(c)
+
+	_, httpResp, apiErr := doResponsesRequest(c, info)
+
+	require.NotNil(t, apiErr)
+	require.Nil(t, httpResp)
+	require.Eventually(t, func() bool {
+		return common.GetDiskCacheStats().ActiveDiskFiles == originalFiles
+	}, time.Second, 10*time.Millisecond)
+	require.Same(t, request, info.Request)
+	cached, ok := common.GetContextKeyType[*dto.OpenAIResponsesRequest](c, constant.ContextKeyOpenAIResponsesRequest)
+	require.True(t, ok)
+	require.Same(t, request, cached)
+	_, err := storage.Bytes()
+	require.NoError(t, err)
+}
+
 func TestDoResponsesRequestPreservesConvertedRequestBytes(t *testing.T) {
 	receivedBody := make(chan []byte, 1)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

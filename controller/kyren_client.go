@@ -29,6 +29,11 @@ type kyrenProductList struct {
 	Pagination kyrenPagination `json:"pagination"`
 }
 
+type kyrenOrderList struct {
+	Items      []kyrenOrder    `json:"items"`
+	Pagination kyrenPagination `json:"pagination"`
+}
+
 type kyrenPagination struct {
 	Page       int `json:"page"`
 	Size       int `json:"size"`
@@ -41,6 +46,7 @@ type kyrenAPI interface {
 	updateProduct(ctx context.Context, id string, req kyrenUpdateProductRequest) (*kyrenProduct, error)
 	retrieveProduct(ctx context.Context, id string) (*kyrenProduct, error)
 	listProducts(ctx context.Context, status string, page int, size int) (*kyrenProductList, error)
+	listOrders(ctx context.Context, status string, productID string, page int, size int) (*kyrenOrderList, error)
 	createCheckout(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error)
 	retrieveCheckout(ctx context.Context, id string) (*kyrenCheckoutSession, error)
 	retrieveOrder(ctx context.Context, id string) (*kyrenOrder, error)
@@ -98,6 +104,23 @@ func (c *kyrenClient) listProducts(ctx context.Context, status string, page int,
 		query.Set("size", fmt.Sprintf("%d", size))
 	}
 	return kyrenDo[kyrenProductList](ctx, c, http.MethodGet, "/v1/products", query, nil)
+}
+
+func (c *kyrenClient) listOrders(ctx context.Context, status string, productID string, page int, size int) (*kyrenOrderList, error) {
+	query := url.Values{}
+	if trimmed := strings.TrimSpace(status); trimmed != "" {
+		query.Set("status", trimmed)
+	}
+	if trimmed := strings.TrimSpace(productID); trimmed != "" {
+		query.Set("productId", trimmed)
+	}
+	if page > 0 {
+		query.Set("page", fmt.Sprintf("%d", page))
+	}
+	if size > 0 {
+		query.Set("size", fmt.Sprintf("%d", size))
+	}
+	return kyrenDo[kyrenOrderList](ctx, c, http.MethodGet, "/v1/orders", query, nil)
 }
 
 func (c *kyrenClient) createCheckout(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {

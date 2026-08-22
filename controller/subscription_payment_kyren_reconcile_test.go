@@ -22,8 +22,10 @@ import (
 type kyrenReconciliationFakeAPI struct {
 	retrieveCheckoutFunc func(context.Context, string) (*kyrenCheckoutSession, error)
 	retrieveOrderFunc    func(context.Context, string) (*kyrenOrder, error)
+	listOrdersFunc       func(context.Context, string, string, int, int) (*kyrenOrderList, error)
 	retrieveCheckoutIDs  []string
 	retrieveOrderIDs     []string
+	listOrderStatuses    []string
 }
 
 func (f *kyrenReconciliationFakeAPI) createProduct(context.Context, kyrenCreateProductRequest) (*kyrenProduct, error) {
@@ -40,6 +42,14 @@ func (f *kyrenReconciliationFakeAPI) retrieveProduct(context.Context, string) (*
 
 func (f *kyrenReconciliationFakeAPI) listProducts(context.Context, string, int, int) (*kyrenProductList, error) {
 	return nil, errors.New("unexpected listProducts call")
+}
+
+func (f *kyrenReconciliationFakeAPI) listOrders(ctx context.Context, status string, productID string, page int, size int) (*kyrenOrderList, error) {
+	f.listOrderStatuses = append(f.listOrderStatuses, status)
+	if f.listOrdersFunc == nil {
+		return &kyrenOrderList{}, nil
+	}
+	return f.listOrdersFunc(ctx, status, productID, page, size)
 }
 
 func (f *kyrenReconciliationFakeAPI) createCheckout(context.Context, kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {
@@ -600,4 +610,116 @@ func TestGetSubscriptionOrderStatusReturnsReusableKyrenCheckoutURL(t *testing.T)
 		assert.Equal(t, checkoutURL, response.Data.CheckoutURL)
 	}
 	assert.Equal(t, []string{checkoutID}, fake.retrieveCheckoutIDs)
+}
+
+func TestGetSubscriptionOrderStatusFindsHiddenPendingKyrenOrderWithoutReturningCheckoutURL(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6331
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6332, "prod_hidden_pending", 1000, 1)
+	tradeNo := "kyren-hidden-pending"
+	checkoutID := "cs_hidden_pending"
+	providerOrderID := "order_hidden_pending"
+	seedKyrenReconciliationSubscription(t, tradeNo, checkoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	hiddenOrder := kyrenReconciliationOrder(providerOrderID, checkoutID, plan.KyrenProductId, "PENDING", tradeNo, userID, plan.Id)
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(context.Context, string) (*kyrenCheckoutSession, error) {
+			checkout := kyrenReconciliationCheckout(checkoutID, "", plan.KyrenProductId, "OPEN")
+			checkout.URL = "https://pay.kyren.test/occupied"
+			return checkout, nil
+		},
+		listOrdersFunc: func(_ context.Context, status string, productID string, page int, size int) (*kyrenOrderList, error) {
+			if status == "PENDING" {
+				return &kyrenOrderList{Items: []kyrenOrder{*hiddenOrder}}, nil
+			}
+			return &kyrenOrderList{}, nil
+		},
+		retrieveOrderFunc: func(context.Context, string) (*kyrenOrder, error) {
+			return hiddenOrder, nil
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	first := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	second := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+
+	for _, recorder := range []*httptest.ResponseRecorder{first, second} {
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		status := decodeKyrenSubscriptionOrderStatus(t, recorder)
+		assert.Equal(t, common.TopUpStatusPending, status.Status)
+		assert.NotContains(t, recorder.Body.String(), "checkout_url")
+	}
+	assert.Equal(t, []string{"PAID", "SETTLED", "REFUNDED", "DISPUTED", "CHARGEBACK", "FAILED", "CLOSED", "REVOKED", "PENDING", "CREATING"}, fake.listOrderStatuses)
+	assert.Equal(t, []string{providerOrderID, providerOrderID}, fake.retrieveOrderIDs)
+	var mapping model.PaymentProviderOrder
+	require.NoError(t, model.DB.Where("provider = ? AND trade_no = ?", model.PaymentProviderKyren, tradeNo).First(&mapping).Error)
+	require.NotNil(t, mapping.ProviderOrderID)
+	assert.Equal(t, providerOrderID, *mapping.ProviderOrderID)
+}
+
+func TestGetSubscriptionOrderStatusDoesNotReturnCheckoutURLWhenKyrenOrderDiscoveryFails(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6341
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6342, "prod_hidden_lookup_failure", 1000, 1)
+	tradeNo := "kyren-hidden-lookup-failure"
+	checkoutID := "cs_hidden_lookup_failure"
+	seedKyrenReconciliationSubscription(t, tradeNo, checkoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(context.Context, string) (*kyrenCheckoutSession, error) {
+			checkout := kyrenReconciliationCheckout(checkoutID, "", plan.KyrenProductId, "OPEN")
+			checkout.URL = "https://pay.kyren.test/unsafe-unverified"
+			return checkout, nil
+		},
+		listOrdersFunc: func(context.Context, string, string, int, int) (*kyrenOrderList, error) {
+			return nil, errors.New("provider order list unavailable")
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, common.TopUpStatusPending, decodeKyrenSubscriptionOrderStatus(t, recorder).Status)
+	assert.NotContains(t, recorder.Body.String(), "checkout_url")
+}
+
+func TestGetSubscriptionOrderStatusFindsHiddenClosedKyrenOrderAndExpiresLocalOrder(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6351
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6352, "prod_hidden_closed", 1000, 1)
+	tradeNo := "kyren-hidden-closed"
+	checkoutID := "cs_hidden_closed"
+	providerOrderID := "order_hidden_closed"
+	seedKyrenReconciliationSubscription(t, tradeNo, checkoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	hiddenOrder := kyrenReconciliationOrder(providerOrderID, checkoutID, plan.KyrenProductId, "CLOSED", tradeNo, userID, plan.Id)
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(context.Context, string) (*kyrenCheckoutSession, error) {
+			checkout := kyrenReconciliationCheckout(checkoutID, "", plan.KyrenProductId, "OPEN")
+			checkout.URL = "https://pay.kyren.test/occupied-closed"
+			return checkout, nil
+		},
+		listOrdersFunc: func(_ context.Context, status string, productID string, page int, size int) (*kyrenOrderList, error) {
+			if status == "CLOSED" {
+				return &kyrenOrderList{Items: []kyrenOrder{*hiddenOrder}}, nil
+			}
+			return &kyrenOrderList{}, nil
+		},
+		retrieveOrderFunc: func(context.Context, string) (*kyrenOrder, error) {
+			return hiddenOrder, nil
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(t, common.TopUpStatusExpired, decodeKyrenSubscriptionOrderStatus(t, recorder).Status)
+	assert.NotContains(t, recorder.Body.String(), "checkout_url")
+	assert.Equal(t, common.TopUpStatusExpired, model.GetSubscriptionOrderByTradeNo(tradeNo).Status)
 }

@@ -103,22 +103,34 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 
 	checkoutStatus := strings.ToUpper(strings.TrimSpace(checkout.Status))
 	if providerOrderID == "" {
-		if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
-			if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
+		hiddenOrder, err := findPendingKyrenProviderOrder(ctx, client, localOrder, mapping, checkout, paymentSnapshot)
+		if err != nil {
+			return "", err
+		}
+		if hiddenOrder != nil {
+			providerOrderID = strings.TrimSpace(hiddenOrder.ID)
+			if err := model.BindPaymentProviderOrderID(model.PaymentProviderKyren, model.PaymentOrderKindSubscription, localOrder.TradeNo, providerOrderID); err != nil {
 				return "", err
 			}
-			return strings.TrimSpace(checkout.URL), nil
+			mapping.ProviderOrderID = &providerOrderID
+		} else {
+			if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
+				if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
+					return "", err
+				}
+				return strings.TrimSpace(checkout.URL), nil
+			}
+			if checkoutStatus != "EXPIRED" {
+				return "", nil
+			}
+			fact := kyrenReconciliationFact{
+				Source: kyrenReconciliationSource, EventType: service.KyrenPaymentEventClosed,
+				CheckoutID: checkoutID, ProductID: strings.TrimSpace(checkout.ProductID),
+				Amount: strings.TrimSpace(checkout.Amount), Currency: strings.ToUpper(strings.TrimSpace(checkout.Currency)),
+				Status: checkoutStatus, UpdatedAt: checkout.ExpiresAt,
+			}
+			return "", applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, true, "")
 		}
-		if checkoutStatus != "EXPIRED" {
-			return "", nil
-		}
-		fact := kyrenReconciliationFact{
-			Source: kyrenReconciliationSource, EventType: service.KyrenPaymentEventClosed,
-			CheckoutID: checkoutID, ProductID: strings.TrimSpace(checkout.ProductID),
-			Amount: strings.TrimSpace(checkout.Amount), Currency: strings.ToUpper(strings.TrimSpace(checkout.Currency)),
-			Status: checkoutStatus, UpdatedAt: checkout.ExpiresAt,
-		}
-		return "", applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, true, "")
 	}
 
 	providerOrder, err := client.retrieveOrder(ctx, providerOrderID)
@@ -136,12 +148,6 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 		eventType = service.KyrenPaymentEventClosed
 	}
 	if eventType == "" {
-		if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
-			if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
-				return "", err
-			}
-			return strings.TrimSpace(checkout.URL), nil
-		}
 		return "", nil
 	}
 	updatedAt := providerOrder.UpdatedAt
@@ -167,6 +173,61 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 		UpdatedAt: updatedAt, Metadata: providerOrder.Metadata,
 	}
 	return "", applyKyrenReconciliationFact(localOrder, mapping, fact, callerIP, false, manualReason)
+}
+
+func findPendingKyrenProviderOrder(ctx context.Context, client kyrenAPI, localOrder *model.SubscriptionOrder, mapping *model.PaymentProviderOrder, checkout *kyrenCheckoutSession, snapshot model.KyrenPaymentSnapshot) (*kyrenOrder, error) {
+	if client == nil || localOrder == nil || mapping == nil || checkout == nil {
+		return nil, fmt.Errorf("invalid Kyren provider order discovery input")
+	}
+	checkoutID := strings.TrimSpace(checkout.ID)
+	if checkoutID == "" {
+		return nil, fmt.Errorf("Kyren provider order discovery checkout is missing")
+	}
+	var match *kyrenOrder
+	for _, status := range []string{"PAID", "SETTLED", "REFUNDED", "DISPUTED", "CHARGEBACK", "FAILED", "CLOSED", "REVOKED", "PENDING", "CREATING"} {
+		for pageNumber := 1; pageNumber <= 100; pageNumber++ {
+			page, err := client.listOrders(ctx, status, snapshot.ProductID, pageNumber, 100)
+			if err != nil {
+				return nil, err
+			}
+			if page == nil {
+				return nil, fmt.Errorf("Kyren provider order discovery returned no page")
+			}
+			for index := range page.Items {
+				candidate := &page.Items[index]
+				if !kyrenProviderOrderMatchesLocal(candidate, checkoutID, localOrder, mapping, snapshot) {
+					continue
+				}
+				if match != nil && match.ID != candidate.ID {
+					return nil, fmt.Errorf("Kyren provider order discovery is ambiguous")
+				}
+				copy := *candidate
+				match = &copy
+			}
+			if page.Pagination.TotalPages > 0 {
+				if pageNumber >= page.Pagination.TotalPages {
+					break
+				}
+			} else if len(page.Items) < 100 {
+				break
+			}
+			if pageNumber == 100 {
+				return nil, fmt.Errorf("Kyren provider order discovery exceeded page limit")
+			}
+		}
+	}
+	return match, nil
+}
+
+func kyrenProviderOrderMatchesLocal(providerOrder *kyrenOrder, checkoutID string, localOrder *model.SubscriptionOrder, mapping *model.PaymentProviderOrder, snapshot model.KyrenPaymentSnapshot) bool {
+	if providerOrder == nil || localOrder == nil || mapping == nil || strings.TrimSpace(providerOrder.ID) == "" || strings.TrimSpace(providerOrder.CheckoutSessionID) != checkoutID {
+		return false
+	}
+	if strings.TrimSpace(providerOrder.ProductID) != strings.TrimSpace(snapshot.ProductID) || !kyrenReconciliationAmountEqual(providerOrder.Amount, snapshot.Amount) || !strings.EqualFold(strings.TrimSpace(providerOrder.Currency), strings.TrimSpace(snapshot.Currency)) {
+		return false
+	}
+	metadata := providerOrder.Metadata
+	return metadata != nil && metadata["kind"] == model.PaymentOrderKindSubscription && metadata["trade_no"] == mapping.TradeNo && metadata["user_id"] == strconv.Itoa(localOrder.UserId) && metadata["plan_id"] == strconv.Itoa(localOrder.PlanId)
 }
 
 func validateKyrenReconciliationPaymentSnapshot(localOrder *model.SubscriptionOrder, snapshot model.KyrenPaymentSnapshot) error {

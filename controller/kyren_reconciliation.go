@@ -184,7 +184,7 @@ func findPendingKyrenProviderOrder(ctx context.Context, client kyrenAPI, localOr
 		return nil, fmt.Errorf("Kyren provider order discovery checkout is missing")
 	}
 	var match *kyrenOrder
-	for _, status := range []string{"PENDING", "CREATING"} {
+	for _, status := range []string{"PAID", "SETTLED", "REFUNDED", "DISPUTED", "CHARGEBACK", "FAILED", "CLOSED", "REVOKED", "PENDING", "CREATING"} {
 		for pageNumber := 1; pageNumber <= 100; pageNumber++ {
 			page, err := client.listOrders(ctx, status, snapshot.ProductID, pageNumber, 100)
 			if err != nil {

@@ -215,7 +215,7 @@ func BindPaymentProviderOrderIDTx(tx *gorm.DB, mapping *PaymentProviderOrder, pr
 	}
 	update := tx.Model(&PaymentProviderOrder{}).
 		Where("id = ? AND provider_order_id IS NULL", mapping.ID).
-		Updates(map[string]any{"provider_order_id": providerOrderID, "updated_at": now})
+		Updates(map[string]any{"provider_order_id": providerOrderID, "provider_checkout_url": nil, "updated_at": now})
 	if update.Error != nil {
 		return update.Error
 	}
@@ -236,6 +236,23 @@ func BindPaymentProviderOrderIDTx(tx *gorm.DB, mapping *PaymentProviderOrder, pr
 		}
 	}
 	return nil
+}
+
+func BindPaymentProviderOrderID(provider string, orderKind string, tradeNo string, providerOrderID string) error {
+	provider = strings.TrimSpace(provider)
+	orderKind = strings.TrimSpace(orderKind)
+	tradeNo = strings.TrimSpace(tradeNo)
+	providerOrderID = strings.TrimSpace(providerOrderID)
+	if provider == "" || tradeNo == "" || providerOrderID == "" {
+		return ErrPaymentProviderOrderConflict
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		mapping, err := EnsurePaymentProviderOrderTx(tx, provider, orderKind, tradeNo)
+		if err != nil {
+			return err
+		}
+		return BindPaymentProviderOrderIDTx(tx, mapping, providerOrderID)
+	})
 }
 
 func BindPaymentProviderCheckout(provider string, tradeNo string, checkoutID string, checkoutURL string) error {

@@ -197,3 +197,33 @@ func TestKyrenClientRetrievesCheckoutAndOrder(t *testing.T) {
 	assert.Equal(t, "trade_retrieve", order.Metadata["trade_no"])
 	assert.Equal(t, []string{"/v1/checkouts/cs_retrieve", "/v1/orders/order_retrieve"}, requestedPaths)
 }
+
+func TestKyrenClientListsOrdersWithSupportedFilters(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, http.MethodGet, r.Method)
+		assert.Equal(t, "/v1/orders", r.URL.Path)
+		assert.Equal(t, "PENDING", r.URL.Query().Get("status"))
+		assert.Equal(t, "prod_pending", r.URL.Query().Get("productId"))
+		assert.Equal(t, "1", r.URL.Query().Get("page"))
+		assert.Equal(t, "100", r.URL.Query().Get("size"))
+		payload, err := common.Marshal(kyrenAPIResponse[kyrenOrderList]{
+			Code: 0, Message: "success",
+			Data: kyrenOrderList{
+				Items:      []kyrenOrder{{ID: "order_pending", Status: "PENDING", ProductID: "prod_pending"}},
+				Pagination: kyrenPagination{Page: 1, Size: 100, Total: 1, TotalPages: 1},
+			},
+		})
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(server.Close)
+	client := &kyrenClient{baseURL: server.URL, apiKey: "kyren_live_test", httpClient: server.Client()}
+
+	orders, err := client.listOrders(context.Background(), "PENDING", "prod_pending", 1, 100)
+
+	require.NoError(t, err)
+	require.NotNil(t, orders)
+	require.Len(t, orders.Items, 1)
+	assert.Equal(t, "order_pending", orders.Items[0].ID)
+}

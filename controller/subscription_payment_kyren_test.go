@@ -58,6 +58,10 @@ func (f *kyrenCheckoutFakeAPI) listProducts(context.Context, string, int, int) (
 	return nil, errors.New("unexpected listProducts call")
 }
 
+func (f *kyrenCheckoutFakeAPI) listOrders(context.Context, string, string, int, int) (*kyrenOrderList, error) {
+	return &kyrenOrderList{}, nil
+}
+
 func (f *kyrenCheckoutFakeAPI) createCheckout(ctx context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {
 	f.createCheckoutRequests = append(f.createCheckoutRequests, req)
 	if f.createCheckoutFunc != nil {

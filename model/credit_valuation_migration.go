@@ -45,6 +45,7 @@ const (
 	CreditValuationMigrationModeApply                  CreditValuationMigrationMode = "apply"
 	CreditValuationMigrationModeVerify                 CreditValuationMigrationMode = "verify"
 	CreditValuationMigrationModeRepairMissingAsUnknown CreditValuationMigrationMode = "repair_missing_as_unknown"
+	CreditValuationMigrationModeRevalueHistorical      CreditValuationMigrationMode = "revalue_historical"
 	CreditValuationMigrationModeSuspend                CreditValuationMigrationMode = "suspend"
 )
 
@@ -110,7 +111,8 @@ func ValidateCreditValuationMigrationRequest(request CreditValuationMigrationReq
 	case CreditValuationMigrationModeDryRun,
 		CreditValuationMigrationModeApply,
 		CreditValuationMigrationModeVerify,
-		CreditValuationMigrationModeRepairMissingAsUnknown:
+		CreditValuationMigrationModeRepairMissingAsUnknown,
+		CreditValuationMigrationModeRevalueHistorical:
 		if reason != "" {
 			return ErrCreditValuationMigrationReasonInvalid
 		}
@@ -191,6 +193,8 @@ func RunCreditValuationMigration(db *gorm.DB, request CreditValuationMigrationRe
 		return runCreditValuationMigrationApply(db, request)
 	case CreditValuationMigrationModeRepairMissingAsUnknown:
 		return runCreditValuationMigrationRepair(db, request)
+	case CreditValuationMigrationModeRevalueHistorical:
+		return runCreditValuationMigrationRevalueHistorical(db, request)
 	case CreditValuationMigrationModeSuspend:
 		return runCreditValuationMigrationSuspend(db, request)
 	default:
@@ -406,6 +410,68 @@ func runCreditValuationMigrationRepair(db *gorm.DB, request CreditValuationMigra
 			return preflight.report, errors.Join(repairErr, markerErr)
 		}
 		return preflight.report, repairErr
+	}
+	return final, nil
+}
+
+func runCreditValuationMigrationRevalueHistorical(db *gorm.DB, request CreditValuationMigrationRequest) (CreditValuationMigrationReport, error) {
+	highest, found, err := findHighestCreditValuationMigration(db)
+	if err != nil {
+		return CreditValuationMigrationReport{}, err
+	}
+	if !found || highest.Status != CreditValuationMigrationSuspended || request.Version <= highest.Version {
+		return CreditValuationMigrationReport{}, ErrCreditValuationMigrationRepairInvalid
+	}
+	fx, currency, initialBlockers, err := migrationSnapshotInputs(db, highest, true, true)
+	if err != nil {
+		return CreditValuationMigrationReport{}, err
+	}
+	preflight, err := buildCreditValuationMigrationSnapshot(db, request, currency, fx, initialBlockers, false)
+	if err != nil {
+		return preflight.report, err
+	}
+	if len(preflight.report.Blockers) > 0 || creditValuationPriceMigrationIncomplete(preflight.report.Price) {
+		return preflight.report, ErrCreditValuationMigrationBlocked
+	}
+	marker, err := claimCreditValuationMigration(db, request, currency, fx, preflight.report.Checksum, true)
+	if err != nil {
+		return preflight.report, err
+	}
+	var final CreditValuationMigrationReport
+	revalueErr := db.Transaction(func(tx *gorm.DB) error {
+		backfillRequest := CreditValuationHistoricalBackfillRequest{
+			Apply: true, RevalueHistorical: true, MigrationVersion: request.Version,
+			BatchSize: request.BatchSize, ValuationCurrency: currency, FX: fx,
+		}
+		if _, err := RunCreditValuationHistoricalBackfill(tx, backfillRequest); err != nil {
+			return err
+		}
+		post, err := buildCreditValuationMigrationSnapshot(tx, request, currency, fx, nil, true)
+		if err != nil {
+			return err
+		}
+		if err := verifyCreditValuationMigrationSnapshot(post, marker, false); err != nil {
+			return err
+		}
+		post.report.Mode = CreditValuationMigrationModeRevalueHistorical
+		post.report.Status = CreditValuationMigrationReady
+		post.report.ReadOnly = false
+		post.report.Changed = true
+		post.report.Ready = true
+		if err := completeCreditValuationMigrationTx(tx, marker, post.report); err != nil {
+			return err
+		}
+		final = post.report
+		return nil
+	})
+	if revalueErr != nil {
+		markerErr := markCreditValuationMigrationFailed(db, marker, creditValuationMigrationFailureCode(revalueErr))
+		preflight.report.Status = CreditValuationMigrationFailed
+		preflight.report.ReadOnly = false
+		if markerErr != nil {
+			return preflight.report, errors.Join(revalueErr, markerErr)
+		}
+		return preflight.report, revalueErr
 	}
 	return final, nil
 }

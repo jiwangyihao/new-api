@@ -25,6 +25,7 @@ const (
 type CreditValuationHistoricalBackfillRequest struct {
 	Apply                  bool
 	RepairMissingAsUnknown bool
+	RevalueHistorical      bool
 	MigrationVersion       int
 	BatchSize              int
 	ValuationCurrency      string
@@ -124,13 +125,16 @@ func normalizeCreditValuationHistoricalBackfillRequest(request CreditValuationHi
 	request.ValuationCurrency = currency
 	request.FX = fx
 	request.BatchSize = batchSize
-	if request.RepairMissingAsUnknown && !request.Apply {
+	if (request.RepairMissingAsUnknown || request.RevalueHistorical) && !request.Apply {
+		return CreditValuationHistoricalBackfillRequest{}, 0, ErrCreditValuationMigrationRepairInvalid
+	}
+	if request.RepairMissingAsUnknown && request.RevalueHistorical {
 		return CreditValuationHistoricalBackfillRequest{}, 0, ErrCreditValuationMigrationRepairInvalid
 	}
 	return request, batchSize, nil
 }
 func validateHistoricalCreditRepairVersion(db *gorm.DB, request CreditValuationHistoricalBackfillRequest) error {
-	if !request.RepairMissingAsUnknown {
+	if !request.RepairMissingAsUnknown && !request.RevalueHistorical {
 		return nil
 	}
 	var stateVersion int
@@ -243,7 +247,9 @@ func RunCreditValuationHistoricalBackfill(db *gorm.DB, request CreditValuationHi
 	reasons := make(map[string]int64)
 	candidates := make([]historicalCreditCandidate, 0, len(subscriptions))
 	for _, subscription := range subscriptions {
-		if state, exists := states[subscription.Id]; exists {
+		state, exists := states[subscription.Id]
+		revalue := exists && normalized.RevalueHistorical && historicalCreditStateCanRevalue(state, normalized.MigrationVersion)
+		if exists && !revalue {
 			report.RowsSkippedExisting++
 			if state.MigrationVersion > 0 {
 				if state.EstimatedCostMicros > 0 {
@@ -332,12 +338,17 @@ func historicalCreditLedgers(db *gorm.DB, subscriptionIDs []int) (map[int][]Cred
 	if len(subscriptionIDs) == 0 || !db.Migrator().HasTable(&CreditBalanceLedger{}) {
 		return result, nil
 	}
+	index, err := loadHistoricalCreditSourceIndex(db)
+	if err != nil {
+		return nil, err
+	}
 	var rows []CreditBalanceLedger
 	if err := db.Where("user_subscription_id IN ?", subscriptionIDs).
 		Order("user_subscription_id ASC, id ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
+		row = recoverHistoricalCreditLedger(row, index)
 		result[row.UserSubscriptionId] = append(result[row.UserSubscriptionId], row)
 	}
 	return result, nil
@@ -489,20 +500,41 @@ func writeHistoricalCreditStates(db *gorm.DB, request CreditValuationHistoricalB
 			if current.UserId != candidate.Subscription.UserId || current.TokenLimit != candidate.Subscription.TokenLimit || current.TokenUsed != candidate.Subscription.TokenUsed {
 				return ErrCreditValuationStateMismatch
 			}
-			var existing int64
-			if err := tx.Model(&CreditValuationState{}).Where("user_subscription_id = ?", current.Id).Count(&existing).Error; err != nil {
-				return err
-			}
-			if existing != 0 {
-				return ErrCreditValuationMigrationConflict
-			}
-			mutation := "historical_backfill"
-			if request.RepairMissingAsUnknown {
-				mutation = "repair_missing_as_unknown"
+			var existing CreditValuationState
+			existingQuery := tx.Where("user_subscription_id = ?", current.Id).Limit(1).Find(&existing)
+			if existingQuery.Error != nil {
+				return existingQuery.Error
 			}
 			now, err := getDBTimestampStrictTx(tx)
 			if err != nil {
 				return err
+			}
+			if existingQuery.RowsAffected == 1 {
+				if !request.RevalueHistorical || !historicalCreditStateCanRevalue(existing, request.MigrationVersion) {
+					return ErrCreditValuationMigrationConflict
+				}
+				newVersion, ok := checkedAddInt64(existing.StateVersion, 1)
+				if !ok {
+					return ErrCreditValuationOverflow
+				}
+				result := tx.Model(&CreditValuationState{}).
+					Where("user_subscription_id = ? AND migration_version = ? AND state_version = ? AND available_credit = ? AND exact_cost_micros = ? AND estimated_cost_micros = ? AND unknown_credit = ?", existing.UserSubscriptionId, existing.MigrationVersion, existing.StateVersion, existing.AvailableCredit, int64(0), int64(0), existing.UnknownCredit).
+					Updates(map[string]any{
+						"available_credit": candidate.Available, "estimated_cost_micros": candidate.Estimated,
+						"unknown_credit": candidate.Unknown, "migration_version": request.MigrationVersion,
+						"state_version": newVersion, "last_mutation_type": "historical_revaluation", "updated_at": now,
+					})
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected != 1 {
+					return ErrCreditValuationMigrationCASConflict
+				}
+				continue
+			}
+			mutation := "historical_backfill"
+			if request.RepairMissingAsUnknown {
+				mutation = "repair_missing_as_unknown"
 			}
 			state := CreditValuationState{UserSubscriptionId: current.Id, UserId: current.UserId, AvailableCredit: candidate.Available, ExactCostMicros: 0, EstimatedCostMicros: candidate.Estimated, UnknownCredit: candidate.Unknown, Currency: request.ValuationCurrency, RuleVersion: CreditValuationRuleVersion, MigrationVersion: request.MigrationVersion, StateVersion: 0, LastMutationType: mutation, CreatedAt: now, UpdatedAt: now}
 			if err := validateCreditValuationState(&current, &state); err != nil {
@@ -514,6 +546,13 @@ func writeHistoricalCreditStates(db *gorm.DB, request CreditValuationHistoricalB
 		}
 		return nil
 	})
+}
+
+func historicalCreditStateCanRevalue(state CreditValuationState, migrationVersion int) bool {
+	if state.MigrationVersion <= 0 || migrationVersion <= state.MigrationVersion || state.ExactCostMicros != 0 || state.EstimatedCostMicros != 0 {
+		return false
+	}
+	return state.UnknownCredit == state.AvailableCredit
 }
 
 func historicalCreditCanLock(db *gorm.DB) bool {

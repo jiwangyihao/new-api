@@ -64,7 +64,7 @@ func ParseCreditValuationCommandArgs(args []string) (CreditValuationCommandOptio
 	for index := 0; index < len(args); index++ {
 		argument := args[index]
 		switch argument {
-		case "--dry-run", "--apply", "--verify", "--repair-missing-as-unknown", "--suspend":
+		case "--dry-run", "--apply", "--verify", "--repair-missing-as-unknown", "--revalue-historical", "--suspend":
 			mode := creditValuationMigrationModeForFlag(argument)
 			if modeFlag != "" {
 				if modeFlag == argument {
@@ -129,8 +129,8 @@ func ParseCreditValuationCommandArgs(args []string) (CreditValuationCommandOptio
 	if !versionSet {
 		return CreditValuationCommandOptions{}, newCreditValuationCommandError(CreditValuationCommandCodeVersionRequired, "--version is required")
 	}
-	if batchSizeSet && options.Mode != model.CreditValuationMigrationModeApply {
-		return CreditValuationCommandOptions{}, newCreditValuationCommandError(CreditValuationCommandCodeBatchSizeNotAllowed, "--batch-size is only allowed with --apply")
+	if batchSizeSet && options.Mode != model.CreditValuationMigrationModeApply && options.Mode != model.CreditValuationMigrationModeRevalueHistorical {
+		return CreditValuationCommandOptions{}, newCreditValuationCommandError(CreditValuationCommandCodeBatchSizeNotAllowed, "--batch-size is only allowed with --apply or --revalue-historical")
 	}
 	if options.Mode == model.CreditValuationMigrationModeSuspend {
 		if !reasonSet || options.Reason == "" {
@@ -153,6 +153,8 @@ func creditValuationMigrationModeForFlag(flag string) model.CreditValuationMigra
 		return model.CreditValuationMigrationModeVerify
 	case "--repair-missing-as-unknown":
 		return model.CreditValuationMigrationModeRepairMissingAsUnknown
+	case "--revalue-historical":
+		return model.CreditValuationMigrationModeRevalueHistorical
 	case "--suspend":
 		return model.CreditValuationMigrationModeSuspend
 	default:

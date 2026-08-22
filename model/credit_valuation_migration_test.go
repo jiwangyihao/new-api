@@ -427,6 +427,76 @@ func TestRepairMissingAsUnknownCanBeAppliedWithSameVersion(t *testing.T) {
 	require.Equal(t, applied.Checksum, verified.Checksum)
 }
 
+func TestRevalueHistoricalMigrationRequiresSuspendedReadyVersionAndPublishesNextReadyMarker(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t,
+		&Option{}, &SubscriptionPlan{}, &UserSubscription{}, &SubscriptionOrder{},
+		&SubscriptionConversion{}, &Redemption{}, &CreditBalanceAdjustment{},
+		&CreditValuationState{}, &CreditBalanceLedger{}, &TimedSubscriptionValuationGrant{},
+	)
+	valuationCurrency := "CNY"
+	zeroMicros := int64(0)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_301, Title: "Credit", PriceAmountMicros: &zeroMicros, Currency: "CNY",
+		ValuationCurrency: &valuationCurrency, EntitlementType: SubscriptionEntitlementCreditBalance,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_302, UserId: 27_303, PlanId: 27_301, EntitlementType: SubscriptionEntitlementCreditBalance,
+		TokenLimit: 1_000, TokenUsed: 200,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationState{
+		UserSubscriptionId: 27_302, UserId: 27_303, AvailableCredit: 800, UnknownCredit: 800,
+		Currency: "CNY", RuleVersion: 1, MigrationVersion: 1, StateVersion: 0,
+		LastMutationType: "historical_backfill", CreatedAt: 1, UpdatedAt: 1,
+	}).Error)
+	snapshot, err := MarshalSubscriptionEntitlementSnapshot(SubscriptionEntitlementSnapshot{
+		PurchaseMode: SubscriptionPurchaseModeCreditBalance, PlanID: 27_304,
+		PlanEntitlementType: SubscriptionEntitlementTimed, ListPriceMicros: &priceMicros,
+		ListPriceCurrency: "CNY", MonthlyTokenLimit: 1_000, TargetCreditBalancePlanID: 27_301,
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&SubscriptionOrder{
+		Id: 27_305, UserId: 27_303, PlanId: 27_304, Status: common.TopUpStatusSuccess,
+		CreditGrantAmount: 1_000, CreditTargetPlanID: 27_301, FulfilledSubscriptionID: 27_302,
+		EntitlementSnapshot: snapshot,
+	}).Error)
+	require.NoError(t, db.Create(&CreditBalanceLedger{
+		Id: 27_306, UserId: 27_303, UserSubscriptionId: 27_302, Type: CreditBalanceLedgerTypePurchase,
+		IdempotencyKey: "revalue-order", SourceType: CreditBalanceLedgerSourceSubscriptionOrder,
+		SourceId: 27_305, GrossCredit: 1_000, AvailableCreditAfter: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&CreditValuationMigration{
+		Version: 1, Status: CreditValuationMigrationReady, ValuationCurrency: "CNY",
+		FxRateNumerator: 1, FxRateDenominator: 1, FxCapturedAt: 1, Checksum: "v1",
+	}).Error)
+
+	_, err = RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeRevalueHistorical, Version: 2, BatchSize: 100,
+	})
+	require.ErrorIs(t, err, ErrCreditValuationMigrationRepairInvalid)
+
+	suspended, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeSuspend, Version: 1, BatchSize: 100, Reason: "historical revaluation",
+	})
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationSuspended, suspended.Status)
+
+	revalued, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeRevalueHistorical, Version: 2, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, CreditValuationMigrationReady, revalued.Status)
+	require.True(t, revalued.Ready)
+	require.Equal(t, int64(32_000_000), revalued.Credit.EstimatedCostMicros)
+	require.Zero(t, revalued.Credit.UnknownCredit)
+
+	verified, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeVerify, Version: 2, BatchSize: 100,
+	})
+	require.NoError(t, err)
+	require.Equal(t, revalued.Checksum, verified.Checksum)
+}
+
 func TestVerifyCreditValuationMigrationSourcesRejectsInvalidTimedGrantFacts(t *testing.T) {
 	db := setupCreditValuationMigrationLifecycleTestDB(t, &TimedSubscriptionValuationGrant{})
 	grants := []TimedSubscriptionValuationGrant{

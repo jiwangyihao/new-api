@@ -41,6 +41,11 @@ func TestParseCreditValuationCommandArgsAcceptsAllModes(t *testing.T) {
 			want: CreditValuationCommandOptions{Mode: model.CreditValuationMigrationModeRepairMissingAsUnknown, Version: 4, BatchSize: CreditValuationCommandDefaultBatchSize},
 		},
 		{
+			name: "revalue historical",
+			args: []string{"--revalue-historical", "--version", "5"},
+			want: CreditValuationCommandOptions{Mode: model.CreditValuationMigrationModeRevalueHistorical, Version: 5, BatchSize: CreditValuationCommandDefaultBatchSize},
+		},
+		{
 			name: "suspend with reason",
 			args: []string{"--suspend", "--version", "5", "--reason", "planned maintenance"},
 			want: CreditValuationCommandOptions{Mode: model.CreditValuationMigrationModeSuspend, Version: 5, BatchSize: CreditValuationCommandDefaultBatchSize, Reason: "planned maintenance"},

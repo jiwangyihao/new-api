@@ -227,6 +227,18 @@ func TestVerifyCreditValuationMigrationSourcesUsesCanonicalCreditSourceKey(t *te
 	require.Contains(t, failures, CreditValuationMigrationReasonCount{Reason: "credit_valuation_source_duplicate", Count: 2})
 }
 
+func TestVerifyCreditValuationMigrationSourcesAllowsLegacyMissingCreditSourceKey(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &CreditBalanceLedger{})
+	require.NoError(t, db.Create(&CreditBalanceLedger{
+		Id: 3, UserId: 3, UserSubscriptionId: 3, Type: CreditBalanceLedgerTypePurchase,
+		IdempotencyKey: "legacy-missing-source", GrossCredit: 100, NetCredit: 100,
+	}).Error)
+
+	failures, err := verifyCreditValuationMigrationSources(db)
+	require.NoError(t, err)
+	require.Empty(t, failures)
+}
+
 func TestMigrationSnapshotUsesFXDirectionForUSDValuation(t *testing.T) {
 	db := setupCreditValuationMigrationLifecycleTestDB(t, &Option{}, &SubscriptionPlan{}, &UserSubscription{})
 	valuationCurrency := "USD"

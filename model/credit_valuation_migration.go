@@ -807,13 +807,6 @@ func verifyCreditValuationMigrationSources(db *gorm.DB) ([]CreditValuationMigrat
 		for _, duplicate := range duplicateSources {
 			counts["credit_valuation_source_duplicate"] += duplicate.Count
 		}
-		var missing int64
-		if err := db.Model(&CreditBalanceLedger{}).Where("source_type = '' OR source_key = ''").Count(&missing).Error; err != nil {
-			return nil, err
-		}
-		if missing > 0 {
-			counts["credit_valuation_source_key_missing"] = missing
-		}
 	}
 	if db.Migrator().HasTable(&TimedSubscriptionValuationGrant{}) {
 		var grants []TimedSubscriptionValuationGrant

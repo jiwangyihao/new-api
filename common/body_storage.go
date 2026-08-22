@@ -278,41 +278,90 @@ func CreateBodyStorage(data []byte) (BodyStorage, error) {
 // CreateBodyStorageFromReader 从 Reader 创建存储（用于大请求的流式处理）
 func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes int64) (BodyStorage, error) {
 	threshold := GetDiskCacheThresholdBytes()
-
-	// 如果启用了磁盘缓存且内容长度超过阈值，直接使用磁盘存储
-	if IsDiskCacheEnabled() &&
-		contentLength > 0 &&
-		contentLength >= threshold &&
-		IsDiskCacheAvailable(contentLength) {
+	if IsDiskCacheEnabled() && contentLength > 0 && contentLength >= threshold && IsDiskCacheAvailable(contentLength) {
 		storage, err := newDiskStorageFromReader(reader, maxBytes, GetDiskCachePath())
 		if err != nil {
 			if IsRequestBodyTooLargeError(err) {
 				return nil, err
 			}
-			// 磁盘存储失败，reader 已被消费，无法安全回退
-			// 直接返回错误而非尝试回退（因为 reader 数据已丢失）
 			return nil, fmt.Errorf("disk storage creation failed: %w", err)
 		}
 		IncrementDiskCacheHits()
 		return storage, nil
 	}
 
+	if IsDiskCacheEnabled() && contentLength <= 0 && threshold > 0 && threshold <= maxBytes && IsDiskCacheAvailable(threshold) {
+		storage, smallBody, err := newProgressiveDiskStorageFromReader(reader, threshold, maxBytes)
+		if err != nil {
+			return nil, err
+		}
+		if storage != nil {
+			IncrementDiskCacheHits()
+			return storage, nil
+		}
+		IncrementMemoryCacheHits()
+		return newMemoryStorage(smallBody), nil
+	}
+
 	data, err := readBodyStorageBytes(reader, contentLength, maxBytes)
 	if err != nil {
 		return nil, err
 	}
-
 	storage, err := CreateBodyStorage(data)
 	if err != nil {
 		return nil, err
 	}
-	// 如果最终使用内存存储，记录内存缓存命中
-	if !storage.IsDisk() {
-		IncrementMemoryCacheHits()
-	} else {
+	if storage.IsDisk() {
 		IncrementDiskCacheHits()
+	} else {
+		IncrementMemoryCacheHits()
 	}
 	return storage, nil
+}
+
+func newProgressiveDiskStorageFromReader(reader io.Reader, threshold, maxBytes int64) (*diskStorage, []byte, error) {
+	filePath, file, err := CreateDiskCacheFile(DiskCacheTypeBody)
+	if err != nil {
+		return nil, nil, err
+	}
+	fail := func(err error) (*diskStorage, []byte, error) {
+		_ = file.Close()
+		_ = os.Remove(filePath)
+		return nil, nil, err
+	}
+
+	written, err := io.CopyN(file, reader, threshold)
+	if err != nil && err != io.EOF {
+		return fail(err)
+	}
+	if written < threshold {
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return fail(err)
+		}
+		data, err := io.ReadAll(file)
+		if err != nil {
+			return fail(err)
+		}
+		_ = file.Close()
+		_ = os.Remove(filePath)
+		return nil, data, nil
+	}
+
+	if _, err := io.Copy(file, io.LimitReader(reader, maxBytes-threshold+1)); err != nil {
+		return fail(err)
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return fail(err)
+	}
+	if stat.Size() > maxBytes {
+		return fail(ErrRequestBodyTooLarge)
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fail(err)
+	}
+	IncrementDiskFiles(stat.Size())
+	return &diskStorage{file: file, filePath: filePath, size: stat.Size()}, nil, nil
 }
 
 func readBodyStorageBytes(reader io.Reader, contentLength, maxBytes int64) ([]byte, error) {

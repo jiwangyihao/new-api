@@ -23,6 +23,14 @@ func prepareExternalSubscriptionEntitlementSnapshot(plan *model.SubscriptionPlan
 	if err != nil {
 		return model.SubscriptionEntitlementSnapshot{}, err
 	}
+	if mode == model.SubscriptionPurchaseModeTimed {
+		if plan == nil || plan.PriceAmountMicros == nil {
+			return model.SubscriptionEntitlementSnapshot{}, model.ErrSubscriptionPlanPriceRequired
+		}
+		if *plan.PriceAmountMicros <= 0 {
+			return model.SubscriptionEntitlementSnapshot{}, model.ErrSubscriptionPlanPriceInvalid
+		}
+	}
 	targetCreditPlanID := 0
 	var creditPlan *model.SubscriptionPlan
 	if mode == model.SubscriptionPurchaseModeCreditBalance {

@@ -422,3 +422,182 @@ func TestKyrenReconciliationFactFormattingIsStable(t *testing.T) {
 	assert.Len(t, firstHash, 64)
 	assert.Contains(t, firstPayload, fmt.Sprintf(`"updated_at":%d`, fact.UpdatedAt))
 }
+
+func TestKyrenReconciliationSweepCompletesPaidOrderWithoutStatusRequest(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6291
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6292, "prod_reconcile_sweep_paid", 1000, 1)
+	tradeNo := "kyren-reconcile-sweep-paid"
+	checkoutID := "cs_reconcile_sweep_paid"
+	providerOrderID := "order_reconcile_sweep_paid"
+	seedKyrenReconciliationSubscription(t, tradeNo, checkoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(context.Context, string) (*kyrenCheckoutSession, error) {
+			return kyrenReconciliationCheckout(checkoutID, providerOrderID, plan.KyrenProductId, "COMPLETE"), nil
+		},
+		retrieveOrderFunc: func(context.Context, string) (*kyrenOrder, error) {
+			return kyrenReconciliationOrder(providerOrderID, checkoutID, plan.KyrenProductId, "PAID", tradeNo, userID, plan.Id), nil
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	result, err := runKyrenReconciliationSweep(context.Background(), 10)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Scanned)
+	assert.Zero(t, result.Failed)
+	var order model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&order).Error)
+	assert.Equal(t, common.TopUpStatusSuccess, order.Status)
+	assert.Positive(t, order.FulfilledSubscriptionID)
+	var subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, plan.Id).Count(&subscriptionCount).Error)
+	assert.Equal(t, int64(1), subscriptionCount)
+}
+
+func TestKyrenReconciliationSweepFinalizesTerminalOrdersAcrossBatchesAndContinuesAfterFailure(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6301
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6302, "prod_reconcile_sweep_terminal", 1000, 1)
+	type providerState struct {
+		checkoutStatus string
+		orderStatus    string
+		providerOrder  string
+	}
+	states := map[string]providerState{}
+	for _, fixture := range []struct {
+		tradeNo       string
+		checkoutID    string
+		providerOrder string
+		checkout      string
+		order         string
+	}{
+		{"kyren-sweep-failed", "cs_sweep_failed", "order_sweep_failed", "OPEN", "FAILED"},
+		{"kyren-sweep-broken", "cs_sweep_broken", "", "", ""},
+		{"kyren-sweep-expired", "cs_sweep_expired", "", "EXPIRED", ""},
+	} {
+		seedKyrenReconciliationSubscription(t, fixture.tradeNo, fixture.checkoutID, userID, &plan)
+		ageKyrenReconciliationMapping(t, fixture.tradeNo)
+		states[fixture.checkoutID] = providerState{
+			checkoutStatus: fixture.checkout,
+			orderStatus:    fixture.order,
+			providerOrder:  fixture.providerOrder,
+		}
+	}
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(_ context.Context, checkoutID string) (*kyrenCheckoutSession, error) {
+			state := states[checkoutID]
+			if state.checkoutStatus == "" {
+				return nil, errors.New("provider unavailable")
+			}
+			return kyrenReconciliationCheckout(checkoutID, state.providerOrder, plan.KyrenProductId, state.checkoutStatus), nil
+		},
+		retrieveOrderFunc: func(_ context.Context, providerOrderID string) (*kyrenOrder, error) {
+			for checkoutID, state := range states {
+				if state.providerOrder == providerOrderID {
+					return kyrenReconciliationOrder(providerOrderID, checkoutID, plan.KyrenProductId, state.orderStatus, "kyren-sweep-failed", userID, plan.Id), nil
+				}
+			}
+			return nil, errors.New("unexpected provider order")
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	result, err := runKyrenReconciliationSweep(context.Background(), 1)
+
+	require.NoError(t, err)
+	assert.Equal(t, 3, result.Scanned)
+	assert.Equal(t, 1, result.Failed)
+	assert.Equal(t, common.TopUpStatusFailed, model.GetSubscriptionOrderByTradeNo("kyren-sweep-failed").Status)
+	assert.Equal(t, common.TopUpStatusPending, model.GetSubscriptionOrderByTradeNo("kyren-sweep-broken").Status)
+	assert.Equal(t, common.TopUpStatusExpired, model.GetSubscriptionOrderByTradeNo("kyren-sweep-expired").Status)
+}
+
+func TestKyrenReconciliationSweepOnlyScansPendingKyrenOrdersWithCheckout(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6311
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6312, "prod_reconcile_sweep_filter", 1000, 1)
+
+	eligibleTradeNo := "kyren-sweep-filter-eligible"
+	eligibleCheckoutID := "cs_sweep_filter_eligible"
+	seedKyrenReconciliationSubscription(t, eligibleTradeNo, eligibleCheckoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, eligibleTradeNo)
+
+	missingCheckoutTradeNo := "kyren-sweep-filter-no-checkout"
+	seedPendingKyrenSubscriptionOrder(t, missingCheckoutTradeNo, userID, &plan)
+	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+		_, err := model.EnsurePaymentProviderOrderTx(tx, model.PaymentProviderKyren, model.PaymentOrderKindSubscription, missingCheckoutTradeNo)
+		return err
+	}))
+
+	nonKyrenOrder := model.SubscriptionOrder{
+		UserId: userID, PlanId: plan.Id, TradeNo: "stripe-sweep-filter-pending",
+		PaymentProvider: model.PaymentProviderStripe, PaymentMethod: model.PaymentMethodStripe,
+		Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+	}
+	require.NoError(t, model.DB.Create(&nonKyrenOrder).Error)
+
+	terminalTradeNo := "kyren-sweep-filter-terminal"
+	terminalCheckoutID := "cs_sweep_filter_terminal"
+	terminal := seedKyrenReconciliationSubscription(t, terminalTradeNo, terminalCheckoutID, userID, &plan)
+	require.NoError(t, model.DB.Model(&model.SubscriptionOrder{}).Where("id = ?", terminal.Id).Updates(map[string]any{
+		"status": common.TopUpStatusExpired, "complete_time": common.GetTimestamp(),
+	}).Error)
+
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(_ context.Context, checkoutID string) (*kyrenCheckoutSession, error) {
+			return kyrenReconciliationCheckout(checkoutID, "", plan.KyrenProductId, "OPEN"), nil
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	result, err := runKyrenReconciliationSweep(context.Background(), 10)
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, result.Scanned)
+	assert.Zero(t, result.Failed)
+	assert.Equal(t, []string{eligibleCheckoutID}, fake.retrieveCheckoutIDs)
+}
+
+func TestGetSubscriptionOrderStatusReturnsReusableKyrenCheckoutURL(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6321
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6322, "prod_reconcile_resume", 1000, 1)
+	tradeNo := "kyren-reconcile-resume"
+	checkoutID := "cs_reconcile_resume"
+	checkoutURL := "https://pay.kyren.test/resume"
+	seedKyrenReconciliationSubscription(t, tradeNo, checkoutID, userID, &plan)
+	ageKyrenReconciliationMapping(t, tradeNo)
+	fake := &kyrenReconciliationFakeAPI{
+		retrieveCheckoutFunc: func(context.Context, string) (*kyrenCheckoutSession, error) {
+			checkout := kyrenReconciliationCheckout(checkoutID, "", plan.KyrenProductId, "OPEN")
+			checkout.URL = checkoutURL
+			return checkout, nil
+		},
+	}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	first := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+	second := performKyrenSubscriptionOrderStatusRequest(userID, tradeNo)
+
+	for _, recorder := range []*httptest.ResponseRecorder{first, second} {
+		require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		var response struct {
+			Success bool `json:"success"`
+			Data    struct {
+				Status      string `json:"status"`
+				CheckoutURL string `json:"checkout_url"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.True(t, response.Success)
+		assert.Equal(t, common.TopUpStatusPending, response.Data.Status)
+		assert.Equal(t, checkoutURL, response.Data.CheckoutURL)
+	}
+	assert.Equal(t, []string{checkoutID}, fake.retrieveCheckoutIDs)
+}

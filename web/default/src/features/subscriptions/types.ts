@@ -476,6 +476,7 @@ export interface SubscriptionOrderStatus {
   status: 'pending' | 'success' | 'failed' | 'expired' | string
   create_time: number
   complete_time: number
+  checkout_url?: string
   credit_balance?: CreditBalanceGrantResult
 }
 

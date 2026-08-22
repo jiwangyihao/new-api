@@ -747,26 +747,38 @@ export function SubscriptionPurchaseDialog(props: Props) {
                           'Waiting for payment confirmation. You can close this dialog and resume here later.'
                         )}
                   </span>
-                  {externalOrderQuery.isError && (
-                    <span className='flex flex-wrap gap-2'>
+                  <span className='flex flex-wrap gap-2'>
+                    {orderStatus?.checkout_url && (
                       <Button
                         type='button'
                         size='sm'
                         variant='outline'
-                        onClick={() => void externalOrderQuery.refetch()}
+                        onClick={() => window.open(orderStatus.checkout_url, '_blank')}
                       >
-                        {t('Retry status check')}
+                        {t('Continue payment')}
                       </Button>
-                      <Button
-                        type='button'
-                        size='sm'
-                        variant='outline'
-                        onClick={clearPendingExternalOrder}
-                      >
-                        {t('Try payment again')}
-                      </Button>
-                    </span>
-                  )}
+                    )}
+                    {externalOrderQuery.isError && (
+                      <>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          onClick={() => void externalOrderQuery.refetch()}
+                        >
+                          {t('Retry status check')}
+                        </Button>
+                        <Button
+                          type='button'
+                          size='sm'
+                          variant='outline'
+                          onClick={clearPendingExternalOrder}
+                        >
+                          {t('Try payment again')}
+                        </Button>
+                      </>
+                    )}
+                  </span>
                 </AlertDescription>
               </Alert>
             )}

@@ -9,6 +9,7 @@ const (
 
 	ContextKeyOriginalModel                    ContextKey = "original_model"
 	ContextKeyRequestStartTime                 ContextKey = "request_start_time"
+	ContextKeyRequestBufferTimeMs              ContextKey = "request_buffer_time_ms"
 	ContextKeyOpenAIResponsesRequest           ContextKey = "openai_responses_request"
 	ContextKeyOpenAIResponsesCompactionRequest ContextKey = "openai_responses_compaction_request"
 

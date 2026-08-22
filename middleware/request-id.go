@@ -18,9 +18,23 @@ var _bp = func() string {
 	return common.GetRandomString(8)
 }()
 
+const nginxRequestIDHeader = "X-Nginx-Request-ID"
+
+func requestIDForContext(c *gin.Context) string {
+	if c != nil && c.Request != nil {
+		id := c.GetHeader(nginxRequestIDHeader)
+		if len(id) == 32 {
+			if _, err := hex.DecodeString(id); err == nil {
+				return id
+			}
+		}
+	}
+	return common.GetTimeString() + _bp + common.GetRandomString(8)
+}
+
 func RequestId() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		id := common.GetTimeString() + _bp + common.GetRandomString(8)
+		id := requestIDForContext(c)
 		c.Set(common.RequestIdKey, id)
 		ctx := context.WithValue(c.Request.Context(), common.RequestIdKey, id)
 		c.Request = c.Request.WithContext(ctx)

@@ -102,6 +102,7 @@ type SubscriptionOrderStatusResponse struct {
 	Status          string                          `json:"status"`
 	CreateTime      int64                           `json:"create_time"`
 	CompleteTime    int64                           `json:"complete_time"`
+	CheckoutURL     string                          `json:"checkout_url,omitempty"`
 	CreditBalance   *model.CreditBalanceGrantResult `json:"credit_balance,omitempty"`
 }
 
@@ -199,8 +200,11 @@ func GetSubscriptionOrderStatus(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	reusableCheckoutURL := ""
 	if order.Status == common.TopUpStatusPending && order.PaymentProvider == model.PaymentProviderKyren {
-		if err := reconcilePendingKyrenSubscriptionOrder(c.Request.Context(), &order, c.ClientIP()); err != nil {
+		var err error
+		reusableCheckoutURL, err = reconcilePendingKyrenSubscriptionOrder(c.Request.Context(), &order, c.ClientIP())
+		if err != nil {
 			logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 订阅订单主动对账失败 user_id=%d trade_no=%s error=%q", userId, tradeNo, err.Error()))
 		}
 		if err := model.DB.Select("id", "user_id", "plan_id", "trade_no", "payment_method", "payment_provider", "status", "create_time", "complete_time", "amount_cents", "currency", "kyren_snapshot", "entitlement_snapshot").
@@ -236,6 +240,9 @@ func GetSubscriptionOrderStatus(c *gin.Context) {
 		Status:          order.Status,
 		CreateTime:      order.CreateTime,
 		CompleteTime:    order.CompleteTime,
+	}
+	if order.Status == common.TopUpStatusPending && order.PaymentProvider == model.PaymentProviderKyren {
+		response.CheckoutURL = reusableCheckoutURL
 	}
 	if order.Status == common.TopUpStatusSuccess && purchaseMode == model.SubscriptionPurchaseModeCreditBalance {
 		var ledger model.CreditBalanceLedger

@@ -962,6 +962,79 @@ describe('Credit balance plan admin component', () => {
     queryClient.clear()
   })
 
+  test('opens a reusable checkout from a pending order status response', async () => {
+    const i18n = createInstance()
+    await i18n.init({
+      lng: 'en',
+      resources: {
+        en: {
+          translation: {
+            'Continue payment': 'Continue payment',
+            'Waiting for payment confirmation. You can close this dialog and resume here later.':
+              'Waiting for payment confirmation. You can close this dialog and resume here later.',
+          },
+        },
+      },
+      interpolation: { escapeValue: false },
+    })
+    const purchasePlan = makeExternalPurchasePlan(9018)
+    window.sessionStorage.setItem(
+      pendingExternalOrderStorageKey(testUserId, purchasePlan.id),
+      JSON.stringify({
+        ownerUserId: testUserId,
+        tradeNo: 'reusable-kyren-order',
+        provider: 'kyren',
+        purchaseMode: 'timed',
+      })
+    )
+    let openedUrl = ''
+    window.open = ((url?: string | URL) => {
+      openedUrl = String(url || '')
+      return null
+    }) as typeof window.open
+    api.defaults.adapter = async (config) => ({
+      data: {
+        success: true,
+        data: {
+          trade_no: 'reusable-kyren-order',
+          plan_id: purchasePlan.id,
+          payment_provider: 'kyren',
+          payment_method: 'kyren',
+          purchase_mode: 'timed',
+          status: 'pending',
+          create_time: 1,
+          complete_time: 0,
+          checkout_url: 'https://checkout.example/reusable-kyren',
+        },
+      },
+      status: 200,
+      statusText: 'OK',
+      headers: {},
+      config,
+    })
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <SubscriptionPurchaseDialog
+            open
+            onOpenChange={() => undefined}
+            plan={{ plan: purchasePlan }}
+            enableKyrenSubscription
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(await view.findByRole('button', { name: 'Continue payment' }))
+
+    assert.equal(openedUrl, 'https://checkout.example/reusable-kyren')
+    view.unmount()
+    queryClient.clear()
+  })
+
   test('does not crash when pending-order storage access is denied', async () => {
     const i18n = createInstance()
     await i18n.init({

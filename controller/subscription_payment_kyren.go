@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -128,6 +129,11 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, msg)
 		return
 	}
+	preparedSnapshot, err := prepareExternalSubscriptionEntitlementSnapshot(plan, purchaseMode)
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
 	if normalizeSubscriptionPlanCurrency(plan.Currency) != kyrenCurrencyCNY {
 		common.ApiErrorMsg(c, "Kyren 仅支持 CNY 套餐")
 		return
@@ -157,7 +163,6 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	tradeNo := fmt.Sprintf("KYSUBUSR%dNO%s%d", userID, common.GetRandomString(6), time.Now().Unix())
 	kyrenSnapshot, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: productID, Amount: expectedAmount, Currency: kyrenCurrencyCNY})
 	if err != nil {
 		common.ApiError(c, err)
@@ -168,68 +173,108 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 		common.ApiError(c, errors.New("Kyren 订阅金额快照无效"))
 		return
 	}
-	preparedSnapshot, err := prepareExternalSubscriptionEntitlementSnapshot(plan, purchaseMode)
-	if err != nil {
-		common.ApiErrorMsg(c, err.Error())
-		return
-	}
 	entitlementSnapshot, err := marshalExternalSubscriptionEntitlementSnapshot(preparedSnapshot, model.PaymentProviderKyren, productID, model.PaymentMethodKyren, amountCents, currency)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	creditGrantAmount, creditTargetPlanID := preparedSnapshot.CreditGrantIdentity()
-	order := &model.SubscriptionOrder{
-		UserId:              userID,
-		PlanId:              plan.Id,
-		Money:               plan.PriceAmount,
-		AmountCents:         amountCents,
-		Currency:            currency,
-		CreditGrantAmount:   creditGrantAmount,
-		CreditTargetPlanID:  creditTargetPlanID,
-		TradeNo:             tradeNo,
-		PaymentMethod:       model.PaymentMethodKyren,
-		PaymentProvider:     model.PaymentProviderKyren,
-		Status:              common.TopUpStatusPending,
-		CreateTime:          common.GetTimestamp(),
-		KyrenSnapshot:       kyrenSnapshot,
-		EntitlementSnapshot: entitlementSnapshot,
-	}
-	if err := service.CreateKyrenSubscriptionPaymentOrder(order); err != nil {
-		common.ApiError(c, err)
+	lockKey := fmt.Sprintf("kyren-subscription:%d:%d:%s", userID, plan.Id, purchaseMode)
+	LockOrder(lockKey)
+	defer UnlockOrder(lockKey)
+
+	for attempts := 0; attempts < 2; attempts++ {
+		tradeNo := fmt.Sprintf("KYSUBUSR%dNO%s%d", userID, common.GetRandomString(6), time.Now().Unix())
+		order := &model.SubscriptionOrder{
+			UserId: userID, PlanId: plan.Id, Money: plan.PriceAmount,
+			AmountCents: amountCents, Currency: currency,
+			CreditGrantAmount: creditGrantAmount, CreditTargetPlanID: creditTargetPlanID,
+			TradeNo: tradeNo, PaymentMethod: model.PaymentMethodKyren,
+			PaymentProvider: model.PaymentProviderKyren, Status: common.TopUpStatusPending,
+			CreateTime: common.GetTimestamp(), KyrenSnapshot: kyrenSnapshot,
+			EntitlementSnapshot: entitlementSnapshot,
+		}
+		claim, err := service.ClaimKyrenSubscriptionPaymentOrder(order, purchaseMode)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if claim.InProgress {
+			common.ApiErrorMsg(c, service.ErrKyrenSubscriptionCheckoutInProgress.Error())
+			return
+		}
+		order = claim.Order
+		tradeNo = order.TradeNo
+		if claim.CheckoutID != "" {
+			checkoutURL, err := reconcilePendingKyrenSubscriptionOrder(c.Request.Context(), order, c.ClientIP())
+			if err != nil {
+				logger.LogWarn(c.Request.Context(), fmt.Sprintf("Kyren 既有订阅 Checkout 对账失败 user_id=%d trade_no=%s error=%q", userID, tradeNo, err.Error()))
+				common.ApiErrorMsg(c, "支付状态查询失败，请稍后重试")
+				return
+			}
+			if checkoutURL != "" {
+				common.ApiSuccess(c, gin.H{"checkout_url": checkoutURL, "url": checkoutURL, "order_id": tradeNo, "reused": true})
+				return
+			}
+			var refreshed model.SubscriptionOrder
+			if err := model.DB.Select("id", "status").First(&refreshed, order.Id).Error; err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if refreshed.Status == common.TopUpStatusPending {
+				common.ApiErrorMsg(c, "已有支付正在处理中，请稍后重试")
+				return
+			}
+			continue
+		}
+
+		checkout, err := client.createCheckout(c.Request.Context(), kyrenCreateCheckoutRequest{
+			ProductID: productID, SuccessURL: paymentReturnPath("/console/topup?pay=success"),
+			CancelURL:     paymentReturnPath("/console/topup?pay=cancel"),
+			CustomerEmail: user.Email, CustomerName: user.Username,
+			Metadata: map[string]string{
+				"kind": "subscription", "trade_no": tradeNo,
+				"user_id": strconv.Itoa(userID), "plan_id": strconv.Itoa(plan.Id),
+			},
+		})
+		if err != nil {
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 创建订阅 Checkout 失败 user_id=%d trade_no=%s error=%q", userID, tradeNo, err.Error()))
+			common.ApiErrorMsg(c, "拉起支付失败")
+			return
+		}
+		if checkout == nil || strings.TrimSpace(checkout.ID) == "" || !safeKyrenCheckoutURL(checkout.URL) {
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
+			common.ApiErrorMsg(c, "拉起支付失败")
+			return
+		}
+		if err := service.BindKyrenPaymentCheckoutURL(tradeNo, checkout.ID, checkout.URL); err != nil {
+			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
+			logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定订阅 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
+			common.ApiErrorMsg(c, "拉起支付失败")
+			return
+		}
+		common.ApiSuccess(c, gin.H{"checkout_url": checkout.URL, "url": checkout.URL, "order_id": tradeNo})
 		return
 	}
-	checkout, err := client.createCheckout(c.Request.Context(), kyrenCreateCheckoutRequest{
-		ProductID:     productID,
-		SuccessURL:    paymentReturnPath("/console/topup?pay=success"),
-		CancelURL:     paymentReturnPath("/console/topup?pay=cancel"),
-		CustomerEmail: user.Email,
-		CustomerName:  user.Username,
-		Metadata: map[string]string{
-			"kind":     "subscription",
-			"trade_no": tradeNo,
-			"user_id":  strconv.Itoa(userID),
-			"plan_id":  strconv.Itoa(plan.Id),
-		},
-	})
-	if err != nil {
-		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 创建订阅 Checkout 失败 user_id=%d trade_no=%s error=%q", userID, tradeNo, err.Error()))
-		common.ApiErrorMsg(c, "拉起支付失败")
-		return
+	common.ApiErrorMsg(c, "支付状态正在更新，请稍后重试")
+}
+
+func reusableKyrenSubscriptionCheckout(checkout *kyrenCheckoutSession, checkoutID string, productID string, amount string, currency string) bool {
+	if checkout == nil || strings.TrimSpace(checkout.ID) != strings.TrimSpace(checkoutID) || strings.ToUpper(strings.TrimSpace(checkout.Status)) != "OPEN" || strings.TrimSpace(checkout.OrderID) != "" || !safeKyrenCheckoutURL(checkout.URL) {
+		return false
 	}
-	if checkout == nil || strings.TrimSpace(checkout.ID) == "" || strings.TrimSpace(checkout.URL) == "" {
-		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
-		common.ApiErrorMsg(c, "拉起支付失败")
-		return
+	if checkout.ExpiresAt > 0 && checkout.ExpiresAt <= time.Now().UnixMilli() {
+		return false
 	}
-	if err := service.BindKyrenPaymentCheckout(tradeNo, checkout.ID); err != nil {
-		_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
-		logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定订阅 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
-		common.ApiErrorMsg(c, "拉起支付失败")
-		return
-	}
-	common.ApiSuccess(c, gin.H{"checkout_url": checkout.URL, "url": checkout.URL, "order_id": tradeNo})
+	return strings.TrimSpace(checkout.ProductID) == strings.TrimSpace(productID) &&
+		kyrenReconciliationAmountEqual(checkout.Amount, amount) &&
+		strings.EqualFold(strings.TrimSpace(checkout.Currency), strings.TrimSpace(currency))
+}
+
+func safeKyrenCheckoutURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != ""
 }
 
 func KyrenWebhook(c *gin.Context) {

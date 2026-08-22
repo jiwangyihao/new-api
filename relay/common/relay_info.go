@@ -1243,33 +1243,32 @@ func FailTaskInfo(reason string) *TaskInfo {
 	}
 }
 
-// RemoveDisabledFields 从请求 JSON 数据中移除渠道设置中禁用的字段
-// service_tier: 服务层级字段，可能导致额外计费（OpenAI、Claude、Responses API 支持）
-// inference_geo: Claude 数据驻留推理区域字段（仅 Claude 支持，默认过滤）
-// speed: Claude 推理速度模式字段（仅 Claude 支持，默认过滤）
-// store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
-// safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
-// stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
-// hasDisabledFields 使用 GJSON 只探测可能被移除的顶层字段，避免无目标字段的请求进入完整 map 解码和重新序列化。
+// RemoveDisabledFields 从请求 JSON 数据中移除渠道设置中禁用的字段。
+// service_tier: 服务层级字段，可能导致额外计费（OpenAI、Claude、Responses API 支持）。
+// inference_geo: Claude 数据驻留推理区域字段（仅 Claude 支持，默认过滤）。
+// speed: Claude 推理速度模式字段（仅 Claude 支持，默认过滤）。
+// store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）。
+// safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）。
+// stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）。
+// hasDisabledFields 使用 GJSON 的字节查询逐项探测，避免把整个请求体复制为 string。
 func hasDisabledFields(jsonData []byte, settings dto.ChannelOtherSettings) bool {
-	root := gjson.ParseBytes(jsonData)
-	if !settings.AllowServiceTier && root.Get("service_tier").Exists() {
+	if !settings.AllowServiceTier && gjson.GetBytes(jsonData, "service_tier").Exists() {
 		return true
 	}
-	if !settings.AllowInferenceGeo && root.Get("inference_geo").Exists() {
+	if !settings.AllowInferenceGeo && gjson.GetBytes(jsonData, "inference_geo").Exists() {
 		return true
 	}
-	if !settings.AllowSpeed && root.Get("speed").Exists() {
+	if !settings.AllowSpeed && gjson.GetBytes(jsonData, "speed").Exists() {
 		return true
 	}
-	if settings.DisableStore && root.Get("store").Exists() {
+	if settings.DisableStore && gjson.GetBytes(jsonData, "store").Exists() {
 		return true
 	}
-	if !settings.AllowSafetyIdentifier && root.Get("safety_identifier").Exists() {
+	if !settings.AllowSafetyIdentifier && gjson.GetBytes(jsonData, "safety_identifier").Exists() {
 		return true
 	}
 	if !settings.AllowIncludeObfuscation {
-		streamOptions := root.Get("stream_options")
+		streamOptions := gjson.GetBytes(jsonData, "stream_options")
 		if streamOptions.Type == gjson.JSON && strings.HasPrefix(strings.TrimSpace(streamOptions.Raw), "{") && streamOptions.Get("include_obfuscation").Exists() {
 			return true
 		}

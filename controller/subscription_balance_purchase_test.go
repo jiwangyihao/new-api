@@ -781,7 +781,7 @@ func TestSubscriptionBalancePayInsufficientBalanceDoesNotDeduct(t *testing.T) {
 	userID := 9511
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_low", Quota: 1000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-pro"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9512, Title: "Pro", PriceAmount: 160, Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9512, Title: "Pro", Currency: "CNY", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 160_000_000)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9512,"idempotency_key":"balance-low"}`)
 
@@ -803,7 +803,9 @@ func TestSubscriptionBalancePayRejectsNonCNYPlanCurrency(t *testing.T) {
 	userID := 9513
 	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "balance_usd", Quota: 10000, Status: common.UserStatusEnabled}).Error)
 	code := "balance-usd"
-	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{Id: 9514, Title: "USD Plan", PriceAmount: 40, Currency: "USD", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}).Error)
+	seedAuthoritativeTimedPlanFixture(t, model.SubscriptionPlan{Id: 9514, Title: "USD Plan", Currency: "USD", Enabled: true, PublicVisible: true, MonthlyTokenLimit: 1000, ConcurrencyLimit: 1, BusinessCode: &code}, 40_000_000)
+	require.NoError(t, model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", 9514).Update("currency", "USD").Error)
+	model.InvalidateSubscriptionPlanCache(9514)
 
 	recorder := performBalancePayRequest(t, userID, `{"plan_id":9514,"idempotency_key":"balance-usd"}`)
 

@@ -341,6 +341,20 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+func newAPIRequest(method, requestURL string, requestBody io.Reader) (*http.Request, error) {
+	if body, ok := requestBody.(*common.ReleasableRequestBodyReader); ok {
+		req, err := http.NewRequest(method, requestURL, body)
+		if err != nil {
+			_ = body.Close()
+			return nil, err
+		}
+		req.ContentLength = body.ContentLength()
+		req.GetBody = body.GetBody
+		return req, nil
+	}
+	return http.NewRequest(method, requestURL, requestBody)
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -349,7 +363,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
 	}
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, err := newAPIRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -585,6 +599,9 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	_ = req.Body.Close()
+	if body, ok := req.Body.(*common.ReleasableRequestBodyReader); ok {
+		body.Release()
+	}
 	_ = c.Request.Body.Close()
 	return resp, nil
 }

@@ -294,6 +294,8 @@ func main() {
 
 	// Channel upstream model update check task
 	controller.StartChannelUpstreamModelUpdateTask()
+	// Kyren pending subscription reconciliation task
+	controller.StartKyrenReconciliationTask()
 
 	if common.IsMasterNode && constant.UpdateTask {
 		gopool.Go(func() {
@@ -451,6 +453,7 @@ func InitResources() error {
 	common.InitEnv()
 
 	logger.SetupLogger()
+	common.StartMemoryGuard()
 
 	// Initialize model settings
 	ratio_setting.InitRatioSettings()

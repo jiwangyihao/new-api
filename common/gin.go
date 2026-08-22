@@ -95,14 +95,20 @@ func GetBodyStorage(c *gin.Context) (BodyStorage, error) {
 	return bs, nil
 }
 
-// CleanupBodyStorage 清理请求体存储（应在请求结束时调用）
+// CleanupBodyStorage closes the request body storage and removes every body
+// cache reference from the Gin context so large request buffers can be
+// reclaimed before a long-lived streaming response finishes.
 func CleanupBodyStorage(c *gin.Context) {
+	if c == nil {
+		return
+	}
 	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {
 		if bs, ok := storage.(BodyStorage); ok {
-			bs.Close()
+			_ = bs.Close()
 		}
-		c.Set(KeyBodyStorage, nil)
 	}
+	c.Set(KeyBodyStorage, nil)
+	c.Set(KeyRequestBody, nil)
 }
 
 func UnmarshalBodyReusable(c *gin.Context, v any) error {
@@ -110,11 +116,25 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	if err != nil {
 		return err
 	}
+	contentType := c.Request.Header.Get("Content-Type")
+	if storage.IsDisk() && strings.HasPrefix(contentType, "application/json") {
+		if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
+			return seekErr
+		}
+		if err := DecodeJsonStrict(storage, v); err != nil {
+			_, _ = storage.Seek(0, io.SeekStart)
+			return err
+		}
+		if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
+			return seekErr
+		}
+		c.Request.Body = io.NopCloser(storage)
+		return nil
+	}
 	requestBody, err := storage.Bytes()
 	if err != nil {
 		return err
 	}
-	contentType := c.Request.Header.Get("Content-Type")
 	if strings.HasPrefix(contentType, "application/json") {
 		err = Unmarshal(requestBody, v)
 	} else if strings.Contains(contentType, gin.MIMEPOSTForm) {
@@ -123,14 +143,33 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 		err = parseMultipartFormData(c, requestBody, v)
 	} else {
 		// skip for now
-		// TODO: someday non json request have variant model, we will need to implementation this
 	}
 	if err != nil {
 		return err
 	}
-	// Reset request body
 	if _, seekErr := storage.Seek(0, io.SeekStart); seekErr != nil {
 		return seekErr
+	}
+	c.Request.Body = io.NopCloser(storage)
+	return nil
+}
+
+// UnmarshalBodyReusableWith decodes stable request-body bytes through fn.
+// fn may retain the provided slice until CleanupBodyStorage runs, but must not mutate it.
+func UnmarshalBodyReusableWith(c *gin.Context, fn func([]byte) error) error {
+	storage, err := GetBodyStorage(c)
+	if err != nil {
+		return err
+	}
+	requestBody, err := storage.Bytes()
+	if err != nil {
+		return err
+	}
+	if err := fn(requestBody); err != nil {
+		return err
+	}
+	if _, err := storage.Seek(0, io.SeekStart); err != nil {
+		return err
 	}
 	c.Request.Body = io.NopCloser(storage)
 	return nil

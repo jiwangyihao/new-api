@@ -30,7 +30,7 @@ func TestRedeemLegacySubscriptionWithoutSnapshotRejectsWithoutWrites(t *testing.
 	result, err := Redeem(redemption.Key, user.Id, RedemptionModeTimed)
 
 	require.Nil(t, result)
-	require.ErrorIs(t, err, ErrRedemptionPlanIneligible)
+	require.ErrorIs(t, err, ErrRedemptionSnapshotUnavailable)
 	var saved Redemption
 	require.NoError(t, DB.First(&saved, redemption.Id).Error)
 	require.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)

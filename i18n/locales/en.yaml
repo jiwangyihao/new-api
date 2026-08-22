@@ -63,6 +63,7 @@ redemption.mode_required: "Subscription redemption codes require a redemption mo
 redemption.mode_invalid: "Redemption mode must be timed or credit_balance"
 redemption.credit_balance_unavailable: "Credit balance redemption is currently unavailable"
 redemption.plan_ineligible: "This plan is not eligible for Credit balance redemption"
+redemption.snapshot_unavailable: "This redemption code is missing its historical authorization snapshot; please contact an administrator"
 
 # User messages
 user.password_login_disabled: "Password login has been disabled by administrator"

@@ -552,14 +552,14 @@ func redemptionFulfillmentFromSourceSnapshot(redemption *Redemption, currentPlan
 	}
 	payload := strings.TrimSpace(redemption.FulfillmentSnapshot)
 	if payload == "" {
-		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionSnapshotUnavailable
 	}
 	var fulfillment RedemptionFulfillmentSnapshot
 	if err := common.UnmarshalJsonStr(payload, &fulfillment); err != nil {
-		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionSnapshotUnavailable
 	}
 	if fulfillment.Entitlement.PlanID != redemption.PlanId || strings.TrimSpace(fulfillment.Entitlement.PlanEntitlementType) == "" {
-		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionSnapshotUnavailable
 	}
 	fulfillment.Entitlement.PurchaseMode = mode
 	fulfillment.CreditBalance = nil
@@ -567,7 +567,7 @@ func redemptionFulfillmentFromSourceSnapshot(redemption *Redemption, currentPlan
 	fulfillment.EventEndTime = 0
 	plan, err := SubscriptionPlanFromEntitlementSnapshot(fulfillment.Entitlement)
 	if err != nil {
-		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionPlanIneligible
+		return RedemptionFulfillmentSnapshot{}, nil, ErrRedemptionSnapshotUnavailable
 	}
 	return fulfillment, plan, nil
 }
@@ -612,7 +612,7 @@ func isPublicRedemptionError(err error) bool {
 	return errors.Is(err, ErrRedemptionModeRequired) ||
 		errors.Is(err, ErrRedemptionModeInvalid) ||
 		errors.Is(err, ErrCreditBalanceRedemptionUnavailable) ||
-		errors.Is(err, ErrRedemptionPlanIneligible) ||
+		errors.Is(err, ErrRedemptionSnapshotUnavailable) ||
 		errors.Is(err, ErrRedemptionAlreadyUsed) ||
 		errors.Is(err, ErrCreditValuationInvalidFX) ||
 		errors.Is(err, ErrCreditValuationUnsupportedCurrency) ||

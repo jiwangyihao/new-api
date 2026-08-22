@@ -75,6 +75,7 @@ var (
 	ErrRedemptionModeInvalid              = errors.New("redemption.mode_invalid")
 	ErrCreditBalanceRedemptionUnavailable = errors.New("redemption.credit_balance_unavailable")
 	ErrRedemptionPlanIneligible           = errors.New("redemption.plan_ineligible")
+	ErrRedemptionSnapshotUnavailable      = errors.New("redemption.snapshot_unavailable")
 	ErrRedemptionAlreadyUsed              = errors.New("redemption.used")
 )
 

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -17,6 +19,7 @@ import (
 
 func setupRedemptionCNYTestDB(t *testing.T) {
 	t.Helper()
+	require.NoError(t, i18n.Init())
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Redemption{}, &model.Log{}, &model.User{}, &model.SubscriptionPlan{}, &model.UserSubscription{}, &model.TimedSubscriptionValuationGrant{}, &model.InvitationRewardEvent{}))
 
@@ -303,6 +306,42 @@ func assertRedemptionTopupLogContains(t *testing.T, userID int, expected string)
 	require.NoError(t, model.LOG_DB.Where("user_id = ? AND type = ?", userID, model.LogTypeTopup).Order("id DESC").First(&log).Error)
 	assert.Contains(t, log.Content, expected)
 	assert.NotContains(t, log.Content, "500000")
+}
+
+func TestRedeemLegacySubscriptionWithoutSnapshotReturnsDedicatedError(t *testing.T) {
+	setupRedemptionCNYTestDB(t)
+	userID := 9609
+	planID := 9610
+	require.NoError(t, model.DB.Create(&model.User{Id: userID, Username: "legacy_snapshot_user", Status: common.UserStatusEnabled}).Error)
+	priceMicros := int64(40_000_000)
+	require.NoError(t, model.DB.Create(&model.SubscriptionPlan{
+		Id: planID, Title: "Legacy Snapshot", EntitlementType: model.SubscriptionEntitlementTimed,
+		PriceAmount: 40, PriceAmountMicros: &priceMicros, Currency: "CNY", Enabled: true,
+		DurationUnit: model.SubscriptionDurationDay, DurationValue: 30,
+		MonthlyTokenLimit: 1000, QuotaResetPeriod: model.SubscriptionResetMonthly,
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.Redemption{
+		Id: 9611, UserId: 1, Name: "legacy snapshot", Key: "legacy-snapshot-key",
+		Type: model.RedemptionTypeSubscription, PlanId: planID,
+		Status: common.RedemptionCodeStatusEnabled, CreatedTime: common.GetTimestamp(),
+	}).Error)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/user/topup", strings.NewReader(`{"key":"legacy-snapshot-key","redemption_mode":"timed"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("id", userID)
+	ctx.Set(string(constant.ContextKeyLanguage), i18n.LangZhCN)
+
+	TopUp(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), `"code":"redemption_snapshot_unavailable"`)
+	assert.Contains(t, recorder.Body.String(), "该兑换码缺少历史授权快照，请联系管理员")
+	assert.NotContains(t, recorder.Body.String(), "Credit 余额兑换资格")
+	var saved model.Redemption
+	require.NoError(t, model.DB.First(&saved, 9611).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, saved.Status)
+	assert.Zero(t, saved.UsedUserId)
 }
 
 func TestRedeemSubscriptionCodeResponseIncludesPlanResult(t *testing.T) {

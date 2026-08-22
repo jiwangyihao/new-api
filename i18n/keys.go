@@ -73,6 +73,7 @@ const (
 	MsgRedemptionModeInvalid              = "redemption.mode_invalid"
 	MsgRedemptionCreditBalanceUnavailable = "redemption.credit_balance_unavailable"
 	MsgRedemptionPlanIneligible           = "redemption.plan_ineligible"
+	MsgRedemptionSnapshotUnavailable      = "redemption.snapshot_unavailable"
 )
 
 // User related messages

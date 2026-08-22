@@ -64,6 +64,7 @@ redemption.mode_required: "套餐型兌換碼必須明確選擇兌換模式"
 redemption.mode_invalid: "兌換模式必須是 timed 或 credit_balance"
 redemption.credit_balance_unavailable: "Credit 餘額兌換目前不可用"
 redemption.plan_ineligible: "該套餐不符合 Credit 餘額兌換資格"
+redemption.snapshot_unavailable: "該兌換碼缺少歷史授權快照，請聯繫管理員"
 
 # User messages
 user.password_login_disabled: "管理員關閉了密碼登錄"

@@ -1189,6 +1189,9 @@ func TopUp(c *gin.Context) {
 		case errors.Is(err, model.ErrCreditBalanceRedemptionUnavailable):
 			code = "credit_balance_redemption_unavailable"
 			messageKey = i18n.MsgRedemptionCreditBalanceUnavailable
+		case errors.Is(err, model.ErrRedemptionSnapshotUnavailable):
+			code = "redemption_snapshot_unavailable"
+			messageKey = i18n.MsgRedemptionSnapshotUnavailable
 		case errors.Is(err, model.ErrRedemptionPlanIneligible):
 			code = "redemption_plan_ineligible"
 			messageKey = i18n.MsgRedemptionPlanIneligible

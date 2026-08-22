@@ -92,7 +92,7 @@ func BatchUpdatePendingCount(type_ int) int {
 var migrationFlushAfterSwapHookForTest func()
 
 func FlushBatchUpdateTypeForMigration(type_ int) error {
-	if type_ != BatchUpdateTypeUserQuota {
+	if type_ < 0 || type_ >= BatchUpdateTypeCount {
 		return errors.New("unsupported migration batch update type")
 	}
 	batchUpdateFlushLocks[type_].Lock()
@@ -113,7 +113,7 @@ func FlushBatchUpdateTypeForMigration(type_ int) error {
 			flushed[key] = struct{}{}
 			continue
 		}
-		if err := flushUserQuotaForMigration(key, value); err != nil {
+		if err := flushBatchUpdateRecordForMigration(type_, key, value); err != nil {
 			batchUpdateLocks[type_].Lock()
 			for pendingKey, pendingValue := range snapshot {
 				if pendingValue == 0 {
@@ -130,6 +130,41 @@ func FlushBatchUpdateTypeForMigration(type_ int) error {
 		flushed[key] = struct{}{}
 	}
 	return nil
+}
+
+func FlushAllBatchUpdatesForMigration() error {
+	for type_ := 0; type_ < BatchUpdateTypeCount; type_++ {
+		if err := FlushBatchUpdateTypeForMigration(type_); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func FlushAllWritersForMigration() error {
+	if err := FlushAllBatchUpdatesForMigration(); err != nil {
+		return err
+	}
+	FlushUsageCounterUpdates()
+	FlushSubscriptionTokenDeltaUpdates()
+	FlushConsumeLogUpdates()
+	return nil
+}
+
+func flushBatchUpdateRecordForMigration(type_, id, value int) error {
+	switch type_ {
+	case BatchUpdateTypeUserQuota:
+		return flushUserQuotaForMigration(id, value)
+	case BatchUpdateTypeTokenQuota:
+		return increaseTokenQuota(id, value)
+	case BatchUpdateTypeUsedQuota:
+		return DB.Model(&User{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", value)).Error
+	case BatchUpdateTypeChannelUsedQuota:
+		return DB.Model(&Channel{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", value)).Error
+	case BatchUpdateTypeRequestCount:
+		return DB.Model(&User{}).Where("id = ?", id).Update("request_count", gorm.Expr("request_count + ?", value)).Error
+	default:
+		return errors.New("unsupported migration batch update type")
+	}
 }
 
 func flushUserQuotaForMigration(id int, quota int) error {

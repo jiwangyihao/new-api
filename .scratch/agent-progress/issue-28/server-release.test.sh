@@ -31,26 +31,14 @@ write_permission_shims() {
 set -Eeuo pipefail
 
 ledger_rewrite_without() {
-  local omitted="$1" temporary="${MODE_LEDGER_STUB}.tmp.$$" candidate mode
-  : >"$temporary"
-  if [[ -f "$MODE_LEDGER_STUB" ]]; then
-    while IFS=$'\t' read -r candidate mode; do
-      [[ "$candidate" == "$omitted" ]] || printf '%s\t%s\n' "$candidate" "$mode" >>"$temporary"
-    done <"$MODE_LEDGER_STUB"
-  fi
+  local omitted="$1" temporary="${MODE_LEDGER_STUB}.tmp.$$"
+  awk -F $'\t' -v omit="$omitted" '$1 != omit { print }' "$MODE_LEDGER_STUB" >"$temporary"
   "$REAL_MV_SHIM" -f "$temporary" "$MODE_LEDGER_STUB"
 }
 
 ledger_lookup() {
-  local wanted="$1" candidate mode
-  [[ -f "$MODE_LEDGER_STUB" ]] || return 1
-  while IFS=$'\t' read -r candidate mode; do
-    if [[ "$candidate" == "$wanted" ]]; then
-      printf '%s\n' "$mode"
-      return 0
-    fi
-  done <"$MODE_LEDGER_STUB"
-  return 1
+  local wanted="$1"
+  awk -F $'\t' -v wanted="$wanted" '$1 == wanted { print $2; found=1; exit } END { if (!found) exit 1 }' "$MODE_LEDGER_STUB"
 }
 
 case "${1:-}" in
@@ -230,30 +218,67 @@ def migration(mode):
 def probe(kind):
     if not isinstance(data, dict) or data.get("success") is not True:
         return False
+    if kind == "browser":
+        return (data.get("environment") == "production_browser" and
+                data.get("release_id") == values.get("release") and
+                data.get("digest") == values.get("digest") and
+                data.get("revision") == values.get("revision") and
+                data.get("snapshot_at") == int(values.get("snapshot", 1)) and
+                data.get("api_origin") == "http://127.0.0.1:13080" and
+                data.get("frontend_origin") == "https://api.pqapi.shop" and
+                all(data.get(k) is True for k in ("authenticated", "rendered_32_cny", "rendered_exact",
+                    "rendered_estimated", "rendered_unknown", "rendered_credit_time_not_applicable",
+                    "rendered_required_warning", "network_api_authenticated")) and
+                data.get("static_interception_used") is False and isinstance(data.get("captured_at"), str))
     if kind == "production":
         return (data.get("environment") == "production" and data.get("read_only") is True and
                 data.get("digest") == values.get("digest") and data.get("revision") == values.get("revision") and
                 data.get("marker_status") == "ready" and data.get("migration_version") == int(values.get("version", 1)) and
-                all(data.get(k) is True for k in ("invariants", "authenticated_frontend",
-                    "disabled_plan_existing_consumable", "disabled_plan_new_allocations_rejected", "model_scope_ignored")))
+                data.get("snapshot_at") == int(values.get("snapshot", 1)) and
+                data.get("api_origin") == "http://127.0.0.1:13080" and data.get("browser_evidence_required") is True and
+                all(data.get(k) is True for k in ("invariants", "authenticated_api", "administrator_identity",
+                    "paid_value_endpoints_structurally_consistent")))
     if kind == "clone":
         f = data.get("fixture", {})
-        return (data.get("environment") == "isolated_clone" and
+        return (data.get("environment") == "isolated_clone" and data.get("clone_isolated") is True and
+                data.get("production_identity_collision") is False and data.get("cleanup_complete") is True and
+                data.get("target_digest") == values.get("target_digest") and
                 data.get("source_backup_sha256") == values.get("backup_checksum") and
                 f == {"price_amount_micros": "40000000", "plan_credit": 1000,
                      "consumed_credit": 200, "available_credit": 800, "end_time": 0,
                      "exact_cost_micros": "32000000", "currency": "CNY",
                      "active_paid_subscription_count": 1, "estimated_cost_micros": "0",
-                     "unknown_credit": 0, "five_analytics_endpoints_consistent": True})
+                     "unknown_credit": 0, "five_analytics_endpoints_consistent": True,
+                     "disabled_plan_existing_consumable": True,
+                     "disabled_plan_new_allocations_rejected": True,
+                     "model_scope_ignored": True})
     if kind == "observe":
         return (data.get("aggregated") is True and data.get("window_seconds", 0) >= int(values.get("seconds", 1)) and
                 all(data.get(k) == 0 for k in ("health_failures", "credit_valuation_state_missing",
                     "credit_valuation_state_mismatch", "unsupported_fx_errors", "panic_count", "abnormal_restarts")) and
-                data.get("postgres_lock_wait_regression") is False and data.get("write_load_regression") is False)
+                data.get("unknown_credit_regression") is False and
+                data.get("postgres_lock_wait_regression") is False and data.get("write_load_regression") is False and
+                isinstance(data.get("http_request_count"), (int, float)) and
+                isinstance(data.get("http_error_count"), (int, float)) and
+                isinstance(data.get("http_error_rate_ppm"), (int, float)) and
+                isinstance(data.get("postgres_write_delta"), (int, float)) and data.get("postgres_write_delta") >= 0 and
+                isinstance(data.get("postgres_connection_delta"), (int, float)) and
+                isinstance(data.get("postgres_connections_after"), (int, float)) and
+                data.get("batch_update_pending_total") == 0 and
+                isinstance(data.get("settlement_replay_count"), (int, float)) and
+                isinstance(data.get("settlement_replay_growth"), (int, float)) and
+                isinstance(data.get("settlement_max_latency_seconds"), (int, float)) and
+                isinstance(data.get("resource_snapshot"), dict))
     return False
 
 if raw and ".state" in expr and "report" not in expr:
     print(data.get("state", "")); sys.exit(0)
+if raw and ".snapshot_at" in expr:
+    value = data.get("snapshot_at", "") if isinstance(data, dict) else ""
+    if value != "":
+        print(value)
+        sys.exit(0)
+    sys.exit(1)
 if raw and ".report.checksum" in expr:
     print(report().get("checksum", "")); sys.exit(0)
 if "index($reference)" in expr:
@@ -269,6 +294,8 @@ elif '.report.mode == "verify"' in expr:
     result = migration("verify")
 elif '.report.mode == "suspend"' in expr:
     result = migration("suspend")
+elif '.environment == "production_browser"' in expr:
+    result = probe("browser")
 elif '.environment == "production"' in expr:
     result = probe("production")
 elif '.environment == "isolated_clone"' in expr:
@@ -277,8 +304,13 @@ elif ".aggregated == true" in expr:
     result = probe("observe")
 elif '.success == true and .state == "closed"' in expr and ".external_writers" in expr:
     result = gate(closed=True)
-elif '.success == true and .state == "open"' in expr:
-    result = gate(opened=True)
+elif '.bootstrap == true' in expr and '.runtime_stats == false' in expr:
+    result = (isinstance(data, dict) and data.get("success") is True and
+              data.get("bootstrap") is True and data.get("state") == "open" and
+              data.get("runtime_stats") is False and data.get("full_writer_drain") is False and
+              data.get("external_writers") is None and
+              all(isinstance(data.get(k), (int, float)) and data[k] >= 0 for k in (
+                  "background_writers", "non_terminal_preconsume", "async_settlement", "legacy_writer_sessions")))
 elif ".external_writers" in expr:
     result = gate()
 elif ".success == true" in expr:
@@ -326,6 +358,19 @@ setup_fixture() {
   write_permission_shims
   : >"$TEST_CALLS"
   printf 'services:\n  new-api:\n    image: %s\n' "$TEST_CURRENT" >"$TEST_ROOT/compose.release.yml"
+  cat >"$TEST_TMP/browser-evidence.json" <<EOF
+{"success":true,"environment":"production_browser","release_id":"issue28-test","digest":"$TEST_TARGET","revision":"$TEST_REVISION","snapshot_at":1700000000,"authenticated":true,"api_origin":"http://127.0.0.1:13080","frontend_origin":"https://api.pqapi.shop","rendered_32_cny":true,"rendered_exact":true,"rendered_estimated":true,"rendered_unknown":true,"rendered_credit_time_not_applicable":true,"rendered_required_warning":true,"network_api_authenticated":true,"static_interception_used":false,"captured_at":"2026-08-20T00:00:00Z"}
+EOF
+  "$REAL_CHMOD_SHIM" 0600 "$TEST_TMP/browser-evidence.json"
+  MODE_LEDGER_STUB="$MODE_LEDGER_STUB" REAL_MV_SHIM="$REAL_MV_SHIM" "$TEST_MODE_LEDGER_HELPER" set "$TEST_TMP/browser-evidence.json" 600
+  printf '%s\n' 'stub-config' >"$TEST_TMP/write-gate.conf"
+  printf '%s\n' 'stub-config' >"$TEST_TMP/production-probe.conf"
+  printf '%s\n' 'stub-config' >"$TEST_TMP/clone-probe.conf"
+  printf '%s\n' 'stub-config' >"$TEST_TMP/observe.conf"
+  for config in "$TEST_TMP/write-gate.conf" "$TEST_TMP/production-probe.conf" "$TEST_TMP/clone-probe.conf" "$TEST_TMP/observe.conf"; do
+    "$REAL_CHMOD_SHIM" 0600 "$config"
+    MODE_LEDGER_STUB="$MODE_LEDGER_STUB" REAL_MV_SHIM="$REAL_MV_SHIM" "$TEST_MODE_LEDGER_HELPER" set "$config" 600
+  done
   write_jq_implementation
   make_jq_stub
 
@@ -394,7 +439,9 @@ elif [[ "$args" == *"compose"*"up -d"* ]]; then
     rm -f "$STUB_STATE.maintenance_ready" "$STUB_STATE.maintenance_schema_ready"
   fi
 elif [[ "$args" == *"credit-valuation-migrate --dry-run"* ]]; then
-  [[ -s "$STUB_STATE.maintenance_schema_ready" ]] || { printf 'maintenance schema is not staged\n' >&2; exit 58; }
+  running="$(cat "$STUB_STATE.running_image" 2>/dev/null || printf '%s' "$CURRENT_IMAGE_STUB")"
+  [[ "$running" == "$TARGET_IMAGE_STUB" ]] || { printf 'target runtime is not staged\n' >&2; exit 58; }
+  [[ ! -s "$STUB_STATE.running_env" ]] || { printf 'dry-run unexpectedly used maintenance runtime\n' >&2; exit 59; }
   printf '%s\n' "$DRY_REPORT_STUB"
 elif [[ "$args" == *"run --rm"*"credit-valuation-migrate --apply"* ]]; then
   [[ "${FAIL_MODE:-}" != apply ]] || { printf 'simulated apply failure\n' >&2; exit 55; }
@@ -424,12 +471,19 @@ set -Eeuo pipefail
 printf 'write-gate %s\n' "$*" >>"$CALL_LOG"
 state="$(cat "$STUB_STATE.gate" 2>/dev/null || printf open)"
 case "${1:-}" in
+  bootstrap-status)
+    [[ "$state" == open ]] || exit 1
+    printf '%s\n' '{"success":true,"bootstrap":true,"state":"open","runtime_stats":false,"full_writer_drain":false,"external_writers":null,"background_writers":0,"non_terminal_preconsume":0,"async_settlement":0,"legacy_writer_sessions":0}' ;;
   status)
     if [[ "$state" == closed ]]; then
       printf '%s\n' '{"success":true,"state":"closed","external_writers":0,"background_writers":0,"non_terminal_preconsume":0,"async_settlement":0,"legacy_writer_sessions":0}'
     else
       printf '%s\n' '{"success":true,"state":"open","external_writers":0,"background_writers":0,"non_terminal_preconsume":0,"async_settlement":0,"legacy_writer_sessions":0}'
     fi ;;
+  drain-capability)
+    [[ -s "$STUB_STATE.running_image" ]] || exit 1
+    [[ "${FAIL_MODE:-}" != drain_capability ]] || exit 1
+    printf '%s\n' '{"success":true,"state":"open","runtime_stats":true,"full_writer_drain":true}' ;;
   close)
     printf closed >"$STUB_STATE.gate"
     printf '%s\n' '{"success":true,"state":"closed","external_writers":0,"background_writers":0,"non_terminal_preconsume":0,"async_settlement":0,"legacy_writer_sessions":0}' ;;
@@ -438,25 +492,26 @@ case "${1:-}" in
     printf '%s\n' '{"success":true,"state":"open","external_writers":0,"background_writers":0,"non_terminal_preconsume":0,"async_settlement":0,"legacy_writer_sessions":0}' ;;
   *) exit 2 ;;
 esac
+
 HOOK
   chmod +x "$TEST_TMP/write-gate"
 
   cat >"$TEST_TMP/production-probe" <<'HOOK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '%s\n' '{"success":true,"environment":"production","read_only":true,"digest":"'"$2"'","revision":"'"$3"'","marker_status":"ready","migration_version":1,"invariants":true,"authenticated_frontend":true,"disabled_plan_existing_consumable":true,"disabled_plan_new_allocations_rejected":true,"model_scope_ignored":true}'
+printf '%s\n' '{"success":true,"environment":"production","read_only":true,"digest":"'"$2"'","revision":"'"$3"'","marker_status":"ready","migration_version":1,"invariants":true,"authenticated_api":true,"administrator_identity":true,"paid_value_endpoints_structurally_consistent":true,"snapshot_at":1700000000,"api_origin":"http://127.0.0.1:13080","browser_evidence_required":true}'
 HOOK
   chmod +x "$TEST_TMP/production-probe"
   cat >"$TEST_TMP/clone-probe" <<'HOOK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '%s\n' '{"success":true,"environment":"isolated_clone","source_backup_sha256":"'"$3"'","fixture":{"price_amount_micros":"40000000","plan_credit":1000,"consumed_credit":200,"available_credit":800,"end_time":0,"exact_cost_micros":"32000000","currency":"CNY","active_paid_subscription_count":1,"estimated_cost_micros":"0","unknown_credit":0,"five_analytics_endpoints_consistent":true}}'
+printf '%s\n' '{"success":true,"environment":"isolated_clone","clone_isolated":true,"production_identity_collision":false,"source_backup_sha256":"'"$3"'","target_digest":"'"$4"'","cleanup_complete":true,"fixture":{"price_amount_micros":"40000000","plan_credit":1000,"consumed_credit":200,"available_credit":800,"end_time":0,"exact_cost_micros":"32000000","currency":"CNY","active_paid_subscription_count":1,"estimated_cost_micros":"0","unknown_credit":0,"five_analytics_endpoints_consistent":true,"disabled_plan_existing_consumable":true,"disabled_plan_new_allocations_rejected":true,"model_scope_ignored":true}}'
 HOOK
   chmod +x "$TEST_TMP/clone-probe"
   cat >"$TEST_TMP/observe" <<'HOOK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-printf '%s\n' '{"success":true,"aggregated":true,"window_seconds":1,"health_failures":0,"credit_valuation_state_missing":0,"credit_valuation_state_mismatch":0,"unsupported_fx_errors":0,"panic_count":0,"abnormal_restarts":0,"postgres_lock_wait_regression":false,"write_load_regression":false}'
+printf '%s\n' '{"success":true,"aggregated":true,"digest":"'"$2"'","revision":"'"$4"'","window_seconds":1,"health_failures":0,"credit_valuation_state_missing":0,"credit_valuation_state_mismatch":0,"unsupported_fx_errors":0,"panic_count":0,"abnormal_restarts":0,"unknown_credit_regression":false,"postgres_lock_wait_regression":false,"write_load_regression":false,"http_request_count":10,"http_error_count":0,"http_error_rate_ppm":0,"postgres_write_delta":5,"postgres_connection_delta":0,"postgres_connections_after":1,"batch_update_pending_total":0,"settlement_replay_count":0,"settlement_replay_growth":0,"settlement_max_latency_seconds":0,"resource_snapshot":{}}'
 HOOK
   chmod +x "$TEST_TMP/observe"
 
@@ -476,9 +531,14 @@ COMPOSE_RELEASE=$TEST_ROOT/compose.release.yml
 APP_ENV_FILE=$TEST_ROOT/app.env
 DOCKER_NETWORK=issue28-test-network
 WRITE_GATE_HOOK=$TEST_TMP/write-gate
+WRITE_GATE_CONFIG=$TEST_TMP/write-gate.conf
+PRODUCTION_PROBE_CONFIG=$TEST_TMP/production-probe.conf
+CLONE_PROBE_CONFIG=$TEST_TMP/clone-probe.conf
+OBSERVE_CONFIG=$TEST_TMP/observe.conf
 READ_ONLY_PROBE_HOOK=$TEST_TMP/production-probe
 CLONE_PROBE_HOOK=$TEST_TMP/clone-probe
 OBSERVE_HOOK=$TEST_TMP/observe
+BROWSER_EVIDENCE_FILE=$TEST_TMP/browser-evidence.json
 MUTATION_APPROVAL_FILE=$TEST_TMP/mutation.approval
 OPEN_WRITES_APPROVAL_FILE=$TEST_TMP/open.approval
 ROLLBACK_APPROVAL_FILE=$TEST_TMP/rollback.approval
@@ -558,6 +618,32 @@ test_config_rejects_shell_substitution() {
   cleanup_fixture
 }
 
+test_preflight_defers_browser_evidence_validation() {
+  setup_fixture
+  rm -f "$TEST_TMP/browser-evidence.json"
+  run_release preflight
+  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=preflight' ]] || fail 'preflight did not complete without browser evidence'
+  cleanup_fixture
+}
+
+test_stage_runtime_requires_full_writer_drain_capability() {
+  setup_fixture
+  run_release preflight
+  write_approval "$TEST_TMP/mutation.approval" production-maintenance
+  set +e
+  FAIL_MODE=drain_capability run_release stage-runtime >"$TEST_TMP/drain-capability-failure.log" 2>&1
+  rc=$?
+  set -e
+  [[ "$rc" -ne 0 ]] || fail 'stage-runtime accepted a target runtime without full-writer drain capability'
+  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=stage-runtime-starting' ]] || fail 'target capability failure did not preserve recoverable staging state'
+  [[ "$(cat "$TEST_STUB_STATE.running_image")" == "$TEST_TARGET" ]] || fail 'capability was checked before the target runtime was staged'
+  grep -Fq 'write-gate bootstrap-status' "$TEST_CALLS" || fail 'legacy bootstrap status was not queried before staging'
+  grep -Fq 'write-gate drain-capability' "$TEST_CALLS" || fail 'target drain capability was not queried after staging'
+  grep -Fq 'compose --project-name new-api' "$TEST_CALLS" || fail 'target runtime was not staged before capability proof'
+  cleanup_fixture
+}
+
+
 read_state_field() {
   local state_path="$1" wanted="$2" key value
   while IFS='=' read -r key value; do
@@ -572,11 +658,21 @@ read_state_field() {
 prepare_maintenance() {
   run_release preflight
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
-  run_release stop-writes
-  run_release stop-writes
-  run_release backup
-  run_release backup
+  run_release stage-runtime
+  run_release stage-runtime
+  [[ ! -s "$TEST_STUB_STATE.running_env" ]] || fail 'stage-runtime unexpectedly enabled maintenance mode'
+  [[ "$(cat "$TEST_STUB_STATE.running_image")" == "$TEST_TARGET" ]] || fail 'stage-runtime did not start the target image'
+  [[ "$(cat "$TEST_STUB_STATE.gate" 2>/dev/null || printf open)" == open ]] || fail 'stage-runtime closed writes before online dry-run'
+  run_release read-only-dry-run
+  run_release read-only-dry-run
+  [[ "$(cat "$TEST_STUB_STATE.gate" 2>/dev/null || printf open)" == open ]] || fail 'online dry-run closed writes'
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
+  run_release stop-writes
+  run_release stop-writes
+  run_release frozen-dry-run
+  run_release frozen-dry-run
+  run_release backup
+  run_release backup
   run_release stage-schema
   if [[ "$(cat "$TEST_STUB_STATE.running_env" 2>/dev/null || true)" != 'MAINTENANCE_MODE=true' ]]; then
     printf 'rendered Compose release:\n' >&2
@@ -590,10 +686,9 @@ prepare_maintenance() {
   [[ -s "$TEST_STUB_STATE.maintenance_ready" ]] || fail 'maintenance compose-up did not create independent readiness state'
   run_release stage-schema
   [[ "$(cat "$TEST_STUB_STATE.running_env" 2>/dev/null || true)" == 'MAINTENANCE_MODE=true' ]] || fail 'stage-schema did not render MAINTENANCE_MODE=true'
-
-  run_release read-only-dry-run
   write_approval "$TEST_TMP/mutation.approval" apply-migration
 }
+
 
 test_full_pipeline_and_idempotence() {
   setup_fixture
@@ -615,7 +710,7 @@ test_full_pipeline_and_idempotence() {
   run_release observe
   grep -Fq 'phase=observe result=pass' "$TEST_ROOT/audits/issue28-test.log" || fail 'observe result was not persisted in the audit log'
   [[ "$(cat "$TEST_STUB_STATE.gate")" == open ]] || fail 'writes did not remain open after observe'
-  [[ "$(grep -Fc 'credit-valuation-migrate --dry-run --version 1' "$TEST_CALLS")" -eq 2 ]] || fail 'dry-run was not exactly twice'
+  [[ "$(grep -Fc 'credit-valuation-migrate --dry-run --version 1' "$TEST_CALLS")" -eq 4 ]] || fail 'online and frozen dry-run did not each run exactly twice'
   [[ "$(grep -Fc 'pg_dump -U new_api -d new_api -Fc' "$TEST_CALLS")" -eq 1 ]] || fail 'backup was not idempotent'
   write_approval "$TEST_TMP/rollback.approval" rollback-suspend
   run_release rollback-suspend
@@ -665,7 +760,7 @@ test_apply_failure_keeps_writes_closed() {
   set -e
   [[ "$rc" -ne 0 ]] || fail 'failed apply unexpectedly succeeded'
   [[ "$(cat "$TEST_STUB_STATE.gate")" == closed ]] || fail 'failed apply reopened writes'
-  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=read-only-dry-run' ]] || fail 'failed apply advanced state'
+  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=stage-schema' ]] || fail 'failed apply advanced state'
   ! grep -q 'write-gate open' "$TEST_CALLS" || fail 'failure path opened writes'
   cleanup_fixture
 }
@@ -674,7 +769,12 @@ test_stage_schema_failure_stays_closed() {
   setup_fixture
   run_release preflight
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
+  run_release stage-runtime
+  run_release read-only-dry-run
+  write_approval "$TEST_TMP/mutation.approval" production-maintenance
   run_release stop-writes
+  run_release frozen-dry-run
+
   run_release backup
   set +e
   FAIL_MODE=stage run_release stage-schema >"$TEST_TMP/stage-failure.log" 2>&1; rc=$?
@@ -689,11 +789,14 @@ test_before_ready_rollback() {
   setup_fixture
   run_release preflight
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
-  run_release stop-writes
-  run_release backup
-  write_approval "$TEST_TMP/mutation.approval" production-maintenance
-  run_release stage-schema
+  run_release stage-runtime
   run_release read-only-dry-run
+  write_approval "$TEST_TMP/mutation.approval" production-maintenance
+  run_release stop-writes
+  run_release frozen-dry-run
+
+  run_release backup
+  run_release stage-schema
   write_approval "$TEST_TMP/rollback.approval" rollback-before-ready
   run_release rollback-before-ready
   run_release rollback-before-ready
@@ -706,7 +809,12 @@ test_backup_can_rollback_before_target_start() {
   setup_fixture
   run_release preflight
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
+  run_release stage-runtime
+  run_release read-only-dry-run
+  write_approval "$TEST_TMP/mutation.approval" production-maintenance
   run_release stop-writes
+  run_release frozen-dry-run
+
   run_release backup
   write_approval "$TEST_TMP/rollback.approval" rollback-before-ready
   run_release rollback-before-ready
@@ -737,7 +845,7 @@ run_permission_override_case() {
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
   failure_log="$TEST_TMP/permission-failure.log"
   set +e
-  run_release stop-writes >"$failure_log" 2>&1
+  run_release stage-runtime >"$failure_log" 2>&1
   rc=$?
   set -e
   output="$(<"$failure_log")"
@@ -752,8 +860,8 @@ test_permission_contract_with_mock_stat() {
   setup_fixture
   run_release preflight
   write_approval "$TEST_TMP/mutation.approval" production-maintenance
-  run_release stop-writes
-  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=stop-writes' ]] || fail 'simulated mode 600 did not allow guarded transition'
+  run_release stage-runtime
+  [[ "$(grep '^PHASE=' "$TEST_ROOT/state/issue28-test.state")" == 'PHASE=stage-runtime' ]] || fail 'simulated mode 600 did not allow guarded transition'
   printf 'PASS: simulated mode 600 accepted\n'
   cleanup_fixture
 
@@ -799,6 +907,8 @@ if [[ "${TEST_FILTER:-all}" == full ]]; then
 fi
 
 test_config_rejects_missing_write_gate
+test_stage_runtime_requires_full_writer_drain_capability
+test_preflight_defers_browser_evidence_validation
 test_config_rejects_shell_substitution
 test_full_pipeline_and_idempotence
 test_suspend_intermediate_state_resumes_before_backup

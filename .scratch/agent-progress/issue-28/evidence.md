@@ -131,3 +131,10 @@
 - `/opt/new-api/backups/new_api_final.dump.sha256` 与 `/opt/new-api/backups/new_api.dump.sha256` 读取失败；没有 sidecar checksum，也没有本轮一致备份的可读/可恢复验证。不得把读取失败记为备份通过。
 - `/opt/new-api/migration-prep` 清单未显示 Issue #28 的真实 Hook、write-gate 配置或 approval 文件；本地 `production-probe-hook.sh`、`clone-probe-hook.sh`、`observe-hook.sh` 只做过 read/grep 复核，未运行语法或 fixture 验证，且 `write-gate-hook.sh` 未修改。
 - 本轮未执行 install、stop-writes、pull、Compose 修改、迁移、重启、业务/前端验证、open-writes、观察窗口或回滚；生产保持失败关闭，Issue #28 与父 Issue #19 保持 OPEN。
+## 本轮本地工具链与生产现场核验（本次收口）
+
+- 本地定向 Go、Go 非矩阵全套（`53 packages ok, 59 no tests`）、全部 Issue #28 shell `bash -n`、`git diff --check`、write-gate fixture、production/clone wrapper fixture 和 `TEST_FILTER=full` 状态机均已通过。
+- 本轮实现并验证：显式 PostgreSQL clone DSN（`NEW_API_CLONE_SQL_DSN`/`--clone-dsn`，不继承 ambient `SQL_DSN`）、空白估值币种 fallback、全 writer drain、runtime batch pending 指标、观察窗口日志/unknown/锁/错误率/连接/资源合同、Hook 独立配置文件传递与失败关闭。
+- 这些本地结果不等同于生产验收；未在生产执行任何 pull、安装、停写、备份、迁移、重启、业务探针、开放写流量、观察或回滚。
+- 目标主机 `netcup-ows-migrate` 的只读现场仍显示：`compose.release.yml` 固定 digest 与当前本地候选不一致；`/opt/new-api/hooks`、`/opt/new-api/release-state`、本轮 config/approval 缺失；Nginx 入口直接反代 `127.0.0.1:13080`，没有 managed write-gate；基础 Compose 启用 `BATCH_UPDATE_ENABLED=true`，未启用本轮 runtime/drain 配置；可核验的一致 `0600` 备份不存在。
+- 结论：生产迁移、32 CNY 生产/隔离克隆验收、浏览器验收、观察窗口和回滚仍 blocked；Issue #28 与父 #19 保持 OPEN，生产维持失败关闭。

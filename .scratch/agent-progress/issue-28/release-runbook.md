@@ -30,23 +30,25 @@
 - `git diff --check`
 - CI 镜像：只接受推送到 `deploy/main` 的确切 SHA 对应的成功 `Build deployment image` run；从该 run 取得 `ghcr.io/jiwangyihao/new-api@sha256:<digest>`，记录 SHA、run ID、digest，禁止使用 `latest` 或漂移 tag。
 
-## 2. 只读 dry-run
+## 2. 在线只读 dry-run
 
-- 使用目标 digest 运行 `new-api credit-valuation-migrate --dry-run --version 1`
-- 连续两次输出必须为单行 JSON，业务字段逐字节一致，checksum 相同
+- `stage-runtime` 先在写开放时把目标 digest 作为正常 runtime 启动；旧镜像只提供受管 gate/容器身份/健康/SQL bootstrap 证据，目标 runtime 启动后才要求 runtime stats 和 full-writer-drain capability
+- 使用目标 digest 连续两次运行 `new-api credit-valuation-migrate --dry-run --version 1`
+- 两份输出必须分别为单行 JSON、无 blocker、计划价格合法、范围非空；因真实请求仍在变化，不要求两份在线业务快照或 checksum 相同
 - 审阅 estimated/unknown、非法价格、unsupported currency、歧义和 blocker；任一 blocker 非零停止
 
-## 3. 维护窗口
+## 3. 维护窗口与冻结预演
 
 - 阶段前：协调器明确放行；写入 `status.md`
-- `stop-writes`：关闭反代/API 写流量、停止后台任务；观察清零 HTTP writers、非终态预扣、异步 settlement、旧 writer sessions
-- `backup`：PostgreSQL 一致备份；记录服务器绝对路径、大小、UTC、SHA-256；读取/恢复验证
-- `apply`：同一 digest/version/checksum 执行 `--apply --version 1 --batch-size 100`
+- `stop-writes`：关闭反代/API 写流量、drain 后台任务；确认 HTTP writers、非终态预扣、异步 settlement、batch pending 和旧 writer sessions 全部为零，随后停止应用容器
+- `frozen-dry-run`：停写后用同一目标 digest/version 连续运行两次 dry-run；保留两份 mode 0600 原始证据，比较去除 `report.fx.captured_at` 后的规范化完整 JSON，并要求 checksum 相同
+- `backup`：冻结 checksum 稳定后创建 PostgreSQL 一致备份；记录服务器绝对路径、大小、UTC、SHA-256；读取/恢复验证
+- `apply`：同一 digest/version/冻结 checksum 执行 `--apply --version 1 --batch-size 100`；`BATCH_SIZE` 不得漂移
 - `verify`：同一 digest/version 执行 `--verify --version 1`；checksum 与 apply 合同一致
 - `start-closed`：所有实例同 digest 启动，写仍关闭；读取 marker/health/fail-closed
 - `probe`：生产只读；32 CNY tracer 在隔离克隆执行
 - `open-writes`：协调器显式放行后原子恢复，记录精确 UTC
-- `observe`：记录固定窗口、聚合指标和结论
+- `observe`：记录固定窗口、HTTP 错误率、batch pending、PostgreSQL 锁 gauge/连接/写负载、settlement replay/延迟与资源聚合结论
 
 ## 4. 回滚演练
 

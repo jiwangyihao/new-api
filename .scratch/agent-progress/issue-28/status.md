@@ -117,3 +117,9 @@
 - `/opt/new-api/backups/new_api_final.dump.sha256` 与 `/opt/new-api/backups/new_api.dump.sha256` 读取均失败；没有可核验 checksum sidecar、可恢复性或回滚备份证据，读取失败不等于校验通过。
 - `/opt/new-api/migration-prep` 清单未显示真实 Issue #28 write-gate、production-probe、clone-probe、observe Hook 或对应 approval/config；本地 scratch 适配器不能替代远端真实 Hook。
 - 保持失败关闭：禁止 install、stop-writes、pull、Compose 修改、迁移、重启、业务探针、open-writes、observe 和 rollback；本轮未执行生产写操作。
+
+## 本轮收口（本次会话）
+
+- 本地发布工具链与回归已完成：Go 非矩阵全套、定向 Go、脚本语法、write-gate、探针 wrapper、完整状态机均通过。
+- 生产现场只读核验仍失败关闭：候选未部署，远端缺真实 Hook/config/approval、runtime/drain、managed Nginx gate 和本次一致 `0600` 备份。
+- 未执行任何生产远程写操作；不得把本地 stub 状态机 PASS 记录为生产部署或业务验收通过。

@@ -194,6 +194,10 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "credit-valuation-migrate" {
 		os.Exit(RunCreditValuationCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "credit-valuation-probe" {
+		os.Exit(RunCreditValuationProbeCommand(os.Args[2:], os.Stdout, os.Stderr))
+	}
+
 	startTime := time.Now()
 	loadDotEnv()
 	startupPlan := runtimeStartupPlanFor(maintenanceModeEnabled())

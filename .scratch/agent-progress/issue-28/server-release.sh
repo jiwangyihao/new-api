@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 usage() {
   echo 'usage: server-release.sh --config FILE PHASE' >&2
-  echo 'phases: preflight stage-schema read-only-dry-run stop-writes backup apply verify start-closed probe open-writes observe rollback-before-ready rollback-ready-before-open rollback-suspend' >&2
+  echo 'phases: preflight stage-runtime read-only-dry-run stop-writes frozen-dry-run backup stage-schema apply verify start-closed probe open-writes observe rollback-before-ready rollback-ready-before-open rollback-suspend' >&2
   exit 2
 }
 
@@ -36,7 +36,7 @@ require_absolute_executable() {
 
 is_allowed_config_key() {
   case "$1" in
-    RELEASE_ID|EXPECTED_REVISION|TARGET_IMAGE|CURRENT_IMAGE|MIGRATION_VERSION|MAINTENANCE_MODE|ROOT|COMPOSE_BASE|COMPOSE_NETWORK|COMPOSE_PRIMARY|COMPOSE_RELEASE|APP_ENV_FILE|DOCKER_NETWORK|WRITE_GATE_HOOK|READ_ONLY_PROBE_HOOK|CLONE_PROBE_HOOK|OBSERVE_HOOK|AUDIT_DIR|BACKUP_DIR|STATE_DIR|LOCK_FILE|POSTGRES_CONTAINER|POSTGRES_USER|POSTGRES_DB|BATCH_SIZE|HEALTH_TIMEOUT_SECONDS|OBSERVE_SECONDS|MUTATION_APPROVAL_FILE|OPEN_WRITES_APPROVAL_FILE|ROLLBACK_APPROVAL_FILE|SUSPEND_REASON)
+    RELEASE_ID|EXPECTED_REVISION|TARGET_IMAGE|CURRENT_IMAGE|MIGRATION_VERSION|MAINTENANCE_MODE|ROOT|COMPOSE_BASE|COMPOSE_NETWORK|COMPOSE_PRIMARY|COMPOSE_RELEASE|APP_ENV_FILE|DOCKER_NETWORK|WRITE_GATE_HOOK|WRITE_GATE_CONFIG|READ_ONLY_PROBE_HOOK|PRODUCTION_PROBE_CONFIG|CLONE_PROBE_HOOK|CLONE_PROBE_CONFIG|OBSERVE_HOOK|OBSERVE_CONFIG|BROWSER_EVIDENCE_FILE|AUDIT_DIR|BACKUP_DIR|STATE_DIR|LOCK_FILE|POSTGRES_CONTAINER|POSTGRES_USER|POSTGRES_DB|BATCH_SIZE|HEALTH_TIMEOUT_SECONDS|OBSERVE_SECONDS|MUTATION_APPROVAL_FILE|OPEN_WRITES_APPROVAL_FILE|ROLLBACK_APPROVAL_FILE|SUSPEND_REASON)
       return 0
       ;;
     *)
@@ -82,7 +82,13 @@ validate_config() {
   require_absolute_file COMPOSE_PRIMARY
   require_absolute_file COMPOSE_RELEASE
   require_absolute_file APP_ENV_FILE
+  require_absolute_file WRITE_GATE_CONFIG
+  require_absolute_file PRODUCTION_PROBE_CONFIG
+  require_absolute_file CLONE_PROBE_CONFIG
+  require_absolute_file OBSERVE_CONFIG
   require_absolute_executable WRITE_GATE_HOOK
+  require_value BROWSER_EVIDENCE_FILE
+  [[ "$BROWSER_EVIDENCE_FILE" == /* ]] || contract_error 'BROWSER_EVIDENCE_FILE must be an absolute path'
 
   [[ "$RELEASE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$ && "$RELEASE_ID" != *..* ]] || contract_error 'RELEASE_ID is invalid'
   [[ "$EXPECTED_REVISION" =~ $revision_pattern ]] || contract_error 'EXPECTED_REVISION must be a full lowercase commit SHA'
@@ -110,52 +116,61 @@ validate_config() {
   [[ "$POSTGRES_CONTAINER" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || contract_error 'POSTGRES_CONTAINER is invalid'
   [[ "$POSTGRES_USER" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || contract_error 'POSTGRES_USER is invalid'
   [[ "$POSTGRES_DB" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || contract_error 'POSTGRES_DB is invalid'
-  [[ "$BATCH_SIZE" =~ ^[1-9][0-9]*$ ]] || contract_error 'BATCH_SIZE must be a positive integer'
+  [[ "$BATCH_SIZE" == 100 ]] || contract_error 'BATCH_SIZE must remain 100 to match dry-run and verify checksum batches'
   [[ "$HEALTH_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] || contract_error 'HEALTH_TIMEOUT_SECONDS must be a positive integer'
   [[ "$OBSERVE_SECONDS" =~ ^[1-9][0-9]*$ ]] || contract_error 'OBSERVE_SECONDS must be a positive integer'
 
   local optional_hook
+  for config_file in WRITE_GATE_CONFIG PRODUCTION_PROBE_CONFIG CLONE_PROBE_CONFIG OBSERVE_CONFIG; do
+    [[ "$(stat -c '%a' "${!config_file}")" == 600 ]] || contract_error "$config_file permissions must be 0600"
+  done
   for optional_hook in READ_ONLY_PROBE_HOOK CLONE_PROBE_HOOK OBSERVE_HOOK; do
     if [[ -n "${!optional_hook:-}" ]]; then
       require_absolute_executable "$optional_hook"
     fi
   done
+  # Browser evidence is produced after deployment and validated in probe.
+}
+write_gate_call() {
+  NEW_API_WRITE_GATE_CONFIG="$WRITE_GATE_CONFIG" "$WRITE_GATE_HOOK" "$@"
+}
+production_probe_call() {
+  PRODUCTION_PROBE_CONFIG="$PRODUCTION_PROBE_CONFIG" "$READ_ONLY_PROBE_HOOK" "$@"
+}
+clone_probe_call() {
+  CLONE_PROBE_CONFIG="$CLONE_PROBE_CONFIG" "$CLONE_PROBE_HOOK" "$@"
+}
+observe_call() {
+  OBSERVE_CONFIG="$OBSERVE_CONFIG" "$OBSERVE_HOOK" "$@"
 }
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || contract_error "required command is unavailable: $1"
 }
 AUDIT_ORIGINAL_STDOUT_FD=''
-AUDIT_TEE_INPUT_FD=''
-AUDIT_TEE_OUTPUT_FD=''
-AUDIT_TEE_PID_SAVED=''
+AUDIT_PHASE_LOG=''
 
 start_audit_logging() {
   exec {AUDIT_ORIGINAL_STDOUT_FD}>&1
-  coproc RELEASE_AUDIT_TEE {
-    tee -a "$AUDIT_LOG" >&"$AUDIT_ORIGINAL_STDOUT_FD"
-  }
-  AUDIT_TEE_PID_SAVED="$RELEASE_AUDIT_TEE_PID"
-  AUDIT_TEE_OUTPUT_FD="${RELEASE_AUDIT_TEE[0]}"
-  AUDIT_TEE_INPUT_FD="${RELEASE_AUDIT_TEE[1]}"
-  exec {AUDIT_TEE_OUTPUT_FD}<&-
-  AUDIT_TEE_OUTPUT_FD=''
-  exec 1>&"$AUDIT_TEE_INPUT_FD" 2>&1
-  exec {AUDIT_TEE_INPUT_FD}>&-
-  AUDIT_TEE_INPUT_FD=''
+  AUDIT_PHASE_LOG="$AUDIT_DIR/${RELEASE_ID}.${PHASE}.$$.phase.log"
+  : > "$AUDIT_PHASE_LOG"
+  chmod 0600 "$AUDIT_PHASE_LOG"
+  exec 1>"$AUDIT_PHASE_LOG" 2>&1
 }
 
 finish_audit_logging() {
-  local tee_rc=0
+  local append_rc=0 replay_rc=0
   [[ -n "${AUDIT_ORIGINAL_STDOUT_FD:-}" ]] || return 0
   exec 1>&"$AUDIT_ORIGINAL_STDOUT_FD" 2>&1
-  if [[ -n "${AUDIT_TEE_PID_SAVED:-}" ]]; then
-    wait "$AUDIT_TEE_PID_SAVED" || tee_rc=$?
-  fi
+  cat "$AUDIT_PHASE_LOG" >> "$AUDIT_LOG" || append_rc=$?
+  chmod 0600 "$AUDIT_LOG" || append_rc=$?
+  cat "$AUDIT_PHASE_LOG" >&"$AUDIT_ORIGINAL_STDOUT_FD" || replay_rc=$?
+  rm -f "$AUDIT_PHASE_LOG"
+  AUDIT_PHASE_LOG=''
   exec {AUDIT_ORIGINAL_STDOUT_FD}>&-
   AUDIT_ORIGINAL_STDOUT_FD=''
-  AUDIT_TEE_PID_SAVED=''
-  return "$tee_rc"
+  (( append_rc == 0 )) || return "$append_rc"
+  return "$replay_rc"
 }
 
 
@@ -166,7 +181,7 @@ init_runtime() {
   require_command sha256sum
   require_command stat
   require_command cmp
-  require_command tee
+  require_command cat
 
   mkdir -p "$AUDIT_DIR" "$BACKUP_DIR" "$STATE_DIR"
   exec 9>"$LOCK_FILE"
@@ -195,8 +210,18 @@ cleanup() {
       current_phase="$(state_value PHASE 2>/dev/null || true)"
     fi
     case "$PHASE:$current_phase" in
+      stage-runtime:stage-runtime-starting|stage-runtime:stage-runtime-failed)
+        status="$(write_gate_call close "$RELEASE_ID-failure" 2>/dev/null)"
+        if jq -e '.success == true and .state == "closed"' <<<"$status" >/dev/null 2>&1; then
+          STATE_WRITE_GATE_STATE=closed
+          write_state stage-runtime-failed
+          echo "failure safeguard closed writes; target runtime staging remains recoverable" >&2
+        else
+          echo "failure safeguard could not prove writes closed; manual intervention required" >&2
+        fi
+        ;;
       stage-schema:stage-schema-starting|open-writes:probe|observe:open-writes|observe:observe)
-        status="$($WRITE_GATE_HOOK close "$RELEASE_ID-failure" 2>/dev/null)"
+        status="$(write_gate_call close "$RELEASE_ID-failure" 2>/dev/null)"
         if jq -e '.success == true and .state == "closed"' <<<"$status" >/dev/null 2>&1; then
           STATE_WRITE_GATE_STATE=closed
           write_state "${PHASE}-failed"
@@ -206,7 +231,7 @@ cleanup() {
         fi
         ;;
       rollback-suspend:open-writes|rollback-suspend:observe|rollback-suspend:rollback-suspend-suspended|rollback-suspend:rollback-suspend-backup)
-        status="$($WRITE_GATE_HOOK close "$RELEASE_ID-failure" 2>/dev/null)"
+        status="$(write_gate_call close "$RELEASE_ID-failure" 2>/dev/null)"
         if jq -e '.success == true and .state == "closed"' <<<"$status" >/dev/null 2>&1; then
           echo "failure safeguard closed writes; rollback intermediate state preserved" >&2
         else
@@ -225,15 +250,41 @@ cleanup() {
   exit "$rc"
 }
 release_override_image() {
-  local line image='' count=0
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$line" =~ ^[[:space:]]*image:[[:space:]]*(.+)$ ]]; then
-      image="${BASH_REMATCH[1]}"
-      count=$((count + 1))
-    fi
-  done < "$COMPOSE_RELEASE"
-  [[ "$count" -eq 1 ]] || return 1
-  printf '%s\n' "$image"
+  awk '
+    function indent_of(value, spaces) {
+      spaces = value
+      sub(/[^[:space:]].*$/, "", spaces)
+      return length(spaces)
+    }
+    BEGIN { in_services = 0; in_new_api = 0; image = ""; count = 0 }
+    {
+      line = $0
+      indent = indent_of(line)
+      if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
+        in_services = 1
+        services_indent = indent
+        next
+      }
+      if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent) {
+        in_services = 0
+        in_new_api = 0
+      }
+      if (in_services && line ~ /^[[:space:]]*new-api:[[:space:]]*$/ && indent > services_indent) {
+        in_new_api = 1
+        service_indent = indent
+        next
+      }
+      if (in_new_api && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        in_new_api = 0
+      }
+      if (in_new_api && line ~ /^[[:space:]]*image:[[:space:]]*/ && indent > service_indent) {
+        sub(/^[[:space:]]*image:[[:space:]]*/, "", line)
+        image = line
+        count++
+      }
+    }
+    END { if (count != 1) exit 1; print image }
+  ' "$COMPOSE_RELEASE"
 }
 
 
@@ -250,7 +301,7 @@ write_release_override() {
     function padding(count) {
       return sprintf("%*s", count, "")
     }
-    function append_maintenance_entry() {
+    function append_environment_entry() {
       if (maintenance_mode != "true" || maintenance_present) {
         return
       }
@@ -261,10 +312,21 @@ write_release_override() {
       }
       maintenance_present = 1
     }
-    function append_new_environment() {
-      if (maintenance_mode == "true") {
+    function finish_environment() {
+      if (!in_environment) {
+        return
+      }
+      append_environment_entry()
+      in_environment = 0
+    }
+    function finish_service() {
+      if (!in_new_api) {
+        return
+      }
+      if (maintenance_mode == "true" && !environment_seen) {
         print padding(service_indent + 2) "environment:"
         print padding(service_indent + 4) "MAINTENANCE_MODE: \"true\""
+        environment_seen = 1
         maintenance_present = 1
       }
     }
@@ -272,56 +334,29 @@ write_release_override() {
       in_services = 0
       in_new_api = 0
       in_environment = 0
-      pending_image = ""
-      image_count = 0
-      maintenance_present = 0
+      services_indent = -1
+      service_indent = -1
+      environment_indent = -1
+      environment_seen = 0
       environment_style = ""
+      maintenance_present = 0
+      image_count = 0
     }
     {
       line = $0
       indent = indent_of(line)
 
-      if (pending_image != "") {
-        if (in_new_api && line ~ /^[[:space:]]*environment:[[:space:]]*$/ && indent > service_indent) {
-          print pending_image
-          pending_image = ""
-          print line
-          in_environment = 1
-          environment_indent = indent
-          environment_style = ""
-          maintenance_present = 0
-          next
-        }
-        print pending_image
-        append_new_environment()
-        pending_image = ""
+      if (in_environment && line !~ /^[[:space:]]*$/ && indent <= environment_indent) {
+        finish_environment()
       }
-
-      if (in_environment) {
-        if (line ~ /^[[:space:]]*$/) {
-          print line
-          next
-        }
-        if (indent > environment_indent) {
-          if (environment_style == "" && line ~ /^[[:space:]]*-[[:space:]]*/) {
-            environment_style = "list"
-          }
-          if (line ~ /^[[:space:]]*MAINTENANCE_MODE[[:space:]]*:/ || line ~ /^[[:space:]]*-[[:space:]]*MAINTENANCE_MODE([=:]|$)/) {
-            next
-          }
-          print line
-          next
-        }
-        append_maintenance_entry()
-        in_environment = 0
-      }
-
       if (in_new_api && line !~ /^[[:space:]]*$/ && indent <= service_indent) {
+        finish_service()
         in_new_api = 0
       }
       if (in_services && line !~ /^[[:space:]]*$/ && indent <= services_indent && line !~ /^[[:space:]]*services:[[:space:]]*$/) {
         in_services = 0
       }
+
       if (line ~ /^[[:space:]]*services:[[:space:]]*$/) {
         in_services = 1
         services_indent = indent
@@ -331,34 +366,43 @@ write_release_override() {
       if (in_services && line ~ /^[[:space:]]*new-api:[[:space:]]*$/ && indent > services_indent) {
         in_new_api = 1
         service_indent = indent
+        environment_seen = 0
+        environment_style = ""
+        maintenance_present = 0
         print line
         next
       }
       if (in_new_api && line ~ /^[[:space:]]*image:[[:space:]]*.*$/ && indent > service_indent) {
         sub(/image:[[:space:]]*.*/, "image: " image, line)
-        pending_image = line
         image_count++
+        print line
         next
       }
       if (in_new_api && line ~ /^[[:space:]]*environment:[[:space:]]*$/ && indent > service_indent) {
-        print line
         in_environment = 1
+        environment_seen = 1
         environment_indent = indent
         environment_style = ""
         maintenance_present = 0
+        print line
+        next
+      }
+      if (in_environment && indent > environment_indent) {
+        if (environment_style == "" && line ~ /^[[:space:]]*-[[:space:]]*/) {
+          environment_style = "list"
+        }
+        if (line ~ /^[[:space:]]*MAINTENANCE_MODE[[:space:]]*:/ || line ~ /^[[:space:]]*-[[:space:]]*MAINTENANCE_MODE([=:]|$)/) {
+          next
+        }
+        print line
         next
       }
       print line
     }
     END {
-      if (in_environment) {
-        append_maintenance_entry()
-      }
-      if (pending_image != "") {
-        print pending_image
-        append_new_environment()
-      }
-      if (image_count != 1 || (maintenance_mode == "true" && !maintenance_present)) {
+      finish_environment()
+      finish_service()
+      if (image_count != 1 || (maintenance_mode == "true" && !environment_seen)) {
         exit 2
       }
     }
@@ -391,6 +435,10 @@ restore_release_override() {
 STATE_TARGET_CONFIG_ID=''
 STATE_CURRENT_CONFIG_ID=''
 STATE_WRITE_GATE_STATE=''
+STATE_BOOTSTRAP_REPORT=''
+STATE_RUNTIME_STARTED_AT=''
+STATE_ONLINE_DRY_RUN_REPORT_1=''
+STATE_ONLINE_DRY_RUN_REPORT_2=''
 STATE_DRY_RUN_CHECKSUM=''
 STATE_DRY_RUN_REPORT_1=''
 STATE_DRY_RUN_REPORT_2=''
@@ -445,6 +493,10 @@ load_state_context() {
   load_optional_state TARGET_CONFIG_ID STATE_TARGET_CONFIG_ID
   load_optional_state CURRENT_CONFIG_ID STATE_CURRENT_CONFIG_ID
   load_optional_state WRITE_GATE_STATE STATE_WRITE_GATE_STATE
+  load_optional_state BOOTSTRAP_REPORT STATE_BOOTSTRAP_REPORT
+  load_optional_state RUNTIME_STARTED_AT STATE_RUNTIME_STARTED_AT
+  load_optional_state ONLINE_DRY_RUN_REPORT_1 STATE_ONLINE_DRY_RUN_REPORT_1
+  load_optional_state ONLINE_DRY_RUN_REPORT_2 STATE_ONLINE_DRY_RUN_REPORT_2
   load_optional_state DRY_RUN_CHECKSUM STATE_DRY_RUN_CHECKSUM
   load_optional_state DRY_RUN_REPORT_1 STATE_DRY_RUN_REPORT_1
   load_optional_state DRY_RUN_REPORT_2 STATE_DRY_RUN_REPORT_2
@@ -477,28 +529,37 @@ require_state_evidence() {
   local phase="$1"
   case "$phase" in
     preflight)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT
       ;;
-    stop-writes|backup)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE
-      ;;
-    stage-schema-starting|stage-schema)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+    stage-runtime-starting|stage-runtime|stage-runtime-failed)
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
       ;;
     read-only-dry-run)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+      ;;
+    stop-writes)
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+      ;;
+    frozen-dry-run)
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2 RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+      ;;
+    backup)
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2 BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+      ;;
+    stage-schema-starting|stage-schema)
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2 BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
       ;;
     apply)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2 APPLY_REPORT APPLY_CHECKSUM
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 DRY_RUN_CHECKSUM DRY_RUN_REPORT_1 DRY_RUN_REPORT_2 BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE APPLY_REPORT APPLY_CHECKSUM RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
       ;;
     verify|start-closed)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM APPLY_REPORT APPLY_CHECKSUM VERIFY_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM APPLY_REPORT APPLY_CHECKSUM VERIFY_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE
       ;;
     probe)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM APPLY_CHECKSUM VERIFY_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE PRODUCTION_PROBE_REPORT CLONE_PROBE_REPORT
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 BACKUP_PATH BACKUP_CHECKSUM BACKUP_SIZE DRY_RUN_CHECKSUM APPLY_CHECKSUM VERIFY_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE PRODUCTION_PROBE_REPORT CLONE_PROBE_REPORT
       ;;
     open-writes|observe)
-      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID DRY_RUN_CHECKSUM APPLY_CHECKSUM PRODUCTION_PROBE_REPORT CLONE_PROBE_REPORT
+      require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID WRITE_GATE_STATE BOOTSTRAP_REPORT RUNTIME_STARTED_AT ONLINE_DRY_RUN_REPORT_1 ONLINE_DRY_RUN_REPORT_2 DRY_RUN_CHECKSUM APPLY_CHECKSUM PRODUCTION_PROBE_REPORT CLONE_PROBE_REPORT
       ;;
     rollback-suspend-suspended)
       require_state_field TARGET_CONFIG_ID CURRENT_CONFIG_ID DRY_RUN_CHECKSUM APPLY_CHECKSUM SUSPEND_REPORT RELEASE_OVERRIDE_BACKUP RELEASE_OVERRIDE_MODE ROLLBACK_REASON
@@ -508,6 +569,7 @@ require_state_evidence() {
       ;;
   esac
 }
+
 
 write_optional_state() {
   local key="$1" value="$2"
@@ -530,6 +592,10 @@ write_state() {
     write_optional_state TARGET_CONFIG_ID "$STATE_TARGET_CONFIG_ID"
     write_optional_state CURRENT_CONFIG_ID "$STATE_CURRENT_CONFIG_ID"
     write_optional_state WRITE_GATE_STATE "$STATE_WRITE_GATE_STATE"
+    write_optional_state BOOTSTRAP_REPORT "$STATE_BOOTSTRAP_REPORT"
+    write_optional_state RUNTIME_STARTED_AT "$STATE_RUNTIME_STARTED_AT"
+    write_optional_state ONLINE_DRY_RUN_REPORT_1 "$STATE_ONLINE_DRY_RUN_REPORT_1"
+    write_optional_state ONLINE_DRY_RUN_REPORT_2 "$STATE_ONLINE_DRY_RUN_REPORT_2"
     write_optional_state DRY_RUN_CHECKSUM "$STATE_DRY_RUN_CHECKSUM"
     write_optional_state DRY_RUN_REPORT_1 "$STATE_DRY_RUN_REPORT_1"
     write_optional_state DRY_RUN_REPORT_2 "$STATE_DRY_RUN_REPORT_2"
@@ -623,7 +689,7 @@ require_approval() {
 
 write_gate_status() {
   local output
-  output="$($WRITE_GATE_HOOK status)"
+  output="$(write_gate_call status)"
   jq -e '
     .success == true and
     (.state == "open" or .state == "closed") and
@@ -641,6 +707,25 @@ require_gate_closed() {
     .non_terminal_preconsume == 0 and .async_settlement == 0 and
     .legacy_writer_sessions == 0
   ' <<<"$output" >/dev/null || contract_error 'write gate is not closed and drained'
+}
+validate_browser_evidence() {
+  local expected_snapshot="$1"
+  [[ "$expected_snapshot" =~ ^[1-9][0-9]*$ ]] || contract_error 'production probe snapshot is invalid'
+  [[ -f "$BROWSER_EVIDENCE_FILE" && "$(stat -c '%a' "$BROWSER_EVIDENCE_FILE")" == 600 ]] || contract_error 'browser evidence is missing or unsafe'
+  jq -e --arg release "$RELEASE_ID" --arg digest "$TARGET_IMAGE" --arg revision "$EXPECTED_REVISION" --argjson snapshot "$expected_snapshot" '
+    .success == true and .environment == "production_browser" and
+    .release_id == $release and .digest == $digest and .revision == $revision and
+    .snapshot_at == $snapshot and .authenticated == true and
+    .api_origin == "http://127.0.0.1:13080" and
+    .frontend_origin == "https://api.pqapi.shop" and
+    .rendered_32_cny == true and .rendered_exact == true and
+    .rendered_estimated == true and .rendered_unknown == true and
+    .rendered_credit_time_not_applicable == true and
+    .rendered_required_warning == true and
+    .network_api_authenticated == true and
+    .static_interception_used == false and
+    (.captured_at | type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))
+  ' "$BROWSER_EVIDENCE_FILE" >/dev/null || contract_error 'production browser evidence failed the release contract'
 }
 
 require_container_maintenance_mode() {
@@ -713,7 +798,7 @@ validate_verify_report() {
 
 run_preflight() {
   local configured_image target_revision target_repo_digests current_repo_digests
-  local target_config_id current_config_id running_configured_image running_config_id gate
+  local target_config_id current_config_id running_configured_image running_config_id bootstrap bootstrap_path
   if [[ -f "$STATE_FILE" ]]; then
     verify_state_integrity
     local existing_phase
@@ -737,13 +822,65 @@ run_preflight() {
   [[ "$running_configured_image" == "$CURRENT_IMAGE" ]] || contract_error 'running container config is not CURRENT_IMAGE'
   running_config_id="$(docker inspect --format '{{.Image}}' new-api)"
   [[ "$running_config_id" == "$current_config_id" ]] || contract_error 'running container config ID is not the verified current image'
-  gate="$(write_gate_status)"
+
+  bootstrap="$(write_gate_call bootstrap-status)"
+  jq -e '
+    .success == true and .bootstrap == true and .state == "open" and
+    .runtime_stats == false and .full_writer_drain == false and
+    .external_writers == null and
+    ([.background_writers, .non_terminal_preconsume, .async_settlement, .legacy_writer_sessions] |
+      all(type == "number" and . >= 0))
+  ' <<<"$bootstrap" >/dev/null || contract_error 'legacy runtime bootstrap status failed; target runtime must be staged before drain capability is required'
+  bootstrap_path="$AUDIT_DIR/${RELEASE_ID}-bootstrap.json"
+  printf '%s\n' "$bootstrap" > "$bootstrap_path"
+  chmod 0600 "$bootstrap_path"
 
   STATE_TARGET_CONFIG_ID="$target_config_id"
   STATE_CURRENT_CONFIG_ID="$current_config_id"
-  STATE_WRITE_GATE_STATE="$(jq -r '.state' <<<"$gate")"
+  STATE_BOOTSTRAP_REPORT="$bootstrap_path"
+  STATE_WRITE_GATE_STATE=open
   write_state preflight
-  echo "release=$RELEASE_ID phase=preflight result=pass target_revision=$target_revision"
+  echo "release=$RELEASE_ID phase=preflight result=pass target_revision=$target_revision bootstrap=legacy-safe"
+}
+
+
+run_stage_runtime() {
+  local status override_backup capability
+  require_state_phase preflight stage-runtime
+  require_approval MUTATION_APPROVAL_FILE production-maintenance '' ''
+  if [[ "$(state_value PHASE)" == stage-runtime ]]; then
+    check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+    require_container_not_in_maintenance_mode
+    status="$(write_gate_status)"
+    jq -e '.success == true and .state == "open"' <<<"$status" >/dev/null || contract_error 'target runtime write gate is not open'
+    capability="$(write_gate_call drain-capability)"
+    jq -e '.success == true and .state == "open" and .runtime_stats == true and .full_writer_drain == true' <<<"$capability" >/dev/null || contract_error 'target runtime lacks an auditable full-writer drain capability'
+    echo "release=$RELEASE_ID phase=stage-runtime result=no-op runtime_started_at=$STATE_RUNTIME_STARTED_AT"
+    return
+  fi
+  status="$(write_gate_call bootstrap-status)"
+  jq -e '.success == true and .bootstrap == true and .state == "open"' <<<"$status" >/dev/null || contract_error 'stage-runtime requires the legacy-safe write gate to remain open'
+  override_backup="$AUDIT_DIR/${RELEASE_ID}-compose.release.before.yml"
+  STATE_RELEASE_OVERRIDE_MODE="$(stat -c '%a' "$COMPOSE_RELEASE")"
+  cp "$COMPOSE_RELEASE" "$override_backup"
+  chmod 0600 "$override_backup"
+  STATE_RELEASE_OVERRIDE_BACKUP="$override_backup"
+  STATE_WRITE_GATE_STATE=open
+  STATE_RUNTIME_STARTED_AT=''
+  write_state stage-runtime-starting
+  write_release_override "$TARGET_IMAGE" false
+  "${COMPOSE[@]}" up -d --no-deps --force-recreate --pull never new-api
+  wait_for_health
+  check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+  require_container_not_in_maintenance_mode
+  status="$(write_gate_status)"
+  jq -e '.success == true and .state == "open"' <<<"$status" >/dev/null || contract_error 'target runtime did not expose a healthy open write-gate contract'
+  capability="$(write_gate_call drain-capability)"
+  jq -e '.success == true and .state == "open" and .runtime_stats == true and .full_writer_drain == true' <<<"$capability" >/dev/null || contract_error 'target runtime lacks an auditable full-writer drain capability'
+  STATE_RUNTIME_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  STATE_WRITE_GATE_STATE=open
+  write_state stage-runtime
+  echo "release=$RELEASE_ID phase=stage-runtime result=pass runtime_started_at=$STATE_RUNTIME_STARTED_AT drain_capability=verified"
 }
 
 run_stage_schema() {
@@ -760,11 +897,16 @@ run_stage_schema() {
     echo "release=$RELEASE_ID phase=stage-schema result=no-op"
     return
   fi
-  override_backup="$AUDIT_DIR/${RELEASE_ID}-compose.release.before.yml"
-  STATE_RELEASE_OVERRIDE_MODE="$(stat -c '%a' "$COMPOSE_RELEASE")"
-  cp "$COMPOSE_RELEASE" "$override_backup"
-  chmod 0600 "$override_backup"
-  STATE_RELEASE_OVERRIDE_BACKUP="$override_backup"
+  if [[ -z "$STATE_RELEASE_OVERRIDE_BACKUP" ]]; then
+    override_backup="$AUDIT_DIR/${RELEASE_ID}-compose.release.before.yml"
+    STATE_RELEASE_OVERRIDE_MODE="$(stat -c '%a' "$COMPOSE_RELEASE")"
+    cp "$COMPOSE_RELEASE" "$override_backup"
+    chmod 0600 "$override_backup"
+    STATE_RELEASE_OVERRIDE_BACKUP="$override_backup"
+  else
+    [[ -f "$STATE_RELEASE_OVERRIDE_BACKUP" ]] || contract_error 'saved Compose release overlay backup is missing'
+  fi
+  [[ "$(release_override_image)" == "$TARGET_IMAGE" ]] || contract_error 'target runtime is not pinned in COMPOSE_RELEASE before maintenance staging'
   STATE_WRITE_GATE_STATE=closed
   write_state stage-schema-starting
   write_release_override "$TARGET_IMAGE" true
@@ -780,32 +922,36 @@ run_stage_schema() {
 }
 
 run_read_only_dry_run() {
-  local first="$AUDIT_DIR/${RELEASE_ID}-dry-run-1.json"
-  local second="$AUDIT_DIR/${RELEASE_ID}-dry-run-2.json"
-  local checksum gate
-  require_state_phase stage-schema read-only-dry-run
+  local first="$AUDIT_DIR/${RELEASE_ID}-online-dry-run-1.json"
+  local second="$AUDIT_DIR/${RELEASE_ID}-online-dry-run-2.json"
+  local gate
+  require_state_phase stage-runtime read-only-dry-run
   gate="$(write_gate_status)"
-  require_gate_closed "$gate"
-  docker exec new-api test -s /tmp/new-api-credit-valuation-schema-ready >/dev/null 2>&1 || contract_error 'maintenance schema readiness is missing before dry-run'
+  jq -e '.success == true and .state == "open"' <<<"$gate" >/dev/null || contract_error 'online dry-run requires the target runtime write gate to remain open'
+  check_running_image "$TARGET_IMAGE" "$STATE_TARGET_CONFIG_ID" "$EXPECTED_REVISION"
+  if [[ "$(state_value PHASE)" == read-only-dry-run ]]; then
+    [[ -f "$STATE_ONLINE_DRY_RUN_REPORT_1" && -f "$STATE_ONLINE_DRY_RUN_REPORT_2" ]] || contract_error 'recorded online dry-run reports are missing'
+    validate_dry_run_report "$STATE_ONLINE_DRY_RUN_REPORT_1"
+    validate_dry_run_report "$STATE_ONLINE_DRY_RUN_REPORT_2"
+    echo "release=$RELEASE_ID phase=read-only-dry-run result=no-op online_reports_recorded=true runtime_open=true"
+    return
+  fi
   run_migration_command --dry-run "$first"
   validate_dry_run_report "$first"
   run_migration_command --dry-run "$second"
   validate_dry_run_report "$second"
-  cmp -s "$first" "$second" || contract_error 'two dry-run reports are not byte-identical'
-  checksum="$(jq -r '.report.checksum' "$first")"
-  [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || contract_error 'dry-run checksum is invalid'
-  STATE_DRY_RUN_CHECKSUM="$checksum"
-  STATE_DRY_RUN_REPORT_1="$first"
-  STATE_DRY_RUN_REPORT_2="$second"
-  STATE_WRITE_GATE_STATE="$(jq -r '.state' <<<"$gate")"
+  STATE_ONLINE_DRY_RUN_REPORT_1="$first"
+  STATE_ONLINE_DRY_RUN_REPORT_2="$second"
+  STATE_WRITE_GATE_STATE=open
   write_state read-only-dry-run
-  echo "release=$RELEASE_ID phase=read-only-dry-run result=pass checksum=$checksum schema_ready=true"
+  echo "release=$RELEASE_ID phase=read-only-dry-run result=pass online_reports_recorded=true runtime_open=true"
 }
+
 
 
 run_stop_writes() {
   local transition status
-  require_state_phase preflight stop-writes
+  require_state_phase read-only-dry-run stop-writes
   require_approval MUTATION_APPROVAL_FILE production-maintenance '' ''
   if [[ "$(state_value PHASE)" == stop-writes ]]; then
     status="$(write_gate_status)"
@@ -813,7 +959,7 @@ run_stop_writes() {
     echo "release=$RELEASE_ID phase=stop-writes result=no-op"
     return
   fi
-  transition="$($WRITE_GATE_HOOK close "$RELEASE_ID")"
+  transition="$(write_gate_call close "$RELEASE_ID")"
   require_gate_closed "$transition"
   status="$(write_gate_status)"
   require_gate_closed "$status"
@@ -821,6 +967,38 @@ run_stop_writes() {
   write_state stop-writes
   echo "release=$RELEASE_ID phase=stop-writes result=pass"
 }
+run_frozen_dry_run() {
+  local first="$AUDIT_DIR/${RELEASE_ID}-frozen-dry-run-1.json"
+  local second="$AUDIT_DIR/${RELEASE_ID}-frozen-dry-run-2.json"
+  local checksum gate
+  require_state_phase stop-writes frozen-dry-run
+  gate="$(write_gate_status)"
+  require_gate_closed "$gate"
+  if [[ "$(state_value PHASE)" == frozen-dry-run ]]; then
+    [[ -f "$STATE_DRY_RUN_REPORT_1" && -f "$STATE_DRY_RUN_REPORT_2" ]] || contract_error 'recorded frozen dry-run reports are missing'
+    validate_dry_run_report "$STATE_DRY_RUN_REPORT_1"
+    validate_dry_run_report "$STATE_DRY_RUN_REPORT_2"
+    cmp <(jq -S -c 'del(.report.fx.captured_at)' "$STATE_DRY_RUN_REPORT_1") <(jq -S -c 'del(.report.fx.captured_at)' "$STATE_DRY_RUN_REPORT_2") >/dev/null || contract_error 'recorded frozen dry-run business reports are not identical'
+    [[ "$(jq -r '.report.checksum' "$STATE_DRY_RUN_REPORT_1")" == "$STATE_DRY_RUN_CHECKSUM" ]] || contract_error 'recorded frozen dry-run checksum mismatch'
+    echo "release=$RELEASE_ID phase=frozen-dry-run result=no-op checksum=$STATE_DRY_RUN_CHECKSUM writes_closed=true"
+    return
+  fi
+  run_migration_command --dry-run "$first"
+  validate_dry_run_report "$first"
+  run_migration_command --dry-run "$second"
+  validate_dry_run_report "$second"
+  cmp <(jq -S -c 'del(.report.fx.captured_at)' "$first") <(jq -S -c 'del(.report.fx.captured_at)' "$second") >/dev/null || contract_error 'two frozen dry-run business reports are not identical'
+  checksum="$(jq -r '.report.checksum' "$first")"
+  [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || contract_error 'frozen dry-run checksum is invalid'
+  [[ "$checksum" == "$(jq -r '.report.checksum' "$second")" ]] || contract_error 'frozen dry-run checksums differ'
+  STATE_DRY_RUN_CHECKSUM="$checksum"
+  STATE_DRY_RUN_REPORT_1="$first"
+  STATE_DRY_RUN_REPORT_2="$second"
+  STATE_WRITE_GATE_STATE=closed
+  write_state frozen-dry-run
+  echo "release=$RELEASE_ID phase=frozen-dry-run result=pass checksum=$checksum writes_closed=true"
+}
+
 
 backup_checksum() {
   local path="$1" checksum remainder
@@ -857,7 +1035,7 @@ verify_recorded_backup() {
 
 run_backup() {
   local status
-  require_state_phase stop-writes backup
+  require_state_phase frozen-dry-run backup
   require_approval MUTATION_APPROVAL_FILE production-maintenance '' ''
   status="$(write_gate_status)"
   require_gate_closed "$status"
@@ -872,9 +1050,10 @@ run_backup() {
   echo "release=$RELEASE_ID phase=backup result=pass backup=$STATE_BACKUP_PATH sha256=$STATE_BACKUP_CHECKSUM size=$STATE_BACKUP_SIZE"
 }
 
+
 run_apply() {
   local report="$AUDIT_DIR/${RELEASE_ID}-apply.json" checksum status
-  require_state_phase read-only-dry-run apply
+  require_state_phase stage-schema apply
   require_approval MUTATION_APPROVAL_FILE apply-migration "$STATE_DRY_RUN_CHECKSUM" ''
   status="$(write_gate_status)"
   require_gate_closed "$status"
@@ -976,34 +1155,44 @@ run_start_closed() {
 
 run_probe() {
   local production_report="$AUDIT_DIR/${RELEASE_ID}-production-probe.json"
-  local clone_report="$AUDIT_DIR/${RELEASE_ID}-clone-probe.json" status
+  local clone_report="$AUDIT_DIR/${RELEASE_ID}-clone-probe.json" status browser_snapshot
   require_state_phase start-closed probe
   require_absolute_executable READ_ONLY_PROBE_HOOK
   require_absolute_executable CLONE_PROBE_HOOK
   status="$(write_gate_status)"
   require_gate_closed "$status"
-  "$READ_ONLY_PROBE_HOOK" "$RELEASE_ID" "$TARGET_IMAGE" "$EXPECTED_REVISION" "$MIGRATION_VERSION" > "$production_report"
-  chmod 0600 "$production_report"
-  jq -e --arg digest "$TARGET_IMAGE" --arg revision "$EXPECTED_REVISION" --argjson version "$MIGRATION_VERSION" '
+  browser_snapshot="$(jq -r '.snapshot_at // empty' "$BROWSER_EVIDENCE_FILE")"
+  validate_browser_evidence "$browser_snapshot"
+  PRODUCTION_SNAPSHOT_AT="$browser_snapshot" production_probe_call "$RELEASE_ID" "$TARGET_IMAGE" "$EXPECTED_REVISION" "$MIGRATION_VERSION" > "$production_report"
+  jq -e --arg digest "$TARGET_IMAGE" --arg revision "$EXPECTED_REVISION" --argjson version "$MIGRATION_VERSION" --argjson snapshot "$browser_snapshot" '
     .success == true and .environment == "production" and .read_only == true and
     .digest == $digest and .revision == $revision and
     .marker_status == "ready" and .migration_version == $version and
-    .invariants == true and .authenticated_frontend == true and
-    .disabled_plan_existing_consumable == true and
-    .disabled_plan_new_allocations_rejected == true and .model_scope_ignored == true
+    .invariants == true and .authenticated_api == true and
+    .administrator_identity == true and
+    .paid_value_endpoints_structurally_consistent == true and
+    .snapshot_at == $snapshot and
+    .api_origin == "http://127.0.0.1:13080" and
+    .browser_evidence_required == true
   ' "$production_report" >/dev/null || contract_error 'production read-only probe failed'
-  "$CLONE_PROBE_HOOK" "$RELEASE_ID" "$STATE_BACKUP_PATH" "$STATE_BACKUP_CHECKSUM" "$TARGET_IMAGE" > "$clone_report"
+  validate_browser_evidence "$(jq -r '.snapshot_at' "$production_report")"
+  MIGRATION_VERSION="$MIGRATION_VERSION" clone_probe_call "$RELEASE_ID" "$STATE_BACKUP_PATH" "$STATE_BACKUP_CHECKSUM" "$TARGET_IMAGE" > "$clone_report"
   chmod 0600 "$clone_report"
-  jq -e --arg backup_checksum "$STATE_BACKUP_CHECKSUM" '
+  jq -e --arg backup_checksum "$STATE_BACKUP_CHECKSUM" --arg target_digest "$TARGET_IMAGE" '
     .success == true and .environment == "isolated_clone" and
-    .source_backup_sha256 == $backup_checksum and
+    .clone_isolated == true and .production_identity_collision == false and
+    .source_backup_sha256 == $backup_checksum and .target_digest == $target_digest and
+    .cleanup_complete == true and
     .fixture.price_amount_micros == "40000000" and .fixture.plan_credit == 1000 and
     .fixture.consumed_credit == 200 and .fixture.available_credit == 800 and
     .fixture.end_time == 0 and .fixture.exact_cost_micros == "32000000" and
     .fixture.currency == "CNY" and .fixture.active_paid_subscription_count == 1 and
     .fixture.estimated_cost_micros == "0" and .fixture.unknown_credit == 0 and
-    .fixture.five_analytics_endpoints_consistent == true
-  ' "$clone_report" >/dev/null || contract_error 'isolated-clone 32 CNY probe failed'
+    .fixture.five_analytics_endpoints_consistent == true and
+    .fixture.disabled_plan_existing_consumable == true and
+    .fixture.disabled_plan_new_allocations_rejected == true and
+    .fixture.model_scope_ignored == true
+  ' "$clone_report" >/dev/null || contract_error 'isolated-clone 32 CNY and disabled-plan probe failed'
   STATE_PRODUCTION_PROBE_REPORT="$production_report"
   STATE_CLONE_PROBE_REPORT="$clone_report"
   STATE_WRITE_GATE_STATE=closed
@@ -1021,7 +1210,7 @@ run_open_writes() {
     echo "release=$RELEASE_ID phase=open-writes result=no-op opened_at=$STATE_DUAL_WRITE_OPENED_AT"
     return
   fi
-  transition="$($WRITE_GATE_HOOK open "$RELEASE_ID")"
+  transition="$(write_gate_call open "$RELEASE_ID")"
   jq -e '.success == true and .state == "open"' <<<"$transition" >/dev/null || contract_error 'write gate refused to open'
   status="$(write_gate_status)"
   jq -e '.success == true and .state == "open"' <<<"$status" >/dev/null || contract_error 'write gate did not remain open'
@@ -1037,14 +1226,26 @@ run_observe() {
   require_absolute_executable OBSERVE_HOOK
   status="$(write_gate_status)"
   jq -e '.success == true and .state == "open"' <<<"$status" >/dev/null || contract_error 'observe requires open writes'
-  "$OBSERVE_HOOK" "$RELEASE_ID" "$OBSERVE_SECONDS" "$TARGET_IMAGE" "$EXPECTED_REVISION" > "$report"
+  observe_call "$RELEASE_ID" "$OBSERVE_SECONDS" "$TARGET_IMAGE" "$EXPECTED_REVISION" > "$report"
   chmod 0600 "$report"
   jq -e --argjson seconds "$OBSERVE_SECONDS" '
     .success == true and .aggregated == true and .window_seconds >= $seconds and
     .health_failures == 0 and .credit_valuation_state_missing == 0 and
     .credit_valuation_state_mismatch == 0 and .unsupported_fx_errors == 0 and
     .panic_count == 0 and .abnormal_restarts == 0 and
-    .postgres_lock_wait_regression == false and .write_load_regression == false
+    .unknown_credit_regression == false and
+    .postgres_lock_wait_regression == false and .write_load_regression == false and
+    (.http_request_count | type == "number" and . >= 0) and
+    (.http_error_count | type == "number" and . >= 0) and
+    (.http_error_rate_ppm | type == "number" and . >= 0) and
+    (.postgres_write_delta | type == "number" and . >= 0) and
+    (.postgres_connection_delta | type == "number") and
+    (.postgres_connections_after | type == "number" and . >= 0) and
+    (.batch_update_pending_total | type == "number" and . == 0) and
+    (.settlement_replay_count | type == "number" and . >= 0) and
+    (.settlement_replay_growth | type == "number" and . >= 0) and
+    (.settlement_max_latency_seconds | type == "number" and . >= 0) and
+    (.resource_snapshot | type == "object")
   ' "$report" >/dev/null || contract_error 'observation window failed'
   STATE_OBSERVE_REPORT="$report"
   STATE_WRITE_GATE_STATE=open
@@ -1064,7 +1265,7 @@ restart_current_image_closed() {
 
 run_rollback_before_ready() {
   local transition status phase
-  require_state_phase backup stage-schema-starting stage-schema read-only-dry-run rollback-before-ready stage-schema-failed
+  require_state_phase frozen-dry-run backup stage-schema-starting stage-schema read-only-dry-run stop-writes rollback-before-ready stage-schema-failed
   if [[ -n "$STATE_DRY_RUN_CHECKSUM" ]]; then
     require_approval ROLLBACK_APPROVAL_FILE rollback-before-ready "$STATE_DRY_RUN_CHECKSUM" ''
   else
@@ -1079,7 +1280,7 @@ run_rollback_before_ready() {
   fi
   status="$(write_gate_status)"
   if ! jq -e '.success == true and .state == "closed"' <<<"$status" >/dev/null; then
-    transition="$($WRITE_GATE_HOOK close "$RELEASE_ID-rollback-before-ready")"
+    transition="$(write_gate_call close "$RELEASE_ID-rollback-before-ready")"
     require_gate_closed "$transition"
   fi
   status="$(write_gate_status)"
@@ -1090,6 +1291,7 @@ run_rollback_before_ready() {
   write_state rollback-before-ready
   echo "release=$RELEASE_ID phase=rollback-before-ready result=pass marker_ready=false writes_closed=true"
 }
+
 
 run_rollback_ready_before_open() {
   local status
@@ -1119,7 +1321,7 @@ run_rollback_suspend() {
     return
   fi
   if [[ "$phase" == open-writes || "$phase" == observe ]]; then
-    transition="$($WRITE_GATE_HOOK close "$RELEASE_ID")"
+    transition="$(write_gate_call close "$RELEASE_ID")"
     require_gate_closed "$transition"
     status="$(write_gate_status)"
     require_gate_closed "$status"
@@ -1166,15 +1368,13 @@ PHASE="$3"
 # reject shell syntax; APP_ENV_FILE points at the protected application env.
 parse_config "$CONFIG_FILE"
 validate_config
-
 case "$PHASE" in
-  preflight|stage-schema|read-only-dry-run|stop-writes|backup|apply|verify|start-closed|probe|open-writes|observe|rollback-before-ready|rollback-ready-before-open|rollback-suspend)
+  preflight|stage-runtime|read-only-dry-run|stop-writes|frozen-dry-run|backup|stage-schema|apply|verify|start-closed|probe|open-writes|observe|rollback-before-ready|rollback-ready-before-open|rollback-suspend)
     ;;
   *)
     usage
     ;;
 esac
-
 init_runtime
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -1183,10 +1383,12 @@ trap 'exit 143' TERM
 
 case "$PHASE" in
   preflight) run_preflight ;;
-  stage-schema) run_stage_schema ;;
+  stage-runtime) run_stage_runtime ;;
   read-only-dry-run) run_read_only_dry_run ;;
   stop-writes) run_stop_writes ;;
+  frozen-dry-run) run_frozen_dry_run ;;
   backup) run_backup ;;
+  stage-schema) run_stage_schema ;;
   apply) run_apply ;;
   verify) run_verify ;;
   start-closed) run_start_closed ;;

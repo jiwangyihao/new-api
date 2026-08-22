@@ -1,6 +1,7 @@
 package model
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -189,24 +190,13 @@ func chooseDBWithSelectionLog(envName string, isLog bool, logSelection bool) (*g
 
 var maintenanceDB *gorm.DB
 
-func InitMaintenanceDB() (*gorm.DB, error) {
-	if maintenanceDB != nil {
-		return maintenanceDB, nil
-	}
-	if os.Getenv("SQL_DSN") == "" {
-		if sqlitePath := strings.TrimSpace(os.Getenv("SQLITE_PATH")); sqlitePath != "" {
-			common.SQLitePath = sqlitePath
-		}
-	}
-
-	db, err := chooseDBWithSelectionLog("SQL_DSN", false, false)
-	if err != nil {
-		return nil, err
+func configureMaintenanceDB(db *gorm.DB) (*gorm.DB, error) {
+	if db == nil {
+		return nil, ErrDatabase
 	}
 	// Maintenance commands own stdout/stderr as a machine-readable JSON
 	// protocol; database diagnostics must be returned as errors, not logged.
 	db = db.Session(&gorm.Session{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
-
 	sqlDB, err := db.DB()
 	if err != nil {
 		return nil, err
@@ -224,9 +214,48 @@ func InitMaintenanceDB() (*gorm.DB, error) {
 			return nil, err
 		}
 	}
-
 	maintenanceDB = db
 	return db, nil
+}
+
+func InitMaintenanceDB() (*gorm.DB, error) {
+	if maintenanceDB != nil {
+		return maintenanceDB, nil
+	}
+	if os.Getenv("SQL_DSN") == "" {
+		if sqlitePath := strings.TrimSpace(os.Getenv("SQLITE_PATH")); sqlitePath != "" {
+			common.SQLitePath = sqlitePath
+		}
+	}
+	db, err := chooseDBWithSelectionLog("SQL_DSN", false, false)
+	if err != nil {
+		return nil, err
+	}
+	return configureMaintenanceDB(db)
+}
+
+// InitMaintenanceCloneDB opens only the explicitly supplied PostgreSQL clone.
+// It deliberately ignores SQL_DSN so a clone probe cannot inherit production.
+func InitMaintenanceCloneDB(dsn string) (*gorm.DB, error) {
+	if maintenanceDB != nil {
+		return nil, errors.New("maintenance database is already initialized")
+	}
+	dsn = strings.TrimSpace(dsn)
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return nil, errors.New("clone database must be an explicit PostgreSQL DSN")
+	}
+	common.UsingSQLite = false
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = true
+	initCol()
+	db, err := gorm.Open(postgres.New(postgres.Config{
+		DSN:                  dsn,
+		PreferSimpleProtocol: true,
+	}), &gorm.Config{PrepareStmt: true})
+	if err != nil {
+		return nil, err
+	}
+	return configureMaintenanceDB(db)
 }
 
 func CloseMaintenanceDB() error {

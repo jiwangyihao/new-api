@@ -311,6 +311,56 @@ func TestEmptyMigrationSnapshotNormalizesLegacyCNYMarkerFX(t *testing.T) {
 		SourceCurrency: "CNY", ValuationCurrency: "CNY", Numerator: 1, Denominator: 1, CapturedAt: 123,
 	}, fx)
 }
+func TestCreditValuationMigrationPersistsCreditPlanCurrencyFallbackBeforeReady(t *testing.T) {
+	db := setupCreditValuationMigrationLifecycleTestDB(t, &Option{}, &SubscriptionPlan{}, &UserSubscription{}, &CreditValuationState{}, &CreditBalanceLedger{}, &TimedSubscriptionValuationGrant{})
+
+	zeroMicros := int64(0)
+	priceMicros := int64(40_000_000)
+
+	whitespaceCurrency := "   "
+	require.NoError(t, db.Create(&SubscriptionPlan{
+		Id: 27_150, Title: "Legacy CNY Credit", PriceAmountMicros: &zeroMicros,
+		Currency: "CNY", ValuationCurrency: &whitespaceCurrency,
+		EntitlementType: SubscriptionEntitlementCreditBalance, MonthlyTokenLimit: 1_000,
+	}).Error)
+	require.NoError(t, db.Create(&UserSubscription{
+		Id: 27_151, UserId: 27_152, PlanId: 27_150,
+		EntitlementType: SubscriptionEntitlementCreditBalance,
+		Status:          SubscriptionStatusActive, TokenLimit: 1_000, TokenUsed: 200,
+	}).Error)
+	now := GetDBTimestamp()
+	require.NoError(t, db.Create(&CreditBalanceLedger{
+		Id: 27_154, UserId: 27_152, UserSubscriptionId: 27_151,
+		Type: CreditBalanceLedgerTypePurchase, IdempotencyKey: "fallback-currency-order",
+		SourceType: CreditBalanceLedgerSourceSubscriptionOrder, SourceId: 27_154,
+		SourceKey:   "subscription_order:fallback-currency-order",
+		GrossCredit: 1_000, NetCredit: 1_000,
+		SourcePriceMicros: 40_000_000, SourcePlanCredit: 1_000,
+		FxSourceCurrency: "CNY", FxRateNumerator: 1, FxRateDenominator: 1,
+		FxCapturedAt: now, CreatedAt: now,
+	}).Error)
+
+	report, err := RunCreditValuationMigration(db, CreditValuationMigrationRequest{
+		Mode: CreditValuationMigrationModeApply, Version: 1, BatchSize: 100,
+	})
+	require.NoError(t, err, "report=%+v", report)
+	require.True(t, report.Ready)
+	require.Equal(t, "CNY", report.ValuationCurrency)
+
+	var plan SubscriptionPlan
+	require.NoError(t, db.First(&plan, 27_150).Error)
+	require.NotNil(t, plan.ValuationCurrency)
+	require.Equal(t, "CNY", *plan.ValuationCurrency)
+
+	snapshot := NewSubscriptionEntitlementSnapshot(&SubscriptionPlan{
+		Id: 27_153, Title: "40 CNY / 1,000 Credit", PriceAmountMicros: &priceMicros,
+		Currency: "CNY", EntitlementType: SubscriptionEntitlementTimed,
+		MonthlyTokenLimit: 1_000, DurationUnit: SubscriptionDurationMonth,
+		DurationValue: 1, QuotaResetPeriod: SubscriptionResetMonthly,
+	}, SubscriptionPurchaseModeCreditBalance, plan.Id)
+	snapshot.SetTargetCreditBalancePlanSnapshot(&plan)
+	require.Equal(t, "CNY", snapshot.TargetCreditBalanceValuationCurrency)
+}
 
 func TestRepairMissingAsUnknownCanBeAppliedWithSameVersion(t *testing.T) {
 	db := setupCreditValuationMigrationLifecycleTestDB(t,

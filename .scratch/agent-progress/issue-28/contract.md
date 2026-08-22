@@ -24,16 +24,18 @@
 
 ## 状态机
 
-1. `preflight`：本地 HEAD/merge-base/status、#27 零 SKIP、目标主机身份、当前 release/digest/health/marker
-2. `read-only-dry-run`：同一目标 digest 连续两次维护 dry-run；完整业务 JSON/checksum 相同
-3. `stop-writes`：反代/应用关闭外部写流量，停止后台任务；确认 HTTP 写、非终态预扣、异步结算和旧 writer 会话清零
-4. `backup`：PostgreSQL 一致备份；绝对路径、UTC、大小、SHA-256、可读/可恢复检查
-5. `apply`：同一 digest、冻结 version、稳定批次、marker CAS
-6. `verify`：同一 digest/version/checksum 原子验证；失败保持写关闭
-7. `start-closed`：所有实例同 digest 启动，外部写仍关闭；检查 ready、health、版本和 fail-closed
-8. `probe`：生产只读健康/业务探针；无授权账号时隔离克隆完成 32 CNY 行为链路
-9. `open-writes`：仅所有前置门禁通过后原子恢复外部写，记录 UTC、digest、marker
-10. `observe`：记录健康、错误率、state missing/mismatch、unknown、unsupported FX、结算延迟、coalescer、DB 锁/连接/写负载、资源
+1. `preflight`：核验目标/当前 immutable digest、revision、当前容器和受管 Nginx gate；旧 runtime 仅用只读 SQL/健康检查形成 bootstrap 证据，不伪造 runtime/drain 能力
+2. `stage-runtime`：写仍开放时切换到目标 digest；目标 runtime 启动后再验证带 token 的 runtime stats 与全 writer drain 能力
+3. `read-only-dry-run`：写开放时连续执行两次兼容性预演；逐份验证完整合同、blocker 和诊断，但允许真实业务写入导致业务快照变化
+4. `stop-writes`：反代/应用关闭外部写流量，停止后台任务；确认 HTTP 写、非终态预扣、异步结算和旧 writer 会话清零
+5. `frozen-dry-run`：停写且全 writer drain 后连续执行两次；除 `fx.captured_at` 外规范化业务 JSON 必须相同，checksum 必须相同并冻结为审批/apply 输入
+6. `backup`：冻结预演通过后创建 PostgreSQL 一致备份；记录绝对路径、UTC、大小、SHA-256 和可读/可恢复检查
+7. `apply`：同一 digest、version、固定 batch size 100 和冻结 checksum 执行 marker CAS
+8. `verify`：同一 digest/version/checksum 原子验证；失败保持写关闭
+9. `start-closed`：所有实例同 digest 启动，外部写仍关闭；检查 ready、health、版本和 fail-closed
+10. `probe`：生产只读健康/业务探针；无授权账号时隔离克隆完成 32 CNY 行为链路
+11. `open-writes`：仅所有前置门禁通过后原子恢复外部写，记录 UTC、digest、marker
+12. `observe`：记录健康、HTTP 错误率、state missing/mismatch、unknown、unsupported FX、结算延迟/replay、batch pending、PostgreSQL 锁 gauge/连接/写负载和资源
 
 ## 退出码
 
@@ -45,8 +47,8 @@
 ## 不变量
 
 - 同一源码提交构建出的所有应用实例使用同一 immutable digest
-- dry-run/verify 只读；两次 dry-run 业务 JSON 与 checksum 字节一致
-- apply/verify 使用同一 migration version、digest 和冻结输入 checksum
+- 在线 dry-run/verify 均只读；在线两次预演各自满足兼容合同，停写后的两次冻结预演经规范化后业务 JSON 与 checksum 一致
+- apply/verify 使用同一 migration version、digest、固定 batch size 100 和停写后冻结的输入 checksum
 - marker 只允许合法 CAS 转换；verify 原子通过后才 ready
 - 每份 Credit 权益恰有一行状态，available 与 token 数量一致，金额/未知量非负且 unknown 不超过 available
 - 迁移前 blocker 必须为零：非终态预扣、缺稳定身份的活动异步任务、旧 writer 会话、Credit 计划缺失/歧义、估值币种/FX 无效

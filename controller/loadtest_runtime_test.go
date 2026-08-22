@@ -108,6 +108,80 @@ func TestLoadtestRuntimeRouteNotRegisteredWhenServerNotLoopback(t *testing.T) {
 		}
 	}
 }
+func TestLoadtestRuntimeRouteAllowsPrivateContainerProxyWithToken(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	t.Setenv("LOADTEST_RUNTIME_STATS_TOKEN", "route-secret")
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, ":3000", nil)
+
+	withoutToken := httptest.NewRecorder()
+	withoutTokenReq := httptest.NewRequest(http.MethodGet, "/debug/loadtest/runtime", nil)
+	withoutTokenReq.RemoteAddr = "172.17.0.1:12345"
+	r.ServeHTTP(withoutToken, withoutTokenReq)
+	if withoutToken.Code != http.StatusForbidden {
+		t.Fatalf("without token status = %d", withoutToken.Code)
+	}
+
+	withToken := httptest.NewRecorder()
+	withTokenReq := httptest.NewRequest(http.MethodGet, "/debug/loadtest/runtime", nil)
+	withTokenReq.RemoteAddr = "172.17.0.1:12345"
+	withTokenReq.Header.Set("X-New-API-Loadtest-Token", "route-secret")
+	r.ServeHTTP(withToken, withTokenReq)
+	if withToken.Code != http.StatusOK {
+		t.Fatalf("with token status = %d body=%s", withToken.Code, withToken.Body.String())
+	}
+}
+
+func TestLoadtestRuntimeRouteRejectsPublicForwardedClientWithToken(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	t.Setenv("LOADTEST_RUNTIME_STATS_TOKEN", "route-secret")
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, ":3000", nil)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/loadtest/runtime", nil)
+	req.RemoteAddr = "172.17.0.1:12345"
+	req.Header.Set("X-New-API-Loadtest-Token", "route-secret")
+	req.Header.Set("X-Forwarded-For", "203.0.113.8")
+	r.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("public forwarded status = %d", recorder.Code)
+	}
+}
+func TestLoadtestRuntimeRouteDoesNotRegisterOnWildcardWithoutToken(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	t.Setenv("LOADTEST_RUNTIME_STATS_TOKEN", "")
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, ":3000", nil)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/debug/loadtest/runtime", nil)
+	req.RemoteAddr = "172.17.0.1:12345"
+	r.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status = %d", recorder.Code)
+	}
+}
+
+func TestLoadtestRuntimeDrainAllowsPrivateContainerProxyWithToken(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	t.Setenv("LOADTEST_RUNTIME_STATS_TOKEN", "route-secret")
+	setupLoadtestRuntimeModelDB(t)
+	requireNoErrorLoadtest(t, model.DB.Create(&model.User{Id: 9342, Username: "runtime-drain-token", Status: common.UserStatusEnabled}).Error)
+	model.AddUserQuotaBatchForMigrationDrain(9342, 700)
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, ":3000", nil)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/debug/loadtest/runtime/batch-update/user-quota/drain", nil)
+	req.RemoteAddr = "172.17.0.1:12345"
+	req.Header.Set(loadtestRuntimeStatsTokenHeader, "route-secret")
+	r.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	assertLoadtestRuntimeDrainResponse(t, recorder.Body.Bytes(), 1, 0, "")
+	if got := getLoadtestRuntimeUserQuota(t, 9342); got != 700 {
+		t.Fatalf("quota = %d", got)
+	}
+}
 
 func TestLoadtestRuntimeRouteReturnsRuntimeFields(t *testing.T) {
 	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
@@ -125,6 +199,28 @@ func TestLoadtestRuntimeRouteReturnsRuntimeFields(t *testing.T) {
 	for _, want := range []string{"goroutines", "heap_alloc_bytes", "block_profile_rate", "mutex_profile_fraction", "batch_update", "quota_data", "perf_metrics", "unavailable"} {
 		if !strings.Contains(rr.Body.String(), want) {
 			t.Fatalf("missing %s in %s", want, rr.Body.String())
+		}
+	}
+}
+
+func TestLoadtestRuntimeDrainCapabilityIsReadOnly(t *testing.T) {
+	t.Setenv("LOADTEST_RUNTIME_STATS_ENABLED", "true")
+	r := gin.New()
+	RegisterLoadtestRuntimeRoute(r, "127.0.0.1:13080", nil)
+	req := httptest.NewRequest(http.MethodOptions, "/debug/loadtest/runtime/batch-update/drain", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := common.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]any{"success": true, "state": "open", "runtime_stats": true, "full_writer_drain": true} {
+		if body[key] != want {
+			t.Fatalf("%s = %v want %v", key, body[key], want)
 		}
 	}
 }

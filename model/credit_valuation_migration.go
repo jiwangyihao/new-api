@@ -297,6 +297,9 @@ func runCreditValuationMigrationApply(db *gorm.DB, request CreditValuationMigrat
 		if !creditValuationPriceMigrationApplyComplete(priceReport) {
 			return ErrCreditValuationMigrationVerifyFailed
 		}
+		if err := persistCreditValuationCurrencyFallbackTx(tx, currency); err != nil {
+			return err
+		}
 		backfillRequest := CreditValuationHistoricalBackfillRequest{
 			Apply: true, MigrationVersion: request.Version, BatchSize: request.BatchSize,
 			ValuationCurrency: currency, FX: fx,
@@ -582,6 +585,26 @@ func creditValuationMigrationCurrency(db *gorm.DB, empty bool) (string, []Credit
 		return "", []CreditValuationMigrationBlocker{{Code: creditValuationMigrationBlockerValuationCurrency, Count: 1}}, nil
 	}
 	return currency, nil, nil
+}
+
+func persistCreditValuationCurrencyFallbackTx(tx *gorm.DB, currency string) error {
+	if tx == nil {
+		return ErrDatabase
+	}
+	currency, err := NormalizeCreditValuationCurrency(currency)
+	if err != nil {
+		return err
+	}
+	result := tx.Model(&SubscriptionPlan{}).
+		Where("entitlement_type = ? AND (valuation_currency IS NULL OR TRIM(valuation_currency) = '')", SubscriptionEntitlementCreditBalance).
+		Update("valuation_currency", currency)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 1 {
+		return ErrCreditValuationMigrationConflict
+	}
+	return nil
 }
 
 func creditValuationMigrationFXCurrencies(valuationCurrency string) (string, string) {

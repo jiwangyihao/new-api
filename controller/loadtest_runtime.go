@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"crypto/subtle"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +19,11 @@ import (
 type runtimeStatus struct {
 	Status string `json:"status"`
 	Reason string `json:"reason,omitempty"`
+}
+
+type loadtestRuntimeAccess struct {
+	Enabled    bool
+	TokenGuard bool
 }
 
 const (
@@ -128,60 +134,124 @@ func (l *loadtestCountingListener) Accept() (net.Conn, error) {
 }
 
 type loadtestRuntimeResponse struct {
-	Goroutines           int              `json:"goroutines"`
-	HeapAllocBytes       uint64           `json:"heap_alloc_bytes"`
-	GOMAXPROCS           int              `json:"gomaxprocs"`
-	GOMEMLimitBytes      int64            `json:"gomemlimit_bytes"`
-	GCCount              uint32           `json:"gc_count"`
-	LastGCUnixMS         uint64           `json:"last_gc_unix_ms"`
-	PauseTotalNS         uint64           `json:"pause_total_ns"`
-	HTTPConnState        map[string]int64 `json:"http_conn_state"`
-	HTTPAcceptTotal      uint64           `json:"http_accept_total"`
-	HTTPActiveCurrent    int64            `json:"http_active_current"`
-	BlockProfileRate     int              `json:"block_profile_rate"`
-	MutexProfileFraction int              `json:"mutex_profile_fraction"`
-	BatchUpdate          runtimeStatus    `json:"batch_update"`
-	QuotaData            runtimeStatus    `json:"quota_data"`
-	PerfMetrics          runtimeStatus    `json:"perf_metrics"`
-	Unavailable          []string         `json:"unavailable,omitempty"`
+	Goroutines              int              `json:"goroutines"`
+	HeapAllocBytes          uint64           `json:"heap_alloc_bytes"`
+	GOMAXPROCS              int              `json:"gomaxprocs"`
+	GOMEMLimitBytes         int64            `json:"gomemlimit_bytes"`
+	GCCount                 uint32           `json:"gc_count"`
+	LastGCUnixMS            uint64           `json:"last_gc_unix_ms"`
+	PauseTotalNS            uint64           `json:"pause_total_ns"`
+	HTTPConnState           map[string]int64 `json:"http_conn_state"`
+	HTTPAcceptTotal         uint64           `json:"http_accept_total"`
+	HTTPActiveCurrent       int64            `json:"http_active_current"`
+	BlockProfileRate        int              `json:"block_profile_rate"`
+	MutexProfileFraction    int              `json:"mutex_profile_fraction"`
+	BatchUpdate             runtimeStatus    `json:"batch_update"`
+	BatchUpdatePendingTotal int              `json:"batch_update_pending_total"`
+	QuotaData               runtimeStatus    `json:"quota_data"`
+	PerfMetrics             runtimeStatus    `json:"perf_metrics"`
+	Unavailable             []string         `json:"unavailable,omitempty"`
+}
+
+const loadtestRuntimeStatsTokenHeader = "X-New-API-Loadtest-Token"
+
+func loadtestRuntimeAccessFor(listenAddr string) loadtestRuntimeAccess {
+	if os.Getenv("LOADTEST_RUNTIME_STATS_ENABLED") != "true" {
+		return loadtestRuntimeAccess{}
+	}
+	if listenAddrIsLoopback(listenAddr) {
+		return loadtestRuntimeAccess{Enabled: true}
+	}
+	if strings.TrimSpace(os.Getenv("LOADTEST_RUNTIME_STATS_TOKEN")) == "" {
+		return loadtestRuntimeAccess{}
+	}
+	return loadtestRuntimeAccess{Enabled: true, TokenGuard: true}
+}
+
+func loadtestRuntimeTokenMatches(r *http.Request) bool {
+	expected := strings.TrimSpace(os.Getenv("LOADTEST_RUNTIME_STATS_TOKEN"))
+	provided := strings.TrimSpace(r.Header.Get(loadtestRuntimeStatsTokenHeader))
+	if expected == "" || provided == "" || len(expected) != len(provided) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) == 1
+}
+
+func privateOrLoopbackRemoteAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+}
+
+func loadtestRuntimeRequestAllowed(r *http.Request, access loadtestRuntimeAccess) bool {
+	if !access.Enabled || !forwardedClientIsLoopback(r) {
+		return false
+	}
+	if !access.TokenGuard {
+		return remoteAddrIsLoopback(r.RemoteAddr)
+	}
+	return privateOrLoopbackRemoteAddr(r.RemoteAddr) && loadtestRuntimeTokenMatches(r)
 }
 
 func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string, stats *LoadtestHTTPStats) {
-	if os.Getenv("LOADTEST_RUNTIME_STATS_ENABLED") != "true" || !listenAddrIsLoopback(listenAddr) {
+	access := loadtestRuntimeAccessFor(listenAddr)
+	if !access.Enabled {
 		return
 	}
 	applyLoadtestProfileRates()
 	r.GET("/debug/loadtest/runtime", func(c *gin.Context) {
-		if !remoteAddrIsLoopback(c.Request.RemoteAddr) || !forwardedClientIsLoopback(c.Request) {
+		if !loadtestRuntimeRequestAllowed(c.Request, access) {
 			c.Status(http.StatusForbidden)
 			return
 		}
+
 		var mem runtime.MemStats
 		runtime.ReadMemStats(&mem)
 		httpConnState, httpAcceptTotal, httpActiveCurrent := stats.Snapshot()
 		batch := model.BatchUpdatePendingSnapshot()
 		resp := loadtestRuntimeResponse{
-			Goroutines:           runtime.NumGoroutine(),
-			HeapAllocBytes:       mem.HeapAlloc,
-			GOMAXPROCS:           runtime.GOMAXPROCS(0),
-			GOMEMLimitBytes:      debug.SetMemoryLimit(-1),
-			GCCount:              mem.NumGC,
-			LastGCUnixMS:         mem.LastGC / uint64(time.Millisecond),
-			PauseTotalNS:         mem.PauseTotalNs,
-			HTTPConnState:        httpConnState,
-			HTTPAcceptTotal:      httpAcceptTotal,
-			HTTPActiveCurrent:    httpActiveCurrent,
-			BlockProfileRate:     parseEnvInt("LOADTEST_PROFILE_BLOCK_RATE"),
-			MutexProfileFraction: parseEnvInt("LOADTEST_PROFILE_MUTEX_FRACTION"),
-			BatchUpdate:          runtimeStatus{Status: "ok", Reason: batch.String()},
-			QuotaData:            runtimeStatus{Status: "unavailable", Reason: "quota data pending snapshot is not exposed"},
-			PerfMetrics:          runtimeStatus{Status: "unavailable", Reason: "perf metrics pending snapshot is not exposed"},
-			Unavailable:          []string{"quota_data", "perf_metrics"},
+			Goroutines:              runtime.NumGoroutine(),
+			HeapAllocBytes:          mem.HeapAlloc,
+			GOMAXPROCS:              runtime.GOMAXPROCS(0),
+			GOMEMLimitBytes:         debug.SetMemoryLimit(-1),
+			GCCount:                 mem.NumGC,
+			LastGCUnixMS:            mem.LastGC / uint64(time.Millisecond),
+			PauseTotalNS:            mem.PauseTotalNs,
+			HTTPConnState:           httpConnState,
+			HTTPAcceptTotal:         httpAcceptTotal,
+			HTTPActiveCurrent:       httpActiveCurrent,
+			BlockProfileRate:        parseEnvInt("LOADTEST_PROFILE_BLOCK_RATE"),
+			MutexProfileFraction:    parseEnvInt("LOADTEST_PROFILE_MUTEX_FRACTION"),
+			BatchUpdate:             runtimeStatus{Status: "ok", Reason: batch.String()},
+			BatchUpdatePendingTotal: batch.Total,
+			QuotaData:               runtimeStatus{Status: "unavailable", Reason: "quota data pending snapshot is not exposed"},
+			PerfMetrics:             runtimeStatus{Status: "unavailable", Reason: "perf metrics pending snapshot is not exposed"},
+			Unavailable:             []string{"quota_data", "perf_metrics"},
 		}
 		c.JSON(http.StatusOK, resp)
 	})
+	r.OPTIONS("/debug/loadtest/runtime/batch-update/drain", func(c *gin.Context) {
+		if !loadtestRuntimeRequestAllowed(c.Request, access) {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success":           true,
+			"state":             "open",
+			"runtime_stats":     true,
+			"full_writer_drain": true,
+			"note":              "Read-only capability check; POST performs the local full-writer drain.",
+		})
+	})
 	r.POST("/debug/loadtest/runtime/batch-update/user-quota/drain", func(c *gin.Context) {
-		if !remoteAddrIsLoopback(c.Request.RemoteAddr) || !forwardedClientIsLoopback(c.Request) {
+		if !loadtestRuntimeRequestAllowed(c.Request, access) {
 			c.Status(http.StatusForbidden)
 			return
 		}
@@ -200,6 +270,28 @@ func RegisterLoadtestRuntimeRoute(r *gin.Engine, listenAddr string, stats *Loadt
 			"pending":      pending,
 			"error":        errorString(err),
 			"note":         "Stop ingress before calling drain; this endpoint only flushes this local instance.",
+		})
+	})
+	r.POST("/debug/loadtest/runtime/batch-update/drain", func(c *gin.Context) {
+		if !loadtestRuntimeRequestAllowed(c.Request, access) {
+			c.Status(http.StatusForbidden)
+			return
+		}
+		before := model.BatchUpdatePendingSnapshot()
+		err := model.FlushAllWritersForMigration()
+		after := model.BatchUpdatePendingSnapshot()
+		status := http.StatusOK
+		if err != nil || after.Total != 0 {
+			status = http.StatusInternalServerError
+		}
+		c.JSON(status, gin.H{
+			"flushed_type":    "all",
+			"before":          before,
+			"after":           after,
+			"pending":         after.Total,
+			"pending_by_type": after.ByType,
+			"error":           errorString(err),
+			"note":            "Stop ingress before calling drain; this endpoint flushes every in-memory batch writer on this instance.",
 		})
 	})
 }

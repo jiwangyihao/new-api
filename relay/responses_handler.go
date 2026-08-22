@@ -102,20 +102,7 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))
 		}
-		if common.ShouldUseDiskCache(int64(len(jsonData))) {
-			diskBody, createErr := relaycommon.NewDiskReleasableRequestBody(jsonData)
-			if createErr == nil {
-				replayBody, createErr = diskBody.Reader()
-				if createErr != nil {
-					diskBody.Release()
-				}
-			}
-			if createErr != nil {
-				replayBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
-			}
-		} else {
-			replayBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
-		}
+		replayBody = relaycommon.NewAdaptiveReplayableRequestBody(jsonData)
 		requestBody = replayBody
 		jsonData = nil
 	}

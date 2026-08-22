@@ -4,9 +4,18 @@ import (
 	"errors"
 	"io"
 	"sync"
+	"sync/atomic"
+
+	appcommon "github.com/QuantumNous/new-api/common"
 )
 
 var errReleasableRequestBodyReleased = errors.New("request body has been released")
+
+var inFlightReplayMemoryBytes atomic.Int64
+
+func InFlightReplayMemoryBytes() int64 {
+	return inFlightReplayMemoryBytes.Load()
+}
 
 // ReleasableRequestBody keeps the upstream request payload replayable while a
 // request is being sent, then drops the backing byte slice after the response
@@ -14,12 +23,86 @@ var errReleasableRequestBodyReleased = errors.New("request body has been release
 type ReleasableRequestBody struct {
 	mu               sync.RWMutex
 	data             []byte
+	accountedBytes   int64
 	readers          int
 	releaseRequested bool
 }
 
 func NewReleasableRequestBody(data []byte) *ReleasableRequestBody {
-	return &ReleasableRequestBody{data: data}
+	size := int64(len(data))
+	inFlightReplayMemoryBytes.Add(size)
+	return &ReleasableRequestBody{data: data, accountedBytes: size}
+}
+
+func newReservedReleasableRequestBody(data []byte) *ReleasableRequestBody {
+	return &ReleasableRequestBody{data: data, accountedBytes: int64(len(data))}
+}
+
+func tryReserveReplayMemory(size, limit int64) bool {
+	if size < 0 || limit <= 0 {
+		return false
+	}
+	for {
+		current := inFlightReplayMemoryBytes.Load()
+		if size > limit-current {
+			return false
+		}
+		if inFlightReplayMemoryBytes.CompareAndSwap(current, current+size) {
+			return true
+		}
+	}
+}
+
+func newDiskReplayReader(data []byte) (ReplayableRequestBodyReader, bool) {
+	body, err := NewDiskReleasableRequestBody(data)
+	if err != nil {
+		return nil, false
+	}
+	reader, err := body.Reader()
+	if err != nil {
+		body.Release()
+		return nil, false
+	}
+	return reader, true
+}
+
+// NewAdaptiveReplayableRequestBody keeps small aggregate replay payloads in
+// memory and spills to disk once either the per-request threshold or the same
+// aggregate in-flight memory budget is exceeded. Disk failures safely fall
+// back to the in-memory owner.
+func NewAdaptiveReplayableRequestBody(data []byte) ReplayableRequestBodyReader {
+	size := int64(len(data))
+	if appcommon.ShouldUseDiskCache(size) {
+		if reader, ok := newDiskReplayReader(data); ok {
+			return reader
+		}
+		return NewReleasableRequestBody(data).Reader()
+	}
+	if appcommon.IsDiskCacheEnabled() {
+		memoryBudget := appcommon.GetDiskCacheThresholdBytes()
+		if memoryBudget > 0 {
+			if tryReserveReplayMemory(size, memoryBudget) {
+				return newReservedReleasableRequestBody(data).Reader()
+			}
+			if appcommon.IsDiskCacheAvailable(size) {
+				if reader, ok := newDiskReplayReader(data); ok {
+					return reader
+				}
+			}
+		}
+	}
+	return NewReleasableRequestBody(data).Reader()
+}
+
+func (b *ReleasableRequestBody) releaseDataLocked() {
+	if b.data == nil {
+		return
+	}
+	b.data = nil
+	if b.accountedBytes != 0 {
+		inFlightReplayMemoryBytes.Add(-b.accountedBytes)
+		b.accountedBytes = 0
+	}
 }
 
 func (b *ReleasableRequestBody) Reader() *ReleasableRequestBodyReader {
@@ -39,7 +122,7 @@ func (b *ReleasableRequestBody) Release() {
 	b.mu.Lock()
 	b.releaseRequested = true
 	if b.readers == 0 {
-		b.data = nil
+		b.releaseDataLocked()
 	}
 	b.mu.Unlock()
 }
@@ -50,7 +133,7 @@ func (b *ReleasableRequestBody) closeReader() {
 		b.readers--
 	}
 	if b.releaseRequested && b.readers == 0 {
-		b.data = nil
+		b.releaseDataLocked()
 	}
 	b.mu.Unlock()
 }

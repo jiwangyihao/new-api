@@ -188,15 +188,24 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	if endpointType, ok := endpointTypeFromRequest(c); ok {
 		switch endpointType {
 		case constant.EndpointTypeOpenAIResponse:
-			var request *dto.OpenAIResponsesRequest
-			err := common.UnmarshalBodyReusableWith(c, func(body []byte) error {
-				var decodeErr error
-				request, decodeErr = dto.UnmarshalOpenAIResponsesRequestBorrowed(body)
-				return decodeErr
-			})
-			if err == nil {
-				common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
-				return &ModelRequest{Model: request.Model}, nil
+			storage, storageErr := common.GetBodyStorage(c)
+			if storageErr == nil && storage.IsDisk() {
+				request := &dto.OpenAIResponsesRequest{}
+				if err := common.UnmarshalBodyReusable(c, request); err == nil {
+					common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
+					return &ModelRequest{Model: request.Model}, nil
+				}
+			} else if storageErr == nil {
+				var request *dto.OpenAIResponsesRequest
+				err := common.UnmarshalBodyReusableWith(c, func(body []byte) error {
+					var decodeErr error
+					request, decodeErr = dto.UnmarshalOpenAIResponsesRequestBorrowed(body)
+					return decodeErr
+				})
+				if err == nil {
+					common.SetContextKey(c, constant.ContextKeyOpenAIResponsesRequest, request)
+					return &ModelRequest{Model: request.Model}, nil
+				}
 			}
 		case constant.EndpointTypeOpenAIResponseCompact:
 			request := &dto.OpenAIResponsesCompactionRequest{}

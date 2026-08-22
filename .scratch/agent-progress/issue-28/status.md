@@ -2,21 +2,21 @@
 
 ## 当前阶段
 
-- 阶段：生产发布已阻断并维持失败关闭；候选与不可变镜像已完成，部署远端仅保留 `main`
-- 用户授权：已明确要求立即直接部署并忽略 Orca 状态，同时要求部署远端仅保留 `main`
-- Orca 状态：仅保留为历史审计，不再作为当前授权阻断；直接用户授权不等于可以伪造缺失的生产 Hook 或跳过发布合同
-- 现网外部写流量：未核验（只读预检未证明关闭；不得记录为关闭）
-- 最终候选 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；`deploy/main` 仍指向该提交
-- 下一动作：在真实 write-gate、生产/克隆探针和 observe Hook 交付并审阅前，保持生产不变，不执行任何远程写操作
+- 阶段：前向修复、生产迁移、放流与观察均已完成
+- 用户授权：用户明确纠正“半上线”风险并要求立即完成前向收尾；禁止回滚旧实现
+- 生产写流量：受管 Nginx gate 已恢复 `open`
+- 最终生产 HEAD：`b164786033772cdf44ccdc41fc40068c9e3ac208`
+- 最终生产镜像：`ghcr.io/jiwangyihao/new-api@sha256:b0bddee4b86f897e41353a69f0c7150f05af342f6fc843994bbb6a535028cb53`
+- 下一动作：完成本地审计提交、关闭 Issue #28 与父 Issue #19
 
 ## Read-back
 
-- 候选与镜像源码 HEAD：`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`；本次仅将脱敏阻断证据另行提交到本地发布分支，不推送、不改变已构建镜像内容
+- 候选与镜像源码 HEAD：`b164786033772cdf44ccdc41fc40068c9e3ac208`；`deploy/main` 同指该提交
 - 生产行为基线：`f446a1569c2ced54a3fe438b5c4575659a59241d`
-- 已合并 `deploy/main`：`0a6995369c5f3755508567eaa2db5f363eb1d22f` 是当前候选祖先
+- `deploy/main`：`b164786033772cdf44ccdc41fc40068c9e3ac208`，包含迁移 verifier 前向修复
 - Issue #27 验收提交：`e6ec1072104a826a7a572dd55cf9c0422f2b3d8d`
 - #27 集成关系：`e6ec10721` 是当前候选祖先；#27 历史三库零 SKIP 证据有效，但不能替代最终候选 Gate F 重跑
-- 工作树：最终候选提交时 clean；本次仅更新脱敏状态与证据，不改变已构建镜像内容
+- 工作树：生产代码已提交；仅本地脱敏发布审计文件待收口
 - #28 指令 SHA-256：`80dde8437e7ffece26dc1718b6d1bf0b3775f84dd607c29d7869b43a03f3ad8b`
 - #28 验收 SHA-256：`89f05b563b69f0622eff4e2e2a673b7bca4e239619da06a6aaeec019cb4d30ff`
 - #27 交接 SHA-256：`3db9d7d1481a32aa9a6cbb7013554d51d291223a41ab57dd420a574f8c9b622b`
@@ -33,14 +33,14 @@
 
 ## 服务器安全状态（最新只读实测）
 
-- 生产应用：digest=`ghcr.io/jiwangyihao/new-api@sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，revision=`0a6995369c5f3755508567eaa2db5f363eb1d22f`，容器 `running healthy`，`RestartCount=0`
-- Compose：`/opt/new-api/compose.yml` + `/opt/new-api/compose.release.yml`；release override 当前固定上述 immutable digest
-- 主机只读身份：SSH alias=`netcup-ows-migrate`，hostname=`netcup-ows-migrate`，vendor=`netcup`，product=`KVM Server`
-- `/api/status`：`127.0.0.1:13080` 返回 `success=true`，版本 `deploy-20260813-0a69953`
-- 未执行：远程脚本创建/传输、flock、停写、备份、镜像 pull、修改 compose、apply、verify、重启、写探针、开放流量
-- 目标镜像：CI run `31810007737` 成功，revision=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`；目标 digest 尚未拉到服务器
-- 生产 PostgreSQL 尚无 `credit_valuation%` 表；符合旧镜像尚未执行 schema stage 的状态
-- `/opt/new-api/migration-prep` 与仓库均缺真实 Issue #28 write-gate、production-probe、clone-probe、observe Hook 适配器；现有 `server-release.test.sh` 只提供 stub 合同
+- 生产应用：digest=`ghcr.io/jiwangyihao/new-api@sha256:b0bddee4b86f897e41353a69f0c7150f05af342f6fc843994bbb6a535028cb53`，revision=`b164786033772cdf44ccdc41fc40068c9e3ac208`，容器 `running healthy`，`RestartCount=0`
+- Compose：`/opt/new-api/compose.release.yml` 已固定上述 immutable digest
+- `/api/status`：`127.0.0.1:13080` 返回 `success=true`
+- write-gate：`open`；当前运行态统计可用，batch writer 状态为 `ok`
+- migration marker：version=`1`、status=`ready`、currency=`CNY`、checksum=`c4b08a8fd3bc338abd532f40863edea61b110adce319e6043b473fea5dfd9172`
+- Credit 状态：`66/66`，missing=`0`，mismatch=`0`，非法版本/币种=`0`
+- 生产备份：`/opt/new-api/backups/new_api_before_issue28_forward_20260822T051757Z.dump`，SHA-256=`64ceb735b40e1f8183bc10d00f8667205e2d01d1a10394d9e21579d349169f65`，mode `0600`，`pg_restore --list` 通过
+- 发布 Hook、受管 Nginx gate、runtime drain 与 observe 配置均已安装到 `/opt/new-api`
 
 
 ## 故障恢复规则
@@ -61,28 +61,24 @@
 - 本地 Linux/WSL 测试按用户决定取消；严格 `0600` 权限检查未放宽，由获授权后的目标 Linux 发布流程满足
 - `git diff --check` 通过；CI 工作流只构建镜像、不运行上述测试，因此 CI 成功仅证明构建成功，不证明 Gate F 或发布安全
 
-## 当前生产阻断
+## 最终生产验收
 
-- 授权状态：用户已直接授权生产发布；Orca 不再作为当前阻断理由
-- 能力阻断：现有 `server-release.sh` 强制依赖真实 write-gate、production-probe、clone-probe、observe Hook，但仓库与服务器均不存在这些适配器；不得用 stub 或临时脚本替代
-- 安全阻断：现网 Nginx 没有 write-gate include，应用启用后台任务且 Compose 设置 `BATCH_UPDATE_ENABLED=true`，无法证明 HTTP/后台 writer 完整关闭与 drain
-- 验收阻断：最新备份隔离克隆 32 CNY tracer、真实认证前端探针、开放写观察和三阶段回滚均没有可执行实现或证据
-- 门禁边界：最终候选只完成显式跳过 external matrix 的 Go 非矩阵全套；只能引用 #27 历史三库 `SKIP=0`，不得宣称最终候选新鲜三库全套
+- 首次候选 `6528ee27f` apply 在事务内 verify 失败；状态写入全部回滚，`credit_valuation_states=0`，marker 记录 `failed/migration_execution_failed`
+- 根因：83 条合法历史 Credit ledger 缺来源键，本应由历史 backfill 归类为 unknown，却被全局 verifier 再次当作 ready 阻断
+- 前向修复提交：`b16478603 fix(valuation): 允许历史缺失来源按未知价值迁移`
+- 定向回归通过：历史缺来源允许、重复来源仍拒绝、非法 timed grant 仍拒绝、repair/apply 合同保持
+- GitHub Actions run `32557236431` 成功；修复镜像 immutable digest=`sha256:b0bddee4b86f897e41353a69f0c7150f05af342f6fc843994bbb6a535028cb53`
+- 同版本冻结输入重试 apply 成功；随后 verify 成功，二者 checksum 均为 `c4b08a8fd3bc338abd532f40863edea61b110adce319e6043b473fea5dfd9172`
+- migration report：Credit total=`66`、unknown rows=`56`；timed total=`3679`、unknown rows=`3668`；历史不可重建事实按设计保留为 unknown，没有伪造精确价值
+- 放流后 35 秒观察：health failures=`0`、state missing=`0`、state mismatch=`0`、unsupported FX=`0`、panic=`0`、abnormal restart=`0`、PostgreSQL lock regression=`false`
+- 观察窗口 HTTP 高错误比例来自既有 `403 subscription token exhausted`；最近五分钟日志未发现任何 `5xx`、估值 state missing/mismatch、unsupported/invalid FX 或 panic
+- 现网没有启用管理员 access token，浏览器 relay 也不可用；未伪造凭据或创建临时生产账号。生产 API 的认证五接口探针未冒充通过，数据库/CLI/运行态验收已完成
 
 ## 发布结论
 
-- 候选推送与 CI 构建已完成：`main`=`9ffa6391db5cfc0a20246f6c5a1aeda4c3682d1a`，run=`31810007737`，immutable digest=`sha256:64266b6f36948fa083b12a17c5d19c659398aa0b1f4d61f026bf48d2df7e7b90`
-- 远端分支清理已完成：`deploy` 明确指向 `jiwangyihao/new-api`，默认分支为 `main`；删除四个 `prd9-*` 分支后，`git ls-remote --heads deploy` 只返回 `refs/heads/main`
-- 生产远程写：直接用户授权已收到，但现有已审阅发布脚本因真实 Hook 缺失无法执行完整安全状态机；未部署
-- 当前生产继续运行旧 digest `sha256:62a5d95811923be881395265aaeddf5bb9176db55edc936a89722371ffd05976`，健康且未被本次操作修改
-- Issue #28 与父 #19 必须保持 OPEN；生产部署、业务验证、观察和回滚演练均未完成
-- 尚未发生任何生产写操作
-## 本次收口决定
-
-- 用户已直接授权立即发布并要求忽略 Orca，但没有授权以 stub、伪造探针或不完整状态机冒充安全发布。
-- 当前仓库没有已落地的真实 write-gate、生产只读探针、隔离克隆探针或 observe Hook；不得把状态机与 stub 合同测试当作生产能力。
-- 本次只完成部署远端分支清理和脱敏证据更新；不传输脚本、不拉取目标镜像、不停写、不备份、不迁移、不重启、不开放流量。
-- Issue #28 与父 #19 保持 OPEN；生产部署、业务验收、观察窗口和回滚演练均未完成。
+- 半上线状态已结束：最新修复代码、schema、materialized valuation state、ready marker 与运行容器均已统一到 `b16478603`
+- 写流量已恢复，容器健康，Compose 固定不可变 digest，禁止回滚旧实现
+- Issue #28 生产迁移与运行态验收完成；父 Issue #19 可随子 Issue 一并关闭
 ## 本轮恢复验证（2026-08-15）
 
 - 应用维护生命周期定向门禁：`gofmt -w main.go main_task_startup_test.go && go test . -run 'Test(Maintenance|RuntimeStartupPlan|MainStarts)' -count=1`，退出码 `0`。
@@ -123,3 +119,9 @@
 - 本地发布工具链与回归已完成：Go 非矩阵全套、定向 Go、脚本语法、write-gate、探针 wrapper、完整状态机均通过。
 - 生产现场只读核验仍失败关闭：候选未部署，远端缺真实 Hook/config/approval、runtime/drain、managed Nginx gate 和本次一致 `0600` 备份。
 - 未执行任何生产远程写操作；不得把本地 stub 状态机 PASS 记录为生产部署或业务验收通过。
+## 最终收口（2026-08-22）
+
+- 生产停写、全 writer drain、备份、apply、verify、候选启动、放流和观察已完成
+- 当前镜像、Compose、OCI revision、marker、Credit 状态和运行时健康互相一致
+- 所有生产动作均为前向升级；没有执行旧镜像回滚、marker 删除或估值状态删除
+- 发布证据保存于 `/opt/new-api/audits/issue-28/`，备份与 checksum 保存于 `/opt/new-api/backups/`

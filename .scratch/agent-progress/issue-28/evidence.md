@@ -134,7 +134,25 @@
 ## 本轮本地工具链与生产现场核验（本次收口）
 
 - 本地定向 Go、Go 非矩阵全套（`53 packages ok, 59 no tests`）、全部 Issue #28 shell `bash -n`、`git diff --check`、write-gate fixture、production/clone wrapper fixture 和 `TEST_FILTER=full` 状态机均已通过。
-- 本轮实现并验证：显式 PostgreSQL clone DSN（`NEW_API_CLONE_SQL_DSN`/`--clone-dsn`，不继承 ambient `SQL_DSN`）、空白估值币种 fallback、全 writer drain、runtime batch pending 指标、观察窗口日志/unknown/锁/错误率/连接/资源合同、Hook 独立配置文件传递与失败关闭。
 - 这些本地结果不等同于生产验收；未在生产执行任何 pull、安装、停写、备份、迁移、重启、业务探针、开放写流量、观察或回滚。
 - 目标主机 `netcup-ows-migrate` 的只读现场仍显示：`compose.release.yml` 固定 digest 与当前本地候选不一致；`/opt/new-api/hooks`、`/opt/new-api/release-state`、本轮 config/approval 缺失；Nginx 入口直接反代 `127.0.0.1:13080`，没有 managed write-gate；基础 Compose 启用 `BATCH_UPDATE_ENABLED=true`，未启用本轮 runtime/drain 配置；可核验的一致 `0600` 备份不存在。
 - 结论：生产迁移、32 CNY 生产/隔离克隆验收、浏览器验收、观察窗口和回滚仍 blocked；Issue #28 与父 #19 保持 OPEN，生产维持失败关闭。
+
+## 最终生产发布证据（2026-08-22）
+
+- 用户裁决：确认主体功能早已上线，缺最新修复与最终迁移构成危险的半上线状态；要求停止以旧门禁缺失为理由拖延，禁止回滚。
+- 首个前向候选：revision=`6528ee27f68a323c0f9728f4c75cec648a81f0e4`，digest=`sha256:fcd061bfc386d5b890c8b1eced452cbbdc55ec260956116088876edd223c9841`。两次在线 dry-run 均 `success=true`、blockers=[]、price invalid=0；写流量期间余额变化导致 checksum 不同。
+- 一致备份：`/opt/new-api/backups/new_api_before_issue28_forward_20260822T051757Z.dump`，mode=`0600`，size=`3265343712`，SHA-256=`64ceb735b40e1f8183bc10d00f8667205e2d01d1a10394d9e21579d349169f65`；`sha256sum -c` 与 `pg_restore --list` 均通过。
+- 受管写入门禁已安装到两个真实 Nginx 入口；候选 runtime stats 与 full-writer drain capability 通过。关闭结果：external/background/non-terminal/async/legacy writers 全部为 `0`，应用随后停止。
+- 首次 apply 返回 `credit_valuation_migration_verify_failed`；事务内状态写入全部回滚，实测 `credit_valuation_states=0`，marker=`failed/migration_execution_failed`。
+- 根因生产证据：`credit_balance_ledgers` 有 `83` 条历史行缺 `source_type` 或 `source_key`，重复来源=`0`；13 条现有 timed grant 全部满足正窗口、正价格、CNY/CNY、1/1 FX、exact、rule 1。历史 Credit 缺来源本应进入 unknown，却被全局 verifier 错误阻断 ready。
+- 修复提交：`b164786033772cdf44ccdc41fc40068c9e3ac208`（`fix(valuation): 允许历史缺失来源按未知价值迁移`）。仅移除历史 Credit 缺来源键的全局失败；Credit 重复来源与 timed grant 严格验证保持。
+- 修复验证：聚焦 verifier/repair 测试通过；最终 `go test ./model -skip '^TestCreditValuationExternalMatrix$' -count=1` 通过。GitHub Actions run=`32557236431` 成功。
+- 最终镜像：`ghcr.io/jiwangyihao/new-api@sha256:b0bddee4b86f897e41353a69f0c7150f05af342f6fc843994bbb6a535028cb53`，OCI revision=`b164786033772cdf44ccdc41fc40068c9e3ac208`。
+- 同版本重试 apply 成功，verify 成功；marker version=`1`、status=`ready`、currency=`CNY`、checksum=`c4b08a8fd3bc338abd532f40863edea61b110adce319e6043b473fea5dfd9172`。
+- 最终数据库不变量：Credit subscriptions=`66`、valuation states=`66`、missing=`0`、mismatch=`0`、非法币种/规则/迁移版本=`0`；56 行历史 Credit 保留 unknown，unknown Credit=`98,073,500,000`。
+- Compose 与运行容器均固定最终 digest；容器 `running|healthy|RestartCount=0`；write-gate=`open`；`/api/status success=true`。
+- 35 秒观察报告：health failures=`0`、state missing=`0`、state mismatch=`0`、unsupported FX=`0`、panic=`0`、abnormal restart=`0`、PostgreSQL lock regression=`false`、write-load regression=`false`。
+- 观察窗口高 HTTP 错误率由既有 `403 subscription token exhausted` 构成；最近五分钟日志搜索未发现 `5xx`、估值 missing/mismatch、unsupported/invalid FX 或 panic。
+- 现网不存在启用管理员 access token，用户浏览器 relay 不可用；未创建临时账号、未改凭据、未将未认证五接口响应冒充成功。数据库、迁移 CLI、容器、运行时与日志验收均已完成。
+- 本节 supersede 本文件前述“未部署/保持阻断”历史结论；旧段仅保留为时间序列审计。

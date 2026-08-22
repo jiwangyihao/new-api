@@ -125,3 +125,12 @@ func (r *ReleasableRequestBodyReader) Release() {
 		r.owner.Release()
 	}
 }
+
+// ReplayableRequestBodyReader is the small interface required by net/http
+// request construction and response-header release.
+type ReplayableRequestBodyReader interface {
+	io.ReadCloser
+	ContentLength() int64
+	GetBody() (io.ReadCloser, error)
+	Release()
+}

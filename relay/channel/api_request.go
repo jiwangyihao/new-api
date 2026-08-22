@@ -342,17 +342,18 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 }
 
 func newAPIRequest(method, requestURL string, requestBody io.Reader) (*http.Request, error) {
-	if body, ok := requestBody.(*common.ReleasableRequestBodyReader); ok {
-		req, err := http.NewRequest(method, requestURL, body)
-		if err != nil {
-			_ = body.Close()
-			return nil, err
-		}
-		req.ContentLength = body.ContentLength()
-		req.GetBody = body.GetBody
-		return req, nil
+	body, ok := requestBody.(common.ReplayableRequestBodyReader)
+	if !ok {
+		return http.NewRequest(method, requestURL, requestBody)
 	}
-	return http.NewRequest(method, requestURL, requestBody)
+	req, err := http.NewRequest(method, requestURL, body)
+	if err != nil {
+		_ = body.Close()
+		return nil, err
+	}
+	req.ContentLength = body.ContentLength()
+	req.GetBody = body.GetBody
+	return req, nil
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
@@ -599,7 +600,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	_ = req.Body.Close()
-	if body, ok := req.Body.(*common.ReleasableRequestBodyReader); ok {
+	if body, ok := req.Body.(common.ReplayableRequestBodyReader); ok {
 		body.Release()
 	}
 	_ = c.Request.Body.Close()

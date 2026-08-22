@@ -72,6 +72,7 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 	adaptor.Init(info)
 
 	var requestBody io.Reader
+	var replayBody relaycommon.ReplayableRequestBodyReader
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
@@ -101,7 +102,28 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))
 		}
-		requestBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
+		if common.ShouldUseDiskCache(int64(len(jsonData))) {
+			diskBody, createErr := relaycommon.NewDiskReleasableRequestBody(jsonData)
+			if createErr == nil {
+				replayBody, createErr = diskBody.Reader()
+				if createErr != nil {
+					diskBody.Release()
+				}
+			}
+			if createErr != nil {
+				replayBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
+			}
+		} else {
+			replayBody = relaycommon.NewReleasableRequestBody(jsonData).Reader()
+		}
+		requestBody = replayBody
+		jsonData = nil
+	}
+	if replayBody != nil {
+		defer func() {
+			_ = replayBody.Close()
+			replayBody.Release()
+		}()
 	}
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)

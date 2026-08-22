@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -274,6 +275,29 @@ func matchAnyIncludeFold(patterns []string, s string) bool {
 	return false
 }
 
+func channelAffinityGJSONValue(result gjson.Result) string {
+	if !result.Exists() {
+		return ""
+	}
+	switch result.Type {
+	case gjson.String, gjson.Number, gjson.True, gjson.False:
+		return strings.TrimSpace(result.String())
+	default:
+		return strings.TrimSpace(result.Raw)
+	}
+}
+
+func cachedResponsesAffinityValue(c *gin.Context, path string) (string, bool) {
+	if c == nil || path != "prompt_cache_key" {
+		return "", false
+	}
+	request, ok := common.GetContextKeyType[*dto.OpenAIResponsesRequest](c, constant.ContextKeyOpenAIResponsesRequest)
+	if !ok || request == nil {
+		return "", false
+	}
+	return channelAffinityGJSONValue(gjson.ParseBytes(request.PromptCacheKey)), true
+}
+
 func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAffinityKeySource) string {
 	switch src.Type {
 	case "context_int":
@@ -294,6 +318,9 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		if src.Path == "" {
 			return ""
 		}
+		if value, cached := cachedResponsesAffinityValue(c, src.Path); cached {
+			return value
+		}
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return ""
@@ -302,16 +329,7 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		if err != nil || len(body) == 0 {
 			return ""
 		}
-		res := gjson.GetBytes(body, src.Path)
-		if !res.Exists() {
-			return ""
-		}
-		switch res.Type {
-		case gjson.String, gjson.Number, gjson.True, gjson.False:
-			return strings.TrimSpace(res.String())
-		default:
-			return strings.TrimSpace(res.Raw)
-		}
+		return channelAffinityGJSONValue(gjson.GetBytes(body, src.Path))
 	default:
 		return ""
 	}

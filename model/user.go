@@ -835,7 +835,7 @@ func (user *User) Update(updatePassword bool) error {
 	return updateUserCache(*user)
 }
 
-const userSettingCASMaxAttempts = 5
+const userSettingCASMaxAttempts = 20
 
 var ErrUserSettingCASConflict = errors.New("user setting changed concurrently")
 
@@ -898,7 +898,9 @@ func mutateUserSettingCAS(userId int, mutate func(*dto.UserSetting) error) (dto.
 		if !isRetryableUserSettingMutationError(err) {
 			return setting, settingJSON, err
 		}
-		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+		if attempt+1 < userSettingCASMaxAttempts {
+			time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+		}
 	}
 	return dto.UserSetting{}, "", ErrUserSettingCASConflict
 }
@@ -913,10 +915,9 @@ func transactionWithUserSettingCASRetry(run func(*gorm.DB) error) error {
 		if !isRetryableUserSettingMutationError(lastErr) {
 			return lastErr
 		}
-		time.Sleep(time.Duration(attempt+1) * time.Millisecond)
-	}
-	if isRetryableUserSettingMutationError(lastErr) {
-		return ErrUserSettingCASConflict
+		if attempt+1 < userSettingCASMaxAttempts {
+			time.Sleep(time.Duration(attempt+1) * time.Millisecond)
+		}
 	}
 	return lastErr
 }

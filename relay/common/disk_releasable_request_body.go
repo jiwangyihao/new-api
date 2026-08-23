@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bufio"
 	"io"
 	"os"
 	"sync"
@@ -44,7 +45,17 @@ func NewDiskReleasableRequestBodyFromJSON(value any) (*DiskReleasableRequestBody
 		_ = file.Close()
 		_ = os.Remove(path)
 	}
-	if err := appcommon.EncodeJson(file, value); err != nil {
+	if streaming, ok := value.(interface{ WriteJSON(io.Writer) error }); ok {
+		buffered := bufio.NewWriter(file)
+		if err := streaming.WriteJSON(buffered); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if err := buffered.Flush(); err != nil {
+			cleanup()
+			return nil, err
+		}
+	} else if err := appcommon.EncodeJson(file, value); err != nil {
 		cleanup()
 		return nil, err
 	}

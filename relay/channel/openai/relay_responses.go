@@ -37,6 +37,41 @@ func openAIResponsesCompletedWithUsage(resp *dto.OpenAIResponsesResponse) bool {
 // 且观察到的输出 token 低于该阈值时，视为未产生有效输出，不进行计费。
 const responsesSoftErrorMinOutputTokens = 20
 
+type responsesStreamEventHeader struct {
+	Type string `json:"type"`
+}
+
+func requiresFullResponsesStreamDecode(eventType string) bool {
+	switch eventType {
+	case "response.completed",
+		"response.error",
+		"response.failed",
+		"response.incomplete",
+		"response.cancelled",
+		"response.canceled",
+		dto.ResponsesOutputTypeItemDone:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseResponsesStreamEvent(data string) (dto.ResponsesStreamResponse, error) {
+	var header responsesStreamEventHeader
+	if err := common.UnmarshalJsonStr(data, &header); err != nil {
+		return dto.ResponsesStreamResponse{}, err
+	}
+	if !requiresFullResponsesStreamDecode(header.Type) {
+		return dto.ResponsesStreamResponse{Type: header.Type}, nil
+	}
+
+	var event dto.ResponsesStreamResponse
+	if err := common.UnmarshalJsonStr(data, &event); err != nil {
+		return dto.ResponsesStreamResponse{}, err
+	}
+	return event, nil
+}
+
 func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
 	defer service.CloseResponseBodyGracefully(resp)
 	// read response body
@@ -147,8 +182,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	doneBuffer := beginResponsesDoneBuffering(c)
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		var streamResponse dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &streamResponse); err != nil {
+		streamResponse, err := parseResponsesStreamEvent(data)
+		if err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return

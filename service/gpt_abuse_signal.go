@@ -64,15 +64,15 @@ func ClassifyGPTAbuseSignalFromHTTPError(statusCode int, body []byte) GPTAbuseSi
 	return classifyGPTAbuseError(statusCode, errorObject, GPTAbuseSourceHTTPError)
 }
 
-func ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data []byte) GPTAbuseSignal {
+func ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data string) GPTAbuseSignal {
 	eventType = strings.TrimSpace(eventType)
-	if eventType == "response.metadata" && containsTrustedAccessForCyber(string(data)) {
+	if eventType == "response.metadata" && containsTrustedAccessForCyber(data) {
 		return GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindHighRiskCyberReroute, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceSSEMetadata, CountEligible: true, Stream: true, Extra: gptAbuseUpstreamWarningExtra(eventType, "", gptErrorObject{}, `{"openai_verification_recommendation":["trusted_access_for_cyber"]}`)}
 	}
 	if eventType != "response.failed" && eventType != "response.error" {
 		return GPTAbuseSignal{}
 	}
-	errorObject, responseStatus := parseGPTSSEErrorObject(data)
+	errorObject, responseStatus := parseGPTSSEErrorObject(common.StringToByteSlice(data))
 	signal := classifyGPTAbuseError(http.StatusInternalServerError, errorObject, GPTAbuseSourceSSEResponseFailed)
 	signal.Stream = true
 	if signal.Matched {

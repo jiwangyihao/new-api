@@ -336,7 +336,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return
 		}
 		if service.ShouldMonitorGPTAbuse(info) {
-			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResp.Type, []byte(data))
+			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResp.Type, data)
 			if signal.Matched {
 				signal.StatusCode = http.StatusOK
 				signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)

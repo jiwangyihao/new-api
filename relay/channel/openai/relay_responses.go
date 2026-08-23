@@ -208,7 +208,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			return
 		}
 		if service.ShouldMonitorGPTAbuse(info) {
-			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResponse.Type, []byte(data))
+			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResponse.Type, data)
 			if signal.Matched {
 				signal.StatusCode = resp.StatusCode
 				signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)

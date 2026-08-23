@@ -14,9 +14,9 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -163,7 +163,7 @@ func TestClassifyGPTAbuseSignalFromHTTPErrorExcludesContentParameterValidation(t
 }
 
 func TestClassifyGPTAbuseSignalFromSSETrustedAccessForCyber(t *testing.T) {
-	payload := []byte(`{"type":"response.metadata","response":{"metadata":{"openai_verification_recommendation":["trusted_access_for_cyber"]}}}`)
+	payload := `{"type":"response.metadata","response":{"metadata":{"openai_verification_recommendation":["trusted_access_for_cyber"]}}}`
 
 	signal := ClassifyGPTAbuseSignalFromSSEEvent("response.metadata", payload)
 
@@ -182,7 +182,7 @@ func TestClassifyGPTAbuseSignalFromSSETrustedAccessForCyber(t *testing.T) {
 }
 
 func TestClassifyGPTAbuseSignalFromSSEEventStoresUpstreamWarningDetails(t *testing.T) {
-	payload := []byte(`{"type":"response.failed","metadata":{"tenant":"secret-tenant"},"response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`)
+	payload := `{"type":"response.failed","metadata":{"tenant":"secret-tenant"},"response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`
 
 	signal := ClassifyGPTAbuseSignalFromSSEEvent("response.failed", payload)
 
@@ -593,7 +593,7 @@ func TestResponsesSSEWarningStoresRepeatBlockBeforeHandlerReturns(t *testing.T) 
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.5","input":[{"role":"user","content":"blocked"}],"stream":true}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	captureGPTAbuseRepeatBlockForSignalTest(t, c, info, `{"model":"gpt-5.5","input":[{"role":"user","content":"blocked"}],"stream":true}`)
-	payload := []byte(`{"type":"response.failed","response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`)
+	payload := `{"type":"response.failed","response":{"status":"failed","error":{"message":"This request has been flagged for possible cybersecurity risk.","type":"invalid_request_error","code":"cyber_policy"}}}`
 	signal := ClassifyGPTAbuseSignalFromSSEEvent("response.failed", payload)
 	require.True(t, signal.Matched)
 	signal.StatusCode = http.StatusOK
@@ -604,4 +604,16 @@ func TestResponsesSSEWarningStoresRepeatBlockBeforeHandlerReturns(t *testing.T) 
 
 	require.NotNil(t, apiErr)
 	assert.Equal(t, string(types.ErrorCodeGPTAbuseRepeatedWarningRequest), apiErr.ToOpenAIError().Code)
+}
+
+func BenchmarkClassifyGPTAbuseSignalFromOrdinarySSEEvent(b *testing.B) {
+	data := `{"type":"response.output_text.delta","delta":"` + strings.Repeat("x", 64<<10) + `"}`
+	b.ReportAllocs()
+	b.SetBytes(int64(len(data)))
+	for b.Loop() {
+		signal := ClassifyGPTAbuseSignalFromSSEEvent("response.output_text.delta", data)
+		if signal.Matched {
+			b.Fatal("ordinary event matched abuse classifier")
+		}
+	}
 }

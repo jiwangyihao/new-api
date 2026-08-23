@@ -109,7 +109,7 @@ func TestResolveGPTAbuseWarningLimit(t *testing.T) {}
 
 ```go
 ClassifyGPTAbuseSignalFromHTTPError(statusCode int, body []byte) GPTAbuseSignal
-ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data []byte) GPTAbuseSignal
+ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data string) GPTAbuseSignal
 GPTUpstreamRequestID(headers http.Header) string
 ResolveGPTAbuseWarningLimit(plan *model.SubscriptionPlan) int
 ```

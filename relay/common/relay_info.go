@@ -848,15 +848,15 @@ func GenRelayInfoResponses(c *gin.Context, request *dto.OpenAIResponsesRequest) 
 		BuiltInTools: make(map[string]*BuildInToolInfo),
 	}
 	if len(request.Tools) > 0 {
-		for _, tool := range request.GetToolsMap() {
-			toolType := common.Interface2String(tool["type"])
+		for _, tool := range request.GetToolsMetadata() {
+			toolType := tool.Type
 			info.ResponsesUsageInfo.BuiltInTools[toolType] = &BuildInToolInfo{
 				ToolName:  toolType,
 				CallCount: 0,
 			}
 			switch toolType {
 			case dto.BuildInToolWebSearchPreview:
-				searchContextSize := common.Interface2String(tool["search_context_size"])
+				searchContextSize := tool.SearchContextSize
 				if searchContextSize == "" {
 					searchContextSize = "medium"
 				}

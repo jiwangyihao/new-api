@@ -1164,12 +1164,17 @@ func (r *OpenAIResponsesRequest) SetModelName(modelName string) {
 	}
 }
 
-func (r *OpenAIResponsesRequest) GetToolsMap() []map[string]any {
-	var toolsMap []map[string]any
+type ResponsesToolMetadata struct {
+	Type              string `json:"type"`
+	SearchContextSize string `json:"search_context_size,omitempty"`
+}
+
+func (r *OpenAIResponsesRequest) GetToolsMetadata() []ResponsesToolMetadata {
+	var tools []ResponsesToolMetadata
 	if len(r.Tools) > 0 {
-		_ = common.Unmarshal(r.Tools, &toolsMap)
+		_ = common.Unmarshal(r.Tools, &tools)
 	}
-	return toolsMap
+	return tools
 }
 
 type Reasoning struct {

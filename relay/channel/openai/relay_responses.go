@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/tidwall/gjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -57,12 +59,29 @@ func requiresFullResponsesStreamDecode(eventType string) bool {
 }
 
 func parseResponsesStreamEvent(data string) (dto.ResponsesStreamResponse, error) {
-	var header responsesStreamEventHeader
-	if err := common.UnmarshalJsonStr(data, &header); err != nil {
-		return dto.ResponsesStreamResponse{}, err
+	dataBytes := common.StringToByteSlice(data)
+	if !gjson.ValidBytes(dataBytes) {
+		return dto.ResponsesStreamResponse{}, fmt.Errorf("invalid responses stream JSON")
 	}
-	if !requiresFullResponsesStreamDecode(header.Type) {
-		return dto.ResponsesStreamResponse{Type: header.Type}, nil
+
+	var eventType string
+	// GJSON returns the first duplicate key, whereas encoding/json uses the last.
+	// Escaped keys also require the standard decoder to preserve that contract.
+	if bytes.Count(dataBytes, []byte(`"type"`)) > 1 || bytes.Contains(dataBytes, []byte(`\u`)) {
+		var header responsesStreamEventHeader
+		if err := common.UnmarshalJsonStr(data, &header); err != nil {
+			return dto.ResponsesStreamResponse{}, err
+		}
+		eventType = header.Type
+	} else {
+		typeResult := gjson.GetBytes(dataBytes, "type")
+		if typeResult.Type != gjson.Null && typeResult.Type != gjson.String {
+			return dto.ResponsesStreamResponse{}, fmt.Errorf("responses stream type must be a string")
+		}
+		eventType = typeResult.String()
+	}
+	if !requiresFullResponsesStreamDecode(eventType) {
+		return dto.ResponsesStreamResponse{Type: eventType}, nil
 	}
 
 	var event dto.ResponsesStreamResponse

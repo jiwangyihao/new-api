@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -14,6 +15,39 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
+
+const (
+	initialResponseFrameCapacity = 4 << 10
+	maxPooledResponseFrameBytes  = 16 << 10
+)
+
+var responseFramePool = sync.Pool{
+	New: func() any {
+		frame := make([]byte, 0, initialResponseFrameCapacity)
+		return &frame
+	},
+}
+
+func acquireResponseFrame(size int) (*[]byte, []byte) {
+	holder := responseFramePool.Get().(*[]byte)
+	frame := (*holder)[:0]
+	if cap(frame) < size {
+		frame = make([]byte, 0, size)
+	}
+	return holder, frame
+}
+
+func releaseResponseFrame(holder *[]byte, frame []byte) {
+	if holder == nil {
+		return
+	}
+	if cap(frame) > maxPooledResponseFrameBytes {
+		*holder = nil
+	} else {
+		*holder = frame[:0]
+	}
+	responseFramePool.Put(holder)
+}
 
 func FlushWriter(c *gin.Context) (err error) {
 	defer func() {
@@ -81,7 +115,9 @@ func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data st
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	frame := make([]byte, 0, len("event: ")+len(resp.Type)+len("\ndata: ")+len(data)+len("\n\n"))
+	frameSize := len("event: ") + len(resp.Type) + len("\ndata: ") + len(data) + len("\n\n")
+	holder, frame := acquireResponseFrame(frameSize)
+	defer releaseResponseFrame(holder, frame)
 	frame = append(frame, "event: "...)
 	frame = append(frame, resp.Type...)
 	frame = append(frame, '\n')

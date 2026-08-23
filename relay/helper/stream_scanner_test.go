@@ -790,6 +790,23 @@ func TestResponseChunkDataWritesSingleSSEFrame(t *testing.T) {
 	assert.Equal(t, "event: response.output_text.delta\ndata: {\"delta\":\"x\"}\n\n", recorder.Body.String())
 }
 
+func TestResponseChunkDataDoesNotLeakPreviousFrameBytes(t *testing.T) {
+	t.Parallel()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	require.NoError(t, ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"first-secret"}`))
+	require.NoError(t, ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"x"}`))
+
+	require.Equal(t,
+		"event: response.output_text.delta\ndata: {\"delta\":\"first-secret\"}\n\n"+
+			"event: response.output_text.delta\ndata: {\"delta\":\"x\"}\n\n",
+		recorder.Body.String(),
+	)
+}
+
 func BenchmarkResponseChunkData(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

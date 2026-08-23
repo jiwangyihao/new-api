@@ -38,6 +38,10 @@ func Marshal(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
+func EncodeJson(writer io.Writer, v any) error {
+	return json.NewEncoder(writer).Encode(v)
+}
+
 func GetJsonType(data json.RawMessage) string {
 	trimmed := bytes.TrimSpace(data)
 	if len(trimmed) == 0 {

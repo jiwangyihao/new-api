@@ -35,6 +35,46 @@ func NewDiskReleasableRequestBody(data []byte) (*DiskReleasableRequestBody, erro
 	return &DiskReleasableRequestBody{path: path, size: int64(len(data))}, nil
 }
 
+func NewDiskReleasableRequestBodyFromJSON(value any) (*DiskReleasableRequestBody, error) {
+	path, file, err := appcommon.CreateDiskCacheFile(appcommon.DiskCacheTypeBody)
+	if err != nil {
+		return nil, err
+	}
+	cleanup := func() {
+		_ = file.Close()
+		_ = os.Remove(path)
+	}
+	if err := appcommon.EncodeJson(file, value); err != nil {
+		cleanup()
+		return nil, err
+	}
+	size, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	if size > 0 {
+		var last [1]byte
+		if _, err := file.ReadAt(last[:], size-1); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if last[0] == '\n' {
+			size--
+			if err := file.Truncate(size); err != nil {
+				cleanup()
+				return nil, err
+			}
+		}
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	appcommon.IncrementDiskFiles(size)
+	return &DiskReleasableRequestBody{path: path, size: size}, nil
+}
+
 func (b *DiskReleasableRequestBody) Reader() (*DiskReleasableRequestBodyReader, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

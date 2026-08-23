@@ -39,6 +39,47 @@ func releaseResponsesRequestResources(c *gin.Context, info *relaycommon.RelayInf
 	httpResp.Request.GetBody = nil
 }
 
+func tryBuildDirectDiskResponsesBody(c *gin.Context, info *relaycommon.RelayInfo, convertedRequest any) (relaycommon.ReplayableRequestBodyReader, bool, error) {
+	if common.DebugEnabled || c == nil || info == nil {
+		return nil, false, nil
+	}
+	storageValue, exists := c.Get(common.KeyBodyStorage)
+	storage, ok := storageValue.(common.BodyStorage)
+	if !exists || !ok || !storage.IsDisk() || !common.IsDiskCacheAvailable(storage.Size()) {
+		return nil, false, nil
+	}
+	var request dto.OpenAIResponsesRequest
+	switch value := convertedRequest.(type) {
+	case dto.OpenAIResponsesRequest:
+		request = value
+	case *dto.OpenAIResponsesRequest:
+		if value == nil {
+			return nil, false, nil
+		}
+		request = *value
+	default:
+		return nil, false, nil
+	}
+	if !relaycommon.CanEncodeResponsesRequestDirectlyToDisk(request, info) {
+		return nil, false, nil
+	}
+	body, err := relaycommon.NewDiskReleasableRequestBodyFromJSON(convertedRequest)
+	if err != nil {
+		return nil, false, nil
+	}
+	reader, err := body.Reader()
+	if err != nil {
+		body.Release()
+		return nil, false, nil
+	}
+	if err := relaycommon.ApplyResponsesHeaderOnlyOverride(info); err != nil {
+		_ = reader.Close()
+		reader.Release()
+		return nil, true, err
+	}
+	return reader, true, nil
+}
+
 func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Adaptor, *http.Response, *types.NewAPIError) {
 	var responsesReq *dto.OpenAIResponsesRequest
 	switch req := info.Request.(type) {
@@ -85,26 +126,35 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		jsonData, err := common.Marshal(convertedRequest)
+		directBody, direct, err := tryBuildDirectDiskResponsesBody(c, info, convertedRequest)
 		if err != nil {
-			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			return nil, nil, newAPIErrorFromParamOverride(err)
 		}
-		jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-		if err != nil {
-			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		if len(info.ParamOverride) > 0 {
-			jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+		if direct {
+			replayBody = directBody
+			requestBody = directBody
+		} else {
+			jsonData, err := common.Marshal(convertedRequest)
 			if err != nil {
-				return nil, nil, newAPIErrorFromParamOverride(err)
+				return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
+			jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
+			if err != nil {
+				return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+			}
+			if len(info.ParamOverride) > 0 {
+				jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
+				if err != nil {
+					return nil, nil, newAPIErrorFromParamOverride(err)
+				}
+			}
+			if common.DebugEnabled {
+				println("requestBody: ", string(jsonData))
+			}
+			replayBody = relaycommon.NewAdaptiveReplayableRequestBody(jsonData)
+			requestBody = replayBody
+			jsonData = nil
 		}
-		if common.DebugEnabled {
-			println("requestBody: ", string(jsonData))
-		}
-		replayBody = relaycommon.NewAdaptiveReplayableRequestBody(jsonData)
-		requestBody = replayBody
-		jsonData = nil
 	}
 	if replayBody != nil {
 		defer func() {

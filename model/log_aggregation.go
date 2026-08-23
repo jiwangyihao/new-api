@@ -203,14 +203,50 @@ func applyPendingLogAggregationEventsBatch(limit int) (int, int, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	logsByID, err := logsForAggregationEvents(events)
+	if err != nil {
+		return 0, 0, err
+	}
 	var firstErr error
 	for i := range events {
 		event := events[i]
-		if err := applyLogAggregationEventByID(event.Id, event.LogID, event.AggregateName); err != nil && firstErr == nil {
+		log := logsByID[event.LogID]
+		if err := applyLogAggregationEvent(event.Id, event.LogID, event.AggregateName, log); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}
 	return pendingCount, len(events), firstErr
+}
+
+func logsForAggregationEvents(events []LogAggregationEvent) (map[int]*Log, error) {
+	if len(events) == 0 {
+		return nil, nil
+	}
+	logIDs := make([]int, 0, len(events))
+	seen := make(map[int]struct{}, len(events))
+	for i := range events {
+		if events[i].LogID <= 0 {
+			continue
+		}
+		if _, exists := seen[events[i].LogID]; exists {
+			continue
+		}
+		seen[events[i].LogID] = struct{}{}
+		logIDs = append(logIDs, events[i].LogID)
+	}
+	if len(logIDs) == 0 {
+		return nil, nil
+	}
+	var logs []Log
+	if err := LOG_DB.Where("id IN ?", logIDs).Find(&logs).Error; err != nil {
+		return nil, err
+	}
+	logsByID := make(map[int]*Log, len(logs))
+	for i := range logs {
+		fillLogDerivedFields(&logs[i])
+		logsByID[logs[i].Id] = &logs[i]
+	}
+	return logsByID, nil
 }
 
 func logAggregationEventsForProcessing(limit int) ([]LogAggregationEvent, int, error) {
@@ -238,6 +274,10 @@ func logAggregationEventsForProcessing(limit int) ([]LogAggregationEvent, int, e
 }
 
 func applyLogAggregationEventByID(eventID int, logID int, aggregateName string) error {
+	return applyLogAggregationEvent(eventID, logID, aggregateName, nil)
+}
+
+func applyLogAggregationEvent(eventID int, logID int, aggregateName string, prefetchedLog *Log) error {
 	return LOG_DB.Transaction(func(tx *gorm.DB) error {
 		now := common.GetTimestamp()
 		res := tx.Model(&LogAggregationEvent{}).
@@ -254,18 +294,22 @@ func applyLogAggregationEventByID(eventID int, logID int, aggregateName string) 
 			return nil
 		}
 
-		var log Log
-		if err := tx.First(&log, logID).Error; err != nil {
-			return markLogAggregationEventFailedTx(tx, eventID, err)
+		log := prefetchedLog
+		if log == nil || log.Id != logID {
+			var loaded Log
+			if err := tx.First(&loaded, logID).Error; err != nil {
+				return markLogAggregationEventFailedTx(tx, eventID, err)
+			}
+			fillLogDerivedFields(&loaded)
+			log = &loaded
 		}
-		fillLogDerivedFields(&log)
 
 		var err error
 		switch aggregateName {
 		case logAggregationNameLogUsageHourly:
-			err = applyLogUsageHourlyAggregationEventTx(tx, &log)
+			err = applyLogUsageHourlyAggregationEventTx(tx, log)
 		case logAggregationNameFreeSubscriptionUsageHourly:
-			err = applyFreeSubscriptionUsageHourlyAggregationEventTx(tx, &log)
+			err = applyFreeSubscriptionUsageHourlyAggregationEventTx(tx, log)
 		default:
 			err = fmt.Errorf("unknown log aggregation %q", aggregateName)
 		}

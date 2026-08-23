@@ -94,16 +94,24 @@ func logAggregationInt64Ptr(value int64) *int64 { return &value }
 type logAggregationEventSelectCounter struct {
 	logger.Interface
 	eventSelects atomic.Int64
+	logSelects   atomic.Int64
 }
 
 func (l *logAggregationEventSelectCounter) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	sql, rows := fc()
 	normalized := strings.ToLower(strings.Join(strings.Fields(sql), " "))
-	selectsEvents := strings.HasPrefix(normalized, "select") && (strings.Contains(normalized, "from `log_aggregation_events`") ||
+	isSelect := strings.HasPrefix(normalized, "select")
+	selectsEvents := isSelect && (strings.Contains(normalized, "from `log_aggregation_events`") ||
 		strings.Contains(normalized, `from "log_aggregation_events"`) ||
 		strings.Contains(normalized, "from log_aggregation_events"))
 	if selectsEvents {
 		l.eventSelects.Add(1)
+	}
+	selectsLogs := isSelect && (strings.Contains(normalized, "from `logs`") ||
+		strings.Contains(normalized, `from "logs"`) ||
+		strings.Contains(normalized, "from logs"))
+	if selectsLogs {
+		l.logSelects.Add(1)
 	}
 	if l.Interface != nil {
 		l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)
@@ -266,6 +274,7 @@ func TestApplyPendingLogAggregationEventsPrefetchesBatchEvents(t *testing.T) {
 	require.NoError(t, ApplyPendingLogAggregationEvents(totalLogs))
 	eventSelects := counter.eventSelects.Load()
 	assert.Equal(t, int64(1), eventSelects, "the batch lookup must be the only SELECT from log_aggregation_events")
+	assert.Equal(t, int64(1), counter.logSelects.Load(), "the batch must prefetch all referenced logs in one SELECT")
 
 	var usage LogUsageHourly
 	require.NoError(t, LOG_DB.Where("bucket_start = ? AND user_id = ? AND token_id = ? AND channel_id = ? AND status = ?", bucketStart, 109, 209, 309, "success").First(&usage).Error)

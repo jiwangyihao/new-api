@@ -1,6 +1,7 @@
 package helper
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -797,6 +798,76 @@ func BenchmarkResponseChunkData(b *testing.B) {
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		if err := ResponseChunkData(c, dto.ResponsesStreamResponse{Type: "response.output_text.delta"}, `{"delta":"x"}`); err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+func TestStreamScannerHandlerFiltersBeforeCopyingIgnoredLines(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	largeIgnored := strings.Repeat("x", 64<<10)
+	body := strings.Join([]string{
+		"event: " + largeIgnored,
+		`data:   {"id":1}   `,
+		`data: {"id":2}`,
+		"data: [DONE]",
+		": " + largeIgnored,
+		`data: {"id":3}`,
+		"",
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: io.NopCloser(strings.NewReader(body))}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	var got []string
+
+	StreamScannerHandler(c, resp, info, func(data string, _ *StreamResult) {
+		got = append(got, data)
+	})
+
+	require.Equal(t, []string{`{"id":1}`, `{"id":2}`}, got)
+	require.Equal(t, relaycommon.StreamEndReasonDone, info.StreamStatus.EndReason)
+}
+func BenchmarkStreamScannerMixedLines(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	oldWriter := gin.DefaultWriter
+	oldErrorWriter := gin.DefaultErrorWriter
+	gin.DefaultWriter = io.Discard
+	gin.DefaultErrorWriter = io.Discard
+	b.Cleanup(func() {
+		gin.DefaultWriter = oldWriter
+		gin.DefaultErrorWriter = oldErrorWriter
+	})
+	const dataLines = 64
+	largeIgnored := strings.Repeat("x", 64<<10)
+	var body strings.Builder
+	for i := 0; i < dataLines; i++ {
+		body.WriteString("event: ")
+		body.WriteString(largeIgnored)
+		body.WriteByte('\n')
+		fmt.Fprintf(&body, "data: {\"id\":%d}\n", i)
+	}
+	body.WriteString("data: [DONE]\n")
+	for i := 0; i < dataLines; i++ {
+		body.WriteString(": ")
+		body.WriteString(largeIgnored)
+		body.WriteByte('\n')
+	}
+	bodyBytes := []byte(body.String())
+	b.ReportAllocs()
+	b.SetBytes(int64(len(bodyBytes)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		resp := &http.Response{Body: io.NopCloser(bytes.NewReader(bodyBytes))}
+		var count int
+		StreamScannerHandler(c, resp, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, func(string, *StreamResult) {
+			count++
+		})
+		if count != dataLines {
+			b.Fatalf("got %d data lines, want %d", count, dataLines)
 		}
 	}
 }

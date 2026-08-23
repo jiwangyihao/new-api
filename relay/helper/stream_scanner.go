@@ -2,11 +2,11 @@ package helper
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -263,28 +263,25 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 
 			ticker.Reset(streamingTimeout)
-			data := scanner.Text()
+			line := scanner.Bytes()
 			if common.DebugEnabled {
-				println(data)
+				println(string(line))
 			}
 
 			if sawDone {
 				continue
 			}
-			if len(data) < 6 {
+			if len(line) < len("data:") || !bytes.HasPrefix(line, []byte("data:")) {
 				continue
 			}
-			if data[:5] != "data:" && data[:6] != "[DONE]" {
+			payload := bytes.TrimSpace(line[len("data:"):])
+			if len(payload) == 0 {
 				continue
 			}
-			data = data[5:]
-			data = strings.TrimSpace(data)
-			if data == "" {
-				continue
-			}
-			if !strings.HasPrefix(data, "[DONE]") {
+			if !bytes.HasPrefix(payload, []byte("[DONE]")) {
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
+				data := string(payload)
 
 				select {
 				case dataChan <- streamScannerItem{data: data}:

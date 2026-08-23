@@ -13,6 +13,8 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 
 	"github.com/glebarez/sqlite"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -121,6 +123,33 @@ func chooseDB(envName string, isLog bool) (*gorm.DB, error) {
 	return chooseDBWithSelectionLog(envName, isLog, true)
 }
 
+func newPostgreSQLConnConfig(dsn string) (*pgx.ConnConfig, error) {
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	// Simple protocol bypasses pgx's implicit statement and description caches;
+	// GORM's explicit PrepareStmt cache remains the single prepared-statement cache.
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	config.StatementCacheCapacity = 0
+	config.DescriptionCacheCapacity = 0
+	return config, nil
+}
+
+func openPostgreSQL(dsn string) (*gorm.DB, error) {
+	config, err := newPostgreSQLConnConfig(dsn)
+	if err != nil {
+		return nil, err
+	}
+	sqlDB := stdlib.OpenDB(*config)
+	db, err := gorm.Open(postgres.New(postgres.Config{Conn: sqlDB}), &gorm.Config{PrepareStmt: true})
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
 func chooseDBWithSelectionLog(envName string, isLog bool, logSelection bool) (*gorm.DB, error) {
 	defer func() {
 		initCol()
@@ -137,12 +166,7 @@ func chooseDBWithSelectionLog(envName string, isLog bool, logSelection bool) (*g
 			} else {
 				common.LogSqlType = common.DatabaseTypePostgreSQL
 			}
-			return gorm.Open(postgres.New(postgres.Config{
-				DSN:                  dsn,
-				PreferSimpleProtocol: true, // disables implicit prepared statement usage
-			}), &gorm.Config{
-				PrepareStmt: true, // precompile SQL
-			})
+			return openPostgreSQL(dsn)
 		}
 		if strings.HasPrefix(dsn, "local") {
 			if logSelection {
@@ -248,10 +272,7 @@ func InitMaintenanceCloneDB(dsn string) (*gorm.DB, error) {
 	common.UsingMySQL = false
 	common.UsingPostgreSQL = true
 	initCol()
-	db, err := gorm.Open(postgres.New(postgres.Config{
-		DSN:                  dsn,
-		PreferSimpleProtocol: true,
-	}), &gorm.Config{PrepareStmt: true})
+	db, err := openPostgreSQL(dsn)
 	if err != nil {
 		return nil, err
 	}

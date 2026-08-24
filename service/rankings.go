@@ -108,44 +108,81 @@ type rankingModelMeta struct {
 	vendorIcon string
 }
 
-var (
-	rankingCacheMu sync.Mutex
-	rankingCache   = map[string]rankingCacheItem{}
-)
+type rankingsSnapshotCall struct {
+	done       chan struct{}
+	data       *RankingsResponse
+	err        error
+	generation uint64
+}
+
+type rankingsSnapshotCache struct {
+	mu         sync.Mutex
+	ttl        time.Duration
+	generation uint64
+	items      map[string]rankingCacheItem
+	inFlight   map[string]*rankingsSnapshotCall
+}
+
+func newRankingsSnapshotCache(ttl time.Duration) *rankingsSnapshotCache {
+	return &rankingsSnapshotCache{
+		ttl:      ttl,
+		items:    make(map[string]rankingCacheItem),
+		inFlight: make(map[string]*rankingsSnapshotCall),
+	}
+}
+
+func (cache *rankingsSnapshotCache) get(key string, now time.Time, build func() (*RankingsResponse, error)) (*RankingsResponse, error) {
+	cache.mu.Lock()
+	if item, ok := cache.items[key]; ok && now.Before(item.expiresAt) {
+		cache.mu.Unlock()
+		return item.data, nil
+	}
+	if call, ok := cache.inFlight[key]; ok {
+		cache.mu.Unlock()
+		<-call.done
+		return call.data, call.err
+	}
+	call := &rankingsSnapshotCall{done: make(chan struct{}), generation: cache.generation}
+	cache.inFlight[key] = call
+	cache.mu.Unlock()
+
+	call.data, call.err = build()
+
+	cache.mu.Lock()
+	if cache.inFlight[key] == call {
+		delete(cache.inFlight, key)
+	}
+	if call.err == nil && call.generation == cache.generation {
+		cache.items[key] = rankingCacheItem{expiresAt: now.Add(cache.ttl), data: call.data}
+	}
+	close(call.done)
+	cache.mu.Unlock()
+	return call.data, call.err
+}
+
+func (cache *rankingsSnapshotCache) flush() {
+	cache.mu.Lock()
+	cache.generation++
+	cache.items = make(map[string]rankingCacheItem)
+	cache.inFlight = make(map[string]*rankingsSnapshotCall)
+	cache.mu.Unlock()
+}
+
+var rankingsCache = newRankingsSnapshotCache(rankingCacheTTL)
 
 func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
 	config, err := rankingConfig(period)
 	if err != nil {
 		return nil, err
 	}
-
 	now := time.Now()
-	rankingCacheMu.Lock()
-	if item, ok := rankingCache[config.id]; ok && now.Before(item.expiresAt) {
-		rankingCacheMu.Unlock()
-		return item.data, nil
-	}
-	rankingCacheMu.Unlock()
-
-	data, err := buildRankingsSnapshot(config, now)
-	if err != nil {
-		return nil, err
-	}
-
-	rankingCacheMu.Lock()
-	rankingCache[config.id] = rankingCacheItem{
-		expiresAt: now.Add(rankingCacheTTL),
-		data:      data,
-	}
-	rankingCacheMu.Unlock()
-
-	return data, nil
+	return rankingsCache.get(config.id, now, func() (*RankingsResponse, error) {
+		return buildRankingsSnapshot(config, now)
+	})
 }
 
 func FlushRankingsCache() {
-	rankingCacheMu.Lock()
-	rankingCache = map[string]rankingCacheItem{}
-	rankingCacheMu.Unlock()
+	rankingsCache.flush()
 }
 
 func FlushRankingsCacheForTest() {

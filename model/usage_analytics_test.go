@@ -18,7 +18,7 @@ type usageAnalyticsModelTestDBs struct {
 	LogDB *gorm.DB
 }
 
-func setupUsageAnalyticsModelTestDBs(t *testing.T) usageAnalyticsModelTestDBs {
+func setupUsageAnalyticsModelTestDBs(t testing.TB) usageAnalyticsModelTestDBs {
 	t.Helper()
 	oldDB := DB
 	oldLogDB := LOG_DB
@@ -350,6 +350,45 @@ func TestUsageAnalyticsStreamsMoreThanFiftyThousandLogs(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, breakdown.Groups, 1)
 	require.Equal(t, logCount, breakdown.Groups[0].RequestCount)
+}
+
+func BenchmarkUsageAnalyticsForEachLog(b *testing.B) {
+	setupUsageAnalyticsModelTestDBs(b)
+	now := usageAnalyticsNow()
+	const logCount = 1000
+	logs := make([]Log, logCount)
+	for i := range logs {
+		meteredTokens := i
+		logs[i] = Log{
+			UserId:           101,
+			CreatedAt:        now - int64(i%60),
+			Type:             LogTypeConsume,
+			TokenId:          i%10 + 1,
+			TokenName:        "benchmark-token",
+			ModelName:        "gpt-5.4",
+			Quota:            i,
+			PromptTokens:     i + 1,
+			CompletionTokens: i + 2,
+			MeteredTokens:    &meteredTokens,
+			UseTime:          i%30 + 1,
+			IsStream:         i%2 == 0,
+		}
+	}
+	require.NoError(b, LOG_DB.CreateInBatches(&logs, 100).Error)
+	query := UsageAnalyticsQuery{UserID: 101, StartTimestamp: now - 60, EndTimestamp: now, GroupBy: UsageAnalyticsGroupByToken}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		count := 0
+		if err := usageAnalyticsForEachLog(query, true, func(log Log) {
+			count += log.PromptTokens + log.CompletionTokens
+		}); err != nil {
+			b.Fatal(err)
+		}
+		if count == 0 {
+			b.Fatal("missing logs")
+		}
+	}
 }
 
 func TestUsageAnalyticsSQLAvoidsDatabaseSpecificFunctions(t *testing.T) {

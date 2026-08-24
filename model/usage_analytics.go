@@ -252,7 +252,19 @@ func usageAnalyticsForEachLog(query UsageAnalyticsQuery, useQueryTime bool, visi
 
 	for rows.Next() {
 		var log Log
-		if err := db.ScanRows(rows, &log); err != nil {
+		if err := rows.Scan(
+			&log.CreatedAt,
+			&log.Type,
+			&log.TokenName,
+			&log.ModelName,
+			&log.Quota,
+			&log.PromptTokens,
+			&log.CompletionTokens,
+			&log.MeteredTokens,
+			&log.UseTime,
+			&log.IsStream,
+			&log.TokenId,
+		); err != nil {
 			return err
 		}
 		visit(log)

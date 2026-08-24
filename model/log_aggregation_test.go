@@ -344,6 +344,45 @@ func TestApplyLogAggregationEventConcurrentWorkersAggregateOnce(t *testing.T) {
 	require.NoError(t, LOG_DB.First(&storedEvent, event.Id).Error)
 	assert.Equal(t, logAggregationEventStatusApplied, storedEvent.Status)
 }
+
+func BenchmarkApplyLogAggregationEventTransaction(b *testing.B) {
+	for _, skipDefaultTransaction := range []bool{false, true} {
+		name := "default_callbacks"
+		if skipDefaultTransaction {
+			name = "skip_default_callbacks"
+		}
+		b.Run(name, func(b *testing.B) {
+			dsn := fmt.Sprintf("file:aggregation-benchmark-%t?mode=memory&cache=shared", skipDefaultTransaction)
+			db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+			require.NoError(b, err)
+			sqlDB, err := db.DB()
+			require.NoError(b, err)
+			b.Cleanup(func() { _ = sqlDB.Close() })
+			require.NoError(b, db.AutoMigrate(&LogAggregationEvent{}))
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				event := LogAggregationEvent{LogID: i + 1, AggregateName: logAggregationNameLogUsageHourly, Status: logAggregationEventStatusPending}
+				if err := db.Create(&event).Error; err != nil {
+					b.Fatal(err)
+				}
+				if err := db.Transaction(func(transaction *gorm.DB) error {
+					tx := transaction
+					if skipDefaultTransaction {
+						tx = transaction.Session(&gorm.Session{SkipDefaultTransaction: true})
+					}
+					return tx.Model(&LogAggregationEvent{}).Where("id = ?", event.Id).Updates(map[string]interface{}{
+						"status":     logAggregationEventStatusApplied,
+						"updated_at": int64(i),
+					}).Error
+				}); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 func TestLogUsageHourlyUpsertPostgresSQLQualifiesConflictColumns(t *testing.T) {
 	setupLogAggregationTestDBs(t)
 	row := LogUsageHourly{

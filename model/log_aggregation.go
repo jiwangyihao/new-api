@@ -278,7 +278,8 @@ func applyLogAggregationEventByID(eventID int, logID int, aggregateName string) 
 }
 
 func applyLogAggregationEvent(eventID int, logID int, aggregateName string, prefetchedLog *Log) error {
-	return LOG_DB.Transaction(func(tx *gorm.DB) error {
+	return LOG_DB.Transaction(func(transaction *gorm.DB) error {
+		tx := transaction.Session(&gorm.Session{SkipDefaultTransaction: true})
 		now := common.GetTimestamp()
 		res := tx.Model(&LogAggregationEvent{}).
 			Where("id = ? AND status IN ?", eventID, []string{logAggregationEventStatusPending, logAggregationEventStatusFailed}).

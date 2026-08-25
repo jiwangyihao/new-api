@@ -28,8 +28,10 @@ const (
 )
 
 type streamScannerItem struct {
-	data string
-	done bool
+	data    string
+	payload []byte
+	holder  *[]byte
+	done    bool
 }
 
 func getScannerBufferSize() int {
@@ -39,9 +41,57 @@ func getScannerBufferSize() int {
 	return DefaultMaxScannerBufferSize
 }
 
-func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+const maxPooledStreamPayloadBytes = 16 << 10
 
-	if resp == nil || dataHandler == nil {
+var streamPayloadPool = sync.Pool{
+	New: func() any {
+		payload := make([]byte, 0, InitialScannerBufferSize)
+		return &payload
+	},
+}
+
+func acquireStreamPayload(size int) (*[]byte, []byte) {
+	holder := streamPayloadPool.Get().(*[]byte)
+	payload := (*holder)[:0]
+	if cap(payload) < size {
+		payload = make([]byte, 0, size)
+	}
+	return holder, payload
+}
+
+func releaseStreamPayload(holder *[]byte, payload []byte) {
+	if holder == nil {
+		return
+	}
+	if cap(payload) > maxPooledStreamPayloadBytes {
+		*holder = nil
+	} else {
+		*holder = payload[:0]
+	}
+	streamPayloadPool.Put(holder)
+}
+
+// StreamScannerHandler preserves the historical string callback contract.
+// Callbacks may retain data after returning.
+func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data string, sr *StreamResult)) {
+	if dataHandler == nil {
+		return
+	}
+	streamScannerHandler(c, resp, info, dataHandler, nil)
+}
+
+// StreamScannerBytesHandler avoids the per-event string copy for Responses.
+// data is immutable and valid only during dataHandler; callers must copy it to retain.
+func StreamScannerBytesHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, dataHandler func(data []byte, sr *StreamResult)) {
+	if dataHandler == nil {
+		return
+	}
+	streamScannerHandler(c, resp, info, nil, dataHandler)
+}
+
+func streamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo, stringHandler func(string, *StreamResult), bytesHandler func([]byte, *StreamResult)) {
+
+	if resp == nil || (stringHandler == nil && bytesHandler == nil) {
 		return
 	}
 
@@ -200,6 +250,9 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 	wg.Add(1)
 	gopool.Go(func() {
 		defer func() {
+			for item := range dataChan {
+				releaseStreamPayload(item.holder, item.payload)
+			}
 			wg.Done()
 			if r := recover(); r != nil {
 				logger.LogError(c, fmt.Sprintf("data handler goroutine panic: %v", r))
@@ -223,7 +276,14 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			}
 			sr.reset()
 			writeMutex.Lock()
-			dataHandler(item.data, sr)
+			func() {
+				defer releaseStreamPayload(item.holder, item.payload)
+				if bytesHandler != nil {
+					bytesHandler(item.payload, sr)
+				} else {
+					stringHandler(item.data, sr)
+				}
+			}()
 			writeMutex.Unlock()
 			if sr.IsStopped() {
 				return
@@ -281,13 +341,22 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			if !bytes.HasPrefix(payload, []byte("[DONE]")) {
 				info.SetFirstResponseTime()
 				info.ReceivedResponseCount++
-				data := string(payload)
-
+				item := streamScannerItem{}
+				if bytesHandler != nil {
+					holder, owned := acquireStreamPayload(len(payload))
+					owned = append(owned, payload...)
+					item.payload = owned
+					item.holder = holder
+				} else {
+					item.data = string(payload)
+				}
 				select {
-				case dataChan <- streamScannerItem{data: data}:
+				case dataChan <- item:
 				case <-ctx.Done():
+					releaseStreamPayload(item.holder, item.payload)
 					return
 				case <-stopChan:
+					releaseStreamPayload(item.holder, item.payload)
 					return
 				}
 			} else {

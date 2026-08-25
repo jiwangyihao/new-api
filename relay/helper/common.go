@@ -108,6 +108,10 @@ func ClaudeChunkData(c *gin.Context, resp dto.ClaudeResponse, data string) {
 }
 
 func ResponseChunkData(c *gin.Context, resp dto.ResponsesStreamResponse, data string) error {
+	return ResponseChunkBytes(c, resp, common.StringToByteSlice(data))
+}
+
+func ResponseChunkBytes(c *gin.Context, resp dto.ResponsesStreamResponse, data []byte) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")
 	}

@@ -59,22 +59,25 @@ func requiresFullResponsesStreamDecode(eventType string) bool {
 }
 
 func parseResponsesStreamEvent(data string) (dto.ResponsesStreamResponse, error) {
-	dataBytes := common.StringToByteSlice(data)
-	if !gjson.ValidBytes(dataBytes) {
+	return parseResponsesStreamEventBytes(common.StringToByteSlice(data))
+}
+
+func parseResponsesStreamEventBytes(data []byte) (dto.ResponsesStreamResponse, error) {
+	if !gjson.ValidBytes(data) {
 		return dto.ResponsesStreamResponse{}, fmt.Errorf("invalid responses stream JSON")
 	}
 
 	var eventType string
 	// GJSON returns the first duplicate key, whereas encoding/json uses the last.
 	// Escaped keys also require the standard decoder to preserve that contract.
-	if bytes.Count(dataBytes, []byte(`"type"`)) > 1 || bytes.Contains(dataBytes, []byte(`\u`)) {
+	if bytes.Count(data, []byte(`"type"`)) > 1 || bytes.Contains(data, []byte(`\u`)) {
 		var header responsesStreamEventHeader
-		if err := common.UnmarshalJsonStr(data, &header); err != nil {
+		if err := common.Unmarshal(data, &header); err != nil {
 			return dto.ResponsesStreamResponse{}, err
 		}
 		eventType = header.Type
 	} else {
-		typeResult := gjson.GetBytes(dataBytes, "type")
+		typeResult := gjson.GetBytes(data, "type")
 		if typeResult.Type != gjson.Null && typeResult.Type != gjson.String {
 			return dto.ResponsesStreamResponse{}, fmt.Errorf("responses stream type must be a string")
 		}
@@ -85,7 +88,7 @@ func parseResponsesStreamEvent(data string) (dto.ResponsesStreamResponse, error)
 	}
 
 	var event dto.ResponsesStreamResponse
-	if err := common.UnmarshalJsonStr(data, &event); err != nil {
+	if err := common.Unmarshal(data, &event); err != nil {
 		return dto.ResponsesStreamResponse{}, err
 	}
 	return event, nil
@@ -200,15 +203,15 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	}
 	doneBuffer := beginResponsesDoneBuffering(c)
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
-		streamResponse, err := parseResponsesStreamEvent(data)
+	helper.StreamScannerBytesHandler(c, resp, info, func(data []byte, sr *helper.StreamResult) {
+		streamResponse, err := parseResponsesStreamEventBytes(data)
 		if err != nil {
 			logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 			sr.Error(err)
 			return
 		}
 		if service.ShouldMonitorGPTAbuse(info) {
-			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResponse.Type, data)
+			signal := service.ClassifyGPTAbuseSignalFromSSEEventBytes(streamResponse.Type, data)
 			if signal.Matched {
 				signal.StatusCode = resp.StatusCode
 				signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
@@ -224,8 +227,8 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if shouldDelayCompleted {
 			completedCopy := streamResponse
 			completedStreamResponse = &completedCopy
-			completedStreamData = data
-		} else if err := sendResponsesStreamData(c, streamResponse, data); err != nil {
+			completedStreamData = string(data)
+		} else if err := sendResponsesStreamBytes(c, streamResponse, data); err != nil {
 			sr.Stop(err)
 			return
 		}
@@ -242,7 +245,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		switch streamResponse.Type {
 		case "response.completed":
 			if info != nil {
-				info.ApplyDynamicBillingMultiplierFromBody(common.StringToByteSlice(data), relaycommon.DynamicBillingMultiplierSourceSSE)
+				info.ApplyDynamicBillingMultiplierFromBody(data, relaycommon.DynamicBillingMultiplierSourceSSE)
 			}
 			completedWithUsage = openAIResponsesCompletedWithUsage(streamResponse.Response)
 			if streamResponse.Response != nil {
@@ -268,17 +271,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 					c.Set("image_generation_call_size", streamResponse.Response.GetSize())
 				}
 			}
-		case "response.output_text.delta":
-			// 处理输出文本
 		case dto.ResponsesOutputTypeItemDone:
-			// 函数调用处理
-			if streamResponse.Item != nil {
-				switch streamResponse.Item.Type {
-				case dto.BuildInCallWebSearchCall:
-					if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
-						if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
-							webSearchTool.CallCount++
-						}
+			if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
+				if info != nil && info.ResponsesUsageInfo != nil && info.ResponsesUsageInfo.BuiltInTools != nil {
+					if webSearchTool, exists := info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
+						webSearchTool.CallCount++
 					}
 				}
 			}

@@ -323,20 +323,20 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return true
 	}
 
-	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+	helper.StreamScannerBytesHandler(c, resp, info, func(data []byte, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
 			return
 		}
 
 		var streamResp dto.ResponsesStreamResponse
-		if err := common.UnmarshalJsonStr(data, &streamResp); err != nil {
+		if err := common.Unmarshal(data, &streamResp); err != nil {
 			logger.LogError(c, "failed to unmarshal responses stream event: "+err.Error())
 			sr.Error(err)
 			return
 		}
 		if service.ShouldMonitorGPTAbuse(info) {
-			signal := service.ClassifyGPTAbuseSignalFromSSEEvent(streamResp.Type, data)
+			signal := service.ClassifyGPTAbuseSignalFromSSEEventBytes(streamResp.Type, data)
 			if signal.Matched {
 				signal.StatusCode = http.StatusOK
 				signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
@@ -483,7 +483,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.completed":
 			if info != nil {
-				info.ApplyDynamicBillingMultiplierFromBody(common.StringToByteSlice(data), relaycommon.DynamicBillingMultiplierSourceSSE)
+				info.ApplyDynamicBillingMultiplierFromBody(data, relaycommon.DynamicBillingMultiplierSourceSSE)
 			}
 			if streamResp.Response != nil {
 				if streamResp.Response.Model != "" {

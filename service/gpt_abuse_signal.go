@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -65,14 +66,18 @@ func ClassifyGPTAbuseSignalFromHTTPError(statusCode int, body []byte) GPTAbuseSi
 }
 
 func ClassifyGPTAbuseSignalFromSSEEvent(eventType string, data string) GPTAbuseSignal {
+	return ClassifyGPTAbuseSignalFromSSEEventBytes(eventType, common.StringToByteSlice(data))
+}
+
+func ClassifyGPTAbuseSignalFromSSEEventBytes(eventType string, data []byte) GPTAbuseSignal {
 	eventType = strings.TrimSpace(eventType)
-	if eventType == "response.metadata" && containsTrustedAccessForCyber(data) {
+	if eventType == "response.metadata" && containsTrustedAccessForCyberBytes(data) {
 		return GPTAbuseSignal{Matched: true, Kind: GPTAbuseKindHighRiskCyberReroute, Severity: GPTAbuseSeverityHigh, Source: GPTAbuseSourceSSEMetadata, CountEligible: true, Stream: true, Extra: gptAbuseUpstreamWarningExtra(eventType, "", gptErrorObject{}, `{"openai_verification_recommendation":["trusted_access_for_cyber"]}`)}
 	}
 	if eventType != "response.failed" && eventType != "response.error" {
 		return GPTAbuseSignal{}
 	}
-	errorObject, responseStatus := parseGPTSSEErrorObject(common.StringToByteSlice(data))
+	errorObject, responseStatus := parseGPTSSEErrorObject(data)
 	signal := classifyGPTAbuseError(http.StatusInternalServerError, errorObject, GPTAbuseSourceSSEResponseFailed)
 	signal.Stream = true
 	if signal.Matched {
@@ -497,6 +502,10 @@ func truncateGPTAbuseWarningDetail(value string) string {
 
 func containsTrustedAccessForCyber(value string) bool {
 	return strings.Contains(strings.ToLower(value), "trusted_access_for_cyber")
+}
+
+func containsTrustedAccessForCyberBytes(value []byte) bool {
+	return bytes.Contains(bytes.ToLower(value), []byte("trusted_access_for_cyber"))
 }
 
 func containsAny(value string, needles ...string) bool {

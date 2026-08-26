@@ -172,7 +172,11 @@ func (g *ChannelGroup) Insert() error {
 	now := common.GetTimestamp()
 	g.CreatedTime = now
 	g.UpdatedTime = now
-	return DB.Create(g).Error
+	if err := DB.Create(g).Error; err != nil {
+		return err
+	}
+	flushEffectiveGroupRowsCache()
+	return nil
 }
 
 func (g *ChannelGroup) Update() error {
@@ -180,12 +184,16 @@ func (g *ChannelGroup) Update() error {
 		return err
 	}
 	g.UpdatedTime = common.GetTimestamp()
-	return DB.Model(g).Select(
+	if err := DB.Model(g).Select(
 		"name", "description", "enabled",
 		"credit_billing_mode", "fixed_request_credits",
 		"dynamic_billing_multiplier_enabled", "token_billing_multiplier",
 		"updated_time",
-	).Updates(g).Error
+	).Updates(g).Error; err != nil {
+		return err
+	}
+	flushEffectiveGroupRowsCache()
+	return nil
 }
 
 func IsChannelGroupNameDuplicated(id int, name string) (bool, error) {
@@ -205,7 +213,7 @@ func DeleteChannelGroupByID(id int) error {
 	if group.IsDefault() {
 		return errors.New("default channel group cannot be deleted")
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("channel_group_id = ?", id).Delete(&ChannelGroupChannel{}).Error; err != nil {
 			return err
 		}
@@ -213,7 +221,11 @@ func DeleteChannelGroupByID(id int) error {
 			return err
 		}
 		return tx.Delete(&ChannelGroup{}, id).Error
-	})
+	}); err != nil {
+		return err
+	}
+	flushEffectiveGroupRowsCache()
+	return nil
 }
 
 func GetAllChannelGroups() ([]*ChannelGroup, error) {
@@ -257,7 +269,7 @@ func GetChannelGroupsByIDs(ids []int) ([]*ChannelGroup, error) {
 // SetChannelGroupChannels 全量覆盖某分组的成员渠道集合。
 func SetChannelGroupChannels(groupId int, channelIds []int) error {
 	unique := lo.Uniq(channelIds)
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("channel_group_id = ?", groupId).Delete(&ChannelGroupChannel{}).Error; err != nil {
 			return err
 		}
@@ -275,7 +287,11 @@ func SetChannelGroupChannels(groupId int, channelIds []int) error {
 			return nil
 		}
 		return tx.Create(&rows).Error
-	})
+	}); err != nil {
+		return err
+	}
+	flushEffectiveGroupRowsCache()
+	return nil
 }
 
 // GetChannelIdsByGroup 返回分组的显式成员渠道 id。
@@ -493,6 +509,12 @@ type effectiveGroupForChannelRow struct {
 	ExplicitMemberCount int64 `gorm:"column:explicit_member_count"`
 }
 
+var effectiveGroupsByChannel = newEffectiveGroupRowsCache()
+
+func flushEffectiveGroupRowsCache() {
+	effectiveGroupsByChannel.flush()
+}
+
 func loadEffectiveGroupsForChannel(channelId int) ([]effectiveGroupForChannelRow, error) {
 	var rows []effectiveGroupForChannelRow
 	err := DB.Model(&ChannelGroup{}).
@@ -517,7 +539,13 @@ func ResolveEffectiveGroupForChannel(tokenGroupNames []string, channelId int) (*
 		tokenGroupNames = []string{DefaultChannelGroupName}
 	}
 
-	rows, err := loadEffectiveGroupsForChannel(channelId)
+	var rows []effectiveGroupForChannelRow
+	var err error
+	if common.MemoryCacheEnabled {
+		rows, err = effectiveGroupsByChannel.get(channelId, loadEffectiveGroupsForChannel)
+	} else {
+		rows, err = loadEffectiveGroupsForChannel(channelId)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -364,6 +364,90 @@ func TestResolveEffectiveGroupForSelectedChannelUsesSingleQuery(t *testing.T) {
 	assert.Contains(t, capture.statements[0], "selected_membership")
 }
 
+func TestResolveEffectiveGroupForSelectedChannelReusesCachedQuery(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6052, "gpt-eff-cache-query")
+	makeGroup(t, "paid-cache-query", []int{6052})
+	flushEffectiveGroupRowsCache()
+
+	capture := &effectiveGroupSQLCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	DB = db.Session(&gorm.Session{Logger: capture})
+	for i := 0; i < 10; i++ {
+		effective, err := ResolveEffectiveGroupForChannel([]string{DefaultChannelGroupName, "paid-cache-query"}, 6052)
+		require.NoError(t, err)
+		require.NotNil(t, effective)
+		assert.Equal(t, "paid-cache-query", effective.Name)
+	}
+	targetStatements := make([]string, 0)
+	for _, statement := range capture.statements {
+		if strings.Contains(strings.ToLower(statement), "selected_membership") {
+			targetStatements = append(targetStatements, statement)
+		}
+	}
+	require.Len(t, targetStatements, 1, "captured SQL: %#v", capture.statements)
+}
+
+func TestResolveEffectiveGroupCacheInvalidatesOnChannelCacheRebuild(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6053, "gpt-eff-cache-invalidate")
+	firstGroup := makeGroup(t, "paid-cache-first", []int{6053})
+	firstGroup.CreditBillingMode = "fixed_request"
+	firstGroup.FixedRequestCredits = 10
+	require.NoError(t, firstGroup.Update())
+	InitChannelCache()
+
+	first, err := ResolveEffectiveGroupForChannel([]string{"paid-cache-first"}, 6053)
+	require.NoError(t, err)
+	require.Equal(t, "paid-cache-first", first.Name)
+
+	secondGroup := makeGroup(t, "paid-cache-second", []int{6053})
+	secondGroup.CreditBillingMode = "fixed_request"
+	secondGroup.FixedRequestCredits = 20
+	require.NoError(t, secondGroup.Update())
+	require.NoError(t, SetChannelGroupChannels(firstGroup.Id, nil))
+	_, _, err = FixAbility()
+	require.NoError(t, err)
+
+	second, err := ResolveEffectiveGroupForChannel([]string{"paid-cache-second"}, 6053)
+	require.NoError(t, err)
+	require.Equal(t, "paid-cache-second", second.Name)
+}
+
+func TestResolveEffectiveGroupCacheInvalidatesOnDirectMembershipUpdate(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6054, "gpt-eff-direct-invalidate")
+	firstGroup := makeGroup(t, "paid-direct-first", []int{6054})
+	secondGroup := makeGroup(t, "paid-direct-second", nil)
+
+	first, err := ResolveEffectiveGroupForChannel([]string{"paid-direct-first"}, 6054)
+	require.NoError(t, err)
+	require.Equal(t, "paid-direct-first", first.Name)
+
+	require.NoError(t, SetChannelGroupChannels(firstGroup.Id, nil))
+	require.NoError(t, SetChannelGroupChannels(secondGroup.Id, []int{6054}))
+	second, err := ResolveEffectiveGroupForChannel([]string{"paid-direct-second"}, 6054)
+	require.NoError(t, err)
+	require.Equal(t, "paid-direct-second", second.Name)
+}
+
+func TestResolveEffectiveGroupBypassesCacheWhenMemoryCacheDisabled(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 6055, "gpt-eff-no-cache")
+	group := makeGroup(t, "paid-no-cache", []int{6055})
+	common.MemoryCacheEnabled = false
+
+	first, err := ResolveEffectiveGroupForChannel([]string{"paid-no-cache"}, 6055)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), first.FixedRequestCredits)
+
+	group.CreditBillingMode = "fixed_request"
+	group.FixedRequestCredits = 123
+	require.NoError(t, group.Update())
+	second, err := ResolveEffectiveGroupForChannel([]string{"paid-no-cache"}, 6055)
+	require.NoError(t, err)
+	require.Equal(t, int64(123), second.FixedRequestCredits)
+}
+
 func TestLoadEffectiveGroupsForChannelGeneratesPortableSQL(t *testing.T) {
 	baseDB := setupChannelGroupSelectionTestDB(t)
 	baseStatement := baseDB.Session(&gorm.Session{DryRun: true}).Find(&[]ChannelGroup{}).Statement

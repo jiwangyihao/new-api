@@ -23,6 +23,7 @@ var channelSyncLock sync.RWMutex
 
 func InitChannelCache() {
 	if !common.MemoryCacheEnabled {
+		flushEffectiveGroupRowsCache()
 		return
 	}
 	newChannelId2channel := make(map[int]*Channel)
@@ -103,7 +104,7 @@ func InitChannelCache() {
 	model2channels = newModel2channels
 	groupModel2channels = newGroupModel2channels
 	defaultGroupHasExplicitMembersCache = defaultHasExplicit
-	//channelsIDM = newChannelId2channel
+	flushEffectiveGroupRowsCache()
 	for i, channel := range newChannelId2channel {
 		if channel.ChannelInfo.IsMultiKey {
 			channel.Keys = channel.GetKeys()

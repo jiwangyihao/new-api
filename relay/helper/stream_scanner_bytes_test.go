@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
@@ -102,6 +103,33 @@ func TestStreamScannerBytesHandlerDrainsQueuedPayloadsAfterStop(t *testing.T) {
 
 	require.Equal(t, 1, count)
 	require.Equal(t, relaycommon.StreamEndReasonHandlerStop, info.StreamStatus.EndReason)
+}
+
+func TestStreamScannerBytesHandlerStopsBlockedUpstreamPromptly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = writer.Close() })
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	resp := &http.Response{Body: reader}
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	returned := make(chan struct{})
+
+	go func() {
+		StreamScannerBytesHandler(c, resp, info, func(_ []byte, sr *StreamResult) {
+			sr.Stop(io.EOF)
+		})
+		close(returned)
+	}()
+
+	_, err := io.WriteString(writer, "data: first\n")
+	require.NoError(t, err)
+	select {
+	case <-returned:
+	case <-time.After(time.Second):
+		t.Fatal("scanner did not return promptly after handler stop")
+	}
 }
 
 func BenchmarkStreamScannerBytesPayload(b *testing.B) {

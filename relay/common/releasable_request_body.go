@@ -166,29 +166,6 @@ func (r *ReleasableRequestBodyReader) Read(p []byte) (int, error) {
 	return n, nil
 }
 
-func (r *ReleasableRequestBodyReader) WriteTo(w io.Writer) (int64, error) {
-	if r == nil || r.owner == nil {
-		return 0, nil
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
-		return 0, nil
-	}
-	r.owner.mu.RLock()
-	defer r.owner.mu.RUnlock()
-	if r.offset >= int64(len(r.owner.data)) {
-		return 0, nil
-	}
-	remaining := r.owner.data[r.offset:]
-	n, err := w.Write(remaining)
-	r.offset += int64(n)
-	if err == nil && n != len(remaining) {
-		err = io.ErrShortWrite
-	}
-	return int64(n), err
-}
-
 func (r *ReleasableRequestBodyReader) Close() error {
 	if r == nil || r.owner == nil {
 		return nil

@@ -134,6 +134,18 @@ func (r *DiskReleasableRequestBodyReader) Read(p []byte) (int, error) {
 	return r.file.Read(p)
 }
 
+func (r *DiskReleasableRequestBodyReader) WriteTo(w io.Writer) (int64, error) {
+	if r == nil || r.file == nil {
+		return 0, nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.file == nil {
+		return 0, nil
+	}
+	return r.file.WriteTo(w)
+}
+
 func (r *DiskReleasableRequestBodyReader) Close() error {
 	if r == nil || r.owner == nil {
 		return nil

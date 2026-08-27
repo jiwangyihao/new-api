@@ -2290,6 +2290,7 @@ type primaryBillableSelectionOutcome struct {
 	Selection                       *primaryBillableSubscription
 	SawDistributorSubscription      bool
 	ActiveSubscriptionId            int
+	SettingJSON                     string
 	RepairedSettingJSON             string
 	BillingStrategy                 string
 	BillingCandidateSubscriptionIds []int
@@ -2391,15 +2392,11 @@ func ClearPrimaryBillableSubscriptionCacheForTest() {
 	primaryBillableSubscriptionCache = sync.Map{}
 }
 
-func cachePrimaryBillableSelectionTx(tx *gorm.DB, userId int, sub *UserSubscription, plan *SubscriptionPlan, distributor bool) {
-	if tx == nil || sub == nil || userId <= 0 || sub.Status != SubscriptionStatusActive {
+func cachePrimaryBillableSelection(userId int, setting string, sub *UserSubscription, plan *SubscriptionPlan, distributor bool) {
+	if sub == nil || userId <= 0 || sub.Status != SubscriptionStatusActive {
 		return
 	}
-	var user User
-	if err := tx.Select("setting").Where("id = ?", userId).First(&user).Error; err != nil {
-		return
-	}
-	setCachedPrimaryBillableSubscription(userId, user.Setting, &primaryBillableSubscription{
+	setCachedPrimaryBillableSubscription(userId, setting, &primaryBillableSubscription{
 		Subscription:     *sub,
 		Plan:             plan,
 		Distributor:      distributor,
@@ -2429,6 +2426,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 				Selection:                       cached,
 				SawDistributorSubscription:      true,
 				ActiveSubscriptionId:            userSetting.ActiveSubscriptionId,
+				SettingJSON:                     user.Setting,
 				BillingStrategy:                 billingStrategy,
 				BillingCandidateSubscriptionIds: []int{userSetting.ActiveSubscriptionId},
 			}, nil
@@ -2442,6 +2440,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	outcome := primaryBillableSelectionOutcome{
 		SawDistributorSubscription:      len(state.OrderedCandidates) > 0,
 		ActiveSubscriptionId:            state.ActiveSubscriptionId,
+		SettingJSON:                     state.SettingJSON,
 		RepairedSettingJSON:             state.RepairedSettingJSON,
 		BillingStrategy:                 state.Strategy,
 		BillingCandidateSubscriptionIds: make([]int, 0, len(state.OrderedCandidates)),
@@ -2962,6 +2961,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 			return selectionErr
 		}
 		repairedSettingJSON = outcome.RepairedSettingJSON
+		selectionSettingJSON := outcome.SettingJSON
 		selection := outcome.Selection
 		if selection == nil {
 			switch {
@@ -3033,7 +3033,7 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		fillSubscriptionPreConsumeResult(returnValue, &sub, selection.Plan, consumeAmount, amountUsedBefore, tokenUsedBefore, distributor)
 		returnValue.CreditValuationTracked = record.ValuationSubscriptionId > 0
 		returnValue.AppliedCredit = record.AppliedCredit
-		cachePrimaryBillableSelectionTx(tx, userId, &sub, selection.Plan, distributor)
+		cachePrimaryBillableSelection(userId, selectionSettingJSON, &sub, selection.Plan, distributor)
 		return nil
 	}
 	err := transactionWithUserSettingCASRetry(runPreConsume)

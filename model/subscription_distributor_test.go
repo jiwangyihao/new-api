@@ -1990,16 +1990,22 @@ func TestPreConsumeUserSubscriptionByUnitsReusesCachedPrimarySelection(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 7498, first.UserSubscriptionId)
 
+	userQueryCount := 0
 	subscriptionQueryCount := 0
 	selectionQueryCount := 0
-	callbackName := "loadtest:count_cached_selection_subscription_query"
+	callbackName := "loadtest:count_cached_selection_queries"
 	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "UserSubscription" {
+		if tx.Statement == nil || tx.Statement.Schema == nil {
 			return
 		}
-		subscriptionQueryCount++
-		if _, ok := tx.Statement.Clauses["ORDER BY"]; ok {
-			selectionQueryCount++
+		switch tx.Statement.Schema.Name {
+		case "User":
+			userQueryCount++
+		case "UserSubscription":
+			subscriptionQueryCount++
+			if _, ok := tx.Statement.Clauses["ORDER BY"]; ok {
+				selectionQueryCount++
+			}
 		}
 	}))
 	t.Cleanup(func() { _ = DB.Callback().Query().Remove(callbackName) })
@@ -2009,6 +2015,7 @@ func TestPreConsumeUserSubscriptionByUnitsReusesCachedPrimarySelection(t *testin
 	require.Equal(t, 7498, second.UserSubscriptionId)
 	assert.Equal(t, 1, subscriptionQueryCount, "cached selection should only refresh subscription usage counters")
 	assert.Equal(t, 0, selectionQueryCount, "cached selection should skip ordered user_subscriptions hot-row selection query")
+	assert.Equal(t, 1, userQueryCount, "cached pre-consume should read user setting only once")
 
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, 7498).Error)

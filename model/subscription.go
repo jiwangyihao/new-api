@@ -2,6 +2,7 @@ package model
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -2906,6 +2907,28 @@ func PreConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 	return preConsumeUserSubscriptionByUnits(requestId, userId, modelName, quotaType, legacyAmount, distributorAmount, nil)
 }
 
+func loadSubscriptionPreConsumeReplayTx(tx *gorm.DB, requestId string) (SubscriptionPreConsumeRecord, bool, error) {
+	var record SubscriptionPreConsumeRecord
+	err := tx.Model(&SubscriptionPreConsumeRecord{}).
+		Select("request_fingerprint_version", "request_fingerprint", "status", "user_subscription_id", "pre_consumed", "valuation_subscription_id", "applied_credit").
+		Where("request_id = ?", requestId).
+		Limit(1).
+		Row().
+		Scan(
+			&record.RequestFingerprintVersion,
+			&record.RequestFingerprint,
+			&record.Status,
+			&record.UserSubscriptionId,
+			&record.PreConsumed,
+			&record.ValuationSubscriptionId,
+			&record.AppliedCredit,
+		)
+	if errors.Is(err, sql.ErrNoRows) {
+		return record, false, nil
+	}
+	return record, err == nil, err
+}
+
 func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName string, quotaType int, legacyAmount int64, distributorAmount int64, hooks *subscriptionTransactionHooks) (*SubscriptionPreConsumeResult, error) {
 	if userId <= 0 {
 		return nil, errors.New("invalid userId")
@@ -2930,12 +2953,11 @@ func preConsumeUserSubscriptionByUnits(requestId string, userId int, modelName s
 		if hooks != nil && hooks.onPreConsumeAttemptStarted != nil {
 			hooks.onPreConsumeAttemptStarted()
 		}
-		var existing SubscriptionPreConsumeRecord
-		query := tx.Where("request_id = ?", requestId).Limit(1).Find(&existing)
-		if query.Error != nil {
-			return query.Error
+		existing, found, queryErr := loadSubscriptionPreConsumeReplayTx(tx, requestId)
+		if queryErr != nil {
+			return queryErr
 		}
-		if query.RowsAffected > 0 {
+		if found {
 			if existing.RequestFingerprintVersion != subscriptionPreConsumeRequestFingerprintVersion || existing.RequestFingerprint != requestFingerprint {
 				return ErrSubscriptionPreConsumeRequestConflict
 			}

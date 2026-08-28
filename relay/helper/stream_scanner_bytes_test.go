@@ -2,10 +2,13 @@ package helper
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,5 +180,40 @@ func BenchmarkStreamScannerStringPayload(b *testing.B) {
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 		resp := &http.Response{Body: io.NopCloser(bytes.NewReader(body))}
 		StreamScannerHandler(c, resp, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}, func(string, *StreamResult) {})
+	}
+}
+
+func BenchmarkAcquireStreamPayload(b *testing.B) {
+	for _, size := range []int{256, 4 << 10, 16 << 10, 64 << 10} {
+		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				holder, payload := acquireStreamPayload(size)
+				payload = append(payload, make([]byte, size)...)
+				releaseStreamPayload(holder, payload)
+			}
+		})
+	}
+}
+
+func BenchmarkAcquireStreamPayloadCold(b *testing.B) {
+	for _, size := range []int{256, 4 << 10, 16 << 10} {
+		b.Run(fmt.Sprintf("size_%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				pool := sync.Pool{New: streamPayloadPool.New}
+				holder := pool.Get().(*[]byte)
+				payload := (*holder)[:0]
+				if cap(payload) < size {
+					payload = make([]byte, 0, size)
+				}
+				payload = append(payload, make([]byte, size)...)
+				runtime.KeepAlive(payload)
+			}
+		})
 	}
 }

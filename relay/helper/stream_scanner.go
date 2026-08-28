@@ -45,7 +45,7 @@ const maxPooledStreamPayloadBytes = 16 << 10
 
 var streamPayloadPool = sync.Pool{
 	New: func() any {
-		payload := make([]byte, 0, InitialScannerBufferSize)
+		payload := make([]byte, 0)
 		return &payload
 	},
 }

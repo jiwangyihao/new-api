@@ -25,6 +25,7 @@ const (
 	InitialScannerBufferSize    = 8 << 10  // 8KB; grows on demand for larger SSE lines
 	DefaultMaxScannerBufferSize = 64 << 20 // 64MB (64*1024*1024) default SSE buffer size
 	DefaultPingInterval         = 10 * time.Second
+	streamScannerQueueCapacity  = 16
 )
 
 type streamScannerItem struct {
@@ -245,7 +246,7 @@ func streamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		})
 	}
 
-	dataChan := make(chan streamScannerItem, 128)
+	dataChan := make(chan streamScannerItem, streamScannerQueueCapacity)
 
 	wg.Add(1)
 	gopool.Go(func() {

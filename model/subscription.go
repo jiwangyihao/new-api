@@ -77,6 +77,22 @@ func NormalizeSubscriptionBillingStrategy(strategy string) string {
 	}
 }
 
+type subscriptionSelectionSetting struct {
+	SubscriptionBillingStrategy string `json:"subscription_billing_strategy,omitempty"`
+	ActiveSubscriptionId        int    `json:"active_subscription_id,omitempty"`
+}
+
+func parseSubscriptionSelectionSetting(raw string) (subscriptionSelectionSetting, error) {
+	setting := subscriptionSelectionSetting{}
+	if raw == "" {
+		return setting, nil
+	}
+	if err := common.UnmarshalJsonStr(raw, &setting); err != nil {
+		return setting, err
+	}
+	return setting, nil
+}
+
 func ValidateSubscriptionBillingStrategy(strategy string) error {
 	switch strings.TrimSpace(strategy) {
 	case SubscriptionBillingStrategySingleActive,
@@ -2419,21 +2435,28 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 	if err := userQuery.First(&user).Error; err != nil {
 		return primaryBillableSelectionOutcome{}, err
 	}
-	userSetting := user.GetSetting()
-	billingStrategy := NormalizeSubscriptionBillingStrategy(userSetting.SubscriptionBillingStrategy)
-	if forUpdate && billingStrategy == SubscriptionBillingStrategySingleActive && userSetting.ActiveSubscriptionId > 0 {
-		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, user.Setting, requiredTokens, now); ok && cached.Subscription.Id == userSetting.ActiveSubscriptionId {
+	selectionSetting, settingErr := parseSubscriptionSelectionSetting(user.Setting)
+	if settingErr != nil {
+		common.SysLog("failed to unmarshal setting: " + settingErr.Error())
+	}
+	billingStrategy := NormalizeSubscriptionBillingStrategy(selectionSetting.SubscriptionBillingStrategy)
+	if forUpdate && billingStrategy == SubscriptionBillingStrategySingleActive && selectionSetting.ActiveSubscriptionId > 0 {
+		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, user.Setting, requiredTokens, now); ok && cached.Subscription.Id == selectionSetting.ActiveSubscriptionId {
 			return primaryBillableSelectionOutcome{
 				Selection:                       cached,
 				SawDistributorSubscription:      true,
-				ActiveSubscriptionId:            userSetting.ActiveSubscriptionId,
+				ActiveSubscriptionId:            selectionSetting.ActiveSubscriptionId,
 				SettingJSON:                     user.Setting,
 				BillingStrategy:                 billingStrategy,
-				BillingCandidateSubscriptionIds: []int{userSetting.ActiveSubscriptionId},
+				BillingCandidateSubscriptionIds: []int{selectionSetting.ActiveSubscriptionId},
 			}, nil
 		}
 	}
 
+	userSetting := dto.UserSetting{
+		SubscriptionBillingStrategy: selectionSetting.SubscriptionBillingStrategy,
+		ActiveSubscriptionId:        selectionSetting.ActiveSubscriptionId,
+	}
 	state, err := resolveSubscriptionBillingStrategyStateTx(tx, userId, userSetting, user.Setting, now, forUpdate, resetDue)
 	if err != nil {
 		return primaryBillableSelectionOutcome{}, err

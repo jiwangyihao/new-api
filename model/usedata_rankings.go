@@ -145,7 +145,6 @@ func GetRankingFreeUserLogCandidatesTx(db *gorm.DB, userIDs []int, startTime int
 	if len(userIDs) == 0 || endTime <= startTime || db == nil {
 		return nil, nil
 	}
-	var rows []RankingFreeUserLogCandidate
 	query := db.Table("logs").
 		Select("id, user_id, created_at, metered_tokens, subscription_id, subscription_tokens_consumed, other").
 		Where("user_id IN ?", userIDs).
@@ -157,8 +156,32 @@ func GetRankingFreeUserLogCandidatesTx(db *gorm.DB, userIDs []int, startTime int
 	if logAggregationEventsTableReady(db) {
 		query = query.Where("NOT EXISTS (SELECT 1 FROM log_aggregation_events WHERE log_aggregation_events.log_id = logs.id AND log_aggregation_events.aggregate_name = ? AND log_aggregation_events.status = ?)", logAggregationNameFreeSubscriptionUsageHourly, logAggregationEventStatusApplied)
 	}
-	err := query.Find(&rows).Error
-	return rows, err
+	rows, err := query.Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]RankingFreeUserLogCandidate, 0)
+	for rows.Next() {
+		var row RankingFreeUserLogCandidate
+		if err := rows.Scan(
+			&row.ID,
+			&row.UserID,
+			&row.CreatedAt,
+			&row.MeteredTokens,
+			&row.SubscriptionID,
+			&row.SubscriptionTokensConsumed,
+			&row.Other,
+		); err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func rankingBucketExpr(bucketSize int64) string {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 )
 
@@ -507,22 +507,61 @@ func rankingCandidateSubscriptionUsage(candidate model.RankingFreeUserLogCandida
 	if candidate.SubscriptionID != nil && candidate.SubscriptionTokensConsumed != nil {
 		return *candidate.SubscriptionID, *candidate.SubscriptionTokensConsumed, true
 	}
-	if strings.TrimSpace(candidate.Other) == "" {
+	if strings.TrimSpace(candidate.Other) == "" || !gjson.Valid(candidate.Other) {
 		return 0, 0, false
 	}
-	var other map[string]interface{}
-	if err := common.UnmarshalJsonStr(candidate.Other, &other); err != nil {
+	root := gjson.Parse(candidate.Other)
+	if !root.IsObject() {
 		return 0, 0, false
 	}
-	parsedSubID, ok := intFromOtherMapValue(other["subscription_id"])
+	var id gjson.Result
+	var consumedValue gjson.Result
+	root.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "subscription_id":
+			id = value
+		case "subscription_tokens_consumed":
+			consumedValue = value
+		}
+		return true
+	})
+	parsedSubID, ok := intFromGJSON(id)
 	if !ok {
 		return 0, 0, false
 	}
-	parsedConsumed, ok := int64FromOtherMapValue(other["subscription_tokens_consumed"])
+	parsedConsumed, ok := int64FromGJSON(consumedValue)
 	if !ok {
 		return 0, 0, false
 	}
 	return parsedSubID, parsedConsumed, true
+}
+
+func intFromGJSON(value gjson.Result) (int, bool) {
+	if !value.Exists() {
+		return 0, false
+	}
+	switch value.Type {
+	case gjson.Number:
+		return int(value.Num), true
+	case gjson.String:
+		return intFromOtherMapValue(value.String())
+	default:
+		return 0, false
+	}
+}
+
+func int64FromGJSON(value gjson.Result) (int64, bool) {
+	if !value.Exists() {
+		return 0, false
+	}
+	switch value.Type {
+	case gjson.Number:
+		return int64(value.Num), true
+	case gjson.String:
+		return int64FromOtherMapValue(value.String())
+	default:
+		return 0, false
+	}
 }
 
 func int64FromOtherMapValue(value interface{}) (int64, bool) {

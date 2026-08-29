@@ -54,6 +54,23 @@ function makeUsageLog(overrides: Partial<UsageLog>): UsageLog {
   } as UsageLog
 }
 
+test('getLogTokenUsage prefers final credits for credit billing logs', () => {
+  const log = makeUsageLog({ prompt_tokens: 10, completion_tokens: 5 })
+  const other = {
+    billing_unit: 'credit' as const,
+    final_credits: 80,
+    subscription_tokens_consumed: 20,
+  }
+
+  assert.equal(getLogTokenUsage(log, other), 80)
+})
+
+test('getLogTokenUsage ignores final credits for legacy logs', () => {
+  const log = makeUsageLog({ prompt_tokens: 10, completion_tokens: 5 })
+  const other = { final_credits: 80, subscription_consumed: 20 }
+
+  assert.equal(getLogTokenUsage(log, other), 20)
+})
 test('getLogTokenUsage prefers subscription consumed tokens', () => {
   const log = makeUsageLog({ prompt_tokens: 10, completion_tokens: 5 })
   const other = { subscription_tokens_consumed: 80, subscription_consumed: 20 }

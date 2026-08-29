@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { isCreditBillingLog } from '@/lib/credits'
 import type { StatusBadgeProps } from '@/components/status-badge'
 import {
   BILLING_PRICING_VARS,
@@ -168,6 +169,9 @@ export function getLogTokenUsage(
   log: UsageLog,
   other: LogOtherData | null
 ): number {
+  if (other && isCreditBillingLog(other) && other.final_credits !== undefined) {
+    return clampTokenCount(other.final_credits)
+  }
   if (other) {
     if (other.subscription_tokens_consumed !== undefined) {
       return clampTokenCount(other.subscription_tokens_consumed)

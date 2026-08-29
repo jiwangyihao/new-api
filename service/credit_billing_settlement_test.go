@@ -102,6 +102,11 @@ func TestTextFixedRequestChargesConfiguredCreditsOnce(t *testing.T) {
 	assert.Equal(t, float64(80), other["api_key_credits"])
 	assert.Equal(t, float64(80), other["subscription_credits"])
 	assert.Equal(t, float64(80), other["final_credits"])
+	assert.Equal(t, "credit", other["billing_unit"])
+	assert.Equal(t, float64(2), other["billing_schema_version"])
+	assert.Equal(t, float64(80), other["pre_consumed_credits"])
+	assert.Equal(t, float64(0), other["settlement_delta_credits"])
+	assert.Equal(t, float64(920), other["remaining_credits"])
 	assert.Equal(t, float64(80), other["api_key_credits_consumed"])
 	assert.Equal(t, float64(80), other["subscription_credits_consumed"])
 }
@@ -131,6 +136,12 @@ func TestTextFixedRequestNoTrustedUsageRefundsPreconsume(t *testing.T) {
 	assert.Equal(t, true, other["usage_unavailable"])
 	assert.Equal(t, false, other["has_trusted_usage"])
 	assert.Equal(t, creditbilling.ZeroReasonNoTrustedUsage, other["credit_billing_zero_reason"])
+	assert.Equal(t, "credit", other["billing_unit"])
+	assert.Equal(t, float64(2), other["billing_schema_version"])
+	assert.Equal(t, float64(80), other["pre_consumed_credits"])
+	assert.Equal(t, float64(-80), other["settlement_delta_credits"])
+	assert.Equal(t, float64(1_000), other["remaining_credits"])
+	assert.Equal(t, float64(0), other["final_credits"])
 }
 
 func TestTextTrustedZeroUsageDiffersByBillingMode(t *testing.T) {

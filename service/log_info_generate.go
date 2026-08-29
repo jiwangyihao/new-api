@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -221,6 +222,28 @@ func appendBillingInfo(relayInfo *relaycommon.RelayInfo, other map[string]interf
 	}
 	appendChannelTokenBillingSnapshotInfo(relayInfo, other)
 	appendNewAPIBillingInfo(relayInfo, other)
+	if relayInfo.BillingSource == "subscription" {
+		billingUnit := "legacy_quota"
+		if relayInfo.SubscriptionEntitlementType == model.SubscriptionEntitlementCreditBalance {
+			billingUnit = "credit"
+			other["pre_consumed_credits"] = relayInfo.SubscriptionPreConsumed
+			settlementDelta := relayInfo.SubscriptionBillableTokens - relayInfo.SubscriptionPreConsumed
+			other["settlement_delta_credits"] = settlementDelta
+			if !relayInfo.SubscriptionTokenUnlimited && relayInfo.SubscriptionTokenLimit > 0 {
+				usedFinal := relayInfo.SubscriptionTokenUsedAfterPreConsume + settlementDelta
+				if usedFinal < 0 {
+					usedFinal = 0
+				}
+				remaining := relayInfo.SubscriptionTokenLimit - usedFinal
+				if remaining < 0 {
+					remaining = 0
+				}
+				other["remaining_credits"] = remaining
+			}
+		}
+		other["billing_unit"] = billingUnit
+		other["billing_schema_version"] = 2
+	}
 	// billing_source: "wallet" or "subscription"
 	if relayInfo.BillingSource != "" {
 		other["billing_source"] = relayInfo.BillingSource

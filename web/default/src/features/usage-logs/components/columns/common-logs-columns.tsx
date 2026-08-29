@@ -21,6 +21,7 @@ import { type ColumnDef } from '@tanstack/react-table'
 import { CircleAlert, Sparkles, KeyRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
+import { formatCredits, isCreditBillingLog } from '@/lib/credits'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import {
   formatTokens,
@@ -105,11 +106,19 @@ function buildDetailSegments(
     }
     return segments
   }
-
   if (!other) return []
 
   const segments: DetailSegment[] = []
-  if (!showCostDetails) {
+  if (isCreditBillingLog(other)) {
+    const creditUsage = getLogTokenUsage(log, other)
+    segments.push({
+      text:
+        creditUsage > 0
+          ? `${t('Credits charged')}: ${formatCredits(creditUsage)}`
+          : t('No credits charged'),
+    })
+    if (!showCostDetails) return segments
+  } else if (!showCostDetails) {
     const tokenUsage = getLogTokenUsage(log, other)
     return tokenUsage > 0
       ? [{ text: `${t('Token Usage')}: ${formatTokens(tokenUsage)}` }]
@@ -652,10 +661,10 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
       cell: ({ row }) => {
         const log = row.original
         if (!isDisplayableLogType(log.type)) return null
-
         const tokenUsage = row.getValue('token_usage') as number
         const other = parseLogOther(log.other)
         const isSubscription = other?.billing_source === 'subscription'
+        const isCredit = isCreditBillingLog(other)
 
         if (isSubscription) {
           return (
@@ -670,11 +679,13 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                     className='size-1.5 rounded-full bg-emerald-500'
                     aria-hidden='true'
                   />
-                  {t('Subscription')}
+                  {isCredit ? formatCredits(tokenUsage) : t('Subscription')}
                 </TooltipTrigger>
                 <TooltipContent>
                   <span>
-                    {t('Deducted by subscription')}: {formatTokens(tokenUsage)}
+                    {isCredit
+                      ? `${t('Credits charged')}: ${formatCredits(tokenUsage)}`
+                      : `${t('Deducted by subscription')}: ${formatTokens(tokenUsage)}`}
                   </span>
                 </TooltipContent>
               </Tooltip>

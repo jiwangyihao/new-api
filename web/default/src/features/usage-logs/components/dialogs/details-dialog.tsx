@@ -31,6 +31,11 @@ import {
   Info,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import {
+  formatCredits,
+  getCreditSettlement,
+  isCreditBillingLog,
+} from '@/lib/credits'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
 import { formatLogQuota, formatTokens, formatUseTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -99,6 +104,20 @@ function DetailRow(props: {
   )
 }
 
+function formatCreditSettlement(
+  delta: number,
+  t: (key: string) => string
+): string {
+  const settlement = getCreditSettlement(delta)
+  if (settlement.kind === 'released') {
+    return `${t('Released pre-consumed credits')}: ${formatCredits(settlement.credits)}`
+  }
+  if (settlement.kind === 'charged') {
+    return `${t('Additional credits charged')}: ${formatCredits(settlement.credits)}`
+  }
+  return t('No credits charged')
+}
+
 function DetailSection(props: {
   icon?: React.ReactNode
   label: string
@@ -142,6 +161,7 @@ function BillingBreakdown(props: {
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
+  const isCredit = isCreditBillingLog(other)
 
   const rows: Array<{ label: string; value: string }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
@@ -328,10 +348,35 @@ function BillingBreakdown(props: {
     })
   }
 
-  rows.push({
-    label: t('Total Cost'),
-    value: formatLogQuota(log.quota),
-  })
+  if (isCredit) {
+    rows.push({
+      label: t('Credits charged'),
+      value: formatCredits(other.final_credits ?? 0),
+    })
+    if (other.base_credits != null) {
+      rows.push({
+        label: t('Base credits'),
+        value: formatCredits(other.base_credits),
+      })
+    }
+    if (other.api_key_credits != null) {
+      rows.push({
+        label: t('API key credits'),
+        value: formatCredits(other.api_key_credits),
+      })
+    }
+    if (other.subscription_credits != null) {
+      rows.push({
+        label: t('Subscription credits'),
+        value: formatCredits(other.subscription_credits),
+      })
+    }
+  } else if (isAdmin) {
+    rows.push({
+      label: t('Legacy billing record'),
+      value: formatLogQuota(log.quota),
+    })
+  }
 
   if (rows.length === 0) return null
 
@@ -430,6 +475,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const isTopup = props.log.type === 1
   const isManage = props.log.type === 3
   const isSubscription = other?.billing_source === 'subscription'
+  const isCredit = isCreditBillingLog(other)
   const isTieredBilling =
     isConsume &&
     !isViolation &&
@@ -964,35 +1010,66 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     mono
                   />
                 )}
-                {other.subscription_pre_consumed != null && (
-                  <DetailRow
-                    label={t('Pre-consumed')}
-                    value={formatLogQuota(other.subscription_pre_consumed)}
-                    mono
-                  />
-                )}
-                {other.subscription_post_delta != null &&
-                  other.subscription_post_delta !== 0 && (
-                    <DetailRow
-                      label={t('Post Delta')}
-                      value={formatLogQuota(other.subscription_post_delta)}
-                      mono
-                    />
-                  )}
-                {other.subscription_consumed != null && (
-                  <DetailRow
-                    label={t('Final Consumed')}
-                    value={formatLogQuota(other.subscription_consumed)}
-                    mono
-                  />
-                )}
-                {other.subscription_remain != null && (
-                  <DetailRow
-                    label={t('Remaining')}
-                    value={`${formatLogQuota(other.subscription_remain)}${other.subscription_total != null ? ` / ${formatLogQuota(other.subscription_total)}` : ''}`}
-                    mono
-                  />
-                )}
+                {isCredit ? (
+                  <>
+                    {other.pre_consumed_credits != null && (
+                      <DetailRow
+                        label={t('Pre-consumed credits')}
+                        value={formatCredits(other.pre_consumed_credits)}
+                        mono
+                      />
+                    )}
+                    {other.settlement_delta_credits != null && (
+                      <DetailRow
+                        label={t('Settlement')}
+                        value={formatCreditSettlement(
+                          other.settlement_delta_credits,
+                          t
+                        )}
+                        mono
+                      />
+                    )}
+                    {other.remaining_credits != null && (
+                      <DetailRow
+                        label={t('Available credits after settlement')}
+                        value={formatCredits(other.remaining_credits)}
+                        mono
+                      />
+                    )}
+                  </>
+                ) : props.isAdmin ? (
+                  <>
+                    {other.subscription_pre_consumed != null && (
+                      <DetailRow
+                        label={t('Pre-consumed')}
+                        value={formatLogQuota(other.subscription_pre_consumed)}
+                        mono
+                      />
+                    )}
+                    {other.subscription_post_delta != null &&
+                      other.subscription_post_delta !== 0 && (
+                        <DetailRow
+                          label={t('Post Delta')}
+                          value={formatLogQuota(other.subscription_post_delta)}
+                          mono
+                        />
+                      )}
+                    {other.subscription_consumed != null && (
+                      <DetailRow
+                        label={t('Final Consumed')}
+                        value={formatLogQuota(other.subscription_consumed)}
+                        mono
+                      />
+                    )}
+                    {other.subscription_remain != null && (
+                      <DetailRow
+                        label={t('Remaining')}
+                        value={`${formatLogQuota(other.subscription_remain)}${other.subscription_total != null ? ` / ${formatLogQuota(other.subscription_total)}` : ''}`}
+                        mono
+                      />
+                    )}
+                  </>
+                ) : null}
               </DetailSection>
             )}
 

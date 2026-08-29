@@ -3101,7 +3101,7 @@ func RefundSubscriptionPreConsume(requestId string) error {
 	}
 	return DB.Transaction(func(tx *gorm.DB) error {
 		var record SubscriptionPreConsumeRecord
-		if err := tx.Set("gorm:query_option", "FOR UPDATE").
+		if err := lockForUpdate(tx).
 			Where("request_id = ?", requestId).First(&record).Error; err != nil {
 			return err
 		}

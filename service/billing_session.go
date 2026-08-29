@@ -547,6 +547,7 @@ func (s *BillingSession) syncRelayInfo() {
 		}
 		info.SubscriptionPlanId = sub.PlanId
 		info.SubscriptionPlanTitle = sub.PlanTitle
+		info.SubscriptionEntitlementType = sub.EntitlementType
 		syncRelayCodexProEligibility(info, sub)
 		if sub.PlanIsTrial {
 			info.SubscriptionTrialMarker = "trial"
@@ -556,6 +557,7 @@ func (s *BillingSession) syncRelayInfo() {
 	} else {
 		info.SubscriptionId = 0
 		info.SubscriptionPreConsumed = 0
+		info.SubscriptionEntitlementType = ""
 		info.SubscriptionTrialMarker = ""
 		info.CodexProEligible = false
 		info.CodexProUnavailableReason = "no_paid_subscription"
@@ -609,6 +611,7 @@ func clearRelayBillingState(info *relaycommon.RelayInfo) {
 	info.SubscriptionDistributorTokenBilling = false
 	info.SubscriptionPlanId = 0
 	info.SubscriptionPlanTitle = ""
+	info.SubscriptionEntitlementType = ""
 	info.SubscriptionTrialMarker = ""
 	info.CodexProEligible = false
 	info.CodexProUnavailableReason = "no_paid_subscription"

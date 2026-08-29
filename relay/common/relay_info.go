@@ -152,8 +152,9 @@ type RelayInfo struct {
 	// SubscriptionPostDelta is the post-consume delta applied to amount_used (quota units; can be negative).
 	SubscriptionPostDelta int64
 	// SubscriptionPlanId / SubscriptionPlanTitle are used for logging/UI display.
-	SubscriptionPlanId    int
-	SubscriptionPlanTitle string
+	SubscriptionPlanId          int
+	SubscriptionPlanTitle       string
+	SubscriptionEntitlementType string
 	// SubscriptionTrialMarker is set to "trial" when the actual billed subscription plan is trial.
 	SubscriptionTrialMarker   string
 	CodexProMode              string

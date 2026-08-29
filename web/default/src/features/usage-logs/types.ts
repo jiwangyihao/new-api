@@ -192,6 +192,15 @@ export interface LogOtherData {
   subscription_consumed?: number
   subscription_remain?: number
   subscription_total?: number
+  billing_unit?: 'credit' | 'legacy_quota'
+  billing_schema_version?: number
+  base_credits?: number
+  api_key_credits?: number
+  subscription_credits?: number
+  final_credits?: number
+  pre_consumed_credits?: number
+  settlement_delta_credits?: number
+  remaining_credits?: number
   billing_multiplier?: number
   billing_multiplier_source?: string
   metered_tokens?: number

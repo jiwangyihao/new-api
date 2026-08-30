@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/bytedance/gopkg/util/gopool"
+	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 )
 
@@ -402,35 +403,88 @@ func stringFromMapValue(value interface{}) (string, bool) {
 }
 
 func fillLogDerivedFields(log *Log) {
-	if log == nil || strings.TrimSpace(log.Other) == "" {
+	if log == nil || strings.TrimSpace(log.Other) == "" || !gjson.Valid(log.Other) {
 		return
 	}
-	var other map[string]interface{}
-	if err := common.UnmarshalJsonStr(log.Other, &other); err != nil {
+	root := gjson.Parse(log.Other)
+	if !root.IsObject() {
 		return
 	}
+	var subscriptionIDValue, subscriptionTokensValue, billingSourceValue, endpointValue, requestPathValue gjson.Result
+	root.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "subscription_id":
+			subscriptionIDValue = value
+		case "subscription_tokens_consumed":
+			subscriptionTokensValue = value
+		case "billing_source":
+			billingSourceValue = value
+		case "endpoint":
+			endpointValue = value
+		case "request_path":
+			requestPathValue = value
+		}
+		return true
+	})
 	if log.SubscriptionID == nil {
-		if v, ok := intFromLogDerivedMapValue(other["subscription_id"]); ok && v > 0 {
-			log.SubscriptionID = &v
+		if value, ok := logDerivedIntFromGJSON(subscriptionIDValue); ok && value > 0 {
+			log.SubscriptionID = &value
 		}
 	}
 	if log.SubscriptionTokensConsumed == nil {
-		if v, ok := int64FromMapValue(other["subscription_tokens_consumed"]); ok && v >= 0 {
-			log.SubscriptionTokensConsumed = &v
+		if value, ok := logDerivedInt64FromGJSON(subscriptionTokensValue); ok && value >= 0 {
+			log.SubscriptionTokensConsumed = &value
 		}
 	}
-	if log.BillingSource == nil {
-		if value, ok := stringFromMapValue(other["billing_source"]); ok {
-			log.BillingSource = &value
-		}
+	if log.BillingSource == nil && billingSourceValue.Type == gjson.String {
+		value := billingSourceValue.String()
+		log.BillingSource = &value
 	}
 	if log.Endpoint == nil {
-		if value, ok := stringFromMapValue(other["endpoint"]); ok {
+		if endpointValue.Type == gjson.String {
+			value := endpointValue.String()
 			log.Endpoint = &value
-		} else if value, ok := stringFromMapValue(other["request_path"]); ok {
+		} else if requestPathValue.Type == gjson.String {
+			value := requestPathValue.String()
 			log.Endpoint = &value
 		}
 	}
+}
+
+func logDerivedIntFromGJSON(value gjson.Result) (int, bool) {
+	if value.Type == gjson.Number {
+		return int(value.Num), true
+	}
+	if value.Type != gjson.String {
+		return 0, false
+	}
+	text := strings.TrimSpace(value.String())
+	if parsed, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return int(parsed), true
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int(parsed), true
+}
+
+func logDerivedInt64FromGJSON(value gjson.Result) (int64, bool) {
+	if value.Type == gjson.Number {
+		return int64(value.Num), true
+	}
+	if value.Type != gjson.String {
+		return 0, false
+	}
+	text := strings.TrimSpace(value.String())
+	if parsed, err := strconv.ParseInt(text, 10, 64); err == nil {
+		return parsed, true
+	}
+	parsed, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int64(parsed), true
 }
 
 type RecordTaskBillingLogParams struct {

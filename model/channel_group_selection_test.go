@@ -223,6 +223,70 @@ func TestGetEffectiveGroupNamesByTokenDisabledBindingsReturnSentinel(t *testing.
 	assert.NotContains(t, names, DefaultChannelGroupName)
 }
 
+func TestGetEffectiveGroupNamesByTokenReusesCachedQuery(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	group := makeGroup(t, "token-cache", nil)
+	require.NoError(t, SetTokenGroupBindings(7301, []int{group.Id}))
+	flushTokenEffectiveGroupsCache()
+
+	capture := &effectiveGroupSQLCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	DB = db.Session(&gorm.Session{Logger: capture})
+	for i := 0; i < 10; i++ {
+		names, err := GetEffectiveGroupNamesByToken(7301)
+		require.NoError(t, err)
+		require.Equal(t, []string{"token-cache"}, names)
+	}
+	require.Len(t, capture.statements, 2, "first load queries bindings and groups once")
+}
+
+func TestSetTokenGroupBindingsInvalidatesEffectiveGroupsCache(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+	first := makeGroup(t, "token-first", nil)
+	second := makeGroup(t, "token-second", nil)
+	require.NoError(t, SetTokenGroupBindings(7302, []int{first.Id}))
+	names, err := GetEffectiveGroupNamesByToken(7302)
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-first"}, names)
+
+	require.NoError(t, SetTokenGroupBindings(7302, []int{second.Id}))
+	names, err = GetEffectiveGroupNamesByToken(7302)
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-second"}, names)
+}
+
+func TestChannelGroupUpdateInvalidatesEffectiveGroupsCache(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+	group := makeGroup(t, "token-enabled", nil)
+	require.NoError(t, SetTokenGroupBindings(7303, []int{group.Id}))
+	names, err := GetEffectiveGroupNamesByToken(7303)
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-enabled"}, names)
+
+	group.Enabled = false
+	require.NoError(t, group.Update())
+	names, err = GetEffectiveGroupNamesByToken(7303)
+	require.NoError(t, err)
+	require.Equal(t, []string{DisabledTokenGroupSentinel}, names)
+}
+
+func TestGetEffectiveGroupNamesByTokenBypassesCacheWhenDisabled(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+	group := makeGroup(t, "token-uncached", nil)
+	require.NoError(t, SetTokenGroupBindings(7304, []int{group.Id}))
+	oldMemory := common.MemoryCacheEnabled
+	common.MemoryCacheEnabled = false
+	t.Cleanup(func() { common.MemoryCacheEnabled = oldMemory })
+
+	names, err := GetEffectiveGroupNamesByToken(7304)
+	require.NoError(t, err)
+	require.Equal(t, []string{"token-uncached"}, names)
+	group.Enabled = false
+	require.NoError(t, DB.Model(group).Update("enabled", false).Error)
+	names, err = GetEffectiveGroupNamesByToken(7304)
+	require.NoError(t, err)
+	require.Equal(t, []string{DisabledTokenGroupSentinel}, names)
+}
+
 func TestGroupSelectionDisabledSentinelDeniesAllChannels(t *testing.T) {
 	db := setupChannelGroupSelectionTestDB(t)
 	const model = "gpt-disabled-deny"

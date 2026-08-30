@@ -23,6 +23,16 @@ const DefaultChannelGroupName = "__default__"
 // 它必须是非空集合（区别于“未绑定 = 回落默认分组”），但又不匹配任何渠道。
 const DisabledTokenGroupSentinel = "__disabled__"
 
+var effectiveGroupNamesByToken = newTokenEffectiveGroupsCache()
+
+func flushTokenEffectiveGroupsCache() {
+	effectiveGroupNamesByToken.flush()
+}
+
+func deleteTokenEffectiveGroupsCache(tokenID int) {
+	effectiveGroupNamesByToken.delete(tokenID)
+}
+
 // GroupCreditBillingModeInherit 表示分组未配置计费方式（第三态，空串），结算时回落到具体渠道。
 const GroupCreditBillingModeInherit = ""
 
@@ -176,6 +186,7 @@ func (g *ChannelGroup) Insert() error {
 		return err
 	}
 	flushEffectiveGroupRowsCache()
+	flushTokenEffectiveGroupsCache()
 	return nil
 }
 
@@ -193,6 +204,7 @@ func (g *ChannelGroup) Update() error {
 		return err
 	}
 	flushEffectiveGroupRowsCache()
+	flushTokenEffectiveGroupsCache()
 	return nil
 }
 
@@ -225,6 +237,7 @@ func DeleteChannelGroupByID(id int) error {
 		return err
 	}
 	flushEffectiveGroupRowsCache()
+	flushTokenEffectiveGroupsCache()
 	return nil
 }
 
@@ -354,7 +367,7 @@ func GetGroupNamesByChannel(channelId int) ([]string, error) {
 // SetTokenGroupBindings 全量覆盖某 API Key 绑定的分组集合。
 func SetTokenGroupBindings(tokenId int, groupIds []int) error {
 	unique := lo.Uniq(groupIds)
-	return DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("token_id = ?", tokenId).Delete(&TokenGroupBinding{}).Error; err != nil {
 			return err
 		}
@@ -372,7 +385,11 @@ func SetTokenGroupBindings(tokenId int, groupIds []int) error {
 			return nil
 		}
 		return tx.Create(&rows).Error
-	})
+	}); err != nil {
+		return err
+	}
+	deleteTokenEffectiveGroupsCache(tokenId)
+	return nil
 }
 
 // GetGroupIdsByToken 返回某 API Key 绑定的分组 id。
@@ -385,6 +402,13 @@ func GetGroupIdsByToken(tokenId int) ([]int, error) {
 // GetEffectiveGroupNamesByToken 返回 API Key 生效的分组名集合（用于渠道选择）。
 // 未绑定任何分组时回落默认分组。仅返回 enabled 分组；已绑定但全部被禁用时返回禁用哨兵分组（拒绝），绝不回落默认分组以免扩大渠道范围。
 func GetEffectiveGroupNamesByToken(tokenId int) ([]string, error) {
+	if !common.MemoryCacheEnabled {
+		return loadEffectiveGroupNamesByToken(tokenId)
+	}
+	return effectiveGroupNamesByToken.get(tokenId, loadEffectiveGroupNamesByToken)
+}
+
+func loadEffectiveGroupNamesByToken(tokenId int) ([]string, error) {
 	ids, err := GetGroupIdsByToken(tokenId)
 	if err != nil {
 		return nil, err
@@ -403,8 +427,6 @@ func GetEffectiveGroupNamesByToken(tokenId int) ([]string, error) {
 		}
 	}
 	if len(names) == 0 {
-		// 已绑定分组但全部被禁用：返回禁用哨兵（非空但不匹配任何渠道），渠道选择据此拒绝服务，
-		// 绝不回落默认分组以免把范围扩大到全部渠道。
 		return []string{DisabledTokenGroupSentinel}, nil
 	}
 	return lo.Uniq(names), nil

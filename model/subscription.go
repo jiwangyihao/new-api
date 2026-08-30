@@ -746,7 +746,7 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	now := time.Unix(nowUnix, 0)
 	var existing UserSubscription
 	var sameTierPaid UserSubscription
-	sameTierPaidQuery := tx.Set("gorm:query_option", "FOR UPDATE").
+	sameTierPaidQuery := lockForUpdate(tx).
 		Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ? AND grant_reason = ?", userId, plan.Id, "active", nowUnix, SubscriptionGrantOrder).
 		Order("end_time desc, id desc").
 		Limit(1).
@@ -754,7 +754,7 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 	if sameTierPaidQuery.Error != nil {
 		return nil, sameTierPaidQuery.Error
 	}
-	existingQuery := tx.Set("gorm:query_option", "FOR UPDATE").
+	existingQuery := lockForUpdate(tx).
 		Where("user_id = ? AND plan_id = ? AND status = ? AND end_time > ?", userId, plan.Id, "active", nowUnix).
 		Order("end_time desc, id desc").
 		Limit(1).
@@ -797,26 +797,15 @@ func CreateUserSubscriptionFromPlanWithResultTx(tx *gorm.DB, userId int, plan *S
 		existing.LastGrantTimeSource = SubscriptionGrantTimeSourceLive
 		existing.LastGrantSource = strings.TrimSpace(source)
 		existing.UpdatedAt = nowUnix
-		fields := []string{
-			"end_time",
-			"token_limit",
-			"concurrency_limit",
-			"next_reset_time",
-			"updated_at",
-			"last_granted_at",
-			"last_grant_credit_snapshot",
-			"last_grant_time_source",
-			"last_grant_source",
-		}
-		if strings.TrimSpace(existing.GrantReason) == source {
-			fields = append(fields, "grant_reason")
-		}
-		if strings.TrimSpace(existing.Source) == source {
-			fields = append(fields, "source")
-		}
 
-		if err := tx.Model(&existing).Select(fields).Updates(existing).Error; err != nil {
-			return nil, err
+		update := tx.Model(&UserSubscription{}).
+			Where("id = ? AND end_time = ? AND end_time < ?", existing.Id, eventStartTime, endUnix).
+			Updates(existing)
+		if update.Error != nil {
+			return nil, update.Error
+		}
+		if update.RowsAffected != 1 {
+			return nil, ErrUserSettingCASConflict
 		}
 		return &UserSubscriptionCreationResult{Subscription: &existing, EventStartTime: eventStartTime, EventEndTime: endUnix}, nil
 	}

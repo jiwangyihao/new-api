@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/glebarez/sqlite"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -107,6 +108,90 @@ func TestTimedSubscriptionValuationGrantConcurrentReplayLinearizes(t *testing.T)
 	require.Equal(t, results[0].result.EventStartTime, results[1].result.EventStartTime)
 	require.Equal(t, results[0].result.EventEndTime, results[1].result.EventEndTime)
 	require.Equal(t, results[0].result.EventEndTime, subscriptions[0].EndTime)
+}
+
+func TestConcurrentDistinctTimedGrantsCreateContiguousRenewalWindows(t *testing.T) {
+	db, userID, plan := setupTimedSubscriptionValuationConcurrencyTestDB(t)
+	requests := []TimedSubscriptionGrantRequest{
+		{UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-renewal-first", SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "first concurrent renewal"},
+		{UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-renewal-second", SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "second concurrent renewal"},
+	}
+	start := make(chan struct{})
+	errorsByGrant := make(chan error, len(requests))
+	var waitGroup sync.WaitGroup
+	for index := range requests {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			errorsByGrant <- transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+				_, err := GrantTimedSubscriptionTx(tx, requests[index])
+				return err
+			})
+		}(index)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsByGrant)
+	for err := range errorsByGrant {
+		require.NoError(t, err)
+	}
+
+	var grants []TimedSubscriptionValuationGrant
+	require.NoError(t, db.Order("event_start_time ASC, id ASC").Find(&grants).Error)
+	require.Len(t, grants, 2)
+	require.Equal(t, grants[0].EventEndTime, grants[1].EventStartTime)
+	require.Equal(t, int64(3600), grants[0].EventEndTime-grants[0].EventStartTime)
+	require.Equal(t, int64(3600), grants[1].EventEndTime-grants[1].EventStartTime)
+	var subscription UserSubscription
+	require.NoError(t, db.Where("user_id = ? AND plan_id = ?", userID, plan.Id).First(&subscription).Error)
+	require.Equal(t, grants[1].EventEndTime, subscription.EndTime)
+}
+
+func TestConcurrentDistinctTimedGrantsNeverMoveSubscriptionEndBackward(t *testing.T) {
+	db, userID, plan := setupTimedSubscriptionValuationConcurrencyTestDB(t)
+	now := common.GetTimestamp()
+	subscription := &UserSubscription{
+		Id: 21903, UserId: userID, PlanId: plan.Id, EntitlementType: SubscriptionEntitlementTimed,
+		TokenLimit: plan.MonthlyTokenLimit, ConcurrencyLimit: plan.ConcurrencyLimit,
+		StartTime: now - 3600, EndTime: now + 7200, Status: SubscriptionStatusActive,
+		GrantReason: SubscriptionGrantOrder, Source: SubscriptionGrantOrder,
+	}
+	require.NoError(t, db.Create(subscription).Error)
+
+	requests := []TimedSubscriptionGrantRequest{
+		{UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-monotonic-first", SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "monotonic first"},
+		{UserId: userID, PlanId: plan.Id, IdempotencyKey: "timed-monotonic-second", SourceType: TimedSubscriptionGrantSourceAdmin, Reason: "monotonic second"},
+	}
+	start := make(chan struct{})
+	errorsByGrant := make(chan error, len(requests))
+	var waitGroup sync.WaitGroup
+	for index := range requests {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			errorsByGrant <- transactionWithUserSettingCASRetry(func(tx *gorm.DB) error {
+				_, err := GrantTimedSubscriptionTx(tx, requests[index])
+				return err
+			})
+		}(index)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsByGrant)
+	for err := range errorsByGrant {
+		require.NoError(t, err)
+	}
+
+	var grants []TimedSubscriptionValuationGrant
+	require.NoError(t, db.Order("event_start_time ASC, id ASC").Find(&grants).Error)
+	require.Len(t, grants, 2)
+	assert.Equal(t, grants[0].EventEndTime, grants[1].EventStartTime)
+	var saved UserSubscription
+	require.NoError(t, db.First(&saved, subscription.Id).Error)
+	assert.Equal(t, grants[1].EventEndTime, saved.EndTime)
+	assert.GreaterOrEqual(t, saved.EndTime, now+7200)
 }
 
 func setupTimedSubscriptionValuationConcurrencyTestDB(t *testing.T) (*gorm.DB, int, SubscriptionPlan) {

@@ -76,6 +76,7 @@ import {
 import { subscriptionQueryKeys } from '../../query-keys'
 import type {
   PlanRecord,
+  SubscriptionPayRequest,
   SubscriptionPayResponse,
   SubscriptionOrderStatus,
   SubscriptionPurchaseMode,
@@ -102,10 +103,10 @@ interface KyrenAvailability {
 interface KyrenPaymentDependencies {
   planId: number
   purchaseMode: SubscriptionPurchaseMode
-  paySubscriptionKyren: (data: {
-    plan_id: number
-    purchase_mode: SubscriptionPurchaseMode
-  }) => Promise<SubscriptionPayResponse>
+  retryTradeNo?: string
+  paySubscriptionKyren: (
+    data: SubscriptionPayRequest
+  ) => Promise<SubscriptionPayResponse>
   openCheckout: (url: string) => void
   onOrderCreated?: (orderId: string) => void
 }
@@ -136,6 +137,7 @@ interface ExternalCheckoutVariables {
   provider: ExternalPaymentProvider
   purchaseMode: SubscriptionPurchaseMode
   paymentMethod?: string
+  retryTradeNo?: string
 }
 
 interface PendingExternalOrder {
@@ -242,10 +244,12 @@ function isSafeHttpCheckoutUrl(value: string): boolean {
 export async function processKyrenSubscriptionPayment(
   deps: KyrenPaymentDependencies
 ): Promise<string> {
-  const res = await deps.paySubscriptionKyren({
+  const request: SubscriptionPayRequest = {
     plan_id: deps.planId,
     purchase_mode: deps.purchaseMode,
-  })
+  }
+  if (deps.retryTradeNo) request.retry_trade_no = deps.retryTradeNo
+  const res = await deps.paySubscriptionKyren(request)
   const checkoutUrl = getKyrenCheckoutUrl(res)
   const orderId = res.data?.order_id?.trim() || ''
   if (
@@ -364,6 +368,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
         const tradeNo = await processKyrenSubscriptionPayment({
           planId: plan.id,
           purchaseMode: variables.purchaseMode,
+          retryTradeNo: variables.retryTradeNo,
           paySubscriptionKyren,
           onOrderCreated: (orderId) =>
             rememberPendingExternalOrder({
@@ -460,6 +465,18 @@ export function SubscriptionPurchaseDialog(props: Props) {
   })
   const activePendingExternalOrder =
     pendingExternalOrder?.ownerUserId === userId ? pendingExternalOrder : null
+  const tryPendingExternalPaymentAgain = () => {
+    if (!activePendingExternalOrder) return
+    if (activePendingExternalOrder.provider !== 'kyren') {
+      clearPendingExternalOrder()
+      return
+    }
+    externalCheckoutMutation.mutate({
+      provider: 'kyren',
+      purchaseMode: activePendingExternalOrder.purchaseMode,
+      retryTradeNo: activePendingExternalOrder.tradeNo,
+    })
+  }
   const externalOrderQuery = useQuery({
     queryKey: [
       'subscriptions',
@@ -772,7 +789,7 @@ export function SubscriptionPurchaseDialog(props: Props) {
                           type='button'
                           size='sm'
                           variant='outline'
-                          onClick={clearPendingExternalOrder}
+                          onClick={tryPendingExternalPaymentAgain}
                         >
                           {t('Try payment again')}
                         </Button>

@@ -43,6 +43,7 @@ type kyrenProductSyncResponse struct {
 type SubscriptionKyrenPayRequest struct {
 	PlanId       int    `json:"plan_id"`
 	PurchaseMode string `json:"purchase_mode"`
+	RetryTradeNo string `json:"retry_trade_no"`
 }
 
 type kyrenWebhookEvent struct {
@@ -108,6 +109,11 @@ func verifyKyrenWebhookSignature(payload []byte, signature string, timestamp str
 func SubscriptionRequestKyrenPay(c *gin.Context) {
 	var req SubscriptionKyrenPayRequest
 	if err := c.ShouldBindJSON(&req); err != nil || req.PlanId <= 0 {
+		common.ApiErrorMsg(c, "参数错误")
+		return
+	}
+	retryTradeNo := strings.TrimSpace(req.RetryTradeNo)
+	if len(retryTradeNo) > 255 {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
@@ -194,7 +200,16 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 			CreateTime: common.GetTimestamp(), KyrenSnapshot: kyrenSnapshot,
 			EntitlementSnapshot: entitlementSnapshot,
 		}
-		claim, err := service.ClaimKyrenSubscriptionPaymentOrder(order, purchaseMode)
+		var claim *service.KyrenSubscriptionPaymentOrderClaim
+		if retryTradeNo != "" {
+			claim, err = service.SupersedeKyrenSubscriptionPaymentOrder(service.KyrenSubscriptionPaymentOrderRetryRequest{
+				PredecessorTradeNo: retryTradeNo,
+				Successor:          order,
+				PurchaseMode:       purchaseMode,
+			})
+		} else {
+			claim, err = service.ClaimKyrenSubscriptionPaymentOrder(order, purchaseMode)
+		}
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -225,6 +240,7 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 				common.ApiErrorMsg(c, "已有支付正在处理中，请稍后重试")
 				return
 			}
+			retryTradeNo = ""
 			continue
 		}
 
@@ -248,7 +264,7 @@ func SubscriptionRequestKyrenPay(c *gin.Context) {
 			common.ApiErrorMsg(c, "拉起支付失败")
 			return
 		}
-		if err := service.BindKyrenPaymentCheckoutURL(tradeNo, checkout.ID, checkout.URL); err != nil {
+		if err := service.BindKyrenPaymentCheckoutURL(model.PaymentOrderKindSubscription, tradeNo, checkout.ID, checkout.URL); err != nil {
 			_ = model.ExpireSubscriptionOrder(tradeNo, model.PaymentProviderKyren)
 			logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定订阅 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
 			common.ApiErrorMsg(c, "拉起支付失败")

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -271,36 +272,91 @@ func BindPaymentProviderCheckout(provider string, tradeNo string, checkoutID str
 			}
 			return err
 		}
-		if mapping.ProviderCheckoutID != nil && *mapping.ProviderCheckoutID != checkoutID {
-			return ErrPaymentProviderOrderConflict
-		}
-		var conflicting PaymentProviderOrder
-		query := tx.Where("provider = ? AND provider_checkout_id = ? AND id <> ?", provider, checkoutID, mapping.ID).Limit(1).Find(&conflicting)
-		if query.Error != nil {
-			return query.Error
-		}
-		if query.RowsAffected > 0 {
-			return ErrPaymentProviderOrderConflict
-		}
-		now, err := getDBTimestampStrictTx(tx)
-		if err != nil {
+		return bindPaymentProviderCheckoutTx(tx, &mapping, checkoutID, checkoutURL)
+	})
+}
+
+func BindPendingPaymentProviderCheckout(provider string, orderKind string, tradeNo string, checkoutID string, checkoutURL string) error {
+	provider = strings.TrimSpace(provider)
+	orderKind = strings.TrimSpace(orderKind)
+	tradeNo = strings.TrimSpace(tradeNo)
+	checkoutID = strings.TrimSpace(checkoutID)
+	checkoutURL = strings.TrimSpace(checkoutURL)
+	if provider == "" || tradeNo == "" || checkoutID == "" || (orderKind != PaymentOrderKindSubscription && orderKind != PaymentOrderKindTopUp) {
+		return ErrPaymentProviderOrderConflict
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		var mapping PaymentProviderOrder
+		if err := LockForUpdate(tx).Where("provider = ? AND trade_no = ?", provider, tradeNo).First(&mapping).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPaymentProviderOrderNotFound
+			}
 			return err
 		}
-		updates := map[string]any{"provider_checkout_id": checkoutID, "updated_at": now}
-		if checkoutURL != "" {
-			updates["provider_checkout_url"] = checkoutURL
-		}
-		result := tx.Model(&PaymentProviderOrder{}).
-			Where("id = ? AND (provider_checkout_id IS NULL OR provider_checkout_id = ?)", mapping.ID, checkoutID).
-			Updates(updates)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
+		if mapping.OrderKind != orderKind {
 			return ErrPaymentProviderOrderConflict
 		}
-		return nil
+		switch orderKind {
+		case PaymentOrderKindSubscription:
+			var order SubscriptionOrder
+			if err := LockForUpdate(tx).Where("id = ?", mapping.LocalOrderID).First(&order).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrPaymentProviderOrderConflict
+				}
+				return err
+			}
+			if order.Id != mapping.LocalOrderID || order.TradeNo != mapping.TradeNo || order.TradeNo != tradeNo || order.UserId != mapping.UserID || order.PlanId != mapping.PlanID || order.PaymentProvider != provider || order.Status != common.TopUpStatusPending || order.CompleteTime != 0 {
+				return ErrPaymentProviderOrderConflict
+			}
+		case PaymentOrderKindTopUp:
+			var order TopUp
+			if err := LockForUpdate(tx).Where("id = ?", mapping.LocalOrderID).First(&order).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrPaymentProviderOrderConflict
+				}
+				return err
+			}
+			if order.Id != mapping.LocalOrderID || order.TradeNo != mapping.TradeNo || order.TradeNo != tradeNo || order.UserId != mapping.UserID || mapping.PlanID != 0 || order.PaymentProvider != provider || order.Status != common.TopUpStatusPending || order.CompleteTime != 0 {
+				return ErrPaymentProviderOrderConflict
+			}
+		}
+		return bindPaymentProviderCheckoutTx(tx, &mapping, checkoutID, checkoutURL)
 	})
+}
+
+func bindPaymentProviderCheckoutTx(tx *gorm.DB, mapping *PaymentProviderOrder, checkoutID string, checkoutURL string) error {
+	if tx == nil || mapping == nil {
+		return ErrPaymentProviderOrderConflict
+	}
+	if mapping.ProviderCheckoutID != nil && *mapping.ProviderCheckoutID != checkoutID {
+		return ErrPaymentProviderOrderConflict
+	}
+	var conflicting PaymentProviderOrder
+	query := tx.Where("provider = ? AND provider_checkout_id = ? AND id <> ?", mapping.Provider, checkoutID, mapping.ID).Limit(1).Find(&conflicting)
+	if query.Error != nil {
+		return query.Error
+	}
+	if query.RowsAffected > 0 {
+		return ErrPaymentProviderOrderConflict
+	}
+	now, err := getDBTimestampStrictTx(tx)
+	if err != nil {
+		return err
+	}
+	updates := map[string]any{"provider_checkout_id": checkoutID, "updated_at": now}
+	if checkoutURL != "" {
+		updates["provider_checkout_url"] = checkoutURL
+	}
+	result := tx.Model(&PaymentProviderOrder{}).
+		Where("id = ? AND (provider_checkout_id IS NULL OR provider_checkout_id = ?)", mapping.ID, checkoutID).
+		Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrPaymentProviderOrderConflict
+	}
+	return nil
 }
 
 func BindPaymentProviderCheckoutID(provider string, tradeNo string, checkoutID string) error {

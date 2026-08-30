@@ -191,6 +191,28 @@ func seedPendingKyrenSubscriptionOrder(t *testing.T, tradeNo string, userID int,
 	}).Error)
 }
 
+func supersedePendingKyrenSubscriptionOrderForTest(t *testing.T, predecessor *model.SubscriptionOrder, successorTradeNo string) *model.SubscriptionOrder {
+	t.Helper()
+	require.NotNil(t, predecessor)
+	claim, err := service.SupersedeKyrenSubscriptionPaymentOrder(service.KyrenSubscriptionPaymentOrderRetryRequest{
+		PredecessorTradeNo: predecessor.TradeNo,
+		Successor: &model.SubscriptionOrder{
+			UserId: predecessor.UserId, PlanId: predecessor.PlanId, Money: predecessor.Money,
+			AmountCents: 4000, Currency: kyrenCurrencyCNY,
+			TradeNo: successorTradeNo, PaymentMethod: model.PaymentMethodKyren,
+			PaymentProvider: model.PaymentProviderKyren, Status: common.TopUpStatusPending,
+			CreateTime: common.GetTimestamp(), KyrenSnapshot: predecessor.KyrenSnapshot,
+			EntitlementSnapshot: predecessor.EntitlementSnapshot,
+		},
+		PurchaseMode: model.SubscriptionPurchaseModeTimed,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, claim)
+	require.True(t, claim.Created)
+	require.NotNil(t, claim.Order)
+	return claim.Order
+}
+
 func signKyrenWebhookPayload(payload []byte, timestamp string, secret string) string {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(timestamp))
@@ -275,6 +297,43 @@ func TestSubscriptionKyrenAllowsRenewalWhenHistoricalPurchaseLimitReached(t *tes
 	var snapshot model.SubscriptionEntitlementSnapshot
 	require.NoError(t, common.UnmarshalJsonStr(order.EntitlementSnapshot, &snapshot))
 	assert.Zero(t, snapshot.MaxPurchasePerUser)
+}
+
+func TestSubscriptionKyrenRetrySupersedesPendingOrder(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6086
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6087, "prod_retry_checkout", 1000, 2)
+	predecessorTradeNo := "kyren-retry-checkout-predecessor"
+	seedPendingKyrenSubscriptionOrder(t, predecessorTradeNo, userID, &plan)
+	fake := &kyrenCheckoutFakeAPI{createCheckoutFunc: func(_ context.Context, req kyrenCreateCheckoutRequest) (*kyrenCheckoutSession, error) {
+		return &kyrenCheckoutSession{ID: "chk_retry_successor", URL: "https://pay.kyren.test/retry-successor", Status: "open"}, nil
+	}}
+	withKyrenCheckoutFakeControllerClient(t, fake)
+
+	recorder := performKyrenSubscriptionPayRequest(t, userID, fmt.Sprintf(`{"plan_id":%d,"purchase_mode":"timed","retry_trade_no":%q}`, plan.Id, predecessorTradeNo))
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(t, recorder.Body.String(), `"success":true`)
+	require.Len(t, fake.createCheckoutRequests, 1)
+	var predecessor model.SubscriptionOrder
+	require.NoError(t, model.DB.Where("trade_no = ?", predecessorTradeNo).First(&predecessor).Error)
+	assert.Equal(t, common.TopUpStatusExpired, predecessor.Status)
+	assert.NotZero(t, predecessor.CompleteTime)
+	assert.NotZero(t, predecessor.SupersededAt)
+	assert.Equal(t, "user explicitly retried Kyren checkout", predecessor.SupersedeReason)
+	require.NotZero(t, predecessor.SupersededByOrderID)
+	var successor model.SubscriptionOrder
+	require.NoError(t, model.DB.First(&successor, predecessor.SupersededByOrderID).Error)
+	assert.Equal(t, common.TopUpStatusPending, successor.Status)
+	assert.Zero(t, successor.CompleteTime)
+	assert.NotEqual(t, predecessor.TradeNo, successor.TradeNo)
+	assert.Equal(t, successor.TradeNo, fake.createCheckoutRequests[0].Metadata["trade_no"])
+	assert.Contains(t, recorder.Body.String(), successor.TradeNo)
+	var mapping model.PaymentProviderOrder
+	require.NoError(t, model.DB.Where("provider = ? AND trade_no = ?", model.PaymentProviderKyren, successor.TradeNo).First(&mapping).Error)
+	require.NotNil(t, mapping.ProviderCheckoutID)
+	assert.Equal(t, "chk_retry_successor", *mapping.ProviderCheckoutID)
 }
 
 func TestSubscriptionKyrenCreditPurchasePersistsSnapshotBeforeCheckout(t *testing.T) {
@@ -523,6 +582,67 @@ func TestKyrenWebhookCompletesSubscriptionOrder(t *testing.T) {
 	require.NoError(t, model.DB.Where("trade_no = ?", tradeNo).First(&topUp).Error)
 	assert.Equal(t, common.TopUpStatusSuccess, topUp.Status)
 	assert.Equal(t, model.PaymentProviderKyren, topUp.PaymentProvider)
+}
+
+func TestKyrenLatePredecessorPaymentExpiresPendingSuccessorAndFulfillsOnce(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6103
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6104, "prod_late_predecessor", 1000, 2)
+	predecessorTradeNo := "kyren-late-predecessor"
+	seedPendingKyrenSubscriptionOrder(t, predecessorTradeNo, userID, &plan)
+	predecessor := model.GetSubscriptionOrderByTradeNo(predecessorTradeNo)
+	require.NotNil(t, predecessor)
+	successor := supersedePendingKyrenSubscriptionOrderForTest(t, predecessor, "kyren-late-predecessor-successor")
+	payload := kyrenWebhookEventPayload(t, "order.paid", "subscription", predecessor.TradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	recorder := performSignedKyrenWebhook(t, payload)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NoError(t, model.DB.First(predecessor, predecessor.Id).Error)
+	require.NoError(t, model.DB.First(successor, successor.Id).Error)
+	assert.Equal(t, common.TopUpStatusSuccess, predecessor.Status)
+	assert.NotZero(t, predecessor.FulfilledSubscriptionID)
+	assert.Equal(t, common.TopUpStatusExpired, successor.Status)
+	assert.Equal(t, "predecessor_paid", successor.SupersedeReason)
+	assert.NotZero(t, successor.CompleteTime)
+	var subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, plan.Id).Count(&subscriptionCount).Error)
+	assert.Equal(t, int64(1), subscriptionCount)
+	var event model.PaymentProviderEvent
+	require.NoError(t, model.DB.Where("trade_no = ? AND event_type = ?", predecessor.TradeNo, service.KyrenPaymentEventPaid).First(&event).Error)
+	assert.Equal(t, model.PaymentProviderEventApplied, event.Status)
+}
+
+func TestKyrenLatePredecessorPaymentConflictsAfterSuccessorFulfilled(t *testing.T) {
+	setupKyrenPaymentControllerTestDB(t)
+	userID := 6105
+	seedKyrenPaymentUser(t, userID)
+	plan := seedKyrenPaymentPlan(t, 6106, "prod_late_double_payment", 1000, 2)
+	predecessorTradeNo := "kyren-late-double-predecessor"
+	seedPendingKyrenSubscriptionOrder(t, predecessorTradeNo, userID, &plan)
+	predecessor := model.GetSubscriptionOrderByTradeNo(predecessorTradeNo)
+	require.NotNil(t, predecessor)
+	successor := supersedePendingKyrenSubscriptionOrderForTest(t, predecessor, "kyren-late-double-successor")
+	successorPayload := kyrenWebhookEventPayload(t, "order.paid", "subscription", successor.TradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+	predecessorPayload := kyrenWebhookEventPayload(t, "order.paid", "subscription", predecessor.TradeNo, plan.KyrenProductId, "40.00", kyrenCurrencyCNY)
+
+	successorRecorder := performSignedKyrenWebhook(t, successorPayload)
+	predecessorRecorder := performSignedKyrenWebhook(t, predecessorPayload)
+
+	require.Equal(t, http.StatusOK, successorRecorder.Code, successorRecorder.Body.String())
+	require.Equal(t, http.StatusOK, predecessorRecorder.Code, predecessorRecorder.Body.String())
+	require.NoError(t, model.DB.First(predecessor, predecessor.Id).Error)
+	require.NoError(t, model.DB.First(successor, successor.Id).Error)
+	assert.Equal(t, common.TopUpStatusExpired, predecessor.Status)
+	assert.Equal(t, common.TopUpStatusSuccess, successor.Status)
+	var subscriptionCount int64
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("user_id = ? AND plan_id = ?", userID, plan.Id).Count(&subscriptionCount).Error)
+	assert.Equal(t, int64(1), subscriptionCount)
+	var event model.PaymentProviderEvent
+	require.NoError(t, model.DB.Where("trade_no = ? AND event_type = ?", predecessor.TradeNo, service.KyrenPaymentEventPaid).First(&event).Error)
+	assert.Equal(t, model.PaymentProviderEventConflict, event.Status)
+	assert.Contains(t, event.OutcomeReason, "terminal outcome")
 }
 
 func TestKyrenWebhookSkipsInvitationRewardEventForTrialSubscriptionPlan(t *testing.T) {

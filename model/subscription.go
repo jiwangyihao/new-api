@@ -371,6 +371,9 @@ type SubscriptionOrder struct {
 	ProviderOrderID         string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
 	ProviderInvoiceID       string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
 	ProviderSubscriptionID  string  `json:"-" gorm:"type:varchar(255);not null;default:'';index"`
+	SupersededByOrderID     int     `json:"-" gorm:"type:int;not null;default:0;index"`
+	SupersededAt            int64   `json:"-" gorm:"type:bigint;not null;default:0;index"`
+	SupersedeReason         string  `json:"-" gorm:"type:varchar(255);not null;default:''"`
 
 	TradeNo         string `json:"trade_no" gorm:"unique;type:varchar(255);index"`
 	PaymentMethod   string `json:"payment_method" gorm:"type:varchar(50)"`

@@ -166,6 +166,39 @@ describe('subscription Kyren payment helper', () => {
     assert.equal(orderId, 'kyren-order-1')
   })
 
+  test('passes the predecessor trade number for an explicit retry', async () => {
+    const payCalls: Array<{
+      plan_id: number
+      purchase_mode: 'timed' | 'credit_balance'
+      retry_trade_no?: string
+    }> = []
+
+    await processKyrenSubscriptionPayment({
+      planId: 1001,
+      purchaseMode: 'timed',
+      retryTradeNo: 'kyren-predecessor-order',
+      paySubscriptionKyren: async (data) => {
+        payCalls.push(data)
+        return {
+          success: true,
+          data: {
+            checkout_url: 'https://checkout.example/retry',
+            order_id: 'kyren-successor-order',
+          },
+        }
+      },
+      openCheckout: () => undefined,
+    })
+
+    assert.deepEqual(payCalls, [
+      {
+        plan_id: 1001,
+        purchase_mode: 'timed',
+        retry_trade_no: 'kyren-predecessor-order',
+      },
+    ])
+  })
+
   test('rejects unsafe Kyren checkout URLs', async () => {
     const openedUrls: string[] = []
 

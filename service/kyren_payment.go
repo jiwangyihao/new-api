@@ -77,6 +77,13 @@ type KyrenSubscriptionPaymentOrderClaim struct {
 	InProgress bool
 }
 
+type KyrenSubscriptionPaymentOrderRetryRequest struct {
+	PredecessorTradeNo string
+	Successor          *model.SubscriptionOrder
+	PurchaseMode       string
+	Reason             string
+}
+
 func ClaimKyrenSubscriptionPaymentOrder(order *model.SubscriptionOrder, purchaseMode string) (*KyrenSubscriptionPaymentOrderClaim, error) {
 	if order == nil || order.UserId <= 0 || order.PlanId <= 0 || strings.TrimSpace(order.TradeNo) == "" || order.PaymentProvider != model.PaymentProviderKyren || order.Status != common.TopUpStatusPending {
 		return nil, errors.New("invalid Kyren subscription payment order")
@@ -169,6 +176,129 @@ func ClaimKyrenSubscriptionPaymentOrder(order *model.SubscriptionOrder, purchase
 	return claim, nil
 }
 
+func SupersedeKyrenSubscriptionPaymentOrder(request KyrenSubscriptionPaymentOrderRetryRequest) (*KyrenSubscriptionPaymentOrderClaim, error) {
+	if request.Successor == nil || request.Successor.UserId <= 0 || request.Successor.PlanId <= 0 || strings.TrimSpace(request.Successor.TradeNo) == "" || request.Successor.PaymentProvider != model.PaymentProviderKyren || request.Successor.Status != common.TopUpStatusPending {
+		return nil, errors.New("invalid Kyren subscription retry order")
+	}
+	predecessorTradeNo := strings.TrimSpace(request.PredecessorTradeNo)
+	purchaseMode, err := model.NormalizeSubscriptionPurchaseMode(request.PurchaseMode)
+	if err != nil || predecessorTradeNo == "" {
+		return nil, errors.New("invalid Kyren subscription retry identity")
+	}
+	reason := strings.TrimSpace(request.Reason)
+	if reason == "" {
+		reason = "user explicitly retried Kyren checkout"
+	}
+	claim := &KyrenSubscriptionPaymentOrderClaim{}
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		lockKey := fmt.Sprintf("kyren:subscription:%d:%d:%s", request.Successor.UserId, request.Successor.PlanId, purchaseMode)
+		if err := model.LockPaymentProviderCreationTx(tx, lockKey); err != nil {
+			return err
+		}
+		var predecessor model.SubscriptionOrder
+		if err := model.LockForUpdate(tx).Where("trade_no = ?", predecessorTradeNo).First(&predecessor).Error; err != nil {
+			return err
+		}
+		if predecessor.UserId != request.Successor.UserId || predecessor.PlanId != request.Successor.PlanId || predecessor.PaymentProvider != model.PaymentProviderKyren {
+			return ErrKyrenSubscriptionPaymentIdentityConflict
+		}
+		predecessorSnapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(predecessor.EntitlementSnapshot)
+		if err != nil {
+			return ErrKyrenSubscriptionPaymentIdentityConflict
+		}
+		predecessorMode, err := model.NormalizeSubscriptionPurchaseMode(predecessorSnapshot.PurchaseMode)
+		if err != nil || predecessorMode != purchaseMode || !kyrenSubscriptionPaymentOrderIdentityMatches(&predecessor, request.Successor) {
+			return ErrKyrenSubscriptionPaymentIdentityConflict
+		}
+		if predecessor.SupersededByOrderID > 0 {
+			var mapping model.PaymentProviderOrder
+			mappingQuery := model.LockForUpdate(tx).Where("provider = ? AND order_kind = ? AND local_order_id = ?", model.PaymentProviderKyren, model.PaymentOrderKindSubscription, predecessor.SupersededByOrderID).Limit(1).Find(&mapping)
+			if mappingQuery.Error != nil {
+				return mappingQuery.Error
+			}
+			if mappingQuery.RowsAffected != 1 || mapping.LocalOrderID != predecessor.SupersededByOrderID {
+				return ErrKyrenSubscriptionPaymentIdentityConflict
+			}
+			var successor model.SubscriptionOrder
+			if err := model.LockForUpdate(tx).Where("id = ?", mapping.LocalOrderID).First(&successor).Error; err != nil {
+				return err
+			}
+			if mapping.TradeNo != successor.TradeNo || mapping.UserID != successor.UserId || mapping.PlanID != successor.PlanId {
+				return ErrKyrenSubscriptionPaymentIdentityConflict
+			}
+			successorSnapshot, err := model.UnmarshalSubscriptionEntitlementSnapshot(successor.EntitlementSnapshot)
+			if err != nil {
+				return ErrKyrenSubscriptionPaymentIdentityConflict
+			}
+			successorMode, err := model.NormalizeSubscriptionPurchaseMode(successorSnapshot.PurchaseMode)
+			if err != nil || successorMode != purchaseMode || successor.PaymentProvider != model.PaymentProviderKyren || successor.PaymentMethod != model.PaymentMethodKyren || !kyrenSubscriptionPaymentOrderIdentityMatches(&successor, request.Successor) {
+				return ErrKyrenSubscriptionPaymentIdentityConflict
+			}
+			if successor.Status != common.TopUpStatusPending || successor.CompleteTime != 0 {
+				return model.ErrSubscriptionOrderStatusInvalid
+			}
+			claim.Order = &successor
+			if mapping.ProviderCheckoutID != nil && strings.TrimSpace(*mapping.ProviderCheckoutID) != "" {
+				claim.CheckoutID = strings.TrimSpace(*mapping.ProviderCheckoutID)
+				return nil
+			}
+			now := model.GetDBTimestamp()
+			leaseStartedAt := successor.CreateTime
+			if mapping.UpdatedAt > leaseStartedAt {
+				leaseStartedAt = mapping.UpdatedAt
+			}
+			if now-leaseStartedAt < kyrenSubscriptionCheckoutCreationLeaseSeconds {
+				claim.InProgress = true
+				return nil
+			}
+			if err := tx.Model(&model.PaymentProviderOrder{}).Where("id = ?", mapping.ID).Update("updated_at", now).Error; err != nil {
+				return err
+			}
+			return nil
+		}
+		if predecessor.Status != common.TopUpStatusPending || predecessor.CompleteTime != 0 {
+			return model.ErrSubscriptionOrderStatusInvalid
+		}
+		if request.Successor.CreateTime == 0 {
+			request.Successor.CreateTime = model.GetDBTimestamp()
+		}
+		if err := tx.Create(request.Successor).Error; err != nil {
+			return err
+		}
+		if err := model.CreatePaymentProviderOrderTx(tx, &model.PaymentProviderOrder{
+			Provider: model.PaymentProviderKyren, OrderKind: model.PaymentOrderKindSubscription,
+			LocalOrderID: request.Successor.Id, TradeNo: request.Successor.TradeNo,
+			UserID: request.Successor.UserId, PlanID: request.Successor.PlanId,
+		}); err != nil {
+			return err
+		}
+		now := model.GetDBTimestamp()
+		update := tx.Model(&model.SubscriptionOrder{}).
+			Where("id = ? AND status = ? AND complete_time = ? AND superseded_by_order_id = ?", predecessor.Id, common.TopUpStatusPending, 0, 0).
+			Updates(map[string]any{
+				"status": common.TopUpStatusExpired, "complete_time": now,
+				"superseded_by_order_id": request.Successor.Id, "superseded_at": now,
+				"supersede_reason": reason,
+			})
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return ErrKyrenSubscriptionPaymentIdentityConflict
+		}
+		claim.Order = request.Successor
+		claim.Created = true
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if claim.Order == nil {
+		return nil, errors.New("Kyren subscription retry order claim returned no order")
+	}
+	return claim, nil
+}
+
 func expireIncompleteKyrenSubscriptionOrderTx(tx *gorm.DB, orderID int, now int64) error {
 	result := tx.Model(&model.SubscriptionOrder{}).
 		Where("id = ? AND status = ? AND complete_time = ?", orderID, common.TopUpStatusPending, 0).
@@ -217,12 +347,12 @@ func CreateKyrenTopUpPaymentOrder(order *model.TopUp) error {
 	})
 }
 
-func BindKyrenPaymentCheckout(tradeNo string, checkoutID string) error {
-	return model.BindPaymentProviderCheckoutID(model.PaymentProviderKyren, tradeNo, checkoutID)
+func BindKyrenPaymentCheckout(orderKind string, tradeNo string, checkoutID string) error {
+	return model.BindPendingPaymentProviderCheckout(model.PaymentProviderKyren, orderKind, tradeNo, checkoutID, "")
 }
 
-func BindKyrenPaymentCheckoutURL(tradeNo string, checkoutID string, checkoutURL string) error {
-	return model.BindPaymentProviderCheckout(model.PaymentProviderKyren, tradeNo, checkoutID, checkoutURL)
+func BindKyrenPaymentCheckoutURL(orderKind string, tradeNo string, checkoutID string, checkoutURL string) error {
+	return model.BindPendingPaymentProviderCheckout(model.PaymentProviderKyren, orderKind, tradeNo, checkoutID, checkoutURL)
 }
 
 func ProcessKyrenPaymentEvent(request KyrenPaymentEventRequest) (*KyrenPaymentEventResult, error) {
@@ -432,6 +562,42 @@ func processKyrenPaidSubscriptionTx(tx *gorm.DB, event *model.PaymentProviderEve
 	}
 	if (order.AmountCents > 0 && order.AmountCents != amountCents) || (strings.TrimSpace(order.Currency) != "" && !strings.EqualFold(order.Currency, currency)) {
 		return conflictKyrenPaymentEventTx(tx, event, result, "subscription amount identity conflicts with checkout snapshot")
+	}
+	if order.Status == common.TopUpStatusExpired && order.SupersededByOrderID > 0 {
+		var successor model.SubscriptionOrder
+		if err := model.LockForUpdate(tx).Where("id = ?", order.SupersededByOrderID).First(&successor).Error; err != nil {
+			return err
+		}
+		if successor.UserId != order.UserId || successor.PlanId != order.PlanId || successor.PaymentProvider != model.PaymentProviderKyren || successor.PaymentMethod != model.PaymentMethodKyren || !kyrenSubscriptionPaymentOrderIdentityMatches(&successor, &order) {
+			return conflictKyrenPaymentEventTx(tx, event, result, "superseding subscription order identity is invalid")
+		}
+		if successor.Status != common.TopUpStatusPending || successor.CompleteTime != 0 || successor.FulfilledSubscriptionID != 0 {
+			return conflictKyrenPaymentEventTx(tx, event, result, "superseding subscription order already reached a terminal outcome")
+		}
+		now := model.GetDBTimestamp()
+		cancelSuccessor := tx.Model(&model.SubscriptionOrder{}).
+			Where("id = ? AND status = ? AND complete_time = ? AND fulfilled_subscription_id = ?", successor.Id, common.TopUpStatusPending, 0, 0).
+			Updates(map[string]any{
+				"status": common.TopUpStatusExpired, "complete_time": now,
+				"supersede_reason": "predecessor_paid",
+			})
+		if cancelSuccessor.Error != nil {
+			return cancelSuccessor.Error
+		}
+		if cancelSuccessor.RowsAffected != 1 {
+			return conflictKyrenPaymentEventTx(tx, event, result, "superseding subscription order changed while applying predecessor payment")
+		}
+		restorePredecessor := tx.Model(&model.SubscriptionOrder{}).
+			Where("id = ? AND status = ? AND superseded_by_order_id = ?", order.Id, common.TopUpStatusExpired, successor.Id).
+			Updates(map[string]any{"status": common.TopUpStatusPending, "complete_time": 0})
+		if restorePredecessor.Error != nil {
+			return restorePredecessor.Error
+		}
+		if restorePredecessor.RowsAffected != 1 {
+			return conflictKyrenPaymentEventTx(tx, event, result, "superseded subscription order changed while applying late payment")
+		}
+		order.Status = common.TopUpStatusPending
+		order.CompleteTime = 0
 	}
 	if order.Status != common.TopUpStatusPending && order.Status != common.TopUpStatusSuccess {
 		return conflictKyrenPaymentEventTx(tx, event, result, "paid event arrived after a different local terminal status")

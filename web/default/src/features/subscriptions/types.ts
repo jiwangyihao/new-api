@@ -399,6 +399,7 @@ export interface SubscriptionPayRequest {
   plan_id: number
   purchase_mode: SubscriptionPurchaseMode
   payment_method?: string
+  retry_trade_no?: string
 }
 
 export type SubscriptionKyrenProductSyncMode =

@@ -81,7 +81,7 @@ func seedKyrenReconciliationSubscription(t *testing.T, tradeNo string, checkoutI
 		_, err := model.EnsurePaymentProviderOrderTx(tx, model.PaymentProviderKyren, model.PaymentOrderKindSubscription, tradeNo)
 		return err
 	}))
-	require.NoError(t, service.BindKyrenPaymentCheckout(tradeNo, checkoutID))
+	require.NoError(t, service.BindKyrenPaymentCheckout(model.PaymentOrderKindSubscription, tradeNo, checkoutID))
 	return order
 }
 

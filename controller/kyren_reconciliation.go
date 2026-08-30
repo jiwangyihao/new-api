@@ -115,7 +115,7 @@ func reconcilePendingKyrenSubscriptionOrder(ctx context.Context, localOrder *mod
 			mapping.ProviderOrderID = &providerOrderID
 		} else {
 			if reusableKyrenSubscriptionCheckout(checkout, checkoutID, paymentSnapshot.ProductID, paymentSnapshot.Amount, paymentSnapshot.Currency) {
-				if err := service.BindKyrenPaymentCheckoutURL(localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
+				if err := service.BindKyrenPaymentCheckoutURL(model.PaymentOrderKindSubscription, localOrder.TradeNo, checkoutID, checkout.URL); err != nil {
 					return "", err
 				}
 				return strings.TrimSpace(checkout.URL), nil

@@ -962,6 +962,99 @@ describe('Credit balance plan admin component', () => {
     queryClient.clear()
   })
 
+  test('retries an unreachable Kyren order with its predecessor trade number', async () => {
+    const i18n = createInstance()
+    await i18n.init({
+      lng: 'en',
+      fallbackLng: false,
+      resources: { en: { translation: {} } },
+      interpolation: { escapeValue: false },
+    })
+    const purchasePlan = {
+      ...makeExternalPurchasePlan(9017),
+      kyren_product_id: 'prod_retry_kyren',
+    }
+    const storageKey = pendingExternalOrderStorageKey(
+      testUserId,
+      purchasePlan.id
+    )
+    window.sessionStorage.setItem(
+      storageKey,
+      JSON.stringify({
+        ownerUserId: testUserId,
+        tradeNo: 'unreachable-kyren-order',
+        provider: 'kyren',
+        purchaseMode: 'credit_balance',
+      })
+    )
+    let paymentRequest: Record<string, unknown> | null = null
+    api.defaults.adapter = async (config) => {
+      if (config.method === 'post' && config.url?.endsWith('/kyren/pay')) {
+        paymentRequest = JSON.parse(String(config.data)) as Record<
+          string,
+          unknown
+        >
+        return {
+          data: {
+            success: true,
+            data: {
+              checkout_url: 'https://checkout.example/kyren-retry',
+              order_id: 'successor-kyren-order',
+            },
+          },
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          config,
+        }
+      }
+      throw new Error('status unavailable')
+    }
+    const openedUrls: string[] = []
+    window.open = ((url?: string | URL) => {
+      openedUrls.push(String(url || ''))
+      return null
+    }) as typeof window.open
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const view = render(
+      <QueryClientProvider client={queryClient}>
+        <I18nextProvider i18n={i18n}>
+          <SubscriptionPurchaseDialog
+            open
+            onOpenChange={() => {}}
+            plan={{ plan: purchasePlan }}
+            enableKyrenSubscription
+            creditBalancePurchaseEnabled
+          />
+        </I18nextProvider>
+      </QueryClientProvider>
+    )
+
+    const tryAgain = await view.findByRole('button', {
+      name: 'Try payment again',
+    })
+    fireEvent.click(tryAgain)
+    await waitFor(() => assert.ok(paymentRequest))
+
+    assert.deepEqual(paymentRequest, {
+      plan_id: purchasePlan.id,
+      purchase_mode: 'credit_balance',
+      retry_trade_no: 'unreachable-kyren-order',
+    })
+    await waitFor(() =>
+      assert.equal(
+        JSON.parse(String(window.sessionStorage.getItem(storageKey))).tradeNo,
+        'successor-kyren-order'
+      )
+    )
+    assert.deepEqual(openedUrls, [
+      'https://checkout.example/kyren-retry',
+    ])
+    queryClient.clear()
+  })
+
   test('opens a reusable checkout from a pending order status response', async () => {
     const i18n = createInstance()
     await i18n.init({

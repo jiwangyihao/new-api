@@ -155,7 +155,7 @@ func RequestKyrenPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "拉起支付失败")
 		return
 	}
-	if err := service.BindKyrenPaymentCheckout(tradeNo, checkout.ID); err != nil {
+	if err := service.BindKyrenPaymentCheckout(model.PaymentOrderKindTopUp, tradeNo, checkout.ID); err != nil {
 		_ = model.UpdatePendingTopUpStatus(tradeNo, model.PaymentProviderKyren, common.TopUpStatusExpired)
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Kyren 绑定充值 Checkout 失败 user_id=%d trade_no=%s checkout_id=%s error=%q", userID, tradeNo, checkout.ID, err.Error()))
 		common.ApiErrorMsg(c, "拉起支付失败")

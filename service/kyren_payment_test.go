@@ -130,7 +130,7 @@ func TestClaimKyrenSubscriptionPaymentOrderReusesSinglePendingCheckout(t *testin
 	first, err := ClaimKyrenSubscriptionPaymentOrder(newOrder("kyren-claim-first"), model.SubscriptionPurchaseModeTimed)
 	require.NoError(t, err)
 	require.True(t, first.Created)
-	require.NoError(t, BindKyrenPaymentCheckout(first.Order.TradeNo, "cs_claim_reuse"))
+	require.NoError(t, BindKyrenPaymentCheckout(model.PaymentOrderKindSubscription, first.Order.TradeNo, "cs_claim_reuse"))
 	second, err := ClaimKyrenSubscriptionPaymentOrder(newOrder("kyren-claim-second"), model.SubscriptionPurchaseModeTimed)
 	require.NoError(t, err)
 
@@ -195,6 +195,126 @@ func TestConcurrentKyrenSubscriptionClaimsCreateOnePendingOrder(t *testing.T) {
 	assert.Equal(t, 1, inProgress)
 	var count int64
 	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ? AND status = ?", userID, planID, common.TopUpStatusPending).Count(&count).Error)
+	assert.Equal(t, int64(1), count)
+}
+
+func TestConcurrentKyrenSubscriptionRetriesCreateOneSuccessor(t *testing.T) {
+	db := setupKyrenPaymentServiceTestDB(t)
+	userID := 9731
+	planID := 9732
+	require.NoError(t, db.Create(&model.User{Id: userID, Username: "kyren-concurrent-retry", Status: common.UserStatusEnabled, AffCode: "kyren-concurrent-retry"}).Error)
+	entitlementSnapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.SubscriptionEntitlementSnapshot{
+		PurchaseMode: model.SubscriptionPurchaseModeTimed, PlanID: planID,
+	})
+	require.NoError(t, err)
+	paymentSnapshot, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: "prod_concurrent_retry", Amount: "40.00", Currency: "CNY"})
+	require.NoError(t, err)
+	newOrder := func(tradeNo string) *model.SubscriptionOrder {
+		return &model.SubscriptionOrder{
+			UserId: userID, PlanId: planID, Money: 40, AmountCents: 4000, Currency: "CNY",
+			TradeNo: tradeNo, PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+			Status: common.TopUpStatusPending, CreateTime: common.GetTimestamp(),
+			KyrenSnapshot: paymentSnapshot, EntitlementSnapshot: entitlementSnapshot,
+		}
+	}
+	predecessor := newOrder("kyren-concurrent-retry-predecessor")
+	require.NoError(t, db.Create(predecessor).Error)
+
+	start := make(chan struct{})
+	claims := make(chan *KyrenSubscriptionPaymentOrderClaim, 2)
+	errorsByRetry := make(chan error, 2)
+	var waitGroup sync.WaitGroup
+	for index := range 2 {
+		waitGroup.Add(1)
+		go func(index int) {
+			defer waitGroup.Done()
+			<-start
+			claim, retryErr := SupersedeKyrenSubscriptionPaymentOrder(KyrenSubscriptionPaymentOrderRetryRequest{
+				PredecessorTradeNo: predecessor.TradeNo,
+				Successor:          newOrder(fmt.Sprintf("kyren-concurrent-retry-successor-%d", index)),
+				PurchaseMode:       model.SubscriptionPurchaseModeTimed,
+			})
+			claims <- claim
+			errorsByRetry <- retryErr
+		}(index)
+	}
+	close(start)
+	waitGroup.Wait()
+	close(claims)
+	close(errorsByRetry)
+
+	for retryErr := range errorsByRetry {
+		require.NoError(t, retryErr)
+	}
+	created := 0
+	inProgress := 0
+	successorID := 0
+	for claim := range claims {
+		require.NotNil(t, claim)
+		require.NotNil(t, claim.Order)
+		if successorID == 0 {
+			successorID = claim.Order.Id
+		}
+		assert.Equal(t, successorID, claim.Order.Id)
+		if claim.Created {
+			created++
+		}
+		if claim.InProgress {
+			inProgress++
+		}
+	}
+	assert.Equal(t, 1, created)
+	assert.Equal(t, 1, inProgress)
+
+	var persistedPredecessor model.SubscriptionOrder
+	require.NoError(t, db.First(&persistedPredecessor, predecessor.Id).Error)
+	assert.Equal(t, common.TopUpStatusExpired, persistedPredecessor.Status)
+	assert.Equal(t, successorID, persistedPredecessor.SupersededByOrderID)
+	var pendingCount, totalCount int64
+	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ? AND status = ?", userID, planID, common.TopUpStatusPending).Count(&pendingCount).Error)
+	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, planID).Count(&totalCount).Error)
+	assert.Equal(t, int64(1), pendingCount)
+	assert.Equal(t, int64(2), totalCount)
+}
+
+func TestKyrenSubscriptionRetryRejectsMismatchedPaymentIdentity(t *testing.T) {
+	db := setupKyrenPaymentServiceTestDB(t)
+	userID := 9741
+	planID := 9742
+	require.NoError(t, db.Create(&model.User{Id: userID, Username: "kyren-retry-identity", Status: common.UserStatusEnabled, AffCode: "kyren-retry-identity"}).Error)
+	entitlementSnapshot, err := model.MarshalSubscriptionEntitlementSnapshot(model.SubscriptionEntitlementSnapshot{
+		PurchaseMode: model.SubscriptionPurchaseModeTimed, PlanID: planID,
+	})
+	require.NoError(t, err)
+	originalPayment, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: "prod_retry_identity", Amount: "40.00", Currency: "CNY"})
+	require.NoError(t, err)
+	differentPayment, err := model.MarshalKyrenPaymentSnapshot(model.KyrenPaymentSnapshot{ProductID: "prod_retry_identity", Amount: "41.00", Currency: "CNY"})
+	require.NoError(t, err)
+	predecessor := &model.SubscriptionOrder{
+		UserId: userID, PlanId: planID, TradeNo: "kyren-retry-identity-predecessor",
+		PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+		Status: common.TopUpStatusPending, KyrenSnapshot: originalPayment, EntitlementSnapshot: entitlementSnapshot,
+	}
+	require.NoError(t, db.Create(predecessor).Error)
+
+	claim, err := SupersedeKyrenSubscriptionPaymentOrder(KyrenSubscriptionPaymentOrderRetryRequest{
+		PredecessorTradeNo: predecessor.TradeNo,
+		Successor: &model.SubscriptionOrder{
+			UserId: userID, PlanId: planID, TradeNo: "kyren-retry-identity-successor",
+			PaymentProvider: model.PaymentProviderKyren, PaymentMethod: model.PaymentMethodKyren,
+			Status: common.TopUpStatusPending, KyrenSnapshot: differentPayment, EntitlementSnapshot: entitlementSnapshot,
+		},
+		PurchaseMode: model.SubscriptionPurchaseModeTimed,
+	})
+
+	require.ErrorIs(t, err, ErrKyrenSubscriptionPaymentIdentityConflict)
+	assert.Nil(t, claim)
+	var persisted model.SubscriptionOrder
+	require.NoError(t, db.First(&persisted, predecessor.Id).Error)
+	assert.Equal(t, common.TopUpStatusPending, persisted.Status)
+	assert.Zero(t, persisted.SupersededByOrderID)
+	var count int64
+	require.NoError(t, db.Model(&model.SubscriptionOrder{}).Where("user_id = ? AND plan_id = ?", userID, planID).Count(&count).Error)
 	assert.Equal(t, int64(1), count)
 }
 

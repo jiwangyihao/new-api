@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -132,4 +133,27 @@ func TestAppendBillingInfoDoesNotWriteTokenFieldsForLegacyAmountSubscription(t *
 		_, exists := other[key]
 		assert.False(t, exists, key)
 	}
+}
+
+func TestTimedSubscriptionBillingLogsUseCreditUnit(t *testing.T) {
+	relayInfo := &relaycommon.RelayInfo{
+		BillingSource:                        BillingSourceSubscription,
+		SubscriptionId:                       3427,
+		SubscriptionEntitlementType:          model.SubscriptionEntitlementTimed,
+		SubscriptionPreConsumed:              160_000,
+		SubscriptionBillableTokens:           160_000,
+		SubscriptionTokenLimit:               1_000_000,
+		SubscriptionTokenUsedAfterPreConsume: 360_000,
+		SubscriptionDistributorTokenBilling:  true,
+	}
+	testRelayInfoStartTimes(relayInfo)
+
+	other := GenerateTextOtherInfo(testBillingInfoContext(t), relayInfo, 0, 0, 0, 0, 0)
+
+	assert.Equal(t, "credit", other["billing_unit"])
+	assert.Equal(t, 2, other["billing_schema_version"])
+	assert.Equal(t, int64(160_000), int64FromOtherValue(t, other["pre_consumed_credits"]))
+	assert.Equal(t, int64(0), int64FromOtherValue(t, other["settlement_delta_credits"]))
+	assert.Equal(t, int64(640_000), int64FromOtherValue(t, other["remaining_credits"]))
+	assert.Equal(t, int64(160_000), int64FromOtherValue(t, other["final_credits"]))
 }

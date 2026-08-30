@@ -2,6 +2,7 @@ package model
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -374,67 +375,84 @@ func applyLogUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) error {
 	return tx.Clauses(logUsageHourlyUpsertClause(row)).Create(&row).Error
 }
 
+type freeSubscriptionAggregationIdentity struct {
+	SubscriptionID int
+	UserID         int
+	PlanID         int
+	StartTime      int64
+	EndTime        int64
+	GrantReason    string
+	Source         string
+	PriceAmount    float64
+	IsTrial        bool
+}
+
+func loadFreeSubscriptionAggregationIdentity(db *gorm.DB, subscriptionID int) (freeSubscriptionAggregationIdentity, bool, error) {
+	if db == nil {
+		return freeSubscriptionAggregationIdentity{}, false, errors.New("business database is nil")
+	}
+	var identity freeSubscriptionAggregationIdentity
+	err := db.Raw(`
+		SELECT s.id, s.user_id, s.plan_id, s.start_time, s.end_time,
+		       s.grant_reason, s.source, p.price_amount, p.is_trial
+		FROM user_subscriptions AS s
+		JOIN users AS u ON u.id = s.user_id AND u.deleted_at IS NULL
+		JOIN subscription_plans AS p ON p.id = s.plan_id
+		WHERE s.id = ?
+		LIMIT 1`, subscriptionID).Row().Scan(
+		&identity.SubscriptionID,
+		&identity.UserID,
+		&identity.PlanID,
+		&identity.StartTime,
+		&identity.EndTime,
+		&identity.GrantReason,
+		&identity.Source,
+		&identity.PriceAmount,
+		&identity.IsTrial,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return freeSubscriptionAggregationIdentity{}, false, nil
+	}
+	return identity, err == nil, err
+}
+
 func applyFreeSubscriptionUsageHourlyAggregationEventTx(tx *gorm.DB, log *Log) error {
 	if log == nil || log.SubscriptionID == nil || *log.SubscriptionID <= 0 || log.SubscriptionTokensConsumed == nil || *log.SubscriptionTokensConsumed <= 0 {
 		return nil
 	}
 	businessDB := DB
-	if businessDB == nil {
-		return errors.New("business database is nil")
-	}
 	if businessDB == LOG_DB {
 		businessDB = tx
 	}
-	var sub UserSubscription
-	if err := businessDB.Where("id = ?", *log.SubscriptionID).First(&sub).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
+	identity, found, err := loadFreeSubscriptionAggregationIdentity(businessDB, *log.SubscriptionID)
+	if err != nil {
 		return err
 	}
-	if sub.UserId != log.UserId || log.CreatedAt < sub.StartTime || (sub.EndTime > 0 && log.CreatedAt >= sub.EndTime) {
+	if !found || identity.UserID != log.UserId || log.CreatedAt < identity.StartTime || (identity.EndTime > 0 && log.CreatedAt >= identity.EndTime) {
 		return nil
 	}
-	var user User
-	if err := businessDB.Select("id").Where("id = ?", sub.UserId).First(&user).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
+	grantSource := strings.TrimSpace(identity.GrantReason)
+	if grantSource == "" {
+		grantSource = strings.TrimSpace(identity.Source)
 	}
-	var plan SubscriptionPlan
-	if err := businessDB.Where("id = ?", sub.PlanId).First(&plan).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		return err
-	}
-	if !subscriptionQualifiesForFreeUsageAggregation(&sub, &plan) {
+	if identity.PriceAmount != 0 || grantSource == SubscriptionGrantMonthlyInviteEntitlement {
 		return nil
 	}
-	hourIndex := int((log.CreatedAt - sub.StartTime) / 3600)
+	if !logAggregationTrialSubscriptionSource(identity.GrantReason) && !logAggregationTrialSubscriptionSource(identity.Source) && !identity.IsTrial {
+		return nil
+	}
+	hourIndex := int((log.CreatedAt - identity.StartTime) / 3600)
 	if hourIndex < 0 || hourIndex >= 24 {
 		return nil
 	}
-	now := common.GetTimestamp()
 	row := FreeSubscriptionUsageHourly{
-		SubscriptionID: sub.Id,
-		UserID:         sub.UserId,
+		SubscriptionID: identity.SubscriptionID,
+		UserID:         identity.UserID,
 		HourIndex:      hourIndex,
 		Tokens:         *log.SubscriptionTokensConsumed,
-		UpdatedAt:      now,
+		UpdatedAt:      common.GetTimestamp(),
 	}
 	return tx.Clauses(freeSubscriptionUsageHourlyUpsertClause(row)).Create(&row).Error
-}
-
-func subscriptionQualifiesForFreeUsageAggregation(sub *UserSubscription, plan *SubscriptionPlan) bool {
-	if sub == nil || plan == nil || plan.PriceAmount != 0 || isInvitationRewardSubscription(sub) {
-		return false
-	}
-	if logAggregationTrialSubscriptionSource(sub.GrantReason) || logAggregationTrialSubscriptionSource(sub.Source) {
-		return true
-	}
-	return plan.IsTrial
 }
 
 func logAggregationTrialSubscriptionSource(value string) bool {

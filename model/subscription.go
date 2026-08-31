@@ -149,10 +149,12 @@ const (
 const primaryBillableSubscriptionOrder = "CASE WHEN grant_reason IN ('trial_code', 'invite_trial') AND token_limit = 0 THEN 1 WHEN grant_reason = 'admin' AND token_limit = 0 THEN 2 ELSE 0 END asc, end_time asc, id asc"
 
 var (
-	subscriptionPlanCacheOnce     sync.Once
-	subscriptionPlanInfoCacheOnce sync.Once
+	subscriptionPlanCacheOnce      sync.Once
+	subscriptionPlanFrontCacheOnce sync.Once
+	subscriptionPlanInfoCacheOnce  sync.Once
 
 	subscriptionPlanCache            *cachex.HybridCache[SubscriptionPlan]
+	subscriptionPlanFrontCache       *cachex.LocalFrontCache[SubscriptionPlan]
 	subscriptionPlanInfoCache        *cachex.HybridCache[SubscriptionPlanInfo]
 	primaryBillableSubscriptionCache sync.Map
 )
@@ -171,6 +173,14 @@ func subscriptionPlanInfoCacheTTL() time.Duration {
 		ttlSeconds = 120
 	}
 	return time.Duration(ttlSeconds) * time.Second
+}
+
+func subscriptionPlanFrontCacheTTL() time.Duration {
+	ttlMilliseconds := common.GetEnvOrDefault("SUBSCRIPTION_PLAN_LOCAL_CACHE_TTL_MS", 1000)
+	if ttlMilliseconds <= 0 {
+		return 0
+	}
+	return time.Duration(ttlMilliseconds) * time.Millisecond
 }
 
 func subscriptionPlanCacheCapacity() int {
@@ -210,6 +220,16 @@ func getSubscriptionPlanCache() *cachex.HybridCache[SubscriptionPlan] {
 	return subscriptionPlanCache
 }
 
+func getSubscriptionPlanFrontCache() *cachex.LocalFrontCache[SubscriptionPlan] {
+	subscriptionPlanFrontCacheOnce.Do(func() {
+		subscriptionPlanFrontCache = cachex.NewLocalFrontCache[SubscriptionPlan](
+			subscriptionPlanFrontCacheTTL(),
+			subscriptionPlanCacheCapacity(),
+		)
+	})
+	return subscriptionPlanFrontCache
+}
+
 func getSubscriptionPlanInfoCache() *cachex.HybridCache[SubscriptionPlanInfo] {
 	subscriptionPlanInfoCacheOnce.Do(func() {
 		ttl := subscriptionPlanInfoCacheTTL()
@@ -242,14 +262,17 @@ func InvalidateSubscriptionPlanCache(planId int) {
 	if planId <= 0 {
 		return
 	}
+	key := subscriptionPlanCacheKey(planId)
+	getSubscriptionPlanFrontCache().Delete(key)
 	cache := getSubscriptionPlanCache()
-	_, _ = cache.DeleteMany([]string{subscriptionPlanCacheKey(planId)})
+	_, _ = cache.DeleteMany([]string{key})
 	infoCache := getSubscriptionPlanInfoCache()
 	_ = infoCache.Purge()
 }
 
 // ClearSubscriptionPlanCacheForTest clears both plan caches between isolated test databases.
 func ClearSubscriptionPlanCacheForTest() {
+	getSubscriptionPlanFrontCache().Purge()
 	_ = getSubscriptionPlanCache().Purge()
 	_ = getSubscriptionPlanInfoCache().Purge()
 }
@@ -686,7 +709,11 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 	}
 	key := subscriptionPlanCacheKey(id)
 	if key != "" {
-		if cached, found, err := getSubscriptionPlanCache().Get(key); err == nil && found {
+		cached, found, err := getSubscriptionPlanFrontCache().GetOrLoad(key, subscriptionPlanCacheTTL(), func() (SubscriptionPlan, bool, error) {
+			value, found, loadErr := getSubscriptionPlanCache().Get(key)
+			return value, found, loadErr
+		})
+		if err == nil && found {
 			return &cached, nil
 		}
 	}
@@ -699,6 +726,7 @@ func getSubscriptionPlanByIdTx(tx *gorm.DB, id int) (*SubscriptionPlan, error) {
 		return nil, err
 	}
 	_ = getSubscriptionPlanCache().SetWithTTL(key, plan, subscriptionPlanCacheTTL())
+	getSubscriptionPlanFrontCache().SetWithTTL(key, plan, subscriptionPlanCacheTTL())
 	return &plan, nil
 }
 

@@ -1990,32 +1990,32 @@ func TestPreConsumeUserSubscriptionByUnitsReusesCachedPrimarySelection(t *testin
 	require.NoError(t, err)
 	require.Equal(t, 7498, first.UserSubscriptionId)
 
-	userQueryCount := 0
-	subscriptionQueryCount := 0
-	selectionQueryCount := 0
-	callbackName := "loadtest:count_cached_selection_queries"
-	require.NoError(t, DB.Callback().Query().Before("gorm:query").Register(callbackName, func(tx *gorm.DB) {
-		if tx.Statement == nil || tx.Statement.Schema == nil {
-			return
-		}
-		switch tx.Statement.Schema.Name {
-		case "User":
-			userQueryCount++
-		case "UserSubscription":
-			subscriptionQueryCount++
-			if _, ok := tx.Statement.Clauses["ORDER BY"]; ok {
-				selectionQueryCount++
-			}
-		}
-	}))
-	t.Cleanup(func() { _ = DB.Callback().Query().Remove(callbackName) })
+	capture := &sqlCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	originalDB := DB
+	DB = DB.Session(&gorm.Session{Logger: capture})
+	t.Cleanup(func() { DB = originalDB })
 
 	second, err := PreConsumeUserSubscriptionByUnits("cached-selection-2", 7496, "gpt-4o", 0, 0, 2)
 	require.NoError(t, err)
 	require.Equal(t, 7498, second.UserSubscriptionId)
-	assert.Equal(t, 1, subscriptionQueryCount, "cached selection should only refresh subscription usage counters")
-	assert.Equal(t, 0, selectionQueryCount, "cached selection should skip ordered user_subscriptions hot-row selection query")
-	assert.Equal(t, 1, userQueryCount, "cached pre-consume should read user setting only once")
+	userQueries := 0
+	subscriptionQueries := 0
+	selectionQueries := 0
+	for _, statement := range capture.statements {
+		normalized := strings.ToLower(statement)
+		if strings.Contains(normalized, "from `users`") || strings.Contains(normalized, `from "users"`) || strings.Contains(normalized, "from users") {
+			userQueries++
+		}
+		if strings.Contains(normalized, "from `user_subscriptions`") || strings.Contains(normalized, `from "user_subscriptions"`) || strings.Contains(normalized, "from user_subscriptions") {
+			subscriptionQueries++
+			if strings.Contains(normalized, "order by") {
+				selectionQueries++
+			}
+		}
+	}
+	assert.Equal(t, 1, subscriptionQueries, "cached selection should only refresh subscription usage counters")
+	assert.Equal(t, 0, selectionQueries, "cached selection should skip ordered user_subscriptions hot-row selection query")
+	assert.Equal(t, 1, userQueries, "cached pre-consume should read user setting only once")
 
 	var got UserSubscription
 	require.NoError(t, DB.First(&got, 7498).Error)

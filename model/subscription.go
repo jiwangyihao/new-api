@@ -2481,30 +2481,41 @@ func cachePrimaryBillableSelection(userId int, setting string, sub *UserSubscrip
 	})
 }
 
+func loadUserSettingTx(tx *gorm.DB, userId int, forUpdate bool) (string, error) {
+	query := tx.Model(&User{}).Select("setting").Where("id = ?", userId)
+	if forUpdate {
+		query = lockForUpdate(query)
+	}
+	var setting sql.NullString
+	if err := query.Row().Scan(&setting); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", gorm.ErrRecordNotFound
+		}
+		return "", err
+	}
+	return setting.String, nil
+}
+
 func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, requiredTokens int64, forUpdate bool, resetDue bool) (primaryBillableSelectionOutcome, error) {
 	if tx == nil {
 		tx = DB
 	}
-	var user User
-	userQuery := tx.Select("setting").Where("id = ?", userId)
-	if forUpdate {
-		userQuery = userQuery.Clauses(clause.Locking{Strength: "UPDATE"})
-	}
-	if err := userQuery.First(&user).Error; err != nil {
+	settingJSON, err := loadUserSettingTx(tx, userId, forUpdate)
+	if err != nil {
 		return primaryBillableSelectionOutcome{}, err
 	}
-	selectionSetting, settingErr := parseSubscriptionSelectionSetting(user.Setting)
+	selectionSetting, settingErr := parseSubscriptionSelectionSetting(settingJSON)
 	if settingErr != nil {
 		common.SysLog("failed to unmarshal setting: " + settingErr.Error())
 	}
 	billingStrategy := NormalizeSubscriptionBillingStrategy(selectionSetting.SubscriptionBillingStrategy)
 	if forUpdate && billingStrategy == SubscriptionBillingStrategySingleActive && selectionSetting.ActiveSubscriptionId > 0 {
-		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, user.Setting, requiredTokens, now); ok && cached.Subscription.Id == selectionSetting.ActiveSubscriptionId {
+		if cached, ok := getCachedPrimaryBillableSubscription(tx, userId, settingJSON, requiredTokens, now); ok && cached.Subscription.Id == selectionSetting.ActiveSubscriptionId {
 			return primaryBillableSelectionOutcome{
 				Selection:                       cached,
 				SawDistributorSubscription:      true,
 				ActiveSubscriptionId:            selectionSetting.ActiveSubscriptionId,
-				SettingJSON:                     user.Setting,
+				SettingJSON:                     settingJSON,
 				BillingStrategy:                 billingStrategy,
 				BillingCandidateSubscriptionIds: []int{selectionSetting.ActiveSubscriptionId},
 			}, nil
@@ -2515,7 +2526,7 @@ func selectPrimaryBillableSubscriptionTx(tx *gorm.DB, userId int, now int64, req
 		SubscriptionBillingStrategy: selectionSetting.SubscriptionBillingStrategy,
 		ActiveSubscriptionId:        selectionSetting.ActiveSubscriptionId,
 	}
-	state, err := resolveSubscriptionBillingStrategyStateTx(tx, userId, userSetting, user.Setting, now, forUpdate, resetDue)
+	state, err := resolveSubscriptionBillingStrategyStateTx(tx, userId, userSetting, settingJSON, now, forUpdate, resetDue)
 	if err != nil {
 		return primaryBillableSelectionOutcome{}, err
 	}

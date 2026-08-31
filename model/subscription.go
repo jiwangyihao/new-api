@@ -2176,17 +2176,55 @@ func sortAutomaticBillingCandidates(candidates []billableSubscriptionCandidate) 
 	})
 }
 
+var billableSubscriptionSelectColumns = []string{
+	"id", "user_id", "plan_id", "entitlement_type",
+	"amount_total", "amount_used", "token_limit", "token_used", "concurrency_limit",
+	"grant_reason", "grant_source_user_id", "start_time", "end_time", "status", "source",
+	"last_reset_time", "next_reset_time", "created_at", "updated_at",
+}
+
+func scanBillableSubscription(row interface{ Scan(...any) error }) (UserSubscription, error) {
+	var sub UserSubscription
+	err := row.Scan(
+		&sub.Id, &sub.UserId, &sub.PlanId, &sub.EntitlementType,
+		&sub.AmountTotal, &sub.AmountUsed, &sub.TokenLimit, &sub.TokenUsed, &sub.ConcurrencyLimit,
+		&sub.GrantReason, &sub.GrantSourceUserId, &sub.StartTime, &sub.EndTime, &sub.Status, &sub.Source,
+		&sub.LastResetTime, &sub.NextResetTime, &sub.CreatedAt, &sub.UpdatedAt,
+	)
+	return sub, err
+}
+
+func loadBillableSubscriptionRowsTx(tx *gorm.DB, userId int, now int64, forUpdate bool) ([]UserSubscription, error) {
+	query := tx.Model(&UserSubscription{}).Select(billableSubscriptionSelectColumns).
+		Where("user_id = ? AND status = ? AND start_time <= ? AND (entitlement_type = ? OR end_time > ?)", userId, SubscriptionStatusActive, now, SubscriptionEntitlementCreditBalance, now)
+	if forUpdate {
+		query = lockForUpdate(query)
+	}
+	rows, err := query.Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	subscriptions := make([]UserSubscription, 0)
+	for rows.Next() {
+		subscription, err := scanBillableSubscription(rows)
+		if err != nil {
+			return nil, err
+		}
+		subscriptions = append(subscriptions, subscription)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return subscriptions, nil
+}
+
 func loadBillableSubscriptionCandidatesTx(tx *gorm.DB, userId int, now int64, forUpdate bool, resetDue bool) ([]billableSubscriptionCandidate, error) {
 	if resetDue && !forUpdate {
 		return nil, errors.New("subscription quota reset requires locked candidates")
 	}
-	query := tx
-	if forUpdate {
-		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
-	}
-	var subscriptions []UserSubscription
-	if err := query.Where("user_id = ? AND status = ? AND start_time <= ? AND (entitlement_type = ? OR end_time > ?)", userId, "active", now, SubscriptionEntitlementCreditBalance, now).
-		Find(&subscriptions).Error; err != nil {
+	subscriptions, err := loadBillableSubscriptionRowsTx(tx, userId, now, forUpdate)
+	if err != nil {
 		return nil, err
 	}
 	candidates := make([]billableSubscriptionCandidate, 0, len(subscriptions))
@@ -2806,7 +2844,19 @@ func maybeResetUserSubscriptionWithPlanTx(tx *gorm.DB, sub *UserSubscription, pl
 	if err != nil || !changed {
 		return err
 	}
-	return tx.Save(sub).Error
+	if err := sub.normalizeEntitlementIdentity(); err != nil {
+		return err
+	}
+	sub.UpdatedAt = common.GetTimestamp()
+	return tx.Model(&UserSubscription{}).Where("id = ?", sub.Id).Updates(map[string]any{
+		"amount_used":      sub.AmountUsed,
+		"token_used":       sub.TokenUsed,
+		"last_reset_time":  sub.LastResetTime,
+		"next_reset_time":  sub.NextResetTime,
+		"entitlement_type": sub.EntitlementType,
+		"singleton_key":    sub.SingletonKey,
+		"updated_at":       sub.UpdatedAt,
+	}).Error
 }
 
 type SubscriptionResetResult struct {

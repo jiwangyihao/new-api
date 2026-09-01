@@ -42,7 +42,7 @@ func NewTokenLimitSession(relayInfo *relaycommon.RelayInfo) *TokenLimitSession {
 	if s.requestId == "" {
 		s.requestId = fmt.Sprintf("token-limit:%d:%d", s.userId, s.tokenId)
 	}
-	if token, err := model.GetTokenByIds(s.tokenId, s.userId); err == nil && token.TokenLimitEnabled && token.TokenLimit > 0 {
+	if enabled, err := model.TokenLimitEnabled(s.tokenId, s.userId); err == nil && enabled {
 		s.enabled = true
 	}
 	return s

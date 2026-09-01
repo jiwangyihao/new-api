@@ -1,6 +1,7 @@
 package model
 
 import (
+	"database/sql"
 	"errors"
 	"strings"
 
@@ -272,16 +273,18 @@ func invalidateTokenCacheById(tokenId int) error {
 	return cacheDeleteToken(token.Key)
 }
 
-func tokenLimitEnabled(tokenId int, userId int) (bool, error) {
+func TokenLimitEnabled(tokenId int, userId int) (bool, error) {
 	return tokenLimitEnabledTx(DB, tokenId, userId)
 }
 
 func tokenLimitEnabledTx(tx *gorm.DB, tokenId int, userId int) (bool, error) {
-	var token Token
-	if err := tx.Select("id", "token_limit_enabled", "token_limit").Where("id = ? AND user_id = ?", tokenId, userId).First(&token).Error; err != nil {
-		return false, err
+	var enabled bool
+	var limit int64
+	err := tx.Raw("SELECT token_limit_enabled, token_limit FROM tokens WHERE id = ? AND user_id = ? AND deleted_at IS NULL LIMIT 1", tokenId, userId).Row().Scan(&enabled, &limit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, gorm.ErrRecordNotFound
 	}
-	return token.TokenLimitEnabled && token.TokenLimit > 0, nil
+	return enabled && limit > 0, err
 }
 
 func consumeTokenLimitRecord(tokenId int, userId int, requestId string, tokens int64, status string) (ok bool, changedTokenId int, err error) {

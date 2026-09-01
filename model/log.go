@@ -61,20 +61,42 @@ const (
 	LogTypeRefund  = 6
 )
 
+func sanitizeUserLogOther(other string) string {
+	if !gjson.Valid(other) {
+		return "null"
+	}
+	root := gjson.Parse(other)
+	if !root.IsObject() {
+		return "null"
+	}
+	hasAdminOnlyField := false
+	root.ForEach(func(key, _ gjson.Result) bool {
+		switch key.String() {
+		case "admin_info", "stream_status":
+			hasAdminOnlyField = true
+			return false
+		default:
+			return true
+		}
+	})
+	if !hasAdminOnlyField {
+		return other
+	}
+	otherMap, err := common.StrToMap(other)
+	if err != nil || otherMap == nil {
+		return "null"
+	}
+	delete(otherMap, "admin_info")
+	delete(otherMap, "stream_status")
+	return common.MapToJsonStr(otherMap)
+}
+
 func formatUserLogs(logs []*Log, startIdx int) {
 	for i := range logs {
 		// 用户侧绝不暴露上游渠道身份：清空渠道名与渠道 id（json:"channel"）。
 		logs[i].ChannelName = ""
 		logs[i].ChannelId = 0
-		var otherMap map[string]interface{}
-		otherMap, _ = common.StrToMap(logs[i].Other)
-		if otherMap != nil {
-			// Remove admin-only debug fields.
-			delete(otherMap, "admin_info")
-			// delete(otherMap, "reject_reason")
-			delete(otherMap, "stream_status")
-		}
-		logs[i].Other = common.MapToJsonStr(otherMap)
+		logs[i].Other = sanitizeUserLogOther(logs[i].Other)
 		logs[i].Id = startIdx + i + 1
 	}
 }

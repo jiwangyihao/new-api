@@ -1,7 +1,7 @@
 package model
 
 import (
-	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -15,6 +15,7 @@ func BenchmarkRankingFreeUserLogCandidates(b *testing.B) {
 		count  = 1000
 	)
 	metered := 12
+	largeOther := `{"payload":"` + strings.Repeat("x", 64<<10) + `"}`
 	logs := make([]Log, 0, count)
 	for i := 0; i < count; i++ {
 		subscriptionID := 32000 + i
@@ -27,7 +28,7 @@ func BenchmarkRankingFreeUserLogCandidates(b *testing.B) {
 			MeteredTokens:              &metered,
 			SubscriptionID:             &subscriptionID,
 			SubscriptionTokensConsumed: &consumed,
-			Other:                      fmt.Sprintf(`{"index":%d}`, i),
+			Other:                      largeOther,
 		})
 	}
 	require.NoError(b, LOG_DB.CreateInBatches(logs, 100).Error)

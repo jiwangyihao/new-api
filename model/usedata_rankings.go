@@ -146,7 +146,7 @@ func GetRankingFreeUserLogCandidatesTx(db *gorm.DB, userIDs []int, startTime int
 		return nil, nil
 	}
 	query := db.Table("logs").
-		Select("id, user_id, created_at, metered_tokens, subscription_id, subscription_tokens_consumed, other").
+		Select("id, user_id, created_at, metered_tokens, subscription_id, subscription_tokens_consumed, CASE WHEN subscription_id IS NULL OR subscription_tokens_consumed IS NULL THEN other ELSE '' END AS other").
 		Where("user_id IN ?", userIDs).
 		Where("type = ?", LogTypeConsume).
 		Where("created_at >= ?", startTime).

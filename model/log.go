@@ -82,13 +82,27 @@ func sanitizeUserLogOther(other string) string {
 	if !hasAdminOnlyField {
 		return other
 	}
-	otherMap, err := common.StrToMap(other)
-	if err != nil || otherMap == nil {
-		return "null"
-	}
-	delete(otherMap, "admin_info")
-	delete(otherMap, "stream_status")
-	return common.MapToJsonStr(otherMap)
+
+	var result strings.Builder
+	result.Grow(len(other))
+	result.WriteByte('{')
+	kept := 0
+	root.ForEach(func(key, value gjson.Result) bool {
+		switch key.String() {
+		case "admin_info", "stream_status":
+			return true
+		}
+		if kept > 0 {
+			result.WriteByte(',')
+		}
+		result.WriteString(key.Raw)
+		result.WriteByte(':')
+		result.WriteString(value.Raw)
+		kept++
+		return true
+	})
+	result.WriteByte('}')
+	return result.String()
 }
 
 func formatUserLogs(logs []*Log, startIdx int) {

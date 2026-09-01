@@ -67,3 +67,20 @@ func BenchmarkFormatUserLogsLargeOtherWithoutAdminFields(b *testing.B) {
 		formatUserLogs(logs, 0)
 	}
 }
+
+func BenchmarkFormatUserLogsLargeOtherWithAdminFields(b *testing.B) {
+	other := common.MapToJsonStr(map[string]any{
+		"payload":       strings.Repeat("x", 1<<20),
+		"frt":           1234,
+		"admin_info":    map[string]any{"channel": 9},
+		"stream_status": map[string]any{"status": "ok"},
+	})
+	logs := []*Log{{Other: other}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(other)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		logs[0].Other = other
+		formatUserLogs(logs, 0)
+	}
+}

@@ -659,6 +659,10 @@ func applyTimedConversionInFlightRequestsTx(tx *gorm.DB, requests []timedConvers
 	if tx == nil || valuationSubscriptionId <= 0 || valuationSource == nil || valuationSource.FXRateSnapshot == nil {
 		return ErrCreditValuationSourceInvalid
 	}
+	if len(requests) == 0 {
+		return nil
+	}
+	now := getDBTimestampTx(tx)
 	for _, request := range requests {
 		if request.id <= 0 || strings.TrimSpace(request.requestID) == "" || request.preConsumed <= 0 {
 			return ErrCreditValuationTargetConflict
@@ -671,7 +675,7 @@ func applyTimedConversionInFlightRequestsTx(tx *gorm.DB, requests []timedConvers
 		if err != nil {
 			return err
 		}
-		now := getDBTimestampTx(tx)
+		// A conversion batch is one atomic transaction; use one authoritative DB timestamp for every migrated request.
 		updated := tx.Model(&SubscriptionPreConsumeRecord{}).
 			Where("id = ? AND request_id = ? AND status = ? AND applied_credit = 0 AND valuation_subscription_id = 0 AND finalized_at = 0", request.id, request.requestID, "consumed").
 			Updates(map[string]any{

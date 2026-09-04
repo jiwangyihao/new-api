@@ -16,9 +16,13 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+func SupportsAlphaSearchAPIType(apiType int) bool {
+	return apiType == constant.APITypeOpenAI || apiType == constant.APITypeCodex
+}
+
 func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError {
 	info.InitChannelMeta(c)
-	if info.ChannelType != constant.ChannelTypeCodex {
+	if !SupportsAlphaSearchAPIType(info.ApiType) {
 		return types.NewError(errors.New("channel does not support /v1/alpha/search"), types.ErrorCodeInvalidRequest)
 	}
 

@@ -267,10 +267,10 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}
-	if info.RelayMode == relayconstant.RelayModeAlphaSearch && apiType != constant.APITypeCodex {
+	if info.RelayMode == relayconstant.RelayModeAlphaSearch && !relay.SupportsAlphaSearchAPIType(apiType) {
 		return testResult{
 			context:     c,
-			localErr:    fmt.Errorf("alpha search test only supports codex channels, got api type %d", apiType),
+			localErr:    fmt.Errorf("alpha search test only supports openai/codex adapters, got api type %d", apiType),
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}

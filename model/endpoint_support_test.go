@@ -90,6 +90,26 @@ func TestChannelSupportsEndpointUsesChannelSettingsBeforeTypeDefaults(t *testing
 	assert.False(t, ChannelSupportsEndpoint(channel, "gpt-5.5", constant.EndpointTypeOpenAIResponse))
 }
 
+func TestChannelSupportsAlphaSearchOnlyWithExplicitOptIn(t *testing.T) {
+	db := setupEndpointSupportTestDB(t)
+	defaultCodex := &Channel{Id: 8, Type: constant.ChannelTypeCodex, Status: common.ChannelStatusEnabled, Models: "gpt-5.5", Group: "default"}
+	optedInCodex := &Channel{
+		Id:     9,
+		Type:   constant.ChannelTypeCodex,
+		Status: common.ChannelStatusEnabled,
+		Models: "gpt-5.5",
+		Group:  "default",
+		OtherSettings: endpointStringsForTest(map[string]any{
+			"supported_endpoint_types": []string{string(constant.EndpointTypeOpenAIResponse), string(constant.EndpointTypeOpenAIAlphaSearch)},
+		}),
+	}
+	require.NoError(t, db.Create(defaultCodex).Error)
+	require.NoError(t, db.Create(optedInCodex).Error)
+
+	assert.False(t, ChannelSupportsEndpoint(defaultCodex, "gpt-5.5", constant.EndpointTypeOpenAIAlphaSearch))
+	assert.True(t, ChannelSupportsEndpoint(optedInCodex, "gpt-5.5", constant.EndpointTypeOpenAIAlphaSearch))
+}
+
 func TestModelEndpointMetadataDoesNotGateChannelSupport(t *testing.T) {
 	db := setupEndpointSupportTestDB(t)
 	channel := &Channel{

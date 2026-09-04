@@ -181,6 +181,7 @@ const EditChannelModal = (props) => {
     param_override: '',
     status_code_mapping: '',
     models: [],
+    supported_endpoint_types: [],
     auto_ban: 1,
     test_model: '',
     priority: 0,
@@ -893,6 +894,13 @@ const EditChannelModal = (props) => {
           // 读取企业账户设置
           data.is_enterprise_account =
             parsedSettings.openrouter_enterprise === true;
+          data.supported_endpoint_types = Array.isArray(
+            parsedSettings.supported_endpoint_types,
+          )
+            ? parsedSettings.supported_endpoint_types
+                .map((endpoint) => String(endpoint || '').trim())
+                .filter(Boolean)
+            : [];
           // 读取字段透传控制设置
           data.allow_service_tier = parsedSettings.allow_service_tier || false;
           data.disable_store = parsedSettings.disable_store || false;
@@ -927,6 +935,7 @@ const EditChannelModal = (props) => {
           data.vertex_key_type = 'json';
           data.aws_key_type = 'ak_sk';
           data.is_enterprise_account = false;
+          data.supported_endpoint_types = [];
           data.allow_service_tier = false;
           data.disable_store = false;
           data.allow_safety_identifier = false;
@@ -945,6 +954,7 @@ const EditChannelModal = (props) => {
         data.vertex_key_type = 'json';
         data.aws_key_type = 'ak_sk';
         data.is_enterprise_account = false;
+        data.supported_endpoint_types = [];
         data.allow_service_tier = false;
         data.disable_store = false;
         data.allow_safety_identifier = false;
@@ -1742,6 +1752,21 @@ const EditChannelModal = (props) => {
         console.error('解析settings失败:', error);
       }
     }
+    const supportedEndpointTypes = Array.from(
+      new Set(
+        (Array.isArray(localInputs.supported_endpoint_types)
+          ? localInputs.supported_endpoint_types
+          : []
+        )
+          .map((endpoint) => String(endpoint || '').trim())
+          .filter(Boolean),
+      ),
+    );
+    if (supportedEndpointTypes.length > 0) {
+      settings.supported_endpoint_types = supportedEndpointTypes;
+    } else {
+      delete settings.supported_endpoint_types;
+    }
 
     // type === 20: 设置企业账户标识，无论是true还是false都要传到后端
     if (localInputs.type === 20) {
@@ -1812,6 +1837,7 @@ const EditChannelModal = (props) => {
     delete localInputs.system_prompt;
     delete localInputs.system_prompt_override;
     delete localInputs.is_enterprise_account;
+    delete localInputs.supported_endpoint_types;
     // 顶层的 vertex_key_type 不应发送给后端
     delete localInputs.vertex_key_type;
     // 顶层的 aws_key_type 不应发送给后端
@@ -2461,6 +2487,31 @@ const EditChannelModal = (props) => {
                       />
                     </Col>
                   </Row>
+
+                  <Form.Select
+                    field='supported_endpoint_types'
+                    label={t('支持的端点类型')}
+                    placeholder={t('留空则使用渠道类型默认端点')}
+                    multiple
+                    optionList={[
+                      { value: 'openai', label: 'OpenAI (/v1/chat/completions)' },
+                      { value: 'openai-response', label: 'OpenAI Responses (/v1/responses)' },
+                      { value: 'openai-response-compact', label: 'OpenAI Responses Compact (/v1/responses/compact)' },
+                      { value: 'openai-alpha-search', label: 'OpenAI Alpha Search (/v1/alpha/search)' },
+                      { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
+                      { value: 'gemini', label: 'Gemini generateContent' },
+                      { value: 'jina-rerank', label: 'Jina Rerank (/rerank)' },
+                      { value: 'image-generation', label: t('图像生成') },
+                      { value: 'embeddings', label: 'Embeddings' },
+                    ]}
+                    onChange={(value) =>
+                      handleChannelOtherSettingsChange(
+                        'supported_endpoint_types',
+                        value,
+                      )
+                    }
+                    extraText={t('选择后将显式限制此渠道可接收的端点；Alpha Search 必须显式启用')}
+                  />
 
                   {inputs.type === 1 && (
                     <>

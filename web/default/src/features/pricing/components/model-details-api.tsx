@@ -429,6 +429,65 @@ function buildImageSample(lang: Lang, ctx: SampleContext): string {
   ].join('\n')
 }
 
+function buildAlphaSearchSample(lang: Lang, ctx: SampleContext): string {
+  const url = `${ctx.baseUrl}${ctx.endpointPath}`
+  const query = 'Latest OpenAI news'
+  const bodyJson = JSON.stringify(
+    {
+      id: 'alpha-search-example',
+      model: ctx.modelName,
+      commands: { search_query: [{ q: query }] },
+      max_output_tokens: 1024,
+    },
+    null,
+    2
+  )
+
+  if (lang === 'curl') {
+    return [
+      `curl ${url} \\`,
+      `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '${bodyJson.replace(/\n/g, '\n     ')}'`,
+    ].join('\n')
+  }
+
+  if (lang === 'python') {
+    return [
+      'import json',
+      'import os',
+      'import urllib.request',
+      '',
+      `payload = json.loads(${JSON.stringify(bodyJson)})`,
+      'request = urllib.request.Request(',
+      `    '${url}',`,
+      '    data=json.dumps(payload).encode("utf-8"),',
+      '    headers={',
+      `        'Authorization': f'Bearer {os.environ["${ctx.apiKeyEnv}"]}',`,
+      '        "Content-Type": "application/json",',
+      '    },',
+      '    method="POST",',
+      ')',
+      'with urllib.request.urlopen(request) as response:',
+      '    print(json.load(response))',
+    ].join('\n')
+  }
+
+  const environment = `process.env.${ctx.apiKeyEnv}`
+  return [
+    `const response = await fetch('${url}', {`,
+    `  method: 'POST',`,
+    `  headers: {`,
+    `    Authorization: \`Bearer \${${environment}}\`,`,
+    `    'Content-Type': 'application/json',`,
+    `  },`,
+    `  body: JSON.stringify(${bodyJson}),`,
+    '',
+    `if (!response.ok) throw new Error(\`HTTP \${response.status}\`)`,
+    `console.log(await response.json())`,
+  ].join('\n')
+}
+
 function buildSample(
   lang: Lang,
   endpointType: string,
@@ -439,6 +498,8 @@ function buildSample(
   if (endpointType === 'embeddings' || endpointType === 'jina-rerank')
     return buildEmbeddingSample(lang, ctx)
   if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
+  if (endpointType === 'openai-alpha-search')
+    return buildAlphaSearchSample(lang, ctx)
   return buildChatSample(lang, ctx)
 }
 
@@ -671,7 +732,6 @@ function ParamRangeCell(props: { param: SupportedParameter }) {
 function RateLimitsSection(props: { model: PricingModel }) {
   const { t } = useTranslation()
   const limits = useMemo(() => buildRateLimits(props.model), [props.model])
-
 
   return (
     <section>

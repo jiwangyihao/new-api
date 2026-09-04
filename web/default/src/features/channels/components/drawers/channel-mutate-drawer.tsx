@@ -223,6 +223,10 @@ const CHANNEL_ENDPOINT_OPTIONS = [
     value: 'openai-response-compact',
     label: 'OpenAI Responses Compact (/v1/responses/compact)',
   },
+  {
+    value: 'openai-alpha-search',
+    label: 'OpenAI Alpha Search (/v1/alpha/search)',
+  },
   { value: 'anthropic', label: 'Anthropic (/v1/messages)' },
   { value: 'gemini', label: 'Gemini generateContent' },
   { value: 'jina-rerank', label: 'Jina Rerank (/rerank)' },
@@ -1300,7 +1304,9 @@ export function ChannelMutateDrawer({
                             type='number'
                             min='0'
                             step='1'
-                            disabled={currentCreditBillingMode !== 'fixed_request'}
+                            disabled={
+                              currentCreditBillingMode !== 'fixed_request'
+                            }
                             {...field}
                             onChange={(e) =>
                               field.onChange(

@@ -19,13 +19,12 @@ For commercial licensing, please contact support@quantumnous.com
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
-
+import type { Channel } from '../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
 } from './channel-form'
-import type { Channel } from '../types'
 
 const channelDrawerSource = readFileSync(
   new URL('../components/drawers/channel-mutate-drawer.tsx', import.meta.url),
@@ -43,7 +42,10 @@ describe('channel endpoint capabilities form contract', () => {
       status: 1,
       channel_info: {},
       settings: JSON.stringify({
-        supported_endpoint_types: ['openai-response', 'openai-response-compact'],
+        supported_endpoint_types: [
+          'openai-response',
+          'openai-response-compact',
+        ],
       }),
     } as unknown as Channel
 
@@ -84,9 +86,10 @@ describe('channel endpoint capabilities form contract', () => {
     })
   })
 
-  test('exposes compact endpoint capability in channel drawer', () => {
+  test('exposes opt-in endpoint capabilities in channel drawer', () => {
     assert.match(channelDrawerSource, /CHANNEL_ENDPOINT_OPTIONS/)
     assert.match(channelDrawerSource, /openai-response-compact/)
+    assert.match(channelDrawerSource, /openai-alpha-search/)
     assert.match(channelDrawerSource, /name='supported_endpoint_types'/)
     assert.match(channelDrawerSource, /Endpoint Capabilities/)
     assert.match(channelDrawerSource, /Supported Endpoint Types/)

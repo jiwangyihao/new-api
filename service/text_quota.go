@@ -331,7 +331,7 @@ func distributorTokenBillingEligibleForText(relayInfo *relaycommon.RelayInfo) bo
 		return false
 	}
 	switch relayInfo.RelayMode {
-	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact, relayconstant.RelayModeRealtime:
+	case relayconstant.RelayModeChatCompletions, relayconstant.RelayModeCompletions, relayconstant.RelayModeResponses, relayconstant.RelayModeResponsesCompact, relayconstant.RelayModeAlphaSearch, relayconstant.RelayModeRealtime:
 		return true
 	case relayconstant.RelayModeGemini:
 		return relayInfo.RelayFormat == types.RelayFormatGemini && !nativeGeminiEmbeddingRequest(relayInfo)

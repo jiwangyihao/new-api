@@ -1172,6 +1172,7 @@ export const STATIC_I18N_KEYS = [
   'OpenAI (/v1/chat/completions)',
   'OpenAI Responses (/v1/responses)',
   'OpenAI Responses Compact (/v1/responses/compact)',
+  'OpenAI Alpha Search (/v1/alpha/search)',
   'Anthropic (/v1/messages)',
   'Gemini generateContent',
   'Jina Rerank (/rerank)',

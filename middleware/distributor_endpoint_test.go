@@ -30,8 +30,18 @@ func TestEndpointTypeFromRequestPathResponses(t *testing.T) {
 	assert.Equal(t, constant.EndpointTypeOpenAIResponse, endpointType)
 }
 
+func TestEndpointTypeFromRequestPathAlphaSearch(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/alpha/search", nil)
+
+	endpointType, ok := endpointTypeFromRequest(c)
+
+	assert.True(t, ok)
+	assert.Equal(t, constant.EndpointTypeOpenAIAlphaSearch, endpointType)
+}
+
 func TestEndpointTypeFromRequestRejectsNearMissPaths(t *testing.T) {
-	for _, path := range []string{"/v1/responsesXYZ", "/v1/responses/compactXYZ", "/v1/responses/other"} {
+	for _, path := range []string{"/v1/responsesXYZ", "/v1/responses/compactXYZ", "/v1/responses/other", "/v1/alpha/searchXYZ", "/v1/alpha/search/other"} {
 		t.Run(path, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			c.Request = httptest.NewRequest("POST", path, nil)

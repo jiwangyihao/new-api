@@ -13,4 +13,5 @@ func TestGetEndpointTypesByChannelTypeCodexIncludesResponsesCompact(t *testing.T
 	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponse)
 	assert.Contains(t, endpoints, constant.EndpointTypeOpenAIResponseCompact)
 	assert.NotContains(t, endpoints, constant.EndpointTypeOpenAI)
+	assert.NotContains(t, endpoints, constant.EndpointTypeOpenAIAlphaSearch)
 }

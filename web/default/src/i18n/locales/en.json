@@ -3697,6 +3697,7 @@
     "Open weights": "Open weights",
     "OpenAI": "OpenAI",
     "OpenAI (/v1/chat/completions)": "OpenAI (/v1/chat/completions)",
+    "OpenAI Alpha Search (/v1/alpha/search)": "OpenAI Alpha Search (/v1/alpha/search)",
     "OpenAI Compatible": "OpenAI Compatible",
     "OpenAI Organization": "OpenAI Organization",
     "OpenAI Organization ID (optional)": "OpenAI Organization ID (optional)",

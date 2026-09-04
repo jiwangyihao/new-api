@@ -42,7 +42,13 @@ func BuildBillingExprRequestInputFromRequest(request dto.Request, headers map[st
 		return input, nil
 	}
 
-	bodyBytes, err := common.Marshal(request)
+	var bodyBytes []byte
+	var err error
+	if alphaRequest, ok := request.(*dto.AlphaSearchRequest); ok && len(alphaRequest.RawBody) > 0 {
+		bodyBytes = append([]byte(nil), alphaRequest.RawBody...)
+	} else {
+		bodyBytes, err = common.Marshal(request)
+	}
 	if err != nil {
 		return billingexpr.RequestInput{}, err
 	}

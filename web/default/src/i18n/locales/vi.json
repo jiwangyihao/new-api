@@ -3697,6 +3697,7 @@
     "Open weights": "Trọng số mở",
     "OpenAI": "OpenAI",
     "OpenAI (/v1/chat/completions)": "Chat OpenAI (/v1/chat/completions)",
+    "OpenAI Alpha Search (/v1/alpha/search)": "Tìm kiếm Alpha của OpenAI (/v1/alpha/search)",
     "OpenAI Compatible": "Tương thích OpenAI",
     "OpenAI Organization": "Tổ chức OpenAI",
     "OpenAI Organization ID (optional)": "ID Tổ chức OpenAI (tùy chọn)",

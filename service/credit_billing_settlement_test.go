@@ -182,6 +182,29 @@ func TestTextTrustedZeroUsageDiffersByBillingMode(t *testing.T) {
 	}
 }
 
+func TestAlphaSearchFixedRequestChargesConfiguredCredits(t *testing.T) {
+	truncate(t)
+	const userID, tokenID, planID, subID, channelID = 97526, 97626, 97726, 97826, 97926
+	seedCreditBillingRuntime(t, userID, tokenID, planID, subID, channelID, "sk-credit-alpha-search", 1_000, 0)
+	seedReadyCreditValuationForServiceTest(t, userID, subID, 1_000)
+
+	ctx := newBillingTestContext(t)
+	relayInfo := newBillingTestRelayInfo(userID, tokenID, "sk-credit-alpha-search", "req-credit-alpha-search", "subscription_only")
+	relayInfo.RelayMode = relayconstant.RelayModeAlphaSearch
+	relayInfo.RelayFormat = types.RelayFormatOpenAIAlphaSearch
+	freezeCreditBillingForServiceTest(t, ctx, relayInfo, channelID, creditbilling.ModeFixedRequest, 80, false)
+	relayInfo.SetEstimatePromptTokens(10)
+	preConsumeForBillingTest(t, ctx, relayInfo, 999)
+
+	require.NoError(t, PostTextConsumeQuota(ctx, relayInfo, &dto.Usage{}, nil))
+	model.FlushSubscriptionTokenDeltaUpdates()
+
+	assert.True(t, relayInfo.HasTrustedUsage)
+	assert.Equal(t, int64(0), relayInfo.RawMeteredTokens)
+	assert.Equal(t, int64(80), relayInfo.SubscriptionBillableTokens)
+	assert.Equal(t, int64(80), getSubscriptionTokenUsed(t, subID))
+}
+
 func TestTextDynamicMultiplierDisabledIgnoresUpstreamMultiplier(t *testing.T) {
 	truncate(t)
 	const userID, tokenID, planID, subID, channelID = 97531, 97532, 97533, 97534, 97535

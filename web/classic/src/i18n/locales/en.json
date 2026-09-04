@@ -3822,6 +3822,9 @@
     "（当前仅支持易支付接口，默认使用上方服务器地址作为回调地址！）": "(Currently only supports Epay interface, the default callback address is the server address above!)",
     "，当前无生效订阅，将自动使用钱包": ", no active subscription. Wallet will be used automatically.",
     "，时间：": ",time:",
-    "，点击更新": ", click Update"
+    "，点击更新": ", click Update",
+    "支持的端点类型": "Supported Endpoint Types",
+    "留空则使用渠道类型默认端点": "Leave empty to use the channel type defaults",
+    "选择后将显式限制此渠道可接收的端点；Alpha Search 必须显式启用": "Selecting values explicitly limits the endpoints this channel can receive; Alpha Search must be enabled explicitly."
   }
 }

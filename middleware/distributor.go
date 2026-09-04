@@ -38,6 +38,8 @@ func endpointTypeFromRequest(c *gin.Context) (constant.EndpointType, bool) {
 		return constant.EndpointTypeOpenAIResponseCompact, true
 	case "/v1/responses":
 		return constant.EndpointTypeOpenAIResponse, true
+	case "/v1/alpha/search":
+		return constant.EndpointTypeOpenAIAlphaSearch, true
 	default:
 		return "", false
 	}

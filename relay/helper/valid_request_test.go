@@ -46,6 +46,14 @@ func TestMaxTokenValidatorsRejectOverflowInputs(t *testing.T) {
 			},
 		},
 		{
+			name: "Alpha Search max_output_tokens",
+			body: fmt.Sprintf(`{"id":"req_1","model":"gpt-4o","commands":{"search_query":[{"q":"hi"}]},"max_output_tokens":%d}`, overLimit),
+			validate: func(ctx *gin.Context) error {
+				_, err := GetAndValidateAlphaSearchRequest(ctx)
+				return err
+			},
+		},
+		{
 			name: "Gemini generationConfig.maxOutputTokens",
 			body: fmt.Sprintf(`{"contents":[{"parts":[{"text":"hi"}]}],"generationConfig":{"maxOutputTokens":%d}}`, overLimit),
 			validate: func(ctx *gin.Context) error {
@@ -92,6 +100,20 @@ func TestMaxTokenValidatorsAcceptLimitBoundary(t *testing.T) {
 			validate: func(ctx *gin.Context) error {
 				_, err := GetAndValidateResponsesRequest(ctx)
 				return err
+			},
+		},
+		{
+			name: "Alpha Search max_output_tokens",
+			body: fmt.Sprintf(`{"id":"req_1","model":"gpt-4o","commands":{"search_query":[{"q":"hi"}]},"max_output_tokens":%d}`, limit),
+			validate: func(ctx *gin.Context) error {
+				request, err := GetAndValidateAlphaSearchRequest(ctx)
+				if err != nil {
+					return err
+				}
+				if request.MaxOutputTokens == nil || *request.MaxOutputTokens != uint(limit) || !strings.Contains(string(request.RawBody), `"commands"`) {
+					return fmt.Errorf("alpha search request did not preserve validated fields")
+				}
+				return nil
 			},
 		},
 		{

@@ -93,6 +93,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if endpointType == string(constant.EndpointTypeOpenAIAlphaSearch) {
+		isStream = false
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -175,6 +178,8 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			relayFormat = types.RelayFormatOpenAIResponses
 		case constant.EndpointTypeOpenAIResponseCompact:
 			relayFormat = types.RelayFormatOpenAIResponsesCompaction
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			relayFormat = types.RelayFormatOpenAIAlphaSearch
 		case constant.EndpointTypeAnthropic:
 			relayFormat = types.RelayFormatClaude
 		case constant.EndpointTypeGemini:
@@ -262,6 +267,13 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}
+	if info.RelayMode == relayconstant.RelayModeAlphaSearch && apiType != constant.APITypeCodex {
+		return testResult{
+			context:     c,
+			localErr:    fmt.Errorf("alpha search test only supports codex channels, got api type %d", apiType),
+			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
+		}
+	}
 	adaptor := relay.GetAdaptor(apiType)
 	if adaptor == nil {
 		return testResult{
@@ -288,6 +300,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	adaptor.Init(info)
 
 	var convertedRequest any
+	var jsonData []byte
 	// 根据 RelayMode 选择正确的转换函数
 	switch info.RelayMode {
 	case relayconstant.RelayModeEmbeddings:
@@ -353,6 +366,16 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 				newAPIError: types.NewError(errors.New("invalid response compaction request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
+	case relayconstant.RelayModeAlphaSearch:
+		alphaRequest, ok := request.(*dto.AlphaSearchRequest)
+		if !ok {
+			return testResult{
+				context:     c,
+				localErr:    errors.New("invalid alpha search request type"),
+				newAPIError: types.NewError(errors.New("invalid alpha search request type"), types.ErrorCodeConvertRequestFailed),
+			}
+		}
+		jsonData, err = relay.BuildAlphaSearchRequestBody(alphaRequest.RawBody, info.OriginModelName, info.UpstreamModelName)
 	default:
 		// Chat/Completion 等其他请求类型
 		if generalReq, ok := request.(*dto.GeneralOpenAIRequest); ok {
@@ -373,12 +396,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewError(err, types.ErrorCodeConvertRequestFailed),
 		}
 	}
-	jsonData, err := common.Marshal(convertedRequest)
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+	if jsonData == nil {
+		jsonData, err = common.Marshal(convertedRequest)
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewError(err, types.ErrorCodeJsonMarshalFailed),
+			}
 		}
 	}
 
@@ -422,7 +447,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		if httpResp.StatusCode != http.StatusOK {
+		if httpResp.StatusCode < http.StatusOK || httpResp.StatusCode >= http.StatusMultipleChoices {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(
 				"channel test bad response: channel_id=%d name=%s type=%d model=%s endpoint_type=%s status=%d err=%v",
@@ -441,29 +466,46 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			}
 		}
 	}
-	usageA, respErr := adaptor.DoResponse(c, httpResp, info)
-	if respErr != nil {
-		return testResult{
-			context:     c,
-			localErr:    respErr,
-			newAPIError: respErr,
+	var usage *dto.Usage
+	var respBody []byte
+	if info.RelayMode == relayconstant.RelayModeAlphaSearch {
+		defer httpResp.Body.Close()
+		info.ApplyDynamicBillingMultiplierFromHeaders(httpResp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
+		respBody, err = io.ReadAll(httpResp.Body)
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			}
 		}
-	}
-	usage, usageErr := coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
-	if usageErr != nil {
-		return testResult{
-			context:     c,
-			localErr:    usageErr,
-			newAPIError: types.NewOpenAIError(usageErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+		info.ApplyDynamicBillingMultiplierFromHeaders(httpResp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+		usage = &dto.Usage{}
+	} else {
+		usageA, respErr := adaptor.DoResponse(c, httpResp, info)
+		if respErr != nil {
+			return testResult{
+				context:     c,
+				localErr:    respErr,
+				newAPIError: respErr,
+			}
 		}
-	}
-	result := w.Result()
-	respBody, err := readTestResponseBody(result.Body, isStream)
-	if err != nil {
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+		usage, err = coerceTestUsage(usageA, isStream, info.GetEstimatePromptTokens())
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+			}
+		}
+		result := w.Result()
+		respBody, err = readTestResponseBody(result.Body, isStream)
+		if err != nil {
+			return testResult{
+				context:     c,
+				localErr:    err,
+				newAPIError: types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError),
+			}
 		}
 	}
 	if bodyErr := validateTestResponseBody(respBody, isStream); bodyErr != nil {
@@ -715,6 +757,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 			return &dto.OpenAIResponsesCompactionRequest{
 				Model: model,
 				Input: testResponsesInput,
+			}
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			maxOutputTokens := uint(16)
+			rawBody := json.RawMessage(fmt.Sprintf(`{"id":"new-api-channel-test","model":%q,"commands":{"search_query":[{"q":"OpenAI","recency":30}]},"max_output_tokens":16}`, model))
+			return &dto.AlphaSearchRequest{
+				Model:           model,
+				Id:              "new-api-channel-test",
+				MaxOutputTokens: &maxOutputTokens,
+				RawBody:         rawBody,
 			}
 		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
 			// 返回 GeneralOpenAIRequest

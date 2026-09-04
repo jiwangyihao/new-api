@@ -3697,6 +3697,7 @@
     "Open weights": "公開ウェイト",
     "OpenAI": "OpenAI",
     "OpenAI (/v1/chat/completions)": "OpenAI チャット (/v1/chat/completions)",
+    "OpenAI Alpha Search (/v1/alpha/search)": "OpenAI Alpha 検索 (/v1/alpha/search)",
     "OpenAI Compatible": "OpenAI互換",
     "OpenAI Organization": "OpenAI組織",
     "OpenAI Organization ID (optional)": "OpenAI 組織 ID (オプション)",

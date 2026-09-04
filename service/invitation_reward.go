@@ -236,6 +236,7 @@ func StartInvitationEntitlementRefreshTask() {
 
 		go func() {
 			common.SysLog("invitation entitlement refresh task started")
+			runInvitationEntitlementRefreshOnce()
 			for {
 				next := nextInvitationEntitlementRefreshAt(time.Now())
 				timer := time.NewTimer(time.Until(next))

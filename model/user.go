@@ -526,7 +526,11 @@ func fillUserInvitationSummariesTx(tx *gorm.DB, users []*User) error {
 }
 
 func rewardMonthStringFromUnix(timestamp int64) string {
-	return time.Unix(timestamp, 0).UTC().Format("2006-01")
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return time.Unix(timestamp, 0).In(loc).Format("2006-01")
 }
 
 func GetUserById(id int, selectAll bool) (*User, error) {

@@ -498,40 +498,12 @@ func upsertInvitationRewardSubscriptionTx(tx *gorm.DB, userId int, plan *model.S
 	return sub, nil
 }
 
-func calcInvitationRewardNextResetTime(now int64, plan *model.SubscriptionPlan, endTime int64) int64 {
-	if plan == nil || endTime <= now {
+func calcInvitationRewardNextResetTime(now int64, _ *model.SubscriptionPlan, endTime int64) int64 {
+	if endTime <= now {
 		return 0
 	}
-	period := model.NormalizeResetPeriod(plan.QuotaResetPeriod)
-	if period == model.SubscriptionResetNever {
-		return 0
-	}
-	loc, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		loc = time.FixedZone("Asia/Shanghai", 8*3600)
-	}
-	base := time.Unix(now, 0).In(loc)
-	var reset time.Time
-	switch period {
-	case model.SubscriptionResetDaily:
-		reset = time.Date(base.Year(), base.Month(), base.Day()+1, 0, 0, 0, 0, loc)
-	case model.SubscriptionResetWeekly:
-		weekday := int(base.Weekday())
-		if weekday == 0 {
-			weekday = 7
-		}
-		reset = time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, loc).AddDate(0, 0, 8-weekday)
-	case model.SubscriptionResetMonthly:
-		reset = time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, loc)
-	case model.SubscriptionResetCustom:
-		if plan.QuotaResetCustomSeconds <= 0 {
-			return 0
-		}
-		reset = time.Unix(now+plan.QuotaResetCustomSeconds, 0)
-	default:
-		return 0
-	}
-	resetTime := reset.Unix()
+	base := time.Unix(now, 0).In(invitationRewardLocation())
+	resetTime := time.Date(base.Year(), base.Month()+1, 1, 0, 0, 0, 0, base.Location()).Unix()
 	if resetTime > endTime {
 		return endTime
 	}

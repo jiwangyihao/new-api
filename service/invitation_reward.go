@@ -97,8 +97,9 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 	if at.IsZero() {
 		at = time.Now()
 	}
+	periodAt := at
 	at = at.UTC()
-	rewardMonth := rewardMonthString(at)
+	rewardMonth := rewardMonthString(periodAt)
 	var status InvitationEntitlementStatus
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		directCount, err := countDirectInviteesTx(tx, inviterId)
@@ -140,6 +141,11 @@ func EnsureMonthlyInvitationEntitlement(inviterId int, at time.Time) (*Invitatio
 			return entitlementQuery.Error
 		}
 		entitlementMissing := entitlementQuery.RowsAffected == 0
+		if entitlementMissing {
+			if err := expirePreviousInvitationRewardSubscriptionsTx(tx, inviterId, at.Unix()); err != nil {
+				return err
+			}
+		}
 		if len(candidates) == 0 {
 			if entitlementMissing {
 				entitlement = model.InvitationMonthlyEntitlement{InviterId: inviterId, RewardMonth: rewardMonth}
@@ -538,14 +544,34 @@ func subscriptionPlanBusinessCode(plan *model.SubscriptionPlan) string {
 	return *plan.BusinessCode
 }
 
+func invitationRewardLocation() *time.Location {
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		return time.FixedZone("Asia/Shanghai", 8*3600)
+	}
+	return loc
+}
+
 func rewardMonthString(at time.Time) string {
-	return at.UTC().Format("2006-01")
+	return at.In(invitationRewardLocation()).Format("2006-01")
 }
 
 func monthEndUnix(at time.Time) int64 {
-	at = at.UTC()
-	end := time.Date(at.Year(), at.Month()+1, 1, 0, 0, 0, 0, time.UTC)
-	return end.Unix()
+	local := at.In(invitationRewardLocation())
+	return time.Date(local.Year(), local.Month()+1, 1, 0, 0, 0, 0, local.Location()).Unix()
+}
+
+func expirePreviousInvitationRewardSubscriptionsTx(tx *gorm.DB, userId int, now int64) error {
+	if tx == nil || userId <= 0 || now <= 0 {
+		return errors.New("invalid invitation reward expiry args")
+	}
+	return tx.Model(&model.UserSubscription{}).
+		Where("user_id = ? AND grant_reason = ? AND status = ?", userId, monthlyInviteEntitlementReason, model.SubscriptionStatusActive).
+		Updates(map[string]interface{}{
+			"status":     model.SubscriptionStatusExpired,
+			"end_time":   now,
+			"updated_at": common.GetTimestamp(),
+		}).Error
 }
 
 func TryEnsureInvitationEntitlementForPaidUser(userId int) {

@@ -314,6 +314,46 @@ func TestMonthlyInvitationEntitlementNextResetUsesShanghaiNaturalMonth(t *testin
 	assert.Equal(t, time.Date(2026, 6, 1, 0, 0, 0, 0, shanghai).Unix(), sub.NextResetTime)
 }
 
+func TestMonthlyInvitationEntitlementUsesShanghaiRewardMonthBoundary(t *testing.T) {
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	assert.Equal(t, "2026-06", rewardMonthString(time.Date(2026, 6, 1, 0, 0, 0, 0, shanghai)))
+	assert.Equal(t, "2026-06", rewardMonthString(time.Date(2026, 5, 31, 16, 0, 0, 0, time.UTC)))
+}
+
+func TestMonthlyInvitationEntitlementResetsTierAtShanghaiMonthStart(t *testing.T) {
+	truncate(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.InvitationMonthlyEntitlement{}))
+	shanghai, err := time.LoadLocation("Asia/Shanghai")
+	require.NoError(t, err)
+	may := time.Date(2026, 5, 14, 12, 0, 0, 0, shanghai)
+	juneStart := time.Date(2026, 6, 1, 0, 0, 0, 0, shanghai)
+	seedInvitationRewardUsers(t, 1661, 1662, 1663)
+	plan := seedInvitationRewardPlan(t, 2661, "standard_monthly_reset", true)
+	require.NoError(t, model.DB.Model(plan).Update("quota_reset_period", model.SubscriptionResetMonthly).Error)
+	end := time.Date(2026, 7, 10, 0, 0, 0, 0, shanghai).Unix()
+	seedPaidInviteeSubscriptionWithEnd(t, 1662, plan.Id, may, end)
+	seedPaidInviteeSubscriptionWithEnd(t, 1663, plan.Id, may, end)
+
+	mayStatus, err := EnsureMonthlyInvitationEntitlement(1661, may)
+	require.NoError(t, err)
+	require.NoError(t, model.DB.Model(&model.UserSubscription{}).Where("id = ?", mayStatus.RewardSubscriptionId).Updates(map[string]any{
+		"amount_used": 42,
+		"token_used":  420,
+	}).Error)
+
+	juneStatus, err := EnsureMonthlyInvitationEntitlement(1661, juneStart)
+	require.NoError(t, err)
+	assert.Equal(t, "2026-06", juneStatus.RewardMonth)
+	var activeRewards []model.UserSubscription
+	require.NoError(t, model.DB.Where("user_id = ? AND grant_reason = ? AND status = ?", 1661, model.SubscriptionGrantMonthlyInviteEntitlement, model.SubscriptionStatusActive).Find(&activeRewards).Error)
+	require.Len(t, activeRewards, 1)
+	assert.Zero(t, activeRewards[0].AmountUsed)
+	assert.Zero(t, activeRewards[0].TokenUsed)
+	assert.Equal(t, juneStart.Unix(), activeRewards[0].LastResetTime)
+	assert.Equal(t, time.Date(2026, 7, 1, 0, 0, 0, 0, shanghai).Unix(), activeRewards[0].NextResetTime)
+}
+
 func TestNextInvitationEntitlementRefreshAtUsesShanghaiMidnight(t *testing.T) {
 	shanghai, err := time.LoadLocation("Asia/Shanghai")
 	require.NoError(t, err)

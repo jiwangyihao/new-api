@@ -180,3 +180,53 @@ func TestStreamStatus_Summary_NilSafe(t *testing.T) {
 	var s *StreamStatus
 	assert.Equal(t, "StreamStatus<nil>", s.Summary())
 }
+
+func TestStreamStatus_ConcurrentCompletionAndQueries(t *testing.T) {
+	for _, reason := range []StreamEndReason{StreamEndReasonDone, StreamEndReasonHandlerStop} {
+		t.Run(string(reason), func(t *testing.T) {
+			const count = 128
+			statuses := make([]*StreamStatus, count)
+			for i := range statuses {
+				statuses[i] = NewStreamStatus()
+			}
+			var endErr error
+			if reason == StreamEndReasonHandlerStop {
+				endErr = fmt.Errorf("downstream write failed")
+			}
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Add(3)
+			go func() {
+				defer wg.Done()
+				<-start
+				for _, status := range statuses {
+					status.FinalizeEOF()
+					status.SetEndReason(reason, endErr)
+				}
+			}()
+			for i := 0; i < 2; i++ {
+				go func() {
+					defer wg.Done()
+					<-start
+					for _, status := range statuses {
+						status.IsNormalEnd()
+						status.Summary()
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			for _, status := range statuses {
+				assert.True(t, status.IsNormalEnd())
+				assert.Contains(t, status.Summary(), "reason="+string(reason))
+				if endErr != nil {
+					assert.Contains(t, status.Summary(), `end_error="downstream write failed"`)
+					assert.Equal(t, 1, status.TotalErrorCount())
+				} else {
+					assert.NotContains(t, status.Summary(), "end_error")
+					assert.Zero(t, status.TotalErrorCount())
+				}
+			}
+		})
+	}
+}

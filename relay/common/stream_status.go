@@ -144,6 +144,8 @@ func (s *StreamStatus) IsNormalEnd() bool {
 	if s == nil {
 		return true
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.EndReason == StreamEndReasonDone ||
 		s.EndReason == StreamEndReasonHandlerStop
 }
@@ -152,15 +154,16 @@ func (s *StreamStatus) Summary() string {
 	if s == nil {
 		return "StreamStatus<nil>"
 	}
-	b := &strings.Builder{}
-	fmt.Fprintf(b, "reason=%s", s.EndReason)
-	if s.EndError != nil {
-		fmt.Fprintf(b, " end_error=%q", s.EndError.Error())
-	}
 	s.mu.Lock()
-	if s.ErrorCount > 0 {
-		fmt.Fprintf(b, " soft_errors=%d", s.ErrorCount)
-	}
+	endReason, endError, errorCount := s.EndReason, s.EndError, s.ErrorCount
 	s.mu.Unlock()
+	b := &strings.Builder{}
+	fmt.Fprintf(b, "reason=%s", endReason)
+	if endError != nil {
+		fmt.Fprintf(b, " end_error=%q", endError.Error())
+	}
+	if errorCount > 0 {
+		fmt.Fprintf(b, " soft_errors=%d", errorCount)
+	}
 	return b.String()
 }

@@ -139,7 +139,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	toolCallIndexByID := make(map[string]int)
 	toolCallNameByID := make(map[string]string)
-	toolCallArgsByID := make(map[string]string)
+	toolCallArgsByID := make(map[string]*strings.Builder)
 	toolCallNameSent := make(map[string]bool)
 	toolCallCanonicalIDByItemID := make(map[string]string)
 	hasSentReasoningSummary := false
@@ -437,7 +437,11 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			}
 
 			newArgs := streamResp.Item.ArgumentsString()
-			prevArgs := toolCallArgsByID[callID]
+			args := toolCallArgsByID[callID]
+			prevArgs := ""
+			if args != nil {
+				prevArgs = args.String()
+			}
 			argsDelta := ""
 			if newArgs != "" {
 				if strings.HasPrefix(newArgs, prevArgs) {
@@ -445,7 +449,13 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				} else {
 					argsDelta = newArgs
 				}
-				toolCallArgsByID[callID] = newArgs
+				if args == nil {
+					args = &strings.Builder{}
+					toolCallArgsByID[callID] = args
+				} else if argsDelta == newArgs {
+					args.Reset()
+				}
+				args.WriteString(argsDelta)
 			}
 
 			if !sendToolCallDelta(callID, name, argsDelta) {
@@ -462,7 +472,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			if callID == "" {
 				break
 			}
-			toolCallArgsByID[callID] += streamResp.Delta
+			if streamResp.Delta != "" {
+				args := toolCallArgsByID[callID]
+				if args == nil {
+					args = &strings.Builder{}
+					toolCallArgsByID[callID] = args
+				}
+				args.WriteString(streamResp.Delta)
+			}
 			if !sendToolCallDelta(callID, "", streamResp.Delta) {
 				sr.Stop(streamErr)
 				return

@@ -177,3 +177,156 @@ func BenchmarkOaiResponsesToChatStreamText(b *testing.B) {
 		})
 	}
 }
+
+func TestOaiResponsesToChatStreamHandlerToolArgumentSnapshots(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	itemEvent := func(eventType, itemID, callID, arguments string) string {
+		body, err := common.Marshal(map[string]any{
+			"type": eventType,
+			"item": map[string]any{"type": "function_call", "id": itemID, "call_id": callID, "name": "lookup", "arguments": arguments},
+		})
+		require.NoError(t, err)
+		return string(body)
+	}
+	deltaEvent := func(itemID, delta string) string {
+		body, err := common.Marshal(map[string]any{"type": "response.function_call_arguments.delta", "item_id": itemID, "delta": delta})
+		require.NoError(t, err)
+		return string(body)
+	}
+	type toolDelta struct {
+		id    string
+		index int
+		name  string
+		args  string
+	}
+	for _, tc := range []struct {
+		name   string
+		events []string
+		want   []toolDelta
+	}{
+		{
+			name: "prefix_and_replacement_snapshots",
+			events: []string{
+				itemEvent("response.output_item.added", "item-a", "call-a", ""),
+				deltaEvent("item-a", `{"q":"`),
+				deltaEvent("item-a", "天气"),
+				itemEvent("response.output_item.done", "item-a", "call-a", `{"q":"天气"}`),
+				itemEvent("response.output_item.done", "item-a", "call-a", `{"q":"天气"}`),
+				itemEvent("response.output_item.done", "item-a", "call-a", `{"q":"重写"}`),
+				deltaEvent("item-a", " "),
+				itemEvent("response.output_item.done", "item-a", "call-a", `{"q":"重写"} `),
+			},
+			want: []toolDelta{
+				{"call-a", 0, "lookup", ""}, {"call-a", 0, "", `{"q":"`}, {"call-a", 0, "", "天气"},
+				{"call-a", 0, "", `"}`}, {"call-a", 0, "", ""}, {"call-a", 0, "", `{"q":"重写"}`},
+				{"call-a", 0, "", " "}, {"call-a", 0, "", ""},
+			},
+		},
+		{
+			name: "empty_snapshot_keeps_prior_arguments",
+			events: []string{
+				itemEvent("response.output_item.added", "item-a", "call-a", `{"a":`),
+				itemEvent("response.output_item.done", "item-a", "call-a", ""),
+				deltaEvent("item-a", ""),
+				deltaEvent("item-a", "1}"),
+				itemEvent("response.output_item.done", "item-a", "call-a", `{"a":1}`),
+			},
+			want: []toolDelta{{"call-a", 0, "lookup", `{"a":`}, {"call-a", 0, "", ""}, {"call-a", 0, "", ""}, {"call-a", 0, "", "1}"}, {"call-a", 0, "", ""}},
+		},
+		{
+			name: "interleaved_calls_keep_independent_prefixes",
+			events: []string{
+				itemEvent("response.output_item.added", "item-a", "call-a", "["),
+				itemEvent("response.output_item.added", "item-b", "call-b", "{"),
+				deltaEvent("item-a", "1"),
+				deltaEvent("item-b", `"b":2`),
+				itemEvent("response.output_item.done", "item-a", "call-a", "[1]"),
+				deltaEvent("item-b", "}"),
+				itemEvent("response.output_item.done", "item-b", "call-b", `{"b":2}`),
+			},
+			want: []toolDelta{{"call-a", 0, "lookup", "["}, {"call-b", 1, "lookup", "{"}, {"call-a", 0, "", "1"}, {"call-b", 1, "", `"b":2`}, {"call-a", 0, "", "]"}, {"call-b", 1, "", "}"}, {"call-b", 1, "", ""}},
+		},
+		{
+			name: "item_id_fallback_and_snapshot_before_delta",
+			events: []string{
+				deltaEvent("fallback", "["),
+				itemEvent("response.output_item.added", "fallback", "", "[1"),
+				deltaEvent("fallback", "]"),
+				itemEvent("response.output_item.done", "fallback", "", "[1]"),
+			},
+			want: []toolDelta{{"fallback", 0, "", "["}, {"fallback", 0, "lookup", "1"}, {"fallback", 0, "", "]"}, {"fallback", 0, "", ""}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var input strings.Builder
+			for _, event := range tc.events {
+				input.WriteString("data: " + event + "\n\n")
+			}
+			input.WriteString("data: " + `{"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":17},"output":[]}}` + "\n\ndata: [DONE]\n\n")
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}, ShouldIncludeUsage: true, DisablePing: true}
+			resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(input.String()))}
+			usage, apiErr := OaiResponsesToChatStreamHandler(ctx, info, resp)
+			require.Nil(t, apiErr)
+			require.NotNil(t, usage)
+			require.Equal(t, 17, usage.TotalTokens)
+			require.True(t, info.HasTrustedUsage)
+			require.True(t, recorder.Flushed)
+			var got []toolDelta
+			var finishes []string
+			for _, line := range strings.Split(recorder.Body.String(), "\n") {
+				data, ok := strings.CutPrefix(line, "data: ")
+				if !ok || data == "[DONE]" {
+					continue
+				}
+				var chunk dto.ChatCompletionsStreamResponse
+				require.NoError(t, common.UnmarshalJsonStr(data, &chunk))
+				for _, choice := range chunk.Choices {
+					for _, tool := range choice.Delta.ToolCalls {
+						require.NotNil(t, tool.Index)
+						got = append(got, toolDelta{tool.ID, *tool.Index, tool.Function.Name, tool.Function.Arguments})
+					}
+					if choice.FinishReason != nil && *choice.FinishReason != "" {
+						finishes = append(finishes, *choice.FinishReason)
+					}
+				}
+			}
+			require.Equal(t, tc.want, got)
+			require.Equal(t, []string{"tool_calls"}, finishes)
+		})
+	}
+}
+
+func BenchmarkOaiResponsesToChatStreamToolArguments(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	for _, size := range []int{4 << 10, 256 << 10, 1 << 20} {
+		b.Run(fmt.Sprintf("bytes=%d", size), func(b *testing.B) {
+			const chunkSize = 1024
+			delta := strings.Repeat("x", chunkSize)
+			event := "data: " + `{"type":"response.function_call_arguments.delta","item_id":"item-a","delta":"` + delta + `"}` + "\n\n"
+			arguments := `{"q":"` + strings.Repeat("x", size) + `"}`
+			snapshot, err := common.Marshal(map[string]any{"type": "response.output_item.done", "item": map[string]any{"type": "function_call", "id": "item-a", "call_id": "call-a", "name": "lookup", "arguments": arguments}})
+			if err != nil {
+				b.Fatal(err)
+			}
+			input := "data: " + `{"type":"response.output_item.added","item":{"type":"function_call","id":"item-a","call_id":"call-a","name":"lookup","arguments":"{\"q\":\""}}` + "\n\n" + strings.Repeat(event, size/chunkSize) + "data: " + `{"type":"response.function_call_arguments.delta","item_id":"item-a","delta":"\"}"}` + "\n\ndata: " + string(snapshot) + "\n\ndata: " + `{"type":"response.completed","response":{"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5},"output":[]}}` + "\n\ndata: [DONE]\n\n"
+			b.ReportAllocs()
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				recorder := httptest.NewRecorder()
+				recorder.Body = nil
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+				info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}, ShouldIncludeUsage: true, DisablePing: true}
+				resp := &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(input))}
+				usage, apiErr := OaiResponsesToChatStreamHandler(ctx, info, resp)
+				if apiErr != nil || usage == nil || usage.TotalTokens != 5 || !recorder.Flushed {
+					b.Fatalf("unexpected tool stream result: usage=%+v error=%v flushed=%t", usage, apiErr, recorder.Flushed)
+				}
+			}
+		})
+	}
+}

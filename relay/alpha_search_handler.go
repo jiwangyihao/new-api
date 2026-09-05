@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -75,6 +76,17 @@ func AlphaSearchHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAP
 		apiErr := service.GPTAwareRelayErrorHandler(c, info, httpResp, false)
 		service.ResetStatusCode(apiErr, c.GetString("status_code_mapping"))
 		return apiErr
+	}
+
+	// The adaptor has released the outbound replay body. Drop the original
+	// input only after success, when another channel attempt is no longer needed.
+	common.CleanupBodyStorage(c)
+	c.Set(string(constant.ContextKeyOpenAIAlphaSearchRequest), nil)
+	request.RawBody = nil
+	info.Request = nil
+	if httpResp.Request != nil {
+		httpResp.Request.Body = nil
+		httpResp.Request.GetBody = nil
 	}
 
 	info.ApplyDynamicBillingMultiplierFromHeaders(httpResp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)

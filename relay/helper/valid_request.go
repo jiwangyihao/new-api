@@ -150,22 +150,26 @@ func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest
 }
 
 func GetAndValidateAlphaSearchRequest(c *gin.Context) (*dto.AlphaSearchRequest, error) {
-	request := &dto.AlphaSearchRequest{}
+	request, ok := common.GetContextKeyType[*dto.AlphaSearchRequest](c, constant.ContextKeyOpenAIAlphaSearchRequest)
+	cached := ok && request != nil
 	isJSON := strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json")
-	if isJSON {
-		// Alpha Search forwards unknown fields verbatim, so decode the same
-		// stable bytes retained in RawBody instead of reading disk storage twice.
-		if err := common.UnmarshalBodyReusableWith(c, func(body []byte) error {
-			if err := common.Unmarshal(body, request); err != nil {
-				return err
+	if !cached {
+		request = &dto.AlphaSearchRequest{}
+		if isJSON {
+			// Alpha Search forwards unknown fields verbatim, so decode the same
+			// stable bytes retained in RawBody instead of reading disk storage twice.
+			if err := common.UnmarshalBodyReusableWith(c, func(body []byte) error {
+				if err := common.Unmarshal(body, request); err != nil {
+					return err
+				}
+				request.RawBody = body
+				return nil
+			}); err != nil {
+				return nil, err
 			}
-			request.RawBody = body
-			return nil
-		}); err != nil {
+		} else if err := common.UnmarshalBodyReusable(c, request); err != nil {
 			return nil, err
 		}
-	} else if err := common.UnmarshalBodyReusable(c, request); err != nil {
-		return nil, err
 	}
 	if request.Model == "" {
 		return nil, errors.New("model is required")
@@ -173,7 +177,7 @@ func GetAndValidateAlphaSearchRequest(c *gin.Context) (*dto.AlphaSearchRequest, 
 	if exceedsMaxTokensLimit(request.MaxOutputTokens) {
 		return nil, errors.New("max_output_tokens is invalid")
 	}
-	if !isJSON {
+	if !cached && !isJSON {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return nil, err

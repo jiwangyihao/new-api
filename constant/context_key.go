@@ -12,6 +12,7 @@ const (
 	ContextKeyRequestBufferTimeMs              ContextKey = "request_buffer_time_ms"
 	ContextKeyOpenAIResponsesRequest           ContextKey = "openai_responses_request"
 	ContextKeyOpenAIResponsesCompactionRequest ContextKey = "openai_responses_compaction_request"
+	ContextKeyOpenAIAlphaSearchRequest         ContextKey = "openai_alpha_search_request"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"

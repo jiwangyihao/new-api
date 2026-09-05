@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -283,5 +284,57 @@ func TestAlphaSearchValidationPropagatesStorageErrors(t *testing.T) {
 				require.Equal(t, payload, original)
 			})
 		}
+	}
+}
+
+func TestAlphaSearchValidationRevalidatesCachedFieldsWithoutReadingBody(t *testing.T) {
+	tooManyTokens := uint(maxTokensLimit) + 1
+	for _, tc := range []struct {
+		name    string
+		request *dto.AlphaSearchRequest
+		errText string
+	}{
+		{"valid", &dto.AlphaSearchRequest{Model: "gpt-alpha", RawBody: []byte(`{"model":"gpt-alpha","future":18446744073709551615}`)}, ""},
+		{"missing_model", &dto.AlphaSearchRequest{RawBody: []byte(`{"id":"request"}`)}, "model is required"},
+		{"invalid_limit", &dto.AlphaSearchRequest{Model: "gpt-alpha", MaxOutputTokens: &tooManyTokens}, "max_output_tokens is invalid"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, storage := newAlphaValidationContext(t, []byte(`{"model":"unused"}`), true)
+			common.SetContextKey(ctx, constant.ContextKeyOpenAIAlphaSearchRequest, tc.request)
+
+			got, err := GetAndValidateAlphaSearchRequest(ctx)
+
+			if tc.errText == "" {
+				require.NoError(t, err)
+				require.Same(t, tc.request, got)
+			} else {
+				require.EqualError(t, err, tc.errText)
+				require.Nil(t, got)
+			}
+			require.Zero(t, storage.readCalls)
+			require.Zero(t, storage.bytesCalls)
+		})
+	}
+}
+
+func TestAlphaSearchValidationIgnoresInvalidCacheEntries(t *testing.T) {
+	var nilRequest *dto.AlphaSearchRequest
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{{"nil", nil}, {"typed_nil", nilRequest}, {"wrong_type", "not a request"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := []byte(`{"model":"gpt-alpha","stream":false,"max_output_tokens":0}`)
+			ctx, storage := newAlphaValidationContext(t, payload, true)
+			common.SetContextKey(ctx, constant.ContextKeyOpenAIAlphaSearchRequest, tc.value)
+
+			got, err := GetAndValidateAlphaSearchRequest(ctx)
+
+			require.NoError(t, err)
+			require.Equal(t, "gpt-alpha", got.Model)
+			require.Equal(t, payload, []byte(got.RawBody))
+			require.Equal(t, 1, storage.bytesCalls)
+			require.Zero(t, storage.readCalls)
+		})
 	}
 }

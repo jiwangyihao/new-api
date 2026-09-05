@@ -215,6 +215,24 @@ func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 				common.SetContextKey(c, constant.ContextKeyOpenAIResponsesCompactionRequest, request)
 				return &ModelRequest{Model: request.Model}, nil
 			}
+		case constant.EndpointTypeOpenAIAlphaSearch:
+			if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
+				var prelude struct {
+					dto.AlphaSearchRequest
+					Group string `json:"group,omitempty"`
+				}
+				err := common.UnmarshalBodyReusableWith(c, func(body []byte) error {
+					if err := common.Unmarshal(body, &prelude); err != nil {
+						return err
+					}
+					prelude.RawBody = body
+					return nil
+				})
+				if err == nil {
+					common.SetContextKey(c, constant.ContextKeyOpenAIAlphaSearchRequest, &prelude.AlphaSearchRequest)
+					return &ModelRequest{Model: prelude.Model, Group: prelude.Group}, nil
+				}
+			}
 		}
 	}
 

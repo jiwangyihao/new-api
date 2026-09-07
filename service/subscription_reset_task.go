@@ -17,13 +17,11 @@ import (
 const (
 	subscriptionResetTickInterval = 1 * time.Minute
 	subscriptionResetBatchSize    = 300
-	subscriptionCleanupInterval   = 30 * time.Minute
 )
 
 var (
 	subscriptionResetOnce    sync.Once
 	subscriptionResetRunning atomic.Bool
-	subscriptionCleanupLast  atomic.Int64
 )
 
 func StartSubscriptionQuotaResetTask() {
@@ -79,12 +77,6 @@ func runSubscriptionQuotaResetOnce() {
 		totalReset += n
 		if n < subscriptionResetBatchSize {
 			break
-		}
-	}
-	lastCleanup := time.Unix(subscriptionCleanupLast.Load(), 0)
-	if time.Since(lastCleanup) >= subscriptionCleanupInterval {
-		if _, err := model.CleanupSubscriptionPreConsumeRecords(7 * 24 * 3600); err == nil {
-			subscriptionCleanupLast.Store(time.Now().Unix())
 		}
 	}
 	if common.DebugEnabled && (totalReset > 0 || totalExpired > 0) {

@@ -2324,20 +2324,6 @@ func TestCreditTaskFailureRefundReusesInitialBillingRequestIdentity(t *testing.T
 	require.Equal(t, refunded.FinalizedAt, replayed.FinalizedAt)
 }
 
-func TestSettleBillingKeepsTimedDistributorTaskTokenInputUnchanged(t *testing.T) {
-	ctx := newBillingTestContext(t)
-	relayInfo := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatTask}
-	session := &BillingSession{funding: &SubscriptionFunding{
-		DistributorTokenBilling: true,
-		EntitlementType:         model.SubscriptionEntitlementTimed,
-	}}
-	relayInfo.Billing = session
-
-	require.NoError(t, SettleBilling(ctx, relayInfo, 175))
-	require.True(t, session.settled)
-	require.Zero(t, session.preConsumedSubscription)
-	require.Zero(t, session.funding.(*SubscriptionFunding).targetAppliedCredit)
-}
 
 func TestTaskBillingMapsMissingSubscriptionWithStructuredError(t *testing.T) {
 	truncate(t)

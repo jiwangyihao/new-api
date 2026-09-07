@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/binary"
@@ -3189,18 +3190,59 @@ func RefundSubscriptionPreConsume(requestId string) error {
 		if err := GuardCreditValuationSubscriptionWriterTx(tx, record.UserSubscriptionId); err != nil {
 			return err
 		}
-		if record.Status == "refunded" {
+		if record.Status == "refunded" && record.FinalizedAt > 0 {
 			return nil
 		}
-		if record.PreConsumed <= 0 {
-			record.Status = "refunded"
-			return tx.Save(&record).Error
-		}
-		if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
-			return err
+		if record.Status != "refunded" && record.PreConsumed > 0 {
+			if err := postConsumeUserSubscriptionDeltaTx(tx, record.UserSubscriptionId, -record.PreConsumed); err != nil {
+				return err
+			}
 		}
 		record.Status = "refunded"
+		record.FinalizedAt = getDBTimestampTx(tx)
 		return tx.Save(&record).Error
+	})
+}
+
+// FinalizeSubscriptionPreConsume records completion after funding has committed;
+// it never applies the funding delta again.
+func FinalizeSubscriptionPreConsume(requestId string, userSubscriptionId int, refunded bool) error {
+	if strings.TrimSpace(requestId) == "" || userSubscriptionId <= 0 {
+		return ErrCreditValuationTargetConflict
+	}
+	return runConvertedSubscriptionSettlementWithRetry(func() error {
+		return DB.Transaction(func(tx *gorm.DB) error {
+			var record SubscriptionPreConsumeRecord
+			if err := lockForUpdate(tx).Where("request_id = ?", requestId).First(&record).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrCreditValuationRequestNotFound
+				}
+				return err
+			}
+			if record.UserSubscriptionId != userSubscriptionId {
+				return ErrCreditValuationMappingConflict
+			}
+			if record.ValuationSubscriptionId > 0 {
+				return SettleCreditRequestTargetTx(tx, &record, record.AppliedCredit, true)
+			}
+			status := "settled"
+			if refunded {
+				status = "refunded"
+			}
+			if record.FinalizedAt > 0 {
+				if record.Status == status {
+					return nil
+				}
+				return ErrCreditValuationFinalizedConflict
+			}
+			if record.Status != "consumed" && record.Status != status {
+				return ErrCreditValuationStateMismatch
+			}
+			now := getDBTimestampTx(tx)
+			return tx.Model(&record).Updates(map[string]any{
+				"status": status, "finalized_at": now, "updated_at": now,
+			}).Error
+		})
 	})
 }
 
@@ -3254,7 +3296,7 @@ var ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference = errors.New("subscri
 func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
 	var tasks []Task
 	return tx.Select("id", "private_data").
-		Where("status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("(status IS NULL OR status NOT IN ?)", []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).
 		Where("subscription_request_id IS NULL").
 		Order("id ASC").
 		FindInBatches(&tasks, subscriptionCleanupReferenceBatchSize, func(_ *gorm.DB, _ int) error {
@@ -3294,13 +3336,29 @@ func validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx *gorm.DB) error {
 func subscriptionPreConsumeActiveTaskReferenceQuery(tx *gorm.DB) *gorm.DB {
 	return tx.Model(&Task{}).
 		Select("1").
-		Where("tasks.status IN ?", []TaskStatus{TaskStatusSubmitted, TaskStatusInProgress}).
+		Where("(tasks.status IS NULL OR tasks.status NOT IN ?)", []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).
 		Where("tasks.subscription_request_id = subscription_pre_consume_records.request_id")
 }
 
+func subscriptionPreConsumeTerminalQuery(tx *gorm.DB, cutoff int64) *gorm.DB {
+	terminal := tx.Where("finalized_at > 0 AND finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"})
+	legacy := "finalized_at = 0 AND valuation_subscription_id = 0 AND applied_credit = 0 AND settlement_version = 0 AND valuation_rule_version = 0 AND created_at > 0 AND created_at < ? AND updated_at > 0 AND updated_at < ?"
+	terminal = terminal.Or(tx.Where(legacy, cutoff, cutoff).Where("status = ?", "refunded"))
+	if LOG_DB == DB && tx.Migrator().HasTable(&Log{}) {
+		completion := tx.Model(&Log{}).Select("1").
+			Where("logs.request_id = subscription_pre_consume_records.request_id").
+			Where("logs.user_id = subscription_pre_consume_records.user_id").
+			Where("logs.subscription_id = subscription_pre_consume_records.user_subscription_id").
+			Where("logs.type = ? AND logs.created_at > 0 AND logs.created_at < ?", LogTypeConsume, cutoff)
+		terminal = terminal.Or(tx.Where(legacy, cutoff, cutoff).
+			Where("status = ? AND request_id <> '' AND user_id > 0 AND user_subscription_id > 0", "consumed").
+			Where("EXISTS (?)", completion))
+	}
+	return tx.Model(&SubscriptionPreConsumeRecord{}).Where(terminal)
+}
+
 func subscriptionPreConsumeCleanupCandidateQuery(tx *gorm.DB, cutoff int64) *gorm.DB {
-	return tx.Model(&SubscriptionPreConsumeRecord{}).
-		Where("finalized_at < ? AND status IN ?", cutoff, []string{"settled", "refunded"}).
+	return subscriptionPreConsumeTerminalQuery(tx, cutoff).
 		Where("NOT EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
 }
 
@@ -3357,8 +3415,7 @@ func PreviewSubscriptionPreConsumeCleanup(olderThanSeconds int64, batchSize int)
 				preview.TerminalCounts[terminalCount.Status] = terminalCount.Count
 			}
 		}
-		protectedQuery := tx.Model(&SubscriptionPreConsumeRecord{}).
-			Where("finalized_at < ? AND status IN ?", preview.Cutoff, []string{"settled", "refunded"}).
+		protectedQuery := subscriptionPreConsumeTerminalQuery(tx, preview.Cutoff).
 			Where("EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
 		if err := protectedQuery.Count(&preview.ProtectedCount).Error; err != nil {
 			return err
@@ -3371,47 +3428,55 @@ func PreviewSubscriptionPreConsumeCleanup(olderThanSeconds int64, batchSize int)
 	return preview, err
 }
 
-const subscriptionPreConsumeCleanupBatchSize = 100
+const subscriptionPreConsumeCleanupBatchSize = 1000
 
-// CleanupSubscriptionPreConsumeRecords removes one bounded batch of old idempotency records.
-func CleanupSubscriptionPreConsumeRecords(olderThanSeconds int64) (int64, error) {
-	return cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds, subscriptionPreConsumeCleanupBatchSize)
-}
-
-func cleanupSubscriptionPreConsumeRecordsBatch(olderThanSeconds int64, batchSize int) (int64, error) {
+// CleanupSubscriptionPreConsumeRecords scans one bounded ID page. The returned
+// cursor advances past protected records without repeatedly rescanning them.
+func CleanupSubscriptionPreConsumeRecords(ctx context.Context, olderThanSeconds int64, batchSize int, afterID int) (StorageRetentionBatchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return StorageRetentionBatchResult{}, err
+	}
 	if olderThanSeconds <= 0 {
 		olderThanSeconds = 7 * 24 * 3600
 	}
-	if batchSize <= 0 {
-		batchSize = subscriptionPreConsumeCleanupBatchSize
+	if DB == nil {
+		return StorageRetentionBatchResult{}, errors.New("main database is not initialized")
 	}
+	batchSize = storageRetentionBatchSize(DB, batchSize)
 	cutoff := GetDBTimestamp() - olderThanSeconds
-	var deleted int64
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	var result StorageRetentionBatchResult
+	err := DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := validateSubscriptionPreConsumeCleanupTaskReferencesTx(tx); err != nil {
 			return err
 		}
-		var candidateIDs []int
-		if err := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
-			Select("id").
-			Order("id ASC").
-			Limit(batchSize).
-			Pluck("id", &candidateIDs).Error; err != nil {
+		var ids []int
+		if err := tx.Model(&SubscriptionPreConsumeRecord{}).Where("id > ?", afterID).
+			Order("id ASC").Limit(batchSize).Pluck("id", &ids).Error; err != nil {
 			return err
 		}
-		if len(candidateIDs) == 0 {
+		result.Scanned = len(ids)
+		result.Done = len(ids) < batchSize
+		if len(ids) == 0 {
 			return nil
 		}
-		res := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
-			Where("id IN ?", candidateIDs).
-			Delete(&SubscriptionPreConsumeRecord{})
-		deleted = res.RowsAffected
-		return res.Error
+		result.LastID = ids[len(ids)-1]
+		var candidates []int
+		if err := lockForUpdate(subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff)).
+			Where("id IN ?", ids).Order("id ASC").Pluck("id", &candidates).Error; err != nil {
+			return err
+		}
+		if len(candidates) == 0 {
+			return nil
+		}
+		deleted := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
+			Where("id IN ?", candidates).Delete(&SubscriptionPreConsumeRecord{})
+		result.Deleted = deleted.RowsAffected
+		return deleted.Error
 	})
 	if err != nil {
-		return 0, err
+		return StorageRetentionBatchResult{}, err
 	}
-	return deleted, nil
+	return result, nil
 }
 
 type SubscriptionPlanInfo struct {

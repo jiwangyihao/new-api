@@ -178,6 +178,17 @@ func taskAdjustFunding(task *model.Task, delta int, final bool) error {
 	return ErrLegacyWalletFundingDisabled
 }
 
+func finalizeTaskSubscriptionPreConsume(ctx context.Context, task *model.Task, refunded bool) {
+	if !taskIsSubscription(task) || strings.TrimSpace(task.PrivateData.SubscriptionRequestId) == "" {
+		return
+	}
+	if err := model.FinalizeSubscriptionPreConsume(task.PrivateData.SubscriptionRequestId, task.PrivateData.SubscriptionId, refunded); err != nil {
+		// The money operation has succeeded; keep an unresolved marker rather
+		// than asking the caller to repeat an already committed funding delta.
+		logger.LogError(ctx, fmt.Sprintf("task pre-consume finalization failed task %s: %v", task.TaskID, err))
+	}
+}
+
 // taskBillingOther 从 task 的 BillingContext 构建日志 Other 字段。
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
@@ -225,6 +236,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) {
 		logger.LogWarn(ctx, fmt.Sprintf("退还资金来源失败 task %s: %s", task.TaskID, err.Error()))
 		return
 	}
+	finalizeTaskSubscriptionPreConsume(ctx, task, true)
 
 	// 2. 记录日志
 	other := taskBillingOther(task)
@@ -261,6 +273,7 @@ func RecalculateTaskQuotaWithClamp(ctx context.Context, task *model.Task, actual
 			logger.LogError(ctx, fmt.Sprintf("任务终态结算失败 task %s: %s", task.TaskID, err.Error()))
 			return
 		}
+		finalizeTaskSubscriptionPreConsume(ctx, task, false)
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
 		return
@@ -284,6 +297,7 @@ func RecalculateTaskQuotaWithClamp(ctx context.Context, task *model.Task, actual
 	if err := task.UpdateQuota(); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("差额结算回写 quota 失败 task %s: %s", task.TaskID, err.Error()))
 	}
+	finalizeTaskSubscriptionPreConsume(ctx, task, false)
 
 	var logType int
 	var logQuota int

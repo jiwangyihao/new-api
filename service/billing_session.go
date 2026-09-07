@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,8 +67,9 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 		}
 		fundingDelta = int(fundingDelta64)
 	}
-	if subscriptionFunding, ok := s.funding.(*SubscriptionFunding); ok {
-		final := s.relayInfo == nil || s.relayInfo.RelayFormat != types.RelayFormatTask
+	subscriptionFunding, isSubscription := s.funding.(*SubscriptionFunding)
+	final := s.relayInfo == nil || s.relayInfo.RelayFormat != types.RelayFormatTask
+	if isSubscription && !s.fundingSettled {
 		handled, err := subscriptionFunding.settleCreditRequestTarget(input.SubscriptionTokens, final)
 		if err != nil {
 			noFundingActivity := input.SubscriptionTokens == 0 &&
@@ -87,23 +89,23 @@ func (s *BillingSession) SettleWithInput(input BillingSettleInput) error {
 			return nil
 		}
 	}
-	if fundingDelta == 0 {
-		s.settled = true
-		return nil
-	}
-
-	// 1) 调整资金来源（仅在尚未提交时执行，防止重复调用）。
-	// 请求级计费不再调整 token key quota；token key 只作为认证凭证。
 	if !s.fundingSettled {
-		if err := s.funding.Settle(fundingDelta); err != nil {
-			return err
+		if fundingDelta != 0 {
+			if err := s.funding.Settle(fundingDelta); err != nil {
+				return err
+			}
+			s.syncRelayInfoPreservingPostDelta()
 		}
 		s.fundingSettled = true
-		s.syncRelayInfoPreservingPostDelta()
 	}
-
-	// 2) 更新 relayInfo 上的订阅 PostDelta（用于日志）。
-	if s.funding.Source() == BillingSourceSubscription {
+	// Funding is already committed. Retrying a failed completion marker must
+	// not reapply that delta or increment the log's PostDelta twice.
+	if isSubscription && final {
+		if err := model.FinalizeSubscriptionPreConsume(subscriptionFunding.requestId, subscriptionFunding.subscriptionId, input.SubscriptionTokens == 0); err != nil {
+			return err
+		}
+	}
+	if fundingDelta != 0 && s.funding.Source() == BillingSourceSubscription {
 		s.relayInfo.SubscriptionPostDelta += int64(fundingDelta)
 		s.syncRelayInfoToActualUsed()
 	}
@@ -146,6 +148,11 @@ func (s *BillingSession) CommitPreConsumedOnFailure() {
 	defer s.mu.Unlock()
 	if s.refunded {
 		return
+	}
+	if funding, ok := s.funding.(*SubscriptionFunding); ok && funding.requestId != "" && funding.subscriptionId > 0 {
+		if err := model.FinalizeSubscriptionPreConsume(funding.requestId, funding.subscriptionId, false); err != nil {
+			logger.LogError(context.Background(), "failed to finalize committed subscription pre-consume: "+err.Error())
+		}
 	}
 	s.settled = true
 }

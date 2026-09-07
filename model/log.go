@@ -1111,24 +1111,20 @@ func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelNa
 }
 
 func DeleteOldLog(ctx context.Context, targetTimestamp int64, limit int) (int64, error) {
-	var total int64 = 0
-
+	var total int64
+	afterID := 0
 	for {
-		if nil != ctx.Err() {
-			return total, ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return total, err
 		}
-
-		result := LOG_DB.Where("created_at < ?", targetTimestamp).Limit(limit).Delete(&Log{})
-		if nil != result.Error {
-			return total, result.Error
+		batch, err := deleteOldLogPage(ctx, targetTimestamp, limit, afterID, false)
+		if err != nil {
+			return total, err
 		}
-
-		total += result.RowsAffected
-
-		if result.RowsAffected < int64(limit) {
-			break
+		total += batch.Deleted
+		if batch.Done {
+			return total, nil
 		}
+		afterID = batch.LastID
 	}
-
-	return total, nil
 }

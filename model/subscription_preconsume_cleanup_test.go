@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -52,9 +53,9 @@ func TestCleanupSubscriptionPreConsumeRecordsDeletesOnlyExpiredTerminalRecords(t
 		Where("request_id = ?", unknownRequestID).
 		UpdateColumns(map[string]any{"status": "future-state", "updated_at": expiredAt}).Error)
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(2), deleted)
+	require.Equal(t, int64(2), deleted.Deleted)
 
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
@@ -100,9 +101,9 @@ func TestCleanupSubscriptionPreConsumeRecordsUsesExclusiveFinalizedAtCutoff(t *t
 	dbTimestampCache.Store(now)
 	dbTimestampCacheUnixNano.Store(time.Now().UnixNano())
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(retentionSeconds)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), retentionSeconds, 100, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(1), deleted.Deleted)
 
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
@@ -153,9 +154,9 @@ func TestCleanupSubscriptionPreConsumeRecordsProtectsActiveTaskReferences(t *tes
 		Where("request_id IN ?", []string{settledRequestID, refundedRequestID, unreferencedRequest}).
 		UpdateColumn("finalized_at", expiredAt).Error)
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(1), deleted.Deleted)
 
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
@@ -191,9 +192,9 @@ func TestCleanupSubscriptionPreConsumeRecordsFailsClosedOnAmbiguousActiveTaskRef
 	require.NoError(t, db.Create(ambiguous).Error)
 	require.False(t, taskProjectionValue(t, db, ambiguous.ID).Valid)
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 	require.ErrorIs(t, err, ErrSubscriptionPreConsumeCleanupAmbiguousTaskReference)
-	require.Zero(t, deleted)
+	require.Zero(t, deleted.Deleted)
 	var count int64
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
 		Where("request_id = ?", requestID).
@@ -235,9 +236,9 @@ func TestCleanupSubscriptionPreConsumeRecordsAllowsProvenTimedTaskWithoutRequest
 	}
 	require.NoError(t, timedTask.Insert())
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(1), deleted.Deleted)
 }
 
 func TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches(t *testing.T) {
@@ -262,20 +263,20 @@ func TestCleanupSubscriptionPreConsumeRecordsUsesStableBoundedBatches(t *testing
 		Where("request_id IN ?", requestIDs).
 		UpdateColumn("finalized_at", expiredAt).Error)
 
-	deleted, err := cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, expectedBatchSize, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(expectedBatchSize), deleted)
+	require.Equal(t, int64(expectedBatchSize), deleted.Deleted)
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
 		Order("id ASC").Pluck("request_id", &remaining).Error)
 	require.Equal(t, requestIDs[expectedBatchSize:], remaining)
 
-	deleted, err = cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	deleted, err = CleanupSubscriptionPreConsumeRecords(context.Background(), 60, expectedBatchSize, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
-	deleted, err = cleanupSubscriptionPreConsumeRecordsBatch(60, expectedBatchSize)
+	require.Equal(t, int64(1), deleted.Deleted)
+	deleted, err = CleanupSubscriptionPreConsumeRecords(context.Background(), 60, expectedBatchSize, 0)
 	require.NoError(t, err)
-	require.Zero(t, deleted)
+	require.Zero(t, deleted.Deleted)
 }
 
 func TestCleanupSubscriptionPreConsumeRecordsRollsBackBatchOnDeleteFailure(t *testing.T) {
@@ -306,9 +307,9 @@ func TestCleanupSubscriptionPreConsumeRecordsRollsBackBatchOnDeleteFailure(t *te
 	}))
 	t.Cleanup(func() { db.Callback().Delete().Remove(callbackName) })
 
-	deleted, err := cleanupSubscriptionPreConsumeRecordsBatch(60, len(requestIDs))
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, len(requestIDs), 0)
 	require.ErrorIs(t, err, injectedErr)
-	require.Zero(t, deleted)
+	require.Zero(t, deleted.Deleted)
 
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
@@ -388,7 +389,7 @@ func TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays(t
 	ready := make(chan struct{}, len(requests)+1)
 	start := make(chan struct{})
 	errs := make(chan error, len(requests)+1)
-	var deleted int64
+	var deleted StorageRetentionBatchResult
 	var wg sync.WaitGroup
 	for _, request := range requests {
 		request := request
@@ -406,7 +407,7 @@ func TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays(t
 		ready <- struct{}{}
 		<-start
 		var cleanupErr error
-		deleted, cleanupErr = CleanupSubscriptionPreConsumeRecords(60)
+		deleted, cleanupErr = CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 		errs <- cleanupErr
 	}()
 	for range cap(ready) {
@@ -418,7 +419,7 @@ func TestCleanupSubscriptionPreConsumeRecordsSerializesWithTerminalTaskReplays(t
 	for concurrentErr := range errs {
 		require.NoError(t, concurrentErr)
 	}
-	require.Zero(t, deleted)
+	require.Zero(t, deleted.Deleted)
 
 	var remaining []string
 	require.NoError(t, db.Model(&SubscriptionPreConsumeRecord{}).
@@ -514,9 +515,9 @@ func TestCleanupSubscriptionPreConsumeRecordsPreservesAuditFacts(t *testing.T) {
 	var stateBefore CreditValuationState
 	require.NoError(t, db.First(&stateBefore, "user_subscription_id = ?", subscriptionID).Error)
 
-	deleted, err := CleanupSubscriptionPreConsumeRecords(60)
+	deleted, err := CleanupSubscriptionPreConsumeRecords(context.Background(), 60, 100, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(1), deleted)
+	require.Equal(t, int64(1), deleted.Deleted)
 
 	var ledgersAfter []CreditBalanceLedger
 	require.NoError(t, db.Order("id ASC").Find(&ledgersAfter).Error)

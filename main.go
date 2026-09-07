@@ -276,6 +276,7 @@ func main() {
 
 	// Subscription quota reset task (daily/weekly/monthly/custom)
 	service.StartSubscriptionQuotaResetTask()
+	service.StartStorageRetentionTask()
 
 	// Invitation entitlement refresh task (daily Asia/Shanghai midnight cache refresh)
 	service.StartInvitationEntitlementRefreshTask()

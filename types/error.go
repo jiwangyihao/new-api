@@ -102,6 +102,7 @@ type NewAPIError struct {
 	errorCode      ErrorCode
 	StatusCode     int
 	Metadata       json.RawMessage
+	local          bool
 }
 
 // Unwrap enables errors.Is / errors.As to work with NewAPIError by exposing the underlying error.
@@ -110,6 +111,12 @@ func (e *NewAPIError) Unwrap() error {
 		return nil
 	}
 	return e.Err
+}
+
+// IsLocal reports an error constructed by the gateway rather than decoded from
+// an upstream response. Wrapping an existing error preserves its origin.
+func (e *NewAPIError) IsLocal() bool {
+	return e != nil && (e.local || e.errorType == ErrorTypeNewAPIError)
 }
 
 func (e *NewAPIError) GetErrorCode() ErrorCode {
@@ -291,7 +298,13 @@ func NewOpenAIError(err error, errorCode ErrorCode, statusCode int, ops ...NewAP
 		Type:    string(errorCode),
 		Code:    errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	result := WithOpenAIError(openaiError, statusCode)
+	result.local = true
+	result.Err = err
+	for _, op := range ops {
+		op(result)
+	}
+	return result
 }
 
 func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
@@ -299,7 +312,9 @@ func InitOpenAIError(errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOpti
 		Type: string(errorCode),
 		Code: errorCode,
 	}
-	return WithOpenAIError(openaiError, statusCode, ops...)
+	result := WithOpenAIError(openaiError, statusCode, ops...)
+	result.local = true
+	return result
 }
 
 func NewErrorWithStatusCode(err error, errorCode ErrorCode, statusCode int, ops ...NewAPIErrorOptions) *NewAPIError {
@@ -394,6 +409,12 @@ func ErrOptionWithNoRecordErrorLog() NewAPIErrorOptions {
 	return func(e *NewAPIError) {
 		e.recordErrorLog = common.GetPointer(false)
 	}
+}
+
+// ErrOptionWithLocalOrigin marks a gateway policy decision represented in an
+// upstream-compatible error format. Decoded provider errors must not use it.
+func ErrOptionWithLocalOrigin() NewAPIErrorOptions {
+	return func(e *NewAPIError) { e.local = true }
 }
 
 func ErrOptionWithStatusCode(statusCode int) NewAPIErrorOptions {

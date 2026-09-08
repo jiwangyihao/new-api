@@ -207,6 +207,7 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 	requestURL := getMjRequestPath(c.Request.URL.String())
 	baseURL := c.GetString("base_url")
 	fullRequestURL := fmt.Sprintf("%s%s", baseURL, requestURL)
+	service.AttemptAvailabilityChannel(c, c.GetInt("channel_id"))
 	mjResp, _, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	if err != nil {
 		return &mjResp.Response
@@ -251,8 +252,10 @@ func RelaySwapFace(c *gin.Context, info *relaycommon.RelayInfo) *dto.MidjourneyR
 		ChannelId:   c.GetInt("channel_id"),
 		Quota:       priceData.Quota,
 	}
+	service.AttachMidjourneyAvailability(c, midjourneyTask)
 	err = midjourneyTask.Insert()
 	if err != nil {
+		service.AvailabilityTaskInsertFailed(c)
 		return service.MidjourneyErrorWrapper(constant.MjRequestError, "insert_midjourney_task_failed")
 	}
 	c.Writer.WriteHeader(mjResp.StatusCode)
@@ -496,6 +499,7 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		}
 	}
 
+	service.AttemptAvailabilityChannel(c, c.GetInt("channel_id"))
 	midjResponseWithStatus, responseBody, err := service.DoMidjourneyHttpRequest(c, time.Second*60, fullRequestURL)
 	if err != nil {
 		return &midjResponseWithStatus.Response
@@ -591,8 +595,10 @@ func RelayMidjourneySubmit(c *gin.Context, relayInfo *relaycommon.RelayInfo) *dt
 		midjourneyTask.Progress = "100%"
 		midjourneyTask.Status = "SUCCESS"
 	}
+	service.AttachMidjourneyAvailability(c, midjourneyTask)
 	err = midjourneyTask.Insert()
 	if err != nil {
+		service.AvailabilityTaskInsertFailed(c)
 		return &dto.MidjourneyResponse{
 			Code:        4,
 			Description: "insert_midjourney_task_failed",

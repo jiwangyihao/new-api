@@ -659,7 +659,10 @@ func migrateLogSchema(db *gorm.DB) error {
 			return err
 		}
 	}
-	return db.AutoMigrate(&LogAggregationEvent{}, &FreeSubscriptionUsageHourly{}, &LogUsageHourly{})
+	if err := db.AutoMigrate(&LogAggregationEvent{}, &FreeSubscriptionUsageHourly{}, &LogUsageHourly{}); err != nil {
+		return err
+	}
+	return MigrateAvailability(db)
 }
 
 func migrateLogManualColumns(db *gorm.DB) error {

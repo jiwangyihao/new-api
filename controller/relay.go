@@ -80,7 +80,19 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	)
 
 	var relayInfo *relaycommon.RelayInfo
+	var observationError *types.NewAPIError
 	defer func() {
+		recovered := recover()
+		if recovered != nil {
+			observationError = types.NewError(errors.New("relay panic"), types.ErrorCodeDoRequestFailed)
+		}
+		if observationError == nil {
+			observationError = newAPIError
+		}
+		service.ObserveAvailabilityResult(c, relayInfo, observationError)
+		if recovered != nil {
+			panic(recovered)
+		}
 		_ = writeRelayErrorResponse(c, relayFormat, ws, requestId, relayInfo, newAPIError)
 	}()
 
@@ -173,6 +185,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			handleRelayPanicForTokenLimit(c, relayInfo, recovered)
 		}
 		if newAPIError != nil {
+			observationError = newAPIError
 			newAPIError = handleRelayErrorForTokenLimit(c, relayInfo, newAPIError)
 			return
 		}
@@ -270,6 +283,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 
+		service.AttemptAvailabilityChannel(c, channel.Id)
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
 			newAPIError = relay.WssHelper(c, relayInfo)
@@ -619,6 +633,7 @@ func RelayMidjourney(c *gin.Context) {
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
 	if mjErr != nil {
+		service.ObserveMidjourneyAvailabilityError(c, mjErr.Code, mjErr.Description)
 		statusCode := http.StatusBadRequest
 		if mjErr.Code == 30 {
 			mjErr.Result = "当前模型负载已饱和，请稍后再试，或升级账户以提升服务质量。"
@@ -688,6 +703,10 @@ func RelayTask(c *gin.Context) {
 		respondTaskError(c, taskErr)
 		return
 	}
+	if strings.HasSuffix(c.Request.URL.Path, "/remix") && relayInfo.OriginModelName != "" {
+		capture := service.BeginAvailability(c, relayInfo.OriginModelName, relayInfo.TokenGroups)
+		defer capture.Finish(c)
+	}
 
 	var result *relay.TaskSubmitResult
 	var taskErr *dto.TaskError
@@ -737,6 +756,7 @@ func RelayTask(c *gin.Context) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
+		service.AttemptAvailabilityChannel(c, channel.Id)
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
 		if taskErr == nil {
 			break
@@ -768,6 +788,15 @@ func RelayTask(c *gin.Context) {
 		service.LogTaskConsumption(c, relayInfo)
 
 		task := model.InitTask(result.Platform, relayInfo)
+		if observation := service.DeferTaskAvailability(c); observation != nil {
+			data, marshalErr := common.Marshal(observation)
+			if marshalErr != nil {
+				service.AvailabilityTaskInsertFailed(c)
+			} else {
+				task.AvailabilityData = string(data)
+				task.AvailabilityPending = true
+			}
+		}
 		task.PrivateData.UpstreamTaskID = result.UpstreamTaskID
 		task.PrivateData.BillingSource = relayInfo.BillingSource
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
@@ -783,6 +812,7 @@ func RelayTask(c *gin.Context) {
 		task.Data = result.TaskData
 		task.Action = relayInfo.Action
 		if insertErr := task.Insert(); insertErr != nil {
+			service.AvailabilityTaskInsertFailed(c)
 			common.SysError("insert task error: " + insertErr.Error())
 		}
 	}
@@ -794,6 +824,7 @@ func RelayTask(c *gin.Context) {
 
 // respondTaskError 统一输出 Task 错误响应（含 429 限流提示改写）
 func respondTaskError(c *gin.Context, taskErr *dto.TaskError) {
+	service.ObserveAvailabilityTaskError(c, taskErr.Code, taskErr.StatusCode, taskErr.LocalError)
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		taskErr.Message = "当前上游负载已饱和，请稍后再试"
 	}

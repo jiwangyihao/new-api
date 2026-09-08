@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
@@ -18,6 +20,7 @@ func SystemPerformanceCheck() gin.HandlerFunc {
 		path := c.Request.URL.Path
 		if strings.HasPrefix(path, "/v1/messages") {
 			if err := checkSystemPerformance(); err != nil {
+				model.MarkAvailabilityGap(time.Now().Unix(), time.Now().Unix()+1)
 				c.JSON(err.StatusCode, gin.H{
 					"error": err.ToClaudeError(),
 				})
@@ -26,6 +29,7 @@ func SystemPerformanceCheck() gin.HandlerFunc {
 			}
 		} else {
 			if err := checkSystemPerformance(); err != nil {
+				model.MarkAvailabilityGap(time.Now().Unix(), time.Now().Unix()+1)
 				c.JSON(err.StatusCode, gin.H{
 					"error": err.ToOpenAIError(),
 				})

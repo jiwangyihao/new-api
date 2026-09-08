@@ -36,8 +36,10 @@ type StreamStatus struct {
 	Completed    bool
 	DrainedToEOF bool
 
-	Errors     []StreamErrorEntry
-	ErrorCount int
+	Errors                 []StreamErrorEntry
+	ErrorCount             int
+	serviceFailure         bool
+	availabilityIncomplete bool
 }
 
 func NewStreamStatus() *StreamStatus {
@@ -50,6 +52,19 @@ func (s *StreamStatus) SetEndReason(reason StreamEndReason, err error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Keep service failure evidence even when a client disconnect won the
+	// first-end-reason race. This does not change protocol termination rules.
+	if !s.Completed {
+		switch reason {
+		case StreamEndReasonTimeout, StreamEndReasonScannerErr, StreamEndReasonPanic:
+			s.serviceFailure = true
+		case StreamEndReasonHandlerStop:
+			if err != nil {
+				s.serviceFailure = true
+			}
+		}
+	}
 
 	if s.EndReason != StreamEndReasonNone {
 		if s.EndReason == StreamEndReasonEOF && reason == StreamEndReasonHandlerStop {
@@ -106,6 +121,9 @@ func (s *StreamStatus) RecordError(msg string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if msg != "" && !s.Completed {
+		s.serviceFailure = true
+	}
 	s.recordErrorLocked(msg)
 }
 
@@ -166,4 +184,35 @@ func (s *StreamStatus) Summary() string {
 		fmt.Fprintf(b, " soft_errors=%d", errorCount)
 	}
 	return b.String()
+}
+
+// AvailabilityEvidence snapshots completion evidence under the stream lock.
+// EOF alone is not completion; a later protocol completion may upgrade it.
+func (s *StreamStatus) AvailabilityEvidence() (StreamEndReason, bool, bool, bool) {
+	if s == nil {
+		return StreamEndReasonNone, false, false, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.EndReason, s.Completed, s.ErrorCount > 0, s.serviceFailure
+}
+
+// MarkAvailabilityIncomplete records a bounded shutdown wait which ended
+// before all stream handlers settled; it must not be guessed as a failure.
+func (s *StreamStatus) MarkAvailabilityIncomplete() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.availabilityIncomplete = true
+	s.mu.Unlock()
+}
+
+func (s *StreamStatus) AvailabilityIncomplete() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.availabilityIncomplete
 }

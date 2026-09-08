@@ -135,6 +135,66 @@ func TestSubscriptionPlansPublicRoute(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, selfRecorder.Code)
 }
 
+func TestAvailabilityRequiresLoginAndReturnsOnlyPublicGroupMetrics(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	db := setupSubscriptionPublicPlansRouteTestDB(t)
+	require.NoError(t, model.MigrateAvailability(db))
+	require.NoError(t, db.Create(&model.ChannelGroup{Id: 2, Name: "Public group", Enabled: true}).Error)
+	require.NoError(t, db.Create(&model.Channel{Id: 10, Name: "private-provider", Key: "private-key", Status: common.ChannelStatusEnabled, Models: "public-model", TokenBillingMultiplier: 1}).Error)
+	require.NoError(t, db.Create(&model.ChannelGroupChannel{ChannelGroupId: 2, ChannelId: 10}).Error)
+	engine := gin.New()
+	engine.Use(sessions.Sessions("session", cookie.NewStore([]byte("availability-test-cookie-secret"))))
+	engine.GET("/test-session", func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", "ordinary-user")
+		session.Set("id", 41)
+		session.Set("role", common.RoleCommonUser)
+		session.Set("status", common.UserStatusEnabled)
+		require.NoError(t, session.Save())
+		c.Status(http.StatusNoContent)
+	})
+	SetApiRouter(engine)
+	anonymous := httptest.NewRecorder()
+	engine.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, "/api/availability", nil))
+	assert.Equal(t, http.StatusUnauthorized, anonymous.Code)
+	login := httptest.NewRecorder()
+	engine.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/test-session", nil))
+	for _, tc := range []struct {
+		name, user, query string
+		status            int
+	}{
+		{"ordinary user", "41", "?range=24h", http.StatusOK},
+		{"identity mismatch", "42", "?range=24h", http.StatusUnauthorized},
+		{"invalid range", "41", "?range=all", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/api/availability"+tc.query, nil)
+			request.Header.Set("New-Api-User", tc.user)
+			for _, item := range login.Result().Cookies() {
+				request.AddCookie(item)
+			}
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, request)
+			require.Equal(t, tc.status, recorder.Code)
+			if tc.status != http.StatusOK {
+				return
+			}
+			var payload struct {
+				Success bool                     `json:"success"`
+				Data    model.AvailabilityReport `json:"data"`
+			}
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &payload))
+			require.True(t, payload.Success)
+			require.Len(t, payload.Data.Groups, 1)
+			assert.Equal(t, "Public group", payload.Data.Groups[0].Name)
+			assert.Equal(t, "private, no-store", recorder.Header().Get("Cache-Control"))
+			for _, forbidden := range []string{"private-provider", "private-key", "request_count", "success_count", "failure_count", "channel_id", "request_id"} {
+				assert.NotContains(t, recorder.Body.String(), forbidden)
+			}
+		})
+	}
+}
+
 func TestSubscriptionPlansProtectedDTOOmitsLegacyBusinessGroupFields(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setupSubscriptionPublicPlansRouteTestDB(t)

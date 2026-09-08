@@ -124,9 +124,10 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 	if err != nil {
 		return nil, err
 	}
-	if len(assignments) == 0 {
-		return []ChannelCreditBillingGroup{}, nil
-	}
+	return buildChannelCreditBillingGroups(rows, assignments), nil
+}
+
+func buildChannelCreditBillingGroups(rows []channelCreditBillingRow, assignments map[int]channelNonDefaultGroupAssignment) []ChannelCreditBillingGroup {
 
 	groupsByKey := make(map[struct {
 		groupId int
@@ -196,15 +197,15 @@ func ListEnabledChannelCreditBillingGroups() ([]ChannelCreditBillingGroup, error
 		}
 		return groups[i].ChannelType < groups[j].ChannelType
 	})
-	return groups, nil
+	return groups
 }
 
 // channelNonDefaultGroupAssignment 描述某渠道命中的非默认分组及其计费 profile。
 type channelNonDefaultGroupAssignment struct {
-	groupId         int
-	groupName       string
+	groupId          int
+	groupName        string
 	overridesBilling bool
-	profile         ChannelBillingProfile
+	profile          ChannelBillingProfile
 }
 
 // channelNonDefaultGroupAssignments 返回每个渠道（按渠道 id）命中的非默认分组（按 id 最小者）。
@@ -215,32 +216,30 @@ func channelNonDefaultGroupAssignments() (map[int]channelNonDefaultGroupAssignme
 	if err != nil {
 		return nil, err
 	}
-	nonDefault := make([]*ChannelGroup, 0, len(groups))
-	for _, g := range groups {
-		if g.IsDefault() {
-			continue
-		}
-		nonDefault = append(nonDefault, g)
-	}
-	if len(nonDefault) == 0 {
-		return map[int]channelNonDefaultGroupAssignment{}, nil
-	}
-	sort.Slice(nonDefault, func(i, j int) bool { return nonDefault[i].Id < nonDefault[j].Id })
-
-	groupById := make(map[int]*ChannelGroup, len(nonDefault))
-	groupIds := make([]int, 0, len(nonDefault))
-	for _, g := range nonDefault {
-		groupById[g.Id] = g
-		groupIds = append(groupIds, g.Id)
-	}
 	var members []ChannelGroupChannel
-	if err := DB.Where("channel_group_id IN ?", groupIds).Find(&members).Error; err != nil {
+	if err := DB.Find(&members).Error; err != nil {
 		return nil, err
+	}
+	return assignChannelNonDefaultGroups(groups, members), nil
+}
+
+// assignChannelNonDefaultGroups is the subscription display ownership rule.
+// Callers filter visibility only after ownership, never reassigning history or
+// moving a channel to its next group when its smallest-ID group is hidden.
+func assignChannelNonDefaultGroups(groups []*ChannelGroup, members []ChannelGroupChannel) map[int]channelNonDefaultGroupAssignment {
+	groupById := make(map[int]*ChannelGroup, len(groups))
+	for _, g := range groups {
+		if !g.IsDefault() {
+			groupById[g.Id] = g
+		}
 	}
 
 	// channelId -> 命中的最小 id 非默认分组。
 	chosenGroup := make(map[int]int)
 	for _, m := range members {
+		if groupById[m.ChannelGroupId] == nil {
+			continue
+		}
 		if existing, ok := chosenGroup[m.ChannelId]; !ok || m.ChannelGroupId < existing {
 			chosenGroup[m.ChannelId] = m.ChannelGroupId
 		}
@@ -258,7 +257,7 @@ func channelNonDefaultGroupAssignments() (map[int]channelNonDefaultGroupAssignme
 			profile:          g.BillingProfile(),
 		}
 	}
-	return assignments, nil
+	return assignments
 }
 
 func ListEnabledChannelTokenBillingMultiplierGroups() ([]ChannelTokenBillingMultiplierGroup, error) {

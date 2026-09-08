@@ -356,7 +356,7 @@ func newSubscriptionBillingError(err error) *types.NewAPIError {
 		Type:    "insufficient_quota",
 		Code:    string(errorCode),
 	}
-	apiErr := types.WithOpenAIError(openAIError, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog())
+	apiErr := types.WithOpenAIError(openAIError, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithNoRecordErrorLog(), types.ErrOptionWithLocalOrigin())
 	apiErr.Err = wrappedErr
 	return apiErr
 }

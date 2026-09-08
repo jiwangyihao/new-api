@@ -194,7 +194,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	completedWithUsage := false
 	var completedStreamResponse *dto.ResponsesStreamResponse
-	var completedStreamData string
+	var completedStreamData []byte
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common.UpstreamRequestIdKey, upID)
 	}
@@ -227,7 +227,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if shouldDelayCompleted {
 			completedCopy := streamResponse
 			completedStreamResponse = &completedCopy
-			completedStreamData = string(data)
+			completedStreamData = bytes.Clone(data)
 		} else if err := sendResponsesStreamBytes(c, streamResponse, data); err != nil {
 			sr.Stop(err)
 			return
@@ -299,12 +299,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				service.SeedNewAPIBillingRelayInfo(info, *billing)
 			}
 			if data, err := common.Marshal(completedStreamResponse); err == nil {
-				completedStreamData = string(data)
+				completedStreamData = data
 			} else {
 				logger.LogError(c, "failed to marshal responses completed stream billing metadata: "+err.Error())
 			}
 		}
-		if err := sendResponsesStreamData(c, *completedStreamResponse, completedStreamData); err != nil {
+		if err := sendResponsesStreamBytes(c, *completedStreamResponse, completedStreamData); err != nil {
 			finalWriteOK = false
 			if info != nil && info.StreamStatus != nil {
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)

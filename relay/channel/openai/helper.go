@@ -312,13 +312,6 @@ func (w *responsesDoneBufferingWriter) flushBufferedDone() error {
 	return helper.FlushWriter(&gin.Context{Writer: w.ResponseWriter})
 }
 
-func sendResponsesStreamData(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data string) error {
-	if data == "" {
-		return nil
-	}
-	return helper.ResponseChunkData(c, streamResponse, data)
-}
-
 func sendResponsesStreamBytes(c *gin.Context, streamResponse dto.ResponsesStreamResponse, data []byte) error {
 	if len(data) == 0 {
 		return nil

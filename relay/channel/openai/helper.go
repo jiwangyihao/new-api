@@ -49,16 +49,36 @@ func HandleStreamFormat(c *gin.Context, info *relaycommon.RelayInfo, data string
 	return nil
 }
 
+// HandleStreamResponseFormat converts an already decoded chat stream response
+// without serializing it back to JSON between the Responses and target format.
+func HandleStreamResponseFormat(c *gin.Context, info *relaycommon.RelayInfo, streamResponse *dto.ChatCompletionsStreamResponse) error {
+	if streamResponse == nil {
+		return nil
+	}
+	info.SendResponseCount++
+
+	switch info.RelayFormat {
+	case types.RelayFormatClaude:
+		return handleClaudeResponseFormat(c, streamResponse, info)
+	case types.RelayFormatGemini:
+		return handleGeminiResponseFormat(c, streamResponse, info)
+	}
+	return nil
+}
+
 func handleClaudeFormat(c *gin.Context, data string, info *relaycommon.RelayInfo) error {
 	var streamResponse dto.ChatCompletionsStreamResponse
 	if err := common.Unmarshal(common.StringToByteSlice(data), &streamResponse); err != nil {
 		return err
 	}
+	return handleClaudeResponseFormat(c, &streamResponse, info)
+}
 
+func handleClaudeResponseFormat(c *gin.Context, streamResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) error {
 	if streamResponse.Usage != nil {
 		info.ClaudeConvertInfo.Usage = streamResponse.Usage
 	}
-	claudeResponses := service.StreamResponseOpenAI2Claude(&streamResponse, info)
+	claudeResponses := service.StreamResponseOpenAI2Claude(streamResponse, info)
 	for _, resp := range claudeResponses {
 		helper.ClaudeData(c, *resp)
 	}
@@ -71,8 +91,11 @@ func handleGeminiFormat(c *gin.Context, data string, info *relaycommon.RelayInfo
 		logger.LogError(c, "failed to unmarshal stream response: "+err.Error())
 		return err
 	}
+	return handleGeminiResponseFormat(c, &streamResponse, info)
+}
 
-	geminiResponse := service.StreamResponseOpenAI2Gemini(&streamResponse, info)
+func handleGeminiResponseFormat(c *gin.Context, streamResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) error {
+	geminiResponse := service.StreamResponseOpenAI2Gemini(streamResponse, info)
 
 	// 如果返回 nil，表示没有实际内容，跳过发送
 	if geminiResponse == nil {

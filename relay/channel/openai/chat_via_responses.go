@@ -162,12 +162,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return true
 		}
 
-		chunkData, err := common.Marshal(chunk)
-		if err != nil {
-			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
-			return false
-		}
-		if err := HandleStreamFormat(c, info, string(chunkData), false, false); err != nil {
+		if err := HandleStreamResponseFormat(c, info, chunk); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}

@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/cachex"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/samber/hot"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -3362,6 +3363,18 @@ func subscriptionPreConsumeCleanupCandidateQuery(tx *gorm.DB, cutoff int64) *gor
 		Where("NOT EXISTS (?)", subscriptionPreConsumeActiveTaskReferenceQuery(tx))
 }
 
+func subscriptionPreConsumeCleanupIDsQuery(tx *gorm.DB, ids []int) *gorm.DB {
+	if tx.Dialector.Name() == "postgres" {
+		// A struct keeps GORM from expanding the exact page into one parameter per ID.
+		return tx.Where("id = ANY(?)", pgtype.Array[int]{
+			Elements: ids,
+			Dims:     []pgtype.ArrayDimension{{Length: int32(len(ids)), LowerBound: 1}},
+			Valid:    true,
+		})
+	}
+	return tx.Where("id IN ?", ids)
+}
+
 type SubscriptionPreConsumeCleanupPreview struct {
 	Cutoff            int64
 	BatchSize         int
@@ -3461,15 +3474,15 @@ func CleanupSubscriptionPreConsumeRecords(ctx context.Context, olderThanSeconds 
 		}
 		result.LastID = ids[len(ids)-1]
 		var candidates []int
-		if err := lockForUpdate(subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff)).
-			Where("id IN ?", ids).Order("id ASC").Pluck("id", &candidates).Error; err != nil {
+		if err := lockForUpdate(subscriptionPreConsumeCleanupIDsQuery(subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff), ids)).
+			Order("id ASC").Pluck("id", &candidates).Error; err != nil {
 			return err
 		}
 		if len(candidates) == 0 {
 			return nil
 		}
-		deleted := subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff).
-			Where("id IN ?", candidates).Delete(&SubscriptionPreConsumeRecord{})
+		deleted := subscriptionPreConsumeCleanupIDsQuery(subscriptionPreConsumeCleanupCandidateQuery(tx, cutoff), candidates).
+			Delete(&SubscriptionPreConsumeRecord{})
 		result.Deleted = deleted.RowsAffected
 		return deleted.Error
 	})

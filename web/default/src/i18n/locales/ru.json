@@ -2212,6 +2212,7 @@
     "example.com&#10;blocked-site.com": "example.com&#10;blocked-site.com",
     "example.com&#10;company.com": "example.com&#10;company.com",
     "Excellent": "Отлично",
+    "Critical": "Критическое состояние",
     "Exchange rate is required": "Требуется курс обмена",
     "Exchange rate must be greater than 0": "Курс обмена должен быть больше 0",
     "Excluded": "Исключено",

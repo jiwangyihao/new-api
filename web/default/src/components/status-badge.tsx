@@ -94,6 +94,8 @@ export interface StatusBadgeProps extends Omit<
   copyable?: boolean
   copyText?: string
   autoColor?: string
+  /** Optional dot styling; label contrast remains controlled by the variant. */
+  dotClassName?: string
 }
 
 export function StatusBadge({
@@ -107,6 +109,7 @@ export function StatusBadge({
   copyable = true,
   copyText,
   autoColor,
+  dotClassName,
   className,
   onClick,
   ...props
@@ -147,7 +150,8 @@ export function StatusBadge({
         <span
           className={cn(
             'inline-block size-1.5 shrink-0 rounded-full',
-            dotColorMap[computedVariant]
+            dotColorMap[computedVariant],
+            dotClassName
           )}
           aria-hidden='true'
         />

@@ -20,6 +20,8 @@ For commercial licensing, please contact support@quantumnous.com
 // These cover dynamic labels (e.g. constants, configs) that are passed into t at runtime.
 export const STATIC_I18N_KEYS = [
   // Passive availability states
+  'Excellent',
+  'Critical',
   'Healthy',
   'Degraded',
   'Unhealthy',

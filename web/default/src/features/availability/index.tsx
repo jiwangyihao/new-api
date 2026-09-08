@@ -29,7 +29,7 @@ import { LoadingState } from '@/components/loading-state'
 import { StatusBadge } from '@/components/status-badge'
 import { GroupGrid } from './components/group-grid'
 import { useAvailability } from './hooks/use-availability'
-import { availabilityStates, formatObservedTime } from './lib/presentation'
+import { availabilityBands, formatObservedTime } from './lib/presentation'
 import type { AvailabilityRange } from './types'
 
 export function AvailabilityPage() {
@@ -137,12 +137,13 @@ export function AvailabilityPage() {
                 className='flex flex-wrap gap-3'
                 aria-label={t('Status legend')}
               >
-                {Object.entries(availabilityStates).map(([key, state]) => (
+                {Object.entries(availabilityBands).map(([key, state]) => (
                   <StatusBadge
                     key={key}
                     variant={state.variant}
+                    dotClassName={state.dotClassName}
                     copyable={false}
-                    label={t(state.labelKey)}
+                    label={`${t(state.labelKey)} ${state.rangeLabel}`.trim()}
                   />
                 ))}
               </div>

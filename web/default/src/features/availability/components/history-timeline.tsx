@@ -31,10 +31,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { EmptyState } from '@/components/empty-state'
-import { dotColorMap } from '@/components/status-badge'
 import {
-  availabilityStates,
-  observedState,
+  availabilityBands,
+  observedBand,
   formatLatency,
   formatObservedTime,
   formatRate,
@@ -44,10 +43,10 @@ import type { AvailabilityBucket } from '../types'
 function HistoryBucket(props: { bucket: AvailabilityBucket }) {
   const { t, i18n } = useTranslation()
   const bucket = props.bucket
-  const state = availabilityStates[observedState(bucket)]
+  const state = availabilityBands[observedBand(bucket)]
   const interval = `${formatObservedTime(bucket.start, i18n.language)} – ${formatObservedTime(bucket.end, i18n.language)}`
   const detail = [
-    t(state.labelKey),
+    `${t(state.labelKey)} ${state.rangeLabel}`.trim(),
     `${t('Service success rate')}: ${formatRate(bucket.success_rate, i18n.language)}`,
     `${t('Median first response')}: ${formatLatency(bucket.first_response_ms, i18n.language)}`,
     bucket.coverage === 'complete'
@@ -68,7 +67,7 @@ function HistoryBucket(props: { bucket: AvailabilityBucket }) {
         >
           <span
             aria-hidden='true'
-            className={cn('block h-5 rounded-sm', dotColorMap[state.variant])}
+            className={cn('block h-5 rounded-sm', state.dotClassName)}
           />
         </TooltipTrigger>
         <TooltipContent>

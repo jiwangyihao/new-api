@@ -2212,6 +2212,7 @@
     "example.com&#10;blocked-site.com": "example.com&#10;blocked-site.com",
     "example.com&#10;company.com": "example.com&#10;company.com",
     "Excellent": "优秀",
+    "Critical": "严重异常",
     "Exchange rate is required": "汇率为必填项",
     "Exchange rate must be greater than 0": "汇率必须大于 0",
     "Excluded": "已排除",

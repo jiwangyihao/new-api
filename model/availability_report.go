@@ -85,9 +85,9 @@ func (a *availabilityTotals) metric(start, coverageStart, last int64) Availabili
 		m.SuccessRate = &rate
 		m.LowSample = count < 20
 		switch {
-		case rate >= 99:
+		case rate >= 90:
 			m.State = "healthy"
-		case rate >= 95:
+		case rate >= 80:
 			m.State = "degraded"
 		default:
 			m.State = "unhealthy"

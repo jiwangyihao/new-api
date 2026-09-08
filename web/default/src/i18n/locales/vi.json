@@ -2212,6 +2212,7 @@
     "example.com&#10;blocked-site.com": "example.com\nblocked-site.com",
     "example.com&#10;company.com": "example.com\ncompany.com",
     "Excellent": "Tuyệt vời",
+    "Critical": "Nghiêm trọng",
     "Exchange rate is required": "Cần có tỷ giá",
     "Exchange rate must be greater than 0": "Tỷ giá phải lớn hơn 0",
     "Excluded": "Bị loại trừ",

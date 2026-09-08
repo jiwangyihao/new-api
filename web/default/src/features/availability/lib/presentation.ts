@@ -16,23 +16,84 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { StatusVariant } from '@/components/status-badge'
+import { dotColorMap, type StatusVariant } from '@/components/status-badge'
 import type { AvailabilityMetric, AvailabilityState } from '../types'
 
-export const availabilityStates: Record<
-  AvailabilityState,
-  { labelKey: string; variant: StatusVariant }
+type AvailabilityBand = AvailabilityState | 'excellent' | 'critical'
+
+export const availabilityBands: Record<
+  AvailabilityBand,
+  {
+    labelKey: string
+    variant: StatusVariant
+    dotClassName: string
+    rangeLabel: string
+    state: AvailabilityState
+  }
 > = {
-  healthy: { labelKey: 'Healthy', variant: 'success' },
-  degraded: { labelKey: 'Degraded', variant: 'warning' },
-  unhealthy: { labelKey: 'Unhealthy', variant: 'danger' },
-  unknown: { labelKey: 'No valid observations', variant: 'neutral' },
-  incomplete: { labelKey: 'Incomplete coverage', variant: 'info' },
+  excellent: {
+    labelKey: 'Excellent',
+    variant: 'success',
+    dotClassName: dotColorMap.success,
+    rangeLabel: '≥99%',
+    state: 'healthy',
+  },
+  healthy: {
+    labelKey: 'Healthy',
+    variant: 'success',
+    dotClassName: 'bg-success/55',
+    rangeLabel: '90%–<99%',
+    state: 'healthy',
+  },
+  degraded: {
+    labelKey: 'Degraded',
+    variant: 'warning',
+    dotClassName: dotColorMap.warning,
+    rangeLabel: '80%–<90%',
+    state: 'degraded',
+  },
+  unhealthy: {
+    labelKey: 'Unhealthy',
+    variant: 'danger',
+    dotClassName: 'bg-destructive/55',
+    rangeLabel: '50%–<80%',
+    state: 'unhealthy',
+  },
+  critical: {
+    labelKey: 'Critical',
+    variant: 'danger',
+    dotClassName: dotColorMap.danger,
+    rangeLabel: '<50%',
+    state: 'unhealthy',
+  },
+  unknown: {
+    labelKey: 'No valid observations',
+    variant: 'neutral',
+    dotClassName: dotColorMap.neutral,
+    rangeLabel: '',
+    state: 'unknown',
+  },
+  incomplete: {
+    labelKey: 'Incomplete coverage',
+    variant: 'info',
+    dotClassName: dotColorMap.info,
+    rangeLabel: '',
+    state: 'incomplete',
+  },
 }
-export function observedState(metric: AvailabilityMetric): AvailabilityState {
+
+export function observedBand(metric: AvailabilityMetric): AvailabilityBand {
   if (metric.coverage === 'incomplete') return 'incomplete'
   if (metric.success_rate === null) return 'unknown'
-  return metric.state
+  if (metric.success_rate >= 99) return 'excellent'
+  if (metric.success_rate >= 90) return 'healthy'
+  if (metric.success_rate >= 80) return 'degraded'
+  if (metric.success_rate >= 50) return 'unhealthy'
+  return 'critical'
+}
+
+export function observedState(metric: AvailabilityMetric): AvailabilityState {
+  return availabilityBands[observedBand(metric)].state
 }
 export function formatRate(value: number | null, locale: string): string {
   if (value === null) return '—'

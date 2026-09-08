@@ -123,7 +123,7 @@ func TestAvailabilityThresholdsAndWeightedMedian(t *testing.T) {
 	report, err := GetAvailabilityReport(context.Background(), "1h", now)
 	require.NoError(t, err)
 	g := report.Groups[0]
-	assert.Equal(t, "degraded", g.Current.State)
+	assert.Equal(t, "healthy", g.Current.State)
 	require.NotNil(t, g.Current.SuccessRate)
 	assert.InDelta(t, 120.0/123*100, *g.Current.SuccessRate, 0.000001)
 	require.NotNil(t, g.Current.FirstResponseMs)
@@ -133,7 +133,7 @@ func TestAvailabilityThresholdsAndWeightedMedian(t *testing.T) {
 		byName[m.Name] = m
 	}
 	assert.Equal(t, "healthy", byName["a"].Current.State)
-	assert.Equal(t, "degraded", byName["b"].Current.State)
+	assert.Equal(t, "healthy", byName["b"].Current.State)
 	assert.False(t, byName["b"].Current.LowSample)
 	assert.Equal(t, "unhealthy", byName["bad"].Current.State)
 	assert.True(t, byName["bad"].Current.LowSample)
@@ -161,6 +161,42 @@ func TestAvailabilityThresholdsAndWeightedMedian(t *testing.T) {
 	check(public)
 	assert.NotContains(t, string(encoded), "private-upstream")
 	assert.NotContains(t, string(encoded), "private-secret")
+}
+
+func TestAvailabilityRelaxedHealthThresholds(t *testing.T) {
+	now := setupAvailabilityTest(t)
+	for _, successCount := range []int{79, 80, 89, 90} {
+		name := fmt.Sprintf("boundary-%d", successCount)
+		for i := range 100 {
+			outcome := AvailabilityFailure
+			if i < successCount {
+				outcome = AvailabilitySuccess
+			}
+			availabilityObserve(t, now, fmt.Sprintf("%s-%d", name, i), name, outcome, nil)
+		}
+	}
+	report, err := GetAvailabilityReport(context.Background(), "1h", now)
+	require.NoError(t, err)
+	require.Len(t, report.Groups, 1)
+	want := map[string]string{"boundary-79": "unhealthy", "boundary-80": "degraded", "boundary-89": "degraded", "boundary-90": "healthy"}
+	for _, model := range report.Groups[0].Models {
+		expected, exists := want[model.Name]
+		if !exists {
+			continue
+		}
+		assert.Equal(t, expected, model.Current.State, model.Name)
+		assert.Equal(t, expected, model.Summary.State, model.Name)
+		observed := false
+		for _, bucket := range model.Buckets {
+			if bucket.SuccessRate != nil {
+				assert.Equal(t, expected, bucket.State, model.Name)
+				observed = true
+			}
+		}
+		assert.True(t, observed, model.Name)
+		delete(want, model.Name)
+	}
+	assert.Empty(t, want)
 }
 
 func TestAvailabilityCatalogHistoryAndOwnership(t *testing.T) {

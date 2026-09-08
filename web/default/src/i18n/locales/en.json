@@ -2212,6 +2212,7 @@
     "example.com&#10;blocked-site.com": "example.com&#10;blocked-site.com",
     "example.com&#10;company.com": "example.com&#10;company.com",
     "Excellent": "Excellent",
+    "Critical": "Critical",
     "Exchange rate is required": "Exchange rate is required",
     "Exchange rate must be greater than 0": "Exchange rate must be greater than 0",
     "Excluded": "Excluded",

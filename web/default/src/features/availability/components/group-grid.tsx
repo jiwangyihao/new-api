@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { TitledCard } from '@/components/ui/titled-card'
 import { EmptyState } from '@/components/empty-state'
 import { StatusBadge } from '@/components/status-badge'
+import { observedState } from '../lib/presentation'
 import type { AvailabilityGroup, AvailabilityModel } from '../types'
 import { HistoryTimeline } from './history-timeline'
 import { MetricDetails } from './metric-details'
@@ -39,8 +40,8 @@ function GroupCard(props: {
   const affected = group.models.filter(
     (model) =>
       model.active &&
-      (model.current.state === 'unhealthy' ||
-        model.current.state === 'degraded')
+      (observedState(model.current) === 'unhealthy' ||
+        observedState(model.current) === 'degraded')
   )
   return (
     <TitledCard
@@ -60,7 +61,9 @@ function GroupCard(props: {
             <StatusBadge
               copyable={false}
               variant={
-                affected.some((model) => model.current.state === 'unhealthy')
+                affected.some(
+                  (model) => observedState(model.current) === 'unhealthy'
+                )
                   ? 'danger'
                   : 'warning'
               }

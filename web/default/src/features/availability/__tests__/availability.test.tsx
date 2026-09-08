@@ -42,6 +42,7 @@ import { AvailabilityPage } from '..'
 import { GroupGrid } from '../components/group-grid'
 import { HistoryTimeline } from '../components/history-timeline'
 import { MetricDetails } from '../components/metric-details'
+import { observedBand, observedState } from '../lib/presentation'
 import type {
   AvailabilityGroup,
   AvailabilityMetric,
@@ -218,9 +219,9 @@ test('keyboard expansion keeps one group open and aria controls resolve correctl
 test('recent status is distinct from range metrics and zero latency remains valid', async () => {
   const view = await renderFeature(
     <MetricDetails
-      current={metric()}
+      current={metric({ success_rate: 90 })}
       summary={metric({
-        state: 'degraded',
+        state: 'unhealthy',
         success_rate: 72.5,
         has_failures: true,
       })}
@@ -254,7 +255,6 @@ test('historical model failures do not raise active model alerts but remain insp
   )
   assert.ok(history.getByText('retired-model'))
   assert.ok(history.getByText('No longer offered'))
-  assert.ok(history.getByText('Unhealthy'))
 })
 
 test('an active degraded model is not hidden by healthy group aggregation', async () => {
@@ -302,6 +302,48 @@ test('unknown and incomplete observations are distinguishable and never filled w
   assert.equal(view.queryByText('100%'), null)
   const selected = within(view.getByRole('region', { name: 'Selected range' }))
   assert.equal(selected.getAllByText('—').length, 3)
+})
+
+test('availability bands distinguish relaxed thresholds without changing request success rates', () => {
+  for (const [rate, band, state] of [
+    [100, 'excellent', 'healthy'],
+    [99, 'excellent', 'healthy'],
+    [98.99, 'healthy', 'healthy'],
+    [90, 'healthy', 'healthy'],
+    [89.99, 'degraded', 'degraded'],
+    [80, 'degraded', 'degraded'],
+    [79.99, 'unhealthy', 'unhealthy'],
+    [50, 'unhealthy', 'unhealthy'],
+    [49.99, 'critical', 'unhealthy'],
+    [0, 'critical', 'unhealthy'],
+  ] as const) {
+    const sample = metric({ success_rate: rate })
+    assert.equal(observedBand(sample), band)
+    assert.equal(observedState(sample), state)
+    assert.equal(sample.success_rate, rate)
+  }
+  assert.equal(observedBand(metric({ success_rate: null })), 'unknown')
+  assert.equal(
+    observedBand(metric({ success_rate: 100, coverage: 'incomplete' })),
+    'incomplete'
+  )
+})
+
+test('a model meeting the ninety percent target does not raise an active model alert', async () => {
+  const view = await renderFeature(
+    <GroupGrid
+      groups={[
+        group(1, {
+          models: [
+            model('meets-target', {
+              current: metric({ state: 'unhealthy', success_rate: 90 }),
+            }),
+          ],
+        }),
+      ]}
+    />
+  )
+  assert.equal(view.queryByText('Current models need attention'), null)
 })
 
 test('history blocks expose exact intervals and open touch-accessible details', async () => {

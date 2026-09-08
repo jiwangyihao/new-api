@@ -21,8 +21,8 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { StatusBadge } from '@/components/status-badge'
 import {
-  availabilityStates,
-  observedState,
+  availabilityBands,
+  observedBand,
   formatLatency,
   formatObservedTime,
   formatRate,
@@ -31,12 +31,14 @@ import type { AvailabilityMetric } from '../types'
 
 export function MetricStatus(props: { metric: AvailabilityMetric }) {
   const { t } = useTranslation()
-  const state = availabilityStates[observedState(props.metric)]
+  const state = availabilityBands[observedBand(props.metric)]
   return (
     <StatusBadge
       variant={state.variant}
+      dotClassName={state.dotClassName}
       copyable={false}
       label={t(state.labelKey)}
+      title={`${t(state.labelKey)} ${state.rangeLabel}`.trim()}
     />
   )
 }

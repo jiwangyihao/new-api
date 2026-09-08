@@ -138,12 +138,18 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		// as ordinary content and surfaces downstream as a false success. Detect
 		// it, classify it, and stop — matching the Responses path's handling of
 		// response.failed/response.error.
-		var probe dto.ChatCompletionsStreamResponse
-		if err := common.UnmarshalJsonStr(data, &probe); err == nil {
-			if oaiErr := probe.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-				streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
-				sr.Stop(streamErr)
-				return
+		var probe struct {
+			Error any `json:"error"`
+		}
+		if err := common.UnmarshalJsonStr(data, &probe); err == nil && probe.Error != nil {
+			// 保留错误分片的完整校验，避免其他字段无效时改变原有错误分类。
+			var streamResponse dto.ChatCompletionsStreamResponse
+			if err := common.UnmarshalJsonStr(data, &streamResponse); err == nil {
+				if oaiErr := streamResponse.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
+					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
+					sr.Stop(streamErr)
+					return
+				}
 			}
 		}
 		if lastStreamData != "" {

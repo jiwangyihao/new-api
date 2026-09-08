@@ -168,6 +168,7 @@ func streamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 			close(stopChan)
 		case <-time.After(5 * time.Second):
 			logger.LogError(c, "timeout waiting for goroutines to exit")
+			info.StreamStatus.MarkAvailabilityIncomplete()
 		}
 
 	}()

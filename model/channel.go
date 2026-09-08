@@ -22,29 +22,29 @@ import (
 )
 
 type Channel struct {
-	Id                     int     `json:"id"`
-	Type                   int     `json:"type" gorm:"default:0"`
-	Key                    string  `json:"key" gorm:"not null"`
-	OpenAIOrganization     *string `json:"openai_organization"`
-	TestModel              *string `json:"test_model"`
-	Status                 int     `json:"status" gorm:"default:1"`
-	Name                   string  `json:"name" gorm:"index"`
-	Weight                 *uint   `json:"weight" gorm:"default:0"`
-	CreatedTime            int64   `json:"created_time" gorm:"bigint"`
-	TestTime               int64   `json:"test_time" gorm:"bigint"`
-	ResponseTime           int     `json:"response_time"` // in milliseconds
-	BaseURL                *string `json:"base_url" gorm:"column:base_url;default:''"`
-	Other                  string  `json:"other"`
-	Balance                float64 `json:"balance"` // in USD
-	BalanceUpdatedTime     int64   `json:"balance_updated_time" gorm:"bigint"`
-	Models                           string  `json:"models"`
-	Group                            string  `json:"-" gorm:"type:varchar(64)"`
-	UsedQuota                        int64   `json:"used_quota" gorm:"bigint;default:0"`
-	TokenBillingMultiplier           float64 `json:"token_billing_multiplier" gorm:"not null;default:1"`
-	CreditBillingMode                string  `json:"credit_billing_mode" gorm:"not null;default:'usage_tokens'"`
-	FixedRequestCredits              int64   `json:"fixed_request_credits" gorm:"not null;default:0"`
-	DynamicBillingMultiplierEnabled  bool    `json:"dynamic_billing_multiplier_enabled" gorm:"not null;default:false"`
-	ModelMapping                     *string `json:"model_mapping" gorm:"type:text"`
+	Id                              int     `json:"id"`
+	Type                            int     `json:"type" gorm:"default:0"`
+	Key                             string  `json:"key" gorm:"not null"`
+	OpenAIOrganization              *string `json:"openai_organization"`
+	TestModel                       *string `json:"test_model"`
+	Status                          int     `json:"status" gorm:"default:1"`
+	Name                            string  `json:"name" gorm:"index"`
+	Weight                          *uint   `json:"weight" gorm:"default:0"`
+	CreatedTime                     int64   `json:"created_time" gorm:"bigint"`
+	TestTime                        int64   `json:"test_time" gorm:"bigint"`
+	ResponseTime                    int     `json:"response_time"` // in milliseconds
+	BaseURL                         *string `json:"base_url" gorm:"column:base_url;default:''"`
+	Other                           string  `json:"other"`
+	Balance                         float64 `json:"balance"` // in USD
+	BalanceUpdatedTime              int64   `json:"balance_updated_time" gorm:"bigint"`
+	Models                          string  `json:"models"`
+	Group                           string  `json:"-" gorm:"type:varchar(64)"`
+	UsedQuota                       int64   `json:"used_quota" gorm:"bigint;default:0"`
+	TokenBillingMultiplier          float64 `json:"token_billing_multiplier" gorm:"not null;default:1"`
+	CreditBillingMode               string  `json:"credit_billing_mode" gorm:"not null;default:'usage_tokens'"`
+	FixedRequestCredits             int64   `json:"fixed_request_credits" gorm:"not null;default:0"`
+	DynamicBillingMultiplierEnabled bool    `json:"dynamic_billing_multiplier_enabled" gorm:"not null;default:false"`
+	ModelMapping                    *string `json:"model_mapping" gorm:"type:text"`
 	//MaxInputTokens     *int    `json:"max_input_tokens" gorm:"default:0"`
 	StatusCodeMapping *string `json:"status_code_mapping" gorm:"type:varchar(1024);default:''"`
 	Priority          *int64  `json:"priority" gorm:"bigint;default:0"`
@@ -390,10 +390,12 @@ func (channel *Channel) GetAutoBan() bool {
 }
 
 func (channel *Channel) Save() error {
+	defer InvalidateAvailabilityCatalog()
 	return DB.Save(channel).Error
 }
 
 func (channel *Channel) SaveWithoutKey() error {
+	defer InvalidateAvailabilityCatalog()
 	if channel.Id == 0 {
 		return errors.New("channel ID is 0")
 	}
@@ -470,6 +472,7 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 }
 
 func BatchInsertChannels(channels []Channel) error {
+	defer InvalidateAvailabilityCatalog()
 	if len(channels) == 0 {
 		return nil
 	}
@@ -505,6 +508,7 @@ func BatchInsertChannels(channels []Channel) error {
 }
 
 func BatchDeleteChannels(ids []int) error {
+	defer InvalidateAvailabilityCatalog()
 	if len(ids) == 0 {
 		return nil
 	}
@@ -566,6 +570,7 @@ func (channel *Channel) GetStatusCodeMapping() string {
 }
 
 func (channel *Channel) Insert() error {
+	defer InvalidateAvailabilityCatalog()
 	if err := channel.ValidateBillingProfile(); err != nil {
 		return err
 	}
@@ -579,6 +584,7 @@ func (channel *Channel) Insert() error {
 }
 
 func (channel *Channel) Update() error {
+	defer InvalidateAvailabilityCatalog()
 	// If this is a multi-key channel, recalculate MultiKeySize based on the current key list to avoid inconsistency after editing keys
 	if channel.ChannelInfo.IsMultiKey {
 		var keyStr string
@@ -654,6 +660,7 @@ func (channel *Channel) UpdateBalance(balance float64) {
 }
 
 func (channel *Channel) Delete() error {
+	defer InvalidateAvailabilityCatalog()
 	var err error
 	err = DB.Delete(channel).Error
 	if err != nil {
@@ -738,6 +745,7 @@ func handlerMultiKeyUpdate(channel *Channel, usingKey string, status int, reason
 }
 
 func UpdateChannelStatus(channelId int, usingKey string, status int, reason string) bool {
+	defer InvalidateAvailabilityCatalog()
 	if common.MemoryCacheEnabled {
 		channelStatusLock.Lock()
 		defer channelStatusLock.Unlock()
@@ -809,6 +817,7 @@ func UpdateChannelStatus(channelId int, usingKey string, status int, reason stri
 }
 
 func EnableChannelByTag(tag string) error {
+	defer InvalidateAvailabilityCatalog()
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusEnabled).Error
 	if err != nil {
 		return err
@@ -818,6 +827,7 @@ func EnableChannelByTag(tag string) error {
 }
 
 func DisableChannelByTag(tag string) error {
+	defer InvalidateAvailabilityCatalog()
 	err := DB.Model(&Channel{}).Where("tag = ?", tag).Update("status", common.ChannelStatusManuallyDisabled).Error
 	if err != nil {
 		return err
@@ -827,6 +837,7 @@ func DisableChannelByTag(tag string) error {
 }
 
 func EditChannelByTag(tag string, newTag *string, modelMapping *string, models *string, group *string, priority *int64, weight *uint, paramOverride *string, headerOverride *string) error {
+	defer InvalidateAvailabilityCatalog()
 	updateData := Channel{}
 	shouldReCreateAbilities := false
 	updatedTag := tag
@@ -897,11 +908,13 @@ func updateChannelUsedQuota(id int, quota int) {
 }
 
 func DeleteChannelByStatus(status int64) (int64, error) {
+	defer InvalidateAvailabilityCatalog()
 	result := DB.Where("status = ?", status).Delete(&Channel{})
 	return result.RowsAffected, result.Error
 }
 
 func DeleteDisabledChannel() (int64, error) {
+	defer InvalidateAvailabilityCatalog()
 	result := DB.Where("status = ? or status = ?", common.ChannelStatusAutoDisabled, common.ChannelStatusManuallyDisabled).Delete(&Channel{})
 	return result.RowsAffected, result.Error
 }

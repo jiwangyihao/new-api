@@ -231,7 +231,7 @@ func CheckGPTAbuseRepeatBlock(c *gin.Context, info *relaycommon.RelayInfo) *type
 		logger.LogWarn(contextFromGin(c), "record GPT abuse repeat block log failed: "+err.Error())
 	}
 	message := fmt.Sprintf("Repeated request blocked locally: this exact request recently triggered an upstream GPT safety warning. The request was not sent upstream again. Please review and change the request content before retrying. request_id=%s; first_warning_log_id=%d; first_warning_at=%d", requestID, cacheValue.FirstWarningLogID, cacheValue.CreatedAt)
-	return types.WithOpenAIError(types.OpenAIError{Message: message, Type: "invalid_request_error", Code: string(types.ErrorCodeGPTAbuseRepeatedWarningRequest)}, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	return types.WithOpenAIError(types.OpenAIError{Message: message, Type: "invalid_request_error", Code: string(types.ErrorCodeGPTAbuseRepeatedWarningRequest)}, http.StatusBadRequest, types.ErrOptionWithSkipRetry(), types.ErrOptionWithLocalOrigin())
 }
 
 func StoreGPTAbuseRepeatBlock(c *gin.Context, info *relaycommon.RelayInfo, log *model.GPTAbuseSignalLog) {

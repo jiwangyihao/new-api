@@ -66,6 +66,8 @@ type Task struct {
 	PrivateData           TaskPrivateData `json:"-" gorm:"column:private_data;type:json"`
 	SubscriptionRequestId *string         `json:"-" gorm:"column:subscription_request_id;type:varchar(64);index:idx_tasks_subscription_request_id"`
 	Data                  json.RawMessage `json:"data" gorm:"type:json"`
+	AvailabilityData      string          `json:"-" gorm:"type:text"`
+	AvailabilityPending   bool            `json:"-" gorm:"index:idx_tasks_availability_pending"`
 }
 
 func (t *Task) SetData(data any) {
@@ -390,7 +392,11 @@ func (t *Task) Insert() error {
 	if err := t.prepareSubscriptionRequestProjection(); err != nil {
 		return err
 	}
-	return DB.Create(t).Error
+	if err := DB.Create(t).Error; err != nil {
+		return err
+	}
+	publishTaskAvailability(t)
+	return nil
 }
 
 type taskSnapshot struct {
@@ -429,7 +435,11 @@ func (t *Task) Update() error {
 	if err := t.prepareSubscriptionRequestProjection(); err != nil {
 		return err
 	}
-	return DB.Save(t).Error
+	if err := DB.Save(t).Error; err != nil {
+		return err
+	}
+	publishTaskAvailability(t)
+	return nil
 }
 
 func (t *Task) UpdateQuota() error {
@@ -447,6 +457,9 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
 	if result.Error != nil {
 		return false, result.Error
+	}
+	if result.RowsAffected > 0 {
+		publishTaskAvailability(t)
 	}
 	return result.RowsAffected > 0, nil
 }

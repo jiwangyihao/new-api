@@ -81,6 +81,11 @@ export function useSidebarData(): SidebarData {
             icon: Activity,
           },
           {
+            title: t('Group availability'),
+            url: '/availability',
+            icon: Activity,
+          },
+          {
             title: t('Dashboard'),
             url: '/dashboard/models',
             icon: LayoutDashboard,

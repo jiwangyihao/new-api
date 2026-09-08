@@ -535,6 +535,7 @@ var effectiveGroupsByChannel = newEffectiveGroupRowsCache()
 
 func flushEffectiveGroupRowsCache() {
 	effectiveGroupsByChannel.flush()
+	InvalidateAvailabilityCatalog()
 }
 
 func loadEffectiveGroupsForChannel(channelId int) ([]effectiveGroupForChannelRow, error) {

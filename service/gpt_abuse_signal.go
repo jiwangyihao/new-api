@@ -149,7 +149,7 @@ func EnforceGPTAbuseSuspension(c *gin.Context, info *relaycommon.RelayInfo) *typ
 	if suspension == nil {
 		return nil
 	}
-	return types.WithOpenAIError(types.OpenAIError{Message: "当前账号因触发 GPT 安全策略警告已暂停服务，请于次日恢复后重试", Type: string(types.ErrorCodeGPTAbuseSuspended), Code: types.ErrorCodeGPTAbuseSuspended}, http.StatusForbidden, types.ErrOptionWithSkipRetry())
+	return types.WithOpenAIError(types.OpenAIError{Message: "当前账号因触发 GPT 安全策略警告已暂停服务，请于次日恢复后重试", Type: string(types.ErrorCodeGPTAbuseSuspended), Code: types.ErrorCodeGPTAbuseSuspended}, http.StatusForbidden, types.ErrOptionWithSkipRetry(), types.ErrOptionWithLocalOrigin())
 }
 
 func ShouldMonitorGPTAbuse(info *relaycommon.RelayInfo) bool {

@@ -1,28 +1,30 @@
 package model
 
 type Midjourney struct {
-	Id          int    `json:"id"`
-	Code        int    `json:"code"`
-	UserId      int    `json:"user_id" gorm:"index"`
-	Action      string `json:"action" gorm:"type:varchar(40);index"`
-	MjId        string `json:"mj_id" gorm:"index"`
-	Prompt      string `json:"prompt"`
-	PromptEn    string `json:"prompt_en"`
-	Description string `json:"description"`
-	State       string `json:"state"`
-	SubmitTime  int64  `json:"submit_time" gorm:"index"`
-	StartTime   int64  `json:"start_time" gorm:"index"`
-	FinishTime  int64  `json:"finish_time" gorm:"index"`
-	ImageUrl    string `json:"image_url"`
-	VideoUrl    string `json:"video_url"`
-	VideoUrls   string `json:"video_urls"`
-	Status      string `json:"status" gorm:"type:varchar(20);index"`
-	Progress    string `json:"progress" gorm:"type:varchar(30);index"`
-	FailReason  string `json:"fail_reason"`
-	ChannelId   int    `json:"channel_id"`
-	Quota       int    `json:"quota"`
-	Buttons     string `json:"buttons"`
-	Properties  string `json:"properties"`
+	Id                  int    `json:"id"`
+	Code                int    `json:"code"`
+	UserId              int    `json:"user_id" gorm:"index"`
+	Action              string `json:"action" gorm:"type:varchar(40);index"`
+	MjId                string `json:"mj_id" gorm:"index"`
+	Prompt              string `json:"prompt"`
+	PromptEn            string `json:"prompt_en"`
+	Description         string `json:"description"`
+	State               string `json:"state"`
+	SubmitTime          int64  `json:"submit_time" gorm:"index"`
+	StartTime           int64  `json:"start_time" gorm:"index"`
+	FinishTime          int64  `json:"finish_time" gorm:"index"`
+	ImageUrl            string `json:"image_url"`
+	VideoUrl            string `json:"video_url"`
+	VideoUrls           string `json:"video_urls"`
+	Status              string `json:"status" gorm:"type:varchar(20);index"`
+	Progress            string `json:"progress" gorm:"type:varchar(30);index"`
+	FailReason          string `json:"fail_reason"`
+	ChannelId           int    `json:"channel_id"`
+	Quota               int    `json:"quota"`
+	Buttons             string `json:"buttons"`
+	Properties          string `json:"properties"`
+	AvailabilityData    string `json:"-" gorm:"type:text"`
+	AvailabilityPending bool   `json:"-" gorm:"index:idx_mj_availability_pending"`
 }
 
 // TaskQueryParams 用于包含所有搜索条件的结构体，可以根据需求添加更多字段
@@ -148,12 +150,18 @@ func UpdateProgress(id int, progress string) error {
 func (midjourney *Midjourney) Insert() error {
 	var err error
 	err = DB.Create(midjourney).Error
+	if err == nil {
+		publishMidjourneyAvailability(midjourney)
+	}
 	return err
 }
 
 func (midjourney *Midjourney) Update() error {
 	var err error
 	err = DB.Save(midjourney).Error
+	if err == nil {
+		publishMidjourneyAvailability(midjourney)
+	}
 	return err
 }
 
@@ -166,6 +174,9 @@ func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) 
 	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
 	if result.Error != nil {
 		return false, result.Error
+	}
+	if result.RowsAffected > 0 {
+		publishMidjourneyAvailability(midjourney)
 	}
 	return result.RowsAffected > 0, nil
 }

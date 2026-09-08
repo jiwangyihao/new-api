@@ -54,6 +54,7 @@ import { Route as AuthenticatedGptAbuseIndexRouteImport } from './routes/_authen
 import { Route as AuthenticatedDashboardIndexRouteImport } from './routes/_authenticated/dashboard/index'
 import { Route as AuthenticatedChannelsIndexRouteImport } from './routes/_authenticated/channels/index'
 import { Route as AuthenticatedChannelGroupsIndexRouteImport } from './routes/_authenticated/channel-groups/index'
+import { Route as AuthenticatedAvailabilityIndexRouteImport } from './routes/_authenticated/availability/index'
 import { Route as AuthenticatedAdminOpsIndexRouteImport } from './routes/_authenticated/admin-ops/index'
 import { Route as AuthenticatedAdminAnalyticsIndexRouteImport } from './routes/_authenticated/admin-analytics/index'
 import { Route as AuthenticatedUsageLogsSectionRouteImport } from './routes/_authenticated/usage-logs/$section'
@@ -317,6 +318,12 @@ const AuthenticatedChannelGroupsIndexRoute =
     path: '/channel-groups/',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const AuthenticatedAvailabilityIndexRoute =
+  AuthenticatedAvailabilityIndexRouteImport.update({
+    id: '/availability/',
+    path: '/availability/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedAdminOpsIndexRoute =
   AuthenticatedAdminOpsIndexRouteImport.update({
     id: '/admin-ops/',
@@ -488,6 +495,7 @@ export interface FileRoutesByFullPath {
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/admin-analytics/': typeof AuthenticatedAdminAnalyticsIndexRoute
   '/admin-ops/': typeof AuthenticatedAdminOpsIndexRoute
+  '/availability/': typeof AuthenticatedAvailabilityIndexRoute
   '/channel-groups/': typeof AuthenticatedChannelGroupsIndexRoute
   '/channels/': typeof AuthenticatedChannelsIndexRoute
   '/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -555,6 +563,7 @@ export interface FileRoutesByTo {
   '/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/admin-analytics': typeof AuthenticatedAdminAnalyticsIndexRoute
   '/admin-ops': typeof AuthenticatedAdminOpsIndexRoute
+  '/availability': typeof AuthenticatedAvailabilityIndexRoute
   '/channel-groups': typeof AuthenticatedChannelGroupsIndexRoute
   '/channels': typeof AuthenticatedChannelsIndexRoute
   '/dashboard': typeof AuthenticatedDashboardIndexRoute
@@ -626,6 +635,7 @@ export interface FileRoutesById {
   '/_authenticated/usage-logs/$section': typeof AuthenticatedUsageLogsSectionRoute
   '/_authenticated/admin-analytics/': typeof AuthenticatedAdminAnalyticsIndexRoute
   '/_authenticated/admin-ops/': typeof AuthenticatedAdminOpsIndexRoute
+  '/_authenticated/availability/': typeof AuthenticatedAvailabilityIndexRoute
   '/_authenticated/channel-groups/': typeof AuthenticatedChannelGroupsIndexRoute
   '/_authenticated/channels/': typeof AuthenticatedChannelsIndexRoute
   '/_authenticated/dashboard/': typeof AuthenticatedDashboardIndexRoute
@@ -696,6 +706,7 @@ export interface FileRouteTypes {
     | '/usage-logs/$section'
     | '/admin-analytics/'
     | '/admin-ops/'
+    | '/availability/'
     | '/channel-groups/'
     | '/channels/'
     | '/dashboard/'
@@ -763,6 +774,7 @@ export interface FileRouteTypes {
     | '/usage-logs/$section'
     | '/admin-analytics'
     | '/admin-ops'
+    | '/availability'
     | '/channel-groups'
     | '/channels'
     | '/dashboard'
@@ -833,6 +845,7 @@ export interface FileRouteTypes {
     | '/_authenticated/usage-logs/$section'
     | '/_authenticated/admin-analytics/'
     | '/_authenticated/admin-ops/'
+    | '/_authenticated/availability/'
     | '/_authenticated/channel-groups/'
     | '/_authenticated/channels/'
     | '/_authenticated/dashboard/'
@@ -1207,6 +1220,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedChannelGroupsIndexRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/availability/': {
+      id: '/_authenticated/availability/'
+      path: '/availability'
+      fullPath: '/availability/'
+      preLoaderRoute: typeof AuthenticatedAvailabilityIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/admin-ops/': {
       id: '/_authenticated/admin-ops/'
       path: '/admin-ops'
@@ -1464,6 +1484,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedUsageLogsSectionRoute: typeof AuthenticatedUsageLogsSectionRoute
   AuthenticatedAdminAnalyticsIndexRoute: typeof AuthenticatedAdminAnalyticsIndexRoute
   AuthenticatedAdminOpsIndexRoute: typeof AuthenticatedAdminOpsIndexRoute
+  AuthenticatedAvailabilityIndexRoute: typeof AuthenticatedAvailabilityIndexRoute
   AuthenticatedChannelGroupsIndexRoute: typeof AuthenticatedChannelGroupsIndexRoute
   AuthenticatedChannelsIndexRoute: typeof AuthenticatedChannelsIndexRoute
   AuthenticatedDashboardIndexRoute: typeof AuthenticatedDashboardIndexRoute
@@ -1494,6 +1515,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedUsageLogsSectionRoute: AuthenticatedUsageLogsSectionRoute,
   AuthenticatedAdminAnalyticsIndexRoute: AuthenticatedAdminAnalyticsIndexRoute,
   AuthenticatedAdminOpsIndexRoute: AuthenticatedAdminOpsIndexRoute,
+  AuthenticatedAvailabilityIndexRoute: AuthenticatedAvailabilityIndexRoute,
   AuthenticatedChannelGroupsIndexRoute: AuthenticatedChannelGroupsIndexRoute,
   AuthenticatedChannelsIndexRoute: AuthenticatedChannelsIndexRoute,
   AuthenticatedDashboardIndexRoute: AuthenticatedDashboardIndexRoute,

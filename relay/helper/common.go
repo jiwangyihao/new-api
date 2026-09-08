@@ -139,6 +139,10 @@ func ResponseChunkBytes(c *gin.Context, resp dto.ResponsesStreamResponse, data [
 }
 
 func StringData(c *gin.Context, str string) error {
+	return writeDataFrame(c, common.StringToByteSlice(str))
+}
+
+func writeDataFrame(c *gin.Context, data []byte) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")
 	}
@@ -147,7 +151,12 @@ func StringData(c *gin.Context, str string) error {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
 	}
 
-	if _, err := c.Writer.Write([]byte("data: " + str + "\n\n")); err != nil {
+	holder, frame := acquireResponseFrame(len("data: ") + len(data) + len("\n\n"))
+	defer releaseResponseFrame(holder, frame)
+	frame = append(frame, "data: "...)
+	frame = append(frame, data...)
+	frame = append(frame, '\n', '\n')
+	if _, err := c.Writer.Write(frame); err != nil {
 		return fmt.Errorf("write string data failed: %w", err)
 	}
 	return FlushWriter(c)
@@ -176,7 +185,7 @@ func ObjectData(c *gin.Context, object interface{}) error {
 	if err != nil {
 		return fmt.Errorf("error marshalling object: %w", err)
 	}
-	return StringData(c, string(jsonData))
+	return writeDataFrame(c, jsonData)
 }
 
 func Done(c *gin.Context) error {

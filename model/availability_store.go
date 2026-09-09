@@ -177,8 +177,16 @@ func RecordAvailability(ctx context.Context, observation AvailabilityObservation
 	}
 	row := availabilityRequest{ID: observation.ID, StartedAt: observation.StartedAt, GroupID: observation.GroupID, ModelName: observation.ModelName, Outcome: availabilityPending}
 	err := LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if observation.Outcome == availabilityPending {
-			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+		// MySQL's missing-row UPDATE can acquire a gap lock. Keep its original
+		// insert-first order so concurrent terminal-before-pending writes do not deadlock.
+		insertFirst := tx.Dialector.Name() == "mysql"
+		if observation.Outcome == availabilityPending || insertFirst {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+			if observation.Outcome == availabilityPending {
+				return nil
+			}
 		}
 
 		update := func() (int64, error) {
@@ -193,9 +201,9 @@ func RecordAvailability(ctx context.Context, observation AvailabilityObservation
 		if err != nil {
 			return err
 		}
-		if updated == 0 {
-			// Preserve terminal-before-pending recovery: create the identity only
-			// when no pending row existed, then retry the conditional transition.
+		if updated == 0 && !insertFirst {
+			// The identity may be missing or already terminal. Insert without
+			// overwriting either case, then retry the conditional transition.
 			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
 				return err
 			}

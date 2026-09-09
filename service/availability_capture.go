@@ -108,14 +108,7 @@ func AttemptAvailabilityChannel(c *gin.Context, channelID int) {
 	}
 	capture.attempted = true
 	if capture.catalog != nil {
-		if owner := capture.catalog.ChannelGroups[channelID]; owner > 0 {
-			capture.selectedGroup = owner
-			capture.observation.GroupID = owner
-			return
-		}
-		if capture.observation.GroupID == 0 && capture.selectedGroup > 0 {
-			capture.observation.GroupID = capture.selectedGroup
-		}
+		capture.observation.GroupID = capture.catalog.ChannelGroups[channelID]
 	}
 }
 
@@ -219,16 +212,15 @@ var availabilityMaintenanceOnce sync.Once
 func StartAvailabilityMaintenance() {
 	availabilityMaintenanceOnce.Do(func() {
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-			if err := model.RecoverOrphanedAvailability(ctx, time.Now()); err != nil {
-				logger.LogError(context.Background(), "availability orphan recovery failed: "+err.Error())
-			}
-			cancel()
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {
 				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-				if err := model.MaintainAvailability(ctx, time.Now()); err != nil {
+				now := time.Now()
+				if err := model.RecoverOrphanedAvailability(ctx, now); err != nil {
+					logger.LogError(context.Background(), "availability orphan recovery failed: "+err.Error())
+				}
+				if err := model.MaintainAvailability(ctx, now); err != nil {
 					logger.LogError(context.Background(), "availability maintenance failed: "+err.Error())
 				}
 				if err := model.ReplayTaskAvailability(ctx); err != nil {

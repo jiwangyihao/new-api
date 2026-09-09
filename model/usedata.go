@@ -32,6 +32,8 @@ func UpdateQuotaData() {
 }
 
 var CacheQuotaData = make(map[string]*QuotaData)
+
+var quotaDataSaveLock sync.Mutex
 var CacheQuotaDataLock = sync.Mutex{}
 
 func logQuotaDataCache(userId int, username string, modelName string, quota int, createdAt int64, tokenUsed int) {
@@ -65,6 +67,10 @@ func LogQuotaData(userId int, username string, modelName string, quota int, crea
 }
 
 func SaveQuotaDataCache() {
+	// Serialize read-then-insert flushes without blocking cache writers on database I/O.
+	quotaDataSaveLock.Lock()
+	defer quotaDataSaveLock.Unlock()
+
 	CacheQuotaDataLock.Lock()
 	pending := CacheQuotaData
 	CacheQuotaData = make(map[string]*QuotaData)

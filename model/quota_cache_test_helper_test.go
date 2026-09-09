@@ -15,11 +15,12 @@ type blockingQuotaDB struct {
 	releaseCh   chan struct{}
 	once        sync.Once
 	releaseOnce sync.Once
+	entered     chan struct{}
 }
 
 func newBlockingQuotaDB(t *testing.T) *blockingQuotaDB {
 	t.Helper()
-	return &blockingQuotaDB{blocked: make(chan struct{}), releaseCh: make(chan struct{})}
+	return &blockingQuotaDB{blocked: make(chan struct{}), releaseCh: make(chan struct{}), entered: make(chan struct{}, 8)}
 }
 
 func (b *blockingQuotaDB) waitUntilBlocked(t *testing.T) {
@@ -52,6 +53,10 @@ func (l *quotaBlockingLoggerImpl) Trace(ctx context.Context, begin time.Time, fc
 	sql, rows := fc()
 	if strings.Contains(strings.ToLower(sql), "quota_data") {
 		l.owner.markBlocked()
+		select {
+		case l.owner.entered <- struct{}{}:
+		default:
+		}
 		<-l.owner.releaseCh
 	}
 	l.Interface.Trace(ctx, begin, func() (string, int64) { return sql, rows }, err)

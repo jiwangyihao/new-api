@@ -352,34 +352,119 @@ func TestRecordConsumeLogCoalescesConcurrentInserts(t *testing.T) {
 
 func TestSaveQuotaDataCacheDoesNotBlockNewLogWritesOnDatabaseWork(t *testing.T) {
 	resetLogStatTokenTestData(t)
-	deferredDB := newBlockingQuotaDB(t)
-	t.Cleanup(deferredDB.release)
+	blocker := newBlockingQuotaDB(t)
 	oldLogger := DB.Config.Logger
-	DB.Config.Logger = quotaBlockingLogger(oldLogger, deferredDB)
-	t.Cleanup(func() { DB.Config.Logger = oldLogger })
+	DB.Config.Logger = quotaBlockingLogger(oldLogger, blocker)
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		blocker.release()
+		workers.Wait()
+		DB.Config.Logger = oldLogger
+	})
 
-	LogQuotaData(9201, "before-save", "gpt-test", 10, time.Now().Unix(), 3)
+	const createdAt int64 = 1_800_000_123
+	LogQuotaData(9201, "snapshot-user", "gpt-test", 10, createdAt, 3)
 	saveDone := make(chan struct{})
+	workers.Add(1)
 	go func() {
+		defer workers.Done()
 		SaveQuotaDataCache()
 		close(saveDone)
 	}()
-	deferredDB.waitUntilBlocked(t)
+	blocker.waitUntilBlocked(t)
 
 	wrote := make(chan struct{})
+	workers.Add(1)
 	go func() {
-		LogQuotaData(9202, "during-save", "gpt-test", 20, time.Now().Unix(), 4)
+		defer workers.Done()
+		LogQuotaData(9201, "snapshot-user", "gpt-test", 20, createdAt, 4)
+		LogQuotaData(9201, "snapshot-user", "gpt-test", 30, createdAt+3600, 5)
 		close(wrote)
 	}()
 	select {
 	case <-wrote:
-	case <-time.After(250 * time.Millisecond):
+	case <-time.After(time.Second):
 		t.Fatal("LogQuotaData blocked while SaveQuotaDataCache performed database I/O")
 	}
-	deferredDB.release()
+	blocker.release()
 	select {
 	case <-saveDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("SaveQuotaDataCache did not finish")
 	}
+
+	var first []QuotaData
+	require.NoError(t, DB.Where("user_id = ?", 9201).Order("created_at").Find(&first).Error)
+	require.Len(t, first, 1)
+	require.Equal(t, 1, first[0].Count)
+	require.Equal(t, 10, first[0].Quota)
+	require.Equal(t, 3, first[0].TokenUsed)
+
+	SaveQuotaDataCache()
+	var saved []QuotaData
+	require.NoError(t, DB.Where("user_id = ?", 9201).Order("created_at").Find(&saved).Error)
+	require.Len(t, saved, 2)
+	require.Equal(t, []int{2, 1}, []int{saved[0].Count, saved[1].Count})
+	require.Equal(t, []int{30, 30}, []int{saved[0].Quota, saved[1].Quota})
+	require.Equal(t, []int{7, 5}, []int{saved[0].TokenUsed, saved[1].TokenUsed})
+	require.Equal(t, createdAt-createdAt%3600, saved[0].CreatedAt)
+	require.Equal(t, saved[0].CreatedAt+3600, saved[1].CreatedAt)
+	SaveQuotaDataCache()
+	var afterEmptySave []QuotaData
+	require.NoError(t, DB.Where("user_id = ?", 9201).Order("created_at").Find(&afterEmptySave).Error)
+	require.Equal(t, saved, afterEmptySave)
+}
+
+func TestSaveQuotaDataCacheConcurrentFlushesKeepOneBucket(t *testing.T) {
+	resetLogStatTokenTestData(t)
+	blocker := newBlockingQuotaDB(t)
+	oldLogger := DB.Config.Logger
+	DB.Config.Logger = quotaBlockingLogger(oldLogger, blocker)
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		blocker.release()
+		workers.Wait()
+		DB.Config.Logger = oldLogger
+	})
+	const createdAt int64 = 1_800_000_123
+	LogQuotaData(9203, "concurrent-save", "gpt-test", 10, createdAt, 3)
+	firstDone := make(chan struct{})
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		SaveQuotaDataCache()
+		close(firstDone)
+	}()
+	blocker.waitUntilBlocked(t)
+	<-blocker.entered
+	LogQuotaData(9203, "concurrent-save", "gpt-test", 20, createdAt, 4)
+	secondStarted := make(chan struct{})
+	secondDone := make(chan struct{})
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		close(secondStarted)
+		SaveQuotaDataCache()
+		close(secondDone)
+	}()
+	<-secondStarted
+	// Without flush serialization both SELECTs see a missing bucket before either INSERT.
+	select {
+	case <-blocker.entered:
+	case <-time.After(time.Second):
+	}
+	blocker.release()
+	for _, done := range []<-chan struct{}{firstDone, secondDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent quota save did not finish")
+		}
+	}
+	var saved []QuotaData
+	require.NoError(t, DB.Where("user_id = ?", 9203).Find(&saved).Error)
+	require.Len(t, saved, 1, "concurrent saves must not insert duplicate hourly buckets")
+	require.Equal(t, 2, saved[0].Count)
+	require.Equal(t, 30, saved[0].Quota)
+	require.Equal(t, 7, saved[0].TokenUsed)
 }

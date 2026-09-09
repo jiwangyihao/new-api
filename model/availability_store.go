@@ -177,22 +177,34 @@ func RecordAvailability(ctx context.Context, observation AvailabilityObservation
 	}
 	row := availabilityRequest{ID: observation.ID, StartedAt: observation.StartedAt, GroupID: observation.GroupID, ModelName: observation.ModelName, Outcome: availabilityPending}
 	err := LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		if observation.Outcome == availabilityPending {
+			return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
+		}
+
+		update := func() (int64, error) {
+			result := tx.Model(&availabilityRequest{}).Where("id = ? AND outcome = ?", observation.ID, availabilityPending).Updates(map[string]interface{}{
+				"completed_at": observation.CompletedAt, "group_id": observation.GroupID, "model_name": observation.ModelName,
+				"outcome": observation.Outcome, "first_response_ms": observation.FirstResponseMs, "reason": reason,
+			})
+			return result.RowsAffected, result.Error
+		}
+
+		updated, err := update()
+		if err != nil {
 			return err
 		}
-		if observation.Outcome == availabilityPending {
-			return nil
+		if updated == 0 {
+			// Preserve terminal-before-pending recovery: create the identity only
+			// when no pending row existed, then retry the conditional transition.
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+			updated, err = update()
+			if err != nil {
+				return err
+			}
 		}
-		// Ownership at the final actual attempt is supplied from the frozen catalog
-		// by the caller; it can legitimately differ from the pre-dispatch group.
-		result := tx.Model(&availabilityRequest{}).Where("id = ? AND outcome = ?", observation.ID, availabilityPending).Updates(map[string]interface{}{
-			"completed_at": observation.CompletedAt, "group_id": observation.GroupID, "model_name": observation.ModelName,
-			"outcome": observation.Outcome, "first_response_ms": observation.FirstResponseMs, "reason": reason,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 || observation.Outcome == AvailabilityExcluded {
+		if updated == 0 || observation.Outcome == AvailabilityExcluded {
 			return nil
 		}
 		latency := int64(-1)

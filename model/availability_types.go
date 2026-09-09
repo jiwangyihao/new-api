@@ -18,6 +18,9 @@ const (
 	AvailabilityFailure  = "failure"
 	AvailabilityExcluded = "excluded"
 	AvailabilityUnknown  = "unknown"
+
+	AvailabilityAsyncPendingReason       = "async_pending"
+	AvailabilityProcessInterruptedReason = "process_interrupted"
 )
 
 type AvailabilityCatalogGroup struct {

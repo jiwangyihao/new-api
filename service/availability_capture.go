@@ -108,7 +108,14 @@ func AttemptAvailabilityChannel(c *gin.Context, channelID int) {
 	}
 	capture.attempted = true
 	if capture.catalog != nil {
-		capture.observation.GroupID = capture.catalog.ChannelGroups[channelID]
+		if owner := capture.catalog.ChannelGroups[channelID]; owner > 0 {
+			capture.selectedGroup = owner
+			capture.observation.GroupID = owner
+			return
+		}
+		if capture.observation.GroupID == 0 && capture.selectedGroup > 0 {
+			capture.observation.GroupID = capture.selectedGroup
+		}
 	}
 }
 
@@ -187,6 +194,12 @@ func DeferTaskAvailability(c *gin.Context) *model.AvailabilityObservation {
 	capture.deferred = true
 	observation := capture.observation
 	observation.Outcome = "pending"
+	observation.Reason = model.AvailabilityAsyncPendingReason
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := model.MarkAvailabilityDeferred(ctx, observation.ID); err != nil {
+		logger.LogError(c, "availability async marker not recorded: "+err.Error())
+	}
 	return &observation
 }
 
@@ -206,6 +219,11 @@ var availabilityMaintenanceOnce sync.Once
 func StartAvailabilityMaintenance() {
 	availabilityMaintenanceOnce.Do(func() {
 		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			if err := model.RecoverOrphanedAvailability(ctx, time.Now()); err != nil {
+				logger.LogError(context.Background(), "availability orphan recovery failed: "+err.Error())
+			}
+			cancel()
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {

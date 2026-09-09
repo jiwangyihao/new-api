@@ -66,7 +66,10 @@ func Record(sample Sample) {
 		model:    sample.Model,
 		bucketTs: bucketStart(time.Now().Unix()),
 	}
-	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
+	actual, ok := hotBuckets.Load(key)
+	if !ok {
+		actual, _ = hotBuckets.LoadOrStore(key, &atomicBucket{})
+	}
 	actual.(*atomicBucket).add(sample)
 	recordRedis(key, sample)
 }
@@ -327,9 +330,6 @@ func recordRedis(key bucketKey, sample Sample) {
 		pipe.HIncrBy(ctx, redisKey, "gen_ms", sample.GenerationMs)
 	}
 	pipe.Expire(ctx, redisKey, time.Hour)
-	_, _ = pipe.Exec(ctx)
-
-	pipe = common.RDB.TxPipeline()
 	pipe.SAdd(ctx, perfMetricsActiveModelsKey(), key.model)
 	pipe.Expire(ctx, perfMetricsActiveModelsKey(), time.Hour)
 	_, _ = pipe.Exec(ctx)

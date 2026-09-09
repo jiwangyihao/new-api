@@ -32,6 +32,8 @@ func UpdateQuotaData() {
 }
 
 var CacheQuotaData = make(map[string]*QuotaData)
+
+var quotaDataSaveLock sync.Mutex
 var CacheQuotaDataLock = sync.Mutex{}
 
 func logQuotaDataCache(userId int, username string, modelName string, quota int, createdAt int64, tokenUsed int) {
@@ -65,14 +67,21 @@ func LogQuotaData(userId int, username string, modelName string, quota int, crea
 }
 
 func SaveQuotaDataCache() {
+	// Serialize read-then-insert flushes without blocking cache writers on database I/O.
+	quotaDataSaveLock.Lock()
+	defer quotaDataSaveLock.Unlock()
+
 	CacheQuotaDataLock.Lock()
-	defer CacheQuotaDataLock.Unlock()
-	size := len(CacheQuotaData)
+	pending := CacheQuotaData
+	CacheQuotaData = make(map[string]*QuotaData)
+	CacheQuotaDataLock.Unlock()
+
+	size := len(pending)
 	// 如果缓存中有数据，就保存到数据库中
 	// 1. 先查询数据库中是否有数据
 	// 2. 如果有数据，就更新数据
 	// 3. 如果没有数据，就插入数据
-	for _, quotaData := range CacheQuotaData {
+	for _, quotaData := range pending {
 		quotaDataDB := &QuotaData{}
 		DB.Table("quota_data").Where("user_id = ? and username = ? and model_name = ? and created_at = ?",
 			quotaData.UserID, quotaData.Username, quotaData.ModelName, quotaData.CreatedAt).First(quotaDataDB)
@@ -85,7 +94,6 @@ func SaveQuotaDataCache() {
 			DB.Table("quota_data").Create(quotaData)
 		}
 	}
-	CacheQuotaData = make(map[string]*QuotaData)
 	common.SysLog(fmt.Sprintf("保存数据看板数据成功，共保存%d条数据", size))
 }
 

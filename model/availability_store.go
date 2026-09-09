@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -175,24 +176,44 @@ func RecordAvailability(ctx context.Context, observation AvailabilityObservation
 			break
 		}
 	}
-	row := availabilityRequest{ID: observation.ID, StartedAt: observation.StartedAt, GroupID: observation.GroupID, ModelName: observation.ModelName, Outcome: availabilityPending}
+	row := availabilityRequest{ID: observation.ID, StartedAt: observation.StartedAt, GroupID: observation.GroupID, ModelName: observation.ModelName, Outcome: availabilityPending, Reason: reason}
 	err := LOG_DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+		// MySQL's missing-row UPDATE can acquire a gap lock. Keep its original
+		// insert-first order so concurrent terminal-before-pending writes do not deadlock.
+		insertFirst := tx.Dialector.Name() == "mysql"
+		if observation.Outcome == availabilityPending || insertFirst {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+			if observation.Outcome == availabilityPending {
+				return nil
+			}
+		}
+
+		update := func() (int64, error) {
+			result := tx.Model(&availabilityRequest{}).Where("id = ? AND outcome = ?", observation.ID, availabilityPending).Updates(map[string]interface{}{
+				"completed_at": observation.CompletedAt, "group_id": observation.GroupID, "model_name": observation.ModelName,
+				"outcome": observation.Outcome, "first_response_ms": observation.FirstResponseMs, "reason": reason,
+			})
+			return result.RowsAffected, result.Error
+		}
+
+		updated, err := update()
+		if err != nil {
 			return err
 		}
-		if observation.Outcome == availabilityPending {
-			return nil
+		if updated == 0 && !insertFirst {
+			// The identity may be missing or already terminal. Insert without
+			// overwriting either case, then retry the conditional transition.
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error; err != nil {
+				return err
+			}
+			updated, err = update()
+			if err != nil {
+				return err
+			}
 		}
-		// Ownership at the final actual attempt is supplied from the frozen catalog
-		// by the caller; it can legitimately differ from the pre-dispatch group.
-		result := tx.Model(&availabilityRequest{}).Where("id = ? AND outcome = ?", observation.ID, availabilityPending).Updates(map[string]interface{}{
-			"completed_at": observation.CompletedAt, "group_id": observation.GroupID, "model_name": observation.ModelName,
-			"outcome": observation.Outcome, "first_response_ms": observation.FirstResponseMs, "reason": reason,
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 || observation.Outcome == AvailabilityExcluded {
+		if updated == 0 || observation.Outcome == AvailabilityExcluded {
 			return nil
 		}
 		latency := int64(-1)
@@ -211,6 +232,127 @@ func RecordAvailability(ctx context.Context, observation AvailabilityObservation
 		}).Create(&frequency).Error
 	})
 	return err
+}
+
+// MarkAvailabilityDeferred keeps an accepted asynchronous request out of
+// orphan recovery. The task row remains the source of truth for its terminal
+// outcome; this marker is only a recovery guard.
+func MarkAvailabilityDeferred(ctx context.Context, id string) error {
+	if LOG_DB == nil {
+		return fmt.Errorf("availability log database is nil")
+	}
+	if id == "" {
+		return fmt.Errorf("availability observation id is empty")
+	}
+	return LOG_DB.WithContext(ctx).Model(&availabilityRequest{}).
+		Where("id = ? AND outcome = ?", id, availabilityPending).
+		Update("reason", AvailabilityAsyncPendingReason).Error
+}
+
+func availabilityLegacyAsyncIDs(ctx context.Context) (map[string]struct{}, error) {
+	ids := make(map[string]struct{})
+	if DB == nil {
+		return ids, nil
+	}
+	if DB.Migrator().HasTable(&Task{}) {
+		var tasks []Task
+		if err := DB.WithContext(ctx).Model(&Task{}).Select("availability_data").Where("availability_pending = ?", true).Find(&tasks).Error; err != nil {
+			return nil, err
+		}
+		for _, task := range tasks {
+			var observation AvailabilityObservation
+			if err := common.UnmarshalJsonStr(task.AvailabilityData, &observation); err == nil && observation.ID != "" {
+				ids[observation.ID] = struct{}{}
+			}
+		}
+	}
+	if DB.Migrator().HasTable(&Midjourney{}) {
+		var drawings []Midjourney
+		if err := DB.WithContext(ctx).Model(&Midjourney{}).Select("availability_data").Where("availability_pending = ?", true).Find(&drawings).Error; err != nil {
+			return nil, err
+		}
+		for _, drawing := range drawings {
+			var observation AvailabilityObservation
+			if err := common.UnmarshalJsonStr(drawing.AvailabilityData, &observation); err == nil && observation.ID != "" {
+				ids[observation.ID] = struct{}{}
+			}
+		}
+	}
+	return ids, nil
+}
+
+// RecoverOrphanedAvailability finalizes ordinary requests that have remained
+// pending beyond the maximum unresolved window. It never invents success: the
+// result is explicitly unknown. Accepted async tasks are protected by their
+// marker or by their durable task metadata for legacy rows.
+func RecoverOrphanedAvailability(ctx context.Context, now time.Time) error {
+	if LOG_DB == nil {
+		return fmt.Errorf("availability log database is nil")
+	}
+	legacyAsyncIDs, err := availabilityLegacyAsyncIDs(ctx)
+	if err != nil {
+		return err
+	}
+	cutoff := now.Unix() - availabilityPendingSeconds
+	if cutoff <= 0 {
+		return nil
+	}
+	work, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	defer availabilityInvalidateReport(LOG_DB)
+	deadline := time.Now().Add(20 * time.Second)
+	var cursorAt int64
+	var cursorID string
+	for time.Now().Before(deadline) {
+		var rows []availabilityRequest
+		query := LOG_DB.WithContext(work).Where("outcome = ? AND started_at < ? AND (reason IS NULL OR reason <> ?)", availabilityPending, cutoff, AvailabilityAsyncPendingReason)
+		if cursorAt > 0 {
+			query = query.Where("started_at > ? OR (started_at = ? AND id > ?)", cursorAt, cursorAt, cursorID)
+		}
+		if err := query.Order("started_at, id").Limit(availabilityPageSize).Find(&rows).Error; err != nil {
+			return err
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if err := LOG_DB.WithContext(work).Transaction(func(tx *gorm.DB) error {
+			for _, row := range rows {
+				cursorAt, cursorID = row.StartedAt, row.ID
+				if _, ok := legacyAsyncIDs[row.ID]; ok {
+					continue
+				}
+				completedAt := row.StartedAt + availabilityPendingSeconds
+				result := tx.Model(&availabilityRequest{}).Where("id = ? AND outcome = ? AND (reason IS NULL OR reason <> ?)", row.ID, availabilityPending, AvailabilityAsyncPendingReason).Updates(map[string]interface{}{
+					"completed_at": completedAt, "outcome": AvailabilityUnknown, "reason": AvailabilityProcessInterruptedReason, "first_response_ms": nil,
+				})
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected == 0 {
+					continue
+				}
+				frequency := availabilityFrequency{Minute: completedAt / 60 * 60, GroupID: row.GroupID,
+					ModelHash: fmt.Sprintf("%x", sha256.Sum256([]byte(row.ModelName))), ModelName: row.ModelName,
+					Outcome: AvailabilityUnknown, Latency: -1, Frequency: 1, LastObserved: completedAt}
+				if err := tx.Clauses(clause.OnConflict{
+					Columns: []clause.Column{{Name: "minute"}, {Name: "group_id"}, {Name: "model_hash"}, {Name: "outcome"}, {Name: "latency"}},
+					DoUpdates: clause.Assignments(map[string]interface{}{
+						"frequency":     gorm.Expr("? + 1", clause.Column{Table: "availability_frequencies", Name: "frequency"}),
+						"last_observed": gorm.Expr("CASE WHEN ? > ? THEN ? ELSE ? END", clause.Column{Table: "availability_frequencies", Name: "last_observed"}, completedAt, clause.Column{Table: "availability_frequencies", Name: "last_observed"}, completedAt),
+					}),
+				}).Create(&frequency).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if len(rows) < availabilityPageSize {
+			return nil
+		}
+	}
+	return nil
 }
 
 // MaintainAvailability drains bounded transactions for up to twenty seconds.

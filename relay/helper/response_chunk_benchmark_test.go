@@ -53,3 +53,42 @@ func BenchmarkResponseChunkDataFrameAllocation(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkChatDataFrame(b *testing.B) {
+	gin.SetMode(gin.TestMode)
+	for _, size := range []int{0, 256, 4 << 10, 64 << 10} {
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
+			data := strings.Repeat("x", size)
+			object := struct {
+				Delta string `json:"delta"`
+			}{Delta: data}
+			for _, objectMode := range []bool{false, true} {
+				name := "string"
+				if objectMode {
+					name = "object"
+				}
+				b.Run(name, func(b *testing.B) {
+					writer := &discardResponseChunkWriter{header: make(http.Header)}
+					c, _ := gin.CreateTestContext(writer)
+					c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+					b.ReportAllocs()
+					b.SetBytes(int64(size))
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						var err error
+						if objectMode {
+							err = ObjectData(c, &object)
+						} else {
+							err = StringData(c, data)
+						}
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+					b.StopTimer()
+					b.ReportMetric(float64(writer.writes)/float64(b.N), "writes/op")
+				})
+			}
+		})
+	}
+}

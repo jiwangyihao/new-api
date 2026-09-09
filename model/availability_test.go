@@ -2,9 +2,11 @@ package model
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -506,4 +508,194 @@ func TestAvailabilityChannelMutationRefreshesFutureSnapshots(t *testing.T) {
 	after, err = LoadAvailabilityCatalog(context.Background())
 	require.NoError(t, err)
 	assert.Empty(t, after.Groups)
+}
+
+func TestAvailabilityFinalReplayPreservesFirstOutcome(t *testing.T) {
+	for _, pendingFirst := range []bool{false, true} {
+		for _, outcome := range []string{AvailabilitySuccess, AvailabilityFailure, AvailabilityExcluded, AvailabilityUnknown} {
+			t.Run(fmt.Sprintf("pending=%t/%s", pendingFirst, outcome), func(t *testing.T) {
+				now := setupAvailabilityTest(t)
+				ctx := context.Background()
+				pending := AvailabilityObservation{ID: "replayed-terminal", StartedAt: now.Unix() - 30, GroupID: 2, ModelName: "a", Outcome: availabilityPending}
+				if pendingFirst {
+					require.NoError(t, RecordAvailability(ctx, pending))
+				}
+				zero := int64(0)
+				final := pending
+				final.CompletedAt, final.Outcome, final.FirstResponseMs = now.Unix()-1, outcome, &zero
+				final.GroupID, final.ModelName, final.Reason = 3, "retry-model", "finished"
+				require.NoError(t, RecordAvailability(ctx, final))
+				var first availabilityRequest
+				require.NoError(t, LOG_DB.First(&first, "id = ?", pending.ID).Error)
+				require.Equal(t, pending.StartedAt, first.StartedAt)
+				require.Equal(t, final.CompletedAt, first.CompletedAt)
+				require.Equal(t, outcome, first.Outcome)
+				require.Equal(t, final.GroupID, first.GroupID)
+				require.Equal(t, final.ModelName, first.ModelName)
+				require.NotNil(t, first.FirstResponseMs)
+				require.Zero(t, *first.FirstResponseMs)
+				// Neither a late start nor a contradictory terminal may rewrite the winner.
+				require.NoError(t, RecordAvailability(ctx, pending))
+				replay := final
+				replay.Outcome, replay.GroupID, replay.ModelName = AvailabilityFailure, 2, "a"
+				replay.CompletedAt, replay.FirstResponseMs, replay.Reason = now.Unix(), nil, "contradictory"
+				require.NoError(t, RecordAvailability(ctx, replay))
+				var stored availabilityRequest
+				require.NoError(t, LOG_DB.First(&stored, "id = ?", pending.ID).Error)
+				require.Equal(t, first, stored)
+				var frequencies []availabilityFrequency
+				require.NoError(t, LOG_DB.Find(&frequencies).Error)
+				if outcome == AvailabilityExcluded {
+					require.Empty(t, frequencies)
+				} else {
+					require.Len(t, frequencies, 1)
+					require.Equal(t, int64(1), frequencies[0].Frequency)
+					require.Equal(t, outcome, frequencies[0].Outcome)
+					require.Equal(t, final.GroupID, frequencies[0].GroupID)
+					require.Equal(t, final.ModelName, frequencies[0].ModelName)
+					require.Equal(t, final.CompletedAt, frequencies[0].LastObserved)
+					if outcome == AvailabilitySuccess {
+						require.Zero(t, frequencies[0].Latency)
+					} else {
+						require.Equal(t, int64(-1), frequencies[0].Latency)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAvailabilityRollupFailureRollsBackTerminal(t *testing.T) {
+	for _, pendingFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pendingFirst), func(t *testing.T) {
+			now := setupAvailabilityTest(t)
+			ctx := context.Background()
+			observation := AvailabilityObservation{ID: "rollup-rollback", StartedAt: now.Unix() - 30, GroupID: 2, ModelName: "a", Outcome: availabilityPending}
+			if pendingFirst {
+				require.NoError(t, RecordAvailability(ctx, observation))
+			}
+			injected := errors.New("injected availability rollup failure")
+			const callback = "test:availability-rollup-failure"
+			require.NoError(t, LOG_DB.Callback().Create().After("gorm:create").Register(callback, func(tx *gorm.DB) {
+				if tx.Statement.Table == "availability_frequencies" {
+					tx.AddError(injected)
+				}
+			}))
+			t.Cleanup(func() { LOG_DB.Callback().Create().Remove(callback) })
+			observation.Outcome, observation.CompletedAt = AvailabilitySuccess, now.Unix()-1
+			require.ErrorIs(t, RecordAvailability(ctx, observation), injected)
+			var rows []availabilityRequest
+			require.NoError(t, LOG_DB.Find(&rows).Error)
+			if pendingFirst {
+				require.Len(t, rows, 1)
+				require.Equal(t, availabilityPending, rows[0].Outcome)
+				require.Zero(t, rows[0].CompletedAt)
+			} else {
+				require.Empty(t, rows)
+			}
+			var frequencyCount int64
+			require.NoError(t, LOG_DB.Model(&availabilityFrequency{}).Count(&frequencyCount).Error)
+			require.Zero(t, frequencyCount)
+			require.NoError(t, LOG_DB.Callback().Create().Remove(callback))
+			require.NoError(t, RecordAvailability(ctx, observation))
+			require.NoError(t, RecordAvailability(ctx, observation))
+			var frequencies []availabilityFrequency
+			require.NoError(t, LOG_DB.Find(&frequencies).Error)
+			require.Len(t, frequencies, 1)
+			require.Equal(t, int64(1), frequencies[0].Frequency)
+		})
+	}
+}
+
+func TestAvailabilityConcurrentStartAndFinalClaimOnce(t *testing.T) {
+	for _, pendingFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%t", pendingFirst), func(t *testing.T) {
+			now := setupAvailabilityTest(t)
+			if LOG_DB.Dialector.Name() != "sqlite" {
+				pool, err := LOG_DB.DB()
+				require.NoError(t, err)
+				pool.SetMaxOpenConns(8)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			pending := AvailabilityObservation{ID: "concurrent-terminal", StartedAt: now.Unix() - 30, GroupID: 2, ModelName: "a", Outcome: availabilityPending}
+			if pendingFirst {
+				require.NoError(t, RecordAvailability(ctx, pending))
+			}
+			start := make(chan struct{})
+			errs := make(chan error, 12)
+			var ready sync.WaitGroup
+			ready.Add(cap(errs))
+			for i := 0; i < cap(errs); i++ {
+				observation := pending
+				if i%3 != 0 {
+					observation.CompletedAt = now.Unix() - 1
+					observation.Outcome = AvailabilitySuccess
+					if i%3 == 2 {
+						observation.Outcome = AvailabilityFailure
+					}
+				}
+				go func(observation AvailabilityObservation) {
+					ready.Done()
+					<-start
+					errs <- RecordAvailability(ctx, observation)
+				}(observation)
+			}
+			ready.Wait()
+			close(start)
+			for i := 0; i < cap(errs); i++ {
+				assert.NoError(t, <-errs)
+			}
+			var rows []availabilityRequest
+			require.NoError(t, LOG_DB.Find(&rows).Error)
+			require.Len(t, rows, 1)
+			require.Contains(t, []string{AvailabilitySuccess, AvailabilityFailure}, rows[0].Outcome)
+			var frequencies []availabilityFrequency
+			require.NoError(t, LOG_DB.Find(&frequencies).Error)
+			require.Len(t, frequencies, 1)
+			require.Equal(t, rows[0].Outcome, frequencies[0].Outcome)
+			require.Equal(t, int64(1), frequencies[0].Frequency)
+		})
+	}
+}
+func TestRecoverOrphanedAvailabilityPendingPreservesAsyncTasks(t *testing.T) {
+	setupAvailabilityTest(t)
+	require.NoError(t, DB.AutoMigrate(&Task{}))
+	ctx := context.Background()
+	processStartedAt := time.Now().Unix()
+
+	orphan := AvailabilityObservation{ID: "orphaned-process-request", StartedAt: processStartedAt - availabilityPendingSeconds - 60, GroupID: 2, ModelName: "a", Outcome: availabilityPending}
+	require.NoError(t, RecordAvailability(ctx, orphan))
+
+	legacyAsync := orphan
+	legacyAsync.ID = "legacy-async-request"
+	legacyData, err := common.Marshal(legacyAsync)
+	require.NoError(t, err)
+	require.NoError(t, DB.Create(&Task{TaskID: "legacy-async", Status: TaskStatusInProgress, AvailabilityData: string(legacyData), AvailabilityPending: true}).Error)
+	require.NoError(t, RecordAvailability(ctx, legacyAsync))
+
+	markedAsync := orphan
+	markedAsync.ID = "marked-async-request"
+	markedAsync.Reason = AvailabilityAsyncPendingReason
+	require.NoError(t, RecordAvailability(ctx, markedAsync))
+
+	require.NoError(t, RecoverOrphanedAvailability(ctx, time.Unix(processStartedAt, 0)))
+
+	var rows []availabilityRequest
+	require.NoError(t, LOG_DB.Order("id").Find(&rows).Error)
+	require.Len(t, rows, 3)
+	byID := make(map[string]availabilityRequest, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+	require.Equal(t, AvailabilityUnknown, byID[orphan.ID].Outcome)
+	require.Equal(t, AvailabilityProcessInterruptedReason, byID[orphan.ID].Reason)
+	require.Equal(t, orphan.StartedAt+availabilityPendingSeconds, byID[orphan.ID].CompletedAt)
+	require.Equal(t, availabilityPending, byID[legacyAsync.ID].Outcome)
+	require.Equal(t, availabilityPending, byID[markedAsync.ID].Outcome)
+
+	var frequencies []availabilityFrequency
+	require.NoError(t, LOG_DB.Find(&frequencies).Error)
+	require.Len(t, frequencies, 1)
+	require.Equal(t, AvailabilityUnknown, frequencies[0].Outcome)
 }

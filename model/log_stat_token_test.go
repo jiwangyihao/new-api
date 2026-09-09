@@ -349,3 +349,37 @@ func TestRecordConsumeLogCoalescesConcurrentInserts(t *testing.T) {
 	assert.Equal(t, int64(workers), count)
 	require.LessOrEqual(t, counter.inserts.Load(), int64(4), "consume logs should be batch-inserted under concurrent hot writes")
 }
+
+func TestSaveQuotaDataCacheDoesNotBlockNewLogWritesOnDatabaseWork(t *testing.T) {
+	resetLogStatTokenTestData(t)
+	deferredDB := newBlockingQuotaDB(t)
+	t.Cleanup(deferredDB.release)
+	oldLogger := DB.Config.Logger
+	DB.Config.Logger = quotaBlockingLogger(oldLogger, deferredDB)
+	t.Cleanup(func() { DB.Config.Logger = oldLogger })
+
+	LogQuotaData(9201, "before-save", "gpt-test", 10, time.Now().Unix(), 3)
+	saveDone := make(chan struct{})
+	go func() {
+		SaveQuotaDataCache()
+		close(saveDone)
+	}()
+	deferredDB.waitUntilBlocked(t)
+
+	wrote := make(chan struct{})
+	go func() {
+		LogQuotaData(9202, "during-save", "gpt-test", 20, time.Now().Unix(), 4)
+		close(wrote)
+	}()
+	select {
+	case <-wrote:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("LogQuotaData blocked while SaveQuotaDataCache performed database I/O")
+	}
+	deferredDB.release()
+	select {
+	case <-saveDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SaveQuotaDataCache did not finish")
+	}
+}

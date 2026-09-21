@@ -24,6 +24,7 @@ import {
   calculateStripeAmount,
   calculateWaffoPancakeAmount,
   requestKyrenPayment,
+  requestPQAPIPayment,
   requestPayment,
   requestStripePayment,
   isApiSuccess,
@@ -113,6 +114,7 @@ export function usePayment() {
         setProcessing(true)
 
         const isStripe = isStripePayment(paymentType)
+        const isPQAPI = paymentType === 'pqapi'
         const amount = Math.floor(topupAmount)
 
         const response = isStripe
@@ -120,10 +122,15 @@ export function usePayment() {
               amount,
               payment_method: 'stripe',
             })
-          : await requestPayment({
-              amount,
-              payment_method: paymentType,
-            })
+          : isPQAPI
+            ? await requestPQAPIPayment({
+                amount,
+                payment_method: 'pqapi',
+              })
+            : await requestPayment({
+                amount,
+                payment_method: paymentType,
+              })
 
         if (!isApiSuccess(response)) {
           toast.error(response.message || i18next.t('Payment request failed'))
@@ -138,7 +145,16 @@ export function usePayment() {
         }
 
         // Handle non-Stripe payment
-        if (!isStripe && response.data) {
+        if (isPQAPI && response.data && typeof response.data === 'object') {
+          const checkoutUrl = (response.data as { checkout_url?: string })
+            .checkout_url
+          if (checkoutUrl) {
+            window.location.assign(checkoutUrl)
+            return true
+          }
+        }
+
+        if (!isStripe && !isPQAPI && response.data) {
           const url = (response as unknown as { url?: string }).url
           if (url) {
             submitPaymentForm(url, response.data)

@@ -58,6 +58,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.POST("/creem/webhook", controller.CreemWebhook)
 		apiRouter.POST("/waffo/webhook", controller.WaffoWebhook)
 		apiRouter.POST("/kyren/webhook", controller.KyrenWebhook)
+		apiRouter.POST("/pqapi/webhook", controller.PQAPIWebhook)
 		//apiRouter.POST("/waffo-pancake/webhook", controller.WaffoPancakeWebhook)
 
 		apiRouter.GET("/payment/kyren/products", middleware.AdminAuth(), controller.AdminListKyrenProducts)
@@ -111,6 +112,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/stripe/amount", controller.RequestStripeAmount)
 				selfRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.RequestCreemPay)
 				selfRoute.POST("/kyren/pay", middleware.CriticalRateLimit(), controller.RequestKyrenPay)
+				selfRoute.POST("/pqapi/pay", middleware.CriticalRateLimit(), controller.RequestPQAPIPay)
 				selfRoute.POST("/waffo/amount", controller.RequestWaffoAmount)
 				selfRoute.POST("/waffo/pay", middleware.CriticalRateLimit(), controller.RequestWaffoPay)
 				//selfRoute.POST("/waffo-pancake/amount", controller.RequestWaffoPancakeAmount)

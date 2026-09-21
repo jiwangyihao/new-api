@@ -41,6 +41,12 @@ func isKyrenUserPaymentEnabled() bool {
 		strings.TrimSpace(setting.KyrenWebhookSecret) != ""
 }
 
+func isPQAPITopUpEnabled() bool {
+	return strings.TrimSpace(setting.PQAPIBaseURL) != "" &&
+		strings.TrimSpace(setting.PQAPISiteID) != "" &&
+		strings.TrimSpace(setting.PQAPISecret) != ""
+}
+
 func isWaffoTopUpEnabled() bool {
 	if !setting.WaffoEnabled {
 		return false

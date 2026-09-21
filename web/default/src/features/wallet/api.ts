@@ -166,6 +166,16 @@ export async function requestKyrenPayment(
   return res.data
 }
 
+/** Request a PQAPI hosted checkout for a dynamically priced top-up. */
+export async function requestPQAPIPayment(
+  request: PaymentRequest
+): Promise<KyrenPaymentResponse> {
+  const res = await api.post('/api/user/pqapi/pay', request, {
+    skipBusinessError: true,
+  } as Record<string, unknown>)
+  return res.data
+}
+
 /**
  * Request Waffo payment
  */

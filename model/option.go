@@ -116,6 +116,9 @@ func InitOptionMap() {
 	common.OptionMap["KyrenWebhookSecret"] = setting.KyrenWebhookSecret
 	common.OptionMap["KyrenBaseURL"] = setting.KyrenBaseURL
 	common.OptionMap["KyrenTopUpProducts"] = setting.KyrenTopUpProducts
+	common.OptionMap["PQAPIBaseURL"] = setting.PQAPIBaseURL
+	common.OptionMap["PQAPISiteID"] = setting.PQAPISiteID
+	common.OptionMap["PQAPISecret"] = setting.PQAPISecret
 	common.OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.WaffoEnabled)
 	common.OptionMap["WaffoApiKey"] = setting.WaffoApiKey
 	common.OptionMap["WaffoPrivateKey"] = setting.WaffoPrivateKey
@@ -407,6 +410,17 @@ func updateOptionMap(key string, value string) (err error) {
 		common.OptionMap[key] = normalized
 		common.OptionMapRWMutex.Unlock()
 		return setting.ApplyKyrenRuntimeOption(key, normalized)
+	}
+	if strings.HasPrefix(key, "PQAPI") {
+		if err := setting.ApplyPQAPIRuntimeOption(key, value); err != nil {
+			return err
+		}
+		common.OptionMapRWMutex.Lock()
+		if key != "PQAPISecret" || strings.TrimSpace(value) != "" {
+			common.OptionMap[key] = strings.TrimSpace(value)
+		}
+		common.OptionMapRWMutex.Unlock()
+		return nil
 	}
 
 	common.OptionMapRWMutex.Lock()

@@ -133,6 +133,10 @@ const BILLING_SECTIONS = [
           KyrenWebhookSecret: settings.KyrenWebhookSecret ?? '',
           KyrenBaseURL: settings.KyrenBaseURL ?? 'https://api.kyren.top',
           KyrenTopUpProducts: settings.KyrenTopUpProducts ?? [],
+          PQAPIBaseURL:
+            settings.PQAPIBaseURL ?? 'https://shop.pqapi.shop',
+          PQAPISiteID: settings.PQAPISiteID ?? '',
+          PQAPISecret: settings.PQAPISecret ?? '',
           ServerAddress: settings.ServerAddress ?? '',
         }}
         waffoDefaultValues={{

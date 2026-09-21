@@ -243,6 +243,9 @@ export type BillingSettings = {
   KyrenWebhookSecret: string
   KyrenBaseURL: string
   KyrenTopUpProducts: KyrenTopUpProduct[]
+  PQAPIBaseURL: string
+  PQAPISiteID: string
+  PQAPISecret: string
   ServerAddress: string
   WaffoEnabled: boolean
   WaffoApiKey: string

@@ -122,6 +122,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	if info != nil {
 		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
 	}
+	if info.StreamStatus == nil {
+		info.StreamStatus = relaycommon.NewStreamStatus()
+	}
+	info.StreamStatus.RequireTerminal()
 
 	responseId := helper.GetResponseID(c)
 	createAt := time.Now().Unix()
@@ -159,6 +163,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 				return false
 			}
+			releaseCommittedStreamRequest(info)
 			return true
 		}
 
@@ -166,6 +171,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
+		releaseCommittedStreamRequest(info)
 		return true
 	}
 
@@ -320,6 +326,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			sr.Error(err)
 			return
 		}
+		observeResponsesProtocolOutcome(info, streamResp.Type, data)
+		if streamResp.Response != nil && streamResp.Response.Usage != nil {
+			applyResponsesStreamUsage(usage, streamResp.Response)
+			containStreamUsage = true
+			info.HasTrustedUsage = true
+		}
 		if service.ShouldMonitorGPTAbuse(info) {
 			signal := service.ClassifyGPTAbuseSignalFromSSEEventBytes(streamResp.Type, data)
 			if signal.Matched {
@@ -332,6 +344,15 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				service.RecordGPTAbuseSignal(c, info, signal)
 			}
 		}
+		if info.StreamGate != nil {
+			if apiErr := info.StreamGate.ObserveReplaySafety(data, types.RelayFormatOpenAIResponses); apiErr != nil {
+				info.StreamGate.SetAttemptError(apiErr)
+				streamErr = apiErr
+				sr.Stop(apiErr)
+				return
+			}
+		}
+		releaseCommittedStreamRequest(info)
 
 		switch streamResp.Type {
 		case "response.created":
@@ -342,6 +363,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				if streamResp.Response.CreatedAt != 0 {
 					createAt = int64(streamResp.Response.CreatedAt)
 				}
+			}
+			if !sendStartIfNeeded() {
+				sr.Stop(streamErr)
+				return
 			}
 
 		//case "response.reasoning_text.delta":
@@ -482,7 +507,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 		case "response.function_call_arguments.done":
 
-		case "response.completed":
+		case "response.completed", "response.incomplete", "response.cancelled", "response.canceled":
 			if info != nil {
 				info.ApplyDynamicBillingMultiplierFromBody(data, relaycommon.DynamicBillingMultiplierSourceSSE)
 			}
@@ -528,6 +553,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					info.ClaudeConvertInfo.Usage = usage
 				}
 				finishReason := "stop"
+				if streamResp.Type == "response.incomplete" {
+					finishReason = "length"
+					if info.StreamStatus.OutcomeSnapshot().IncompleteReason == "content_filter" {
+						finishReason = "content_filter"
+					}
+				}
 				if sawToolCall && !sawOutputText {
 					finishReason = "tool_calls"
 				}
@@ -539,7 +570,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				sentStop = true
 			}
 
-		case "response.error", "response.failed":
+		case "error", "response.error", "response.failed":
 			if streamResp.Response != nil {
 				if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
 					streamErr = types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
@@ -557,6 +588,19 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if info != nil {
 		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Trailer, relaycommon.DynamicBillingMultiplierSourceTrailer)
+	}
+	if info.StreamGate != nil {
+		if streamErr != nil {
+			info.StreamGate.SetAttemptError(streamErr)
+		}
+		if service.StreamAttemptError(info) != nil {
+			// Return trusted usage through normal settlement; the controller then
+			// reconciles the protocol error. Do not synthesize a success stop.
+			if containStreamUsage {
+				return usage, nil
+			}
+			return nil, nil
+		}
 	}
 	if streamErr != nil {
 		return nil, streamErr
@@ -598,6 +642,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
 		helper.Done(c)
+	}
+	if info.StreamGate != nil {
+		service.StreamAttemptError(info)
 	}
 	return settlementUsage, nil
 }

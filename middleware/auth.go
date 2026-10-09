@@ -279,12 +279,11 @@ func TokenAuth() func(c *gin.Context) {
 			parts := strings.Split(key, ",")
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
-				if strings.HasPrefix(part, "openai-insecure-api-key") {
-					key = strings.TrimPrefix(part, "openai-insecure-api-key.")
+				if credential, found := strings.CutPrefix(part, "openai-insecure-api-key."); found {
+					c.Request.Header.Set("Authorization", "Bearer "+credential)
 					break
 				}
 			}
-			c.Request.Header.Set("Authorization", "Bearer "+key)
 		}
 		// 检查path包含/v1/messages 或 /v1/models
 		if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {

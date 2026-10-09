@@ -12,6 +12,22 @@ import (
 // attempt or a billing log. Reasons are bounded categories, never error text.
 func ClassifyAvailabilityResult(apiErr *types.NewAPIError, stream *relaycommon.StreamStatus, isStream, clientGone bool) (string, string) {
 	if stream != nil {
+		outcome := stream.OutcomeSnapshot()
+		if outcome.Response == relaycommon.ResponseOutcomeCancelled {
+			return model.AvailabilityExcluded, "client_disconnect"
+		}
+		if protocolBusinessRejection(outcome.ErrorCode, outcome.ErrorType) || outcome.Response == relaycommon.ResponseOutcomeIncomplete && protocolBusinessRejection(outcome.IncompleteReason, "") {
+			return model.AvailabilityExcluded, "user_condition"
+		}
+		if outcome.Response == relaycommon.ResponseOutcomeFailed {
+			return model.AvailabilityFailure, "stream_protocol_error"
+		}
+		if outcome.Response == relaycommon.ResponseOutcomeIncomplete {
+			if outcome.IncompleteReason == "max_output_tokens" {
+				return model.AvailabilitySuccess, "completed"
+			}
+			return model.AvailabilityUnknown, "completion_unverified"
+		}
 		_, _, _, serviceFailure := stream.AvailabilityEvidence()
 		if serviceFailure {
 			return model.AvailabilityFailure, "stream_service_error"
@@ -23,6 +39,9 @@ func ClassifyAvailabilityResult(apiErr *types.NewAPIError, stream *relaycommon.S
 	if apiErr != nil {
 		if clientGone && apiErr.GetErrorCode() == types.ErrorCodeDoRequestFailed && errors.Is(apiErr, context.Canceled) && !errors.Is(apiErr, context.DeadlineExceeded) {
 			return model.AvailabilityExcluded, "client_disconnect"
+		}
+		if protocolBusinessRejection(string(apiErr.GetErrorCode()), apiErr.ToOpenAIError().Type) {
+			return model.AvailabilityExcluded, "user_condition"
 		}
 		switch apiErr.GetErrorCode() {
 		case types.ErrorCodeInvalidRequest, types.ErrorCodeReadRequestBodyFailed,
@@ -63,4 +82,12 @@ func ClassifyAvailabilityResult(apiErr *types.NewAPIError, stream *relaycommon.S
 		return model.AvailabilityUnknown, "completion_unverified"
 	}
 	return model.AvailabilitySuccess, "completed"
+}
+
+func protocolBusinessRejection(code, errorType string) bool {
+	switch code {
+	case "content_filter", "content_policy_violation", "safety", "prompt_blocked", "moderation_blocked", "request_cancelled", "request_canceled":
+		return true
+	}
+	return errorType == "content_policy_error"
 }

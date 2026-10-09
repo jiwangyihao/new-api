@@ -214,7 +214,38 @@ func InitOptionMap() {
 
 func loadOptionsFromDatabase() {
 	options, _ := AllOption()
+	// Validate the persisted policy as a whole: individually loading interdependent
+	// cooldown limits can reject a valid pair merely because of database row order.
+	routeValues := make(map[string]string)
 	for _, option := range options {
+		if strings.HasPrefix(option.Key, "route_health_setting.") {
+			routeValues[strings.TrimPrefix(option.Key, "route_health_setting.")] = option.Value
+		}
+	}
+	if len(routeValues) > 0 {
+		candidate := *operation_setting.GetRouteHealthSetting()
+		_ = config.UpdateConfigFromMap(&candidate, routeValues)
+		valid := candidate.Validate() == nil
+		for key, value := range routeValues {
+			if _, err := candidate.WithOption(key, value); err != nil {
+				valid = false
+			}
+		}
+		if valid {
+			common.OptionMapRWMutex.Lock()
+			*operation_setting.GetRouteHealthSetting() = candidate
+			for key, value := range routeValues {
+				common.OptionMap["route_health_setting."+key] = value
+			}
+			common.OptionMapRWMutex.Unlock()
+		} else {
+			common.SysError("invalid persisted route health policy")
+		}
+	}
+	for _, option := range options {
+		if strings.HasPrefix(option.Key, "route_health_setting.") {
+			continue
+		}
 		err := updateOptionMap(option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
@@ -231,6 +262,9 @@ func SyncOptions(frequency int) {
 }
 
 func UpdateOption(key string, value string) error {
+	if err := validateRouteHealthOption(key, value); err != nil {
+		return err
+	}
 	if key == "USDExchangeRate" {
 		creditFXRateOptionMutex.Lock()
 		defer creditFXRateOptionMutex.Unlock()
@@ -268,6 +302,9 @@ func init() {
 }
 
 func UpdateOptionChecked(key string, value string) error {
+	if err := validateRouteHealthOption(key, value); err != nil {
+		return err
+	}
 	option := Option{Key: key}
 	if err := DB.FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
 		return err
@@ -381,6 +418,9 @@ func prepareMigratedOptionsRuntimePlan(values map[string]string) (migratedOption
 }
 
 func updateOptionMap(key string, value string) (err error) {
+	if err := validateRouteHealthOption(key, value); err != nil {
+		return err
+	}
 	if IsDeprecatedBusinessGroupOption(key) {
 		return nil
 	}
@@ -814,4 +854,13 @@ func handleConfigUpdate(key, value string) bool {
 	}
 
 	return true // 已处理
+}
+
+func validateRouteHealthOption(key, value string) error {
+	const prefix = "route_health_setting."
+	if !strings.HasPrefix(key, prefix) {
+		return nil
+	}
+	_, err := operation_setting.GetRouteHealthSetting().WithOption(strings.TrimPrefix(key, prefix), value)
+	return err
 }

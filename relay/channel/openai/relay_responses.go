@@ -10,11 +10,13 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,9 +36,7 @@ func openAIResponsesCompletedWithUsage(resp *dto.OpenAIResponsesResponse) bool {
 	return resp != nil && resp.Usage != nil && openAIResponseStatusCompleted(resp.Status)
 }
 
-// responsesSoftErrorMinOutputTokens 是软错误结束时仍然计费所需的最小输出 token 数。
-// 上游建立连接后以软错误（response.error/failed/incomplete/cancelled 等）结束，
-// 且观察到的输出 token 低于该阈值时，视为未产生有效输出，不进行计费。
+// Legacy ungated settlement threshold only; replay always uses delivered payload.
 const responsesSoftErrorMinOutputTokens = 20
 
 type responsesStreamEventHeader struct {
@@ -46,6 +46,7 @@ type responsesStreamEventHeader struct {
 func requiresFullResponsesStreamDecode(eventType string) bool {
 	switch eventType {
 	case "response.completed",
+		"error",
 		"response.error",
 		"response.failed",
 		"response.incomplete",
@@ -109,7 +110,11 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
-	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
+	var protocolErr *types.NewAPIError
+	oaiError := responsesResponse.GetOpenAIError()
+	gated := info != nil && info.StreamGate != nil
+	failed := strings.EqualFold(strings.TrimSpace(common.JsonRawMessageToString(responsesResponse.Status)), "failed") || oaiError != nil
+	if oaiError != nil && oaiError.Type != "" || gated && failed {
 		if service.ShouldMonitorGPTAbuse(info) {
 			signal := service.ClassifyGPTAbuseSignalFromHTTPError(resp.StatusCode, responseBody)
 			signal.UpstreamRequestId = c.GetString(common.UpstreamRequestIdKey)
@@ -119,7 +124,19 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 			}
 			service.RecordGPTAbuseSignal(c, info, signal)
 		}
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		if !gated {
+			return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+		}
+		protocolErr = streamgate.ResponsesFailure(responseBody)
+		if !streamgate.ResponsesMeaningfulOutput(responseBody) {
+			return nil, protocolErr
+		}
+		// Preserve output/usage, but replace provider diagnostics with the same
+		// masked public error used by the streaming gate.
+		responseBody, err = sjson.SetBytes(responseBody, "error", protocolErr.ToOpenAIError())
+		if err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
+		}
 	}
 
 	if responsesResponse.HasImageGenerationCall() {
@@ -154,6 +171,16 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 
 	// 写入新的 response body
 	writeOK := service.IOCopyBytesGracefully(c, resp, responseBody)
+	if gated && writeOK {
+		info.StreamGate.FinishPlainResponse(protocolErr)
+		if protocolErr != nil {
+			if info.StreamStatus == nil {
+				info.StreamStatus = relaycommon.NewStreamStatus()
+			}
+			info.StreamStatus.MarkFailed(string(protocolErr.GetErrorCode()), protocolErr.ToOpenAIError().Type, protocolErr.StatusCode)
+		}
+		releaseCommittedStreamRequest(info)
+	}
 
 	if writeOK && responsesResponse.NewAPIBilling != nil && info != nil {
 		info.CodexProServed = responsesResponse.NewAPIBilling.CodexProServed
@@ -168,8 +195,12 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		markCodexProServedCandidateFromResponseTrailer(info, resp)
 		info.ConfirmCodexProServed()
 	}
+	settlementUsage := &usage
+	if gated && responsesResponse.Usage == nil {
+		settlementUsage = nil
+	}
 	if info == nil || info.ResponsesUsageInfo == nil || info.ResponsesUsageInfo.BuiltInTools == nil {
-		return &usage, nil
+		return settlementUsage, nil
 	}
 	// 解析 Tools 用量
 	for _, tool := range responsesResponse.Tools {
@@ -180,7 +211,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 		}
 		buildToolinfo.CallCount++
 	}
-	return &usage, nil
+	return settlementUsage, nil
 }
 
 func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -202,6 +233,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		info.ApplyDynamicBillingMultiplierFromHeaders(resp.Header, relaycommon.DynamicBillingMultiplierSourceHeader)
 	}
 	doneBuffer := beginResponsesDoneBuffering(c)
+	if info != nil {
+		if info.StreamStatus == nil {
+			info.StreamStatus = relaycommon.NewStreamStatus()
+		}
+		info.StreamStatus.RequireTerminal()
+	}
 
 	helper.StreamScannerBytesHandler(c, resp, info, func(data []byte, sr *helper.StreamResult) {
 		streamResponse, err := parseResponsesStreamEventBytes(data)
@@ -223,6 +260,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			}
 		}
 
+		observeResponsesProtocolOutcome(info, streamResponse.Type, data)
+		applyResponsesStreamUsage(usage, streamResponse.Response)
+		if info != nil && streamResponse.Response != nil && streamResponse.Response.Usage != nil {
+			info.HasTrustedUsage = true
+		}
 		shouldDelayCompleted := streamResponse.Type == "response.completed" && openAIResponsesCompletedWithUsage(streamResponse.Response)
 		if shouldDelayCompleted {
 			completedCopy := streamResponse
@@ -232,14 +274,12 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Stop(err)
 			return
 		}
-		if streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" || streamResponse.Type == "response.incomplete" || streamResponse.Type == "response.cancelled" || streamResponse.Type == "response.canceled" {
-			streamErr := fmt.Errorf("responses stream terminal error: %s", streamResponse.Type)
-			if streamResponse.Response != nil {
-				if oaiErr := streamResponse.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
-					streamErr = fmt.Errorf("responses stream terminal error: %s: %s", streamResponse.Type, oaiErr.Message)
-				}
-			}
-			sr.Error(streamErr)
+		releaseCommittedStreamRequest(info)
+		if streamResponse.Type == "error" || streamResponse.Type == "response.error" || streamResponse.Type == "response.failed" || responsesIncompleteFailure(streamResponse.Type, data) {
+			// The gate retains failure until the controller decides retry/finalize.
+			// Record diagnostics for legacy streams without treating normal limits
+			// or client/moderation cancellation as an upstream outage.
+			sr.Error(fmt.Errorf("responses stream terminal error: %s", streamResponse.Type))
 			return
 		}
 		switch streamResponse.Type {
@@ -298,7 +338,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			if info != nil {
 				service.SeedNewAPIBillingRelayInfo(info, *billing)
 			}
-			if data, err := common.Marshal(completedStreamResponse); err == nil {
+			if data, err := sjson.SetBytes(completedStreamData, "newapi_billing", billing); err == nil {
 				completedStreamData = data
 			} else {
 				logger.LogError(c, "failed to marshal responses completed stream billing metadata: "+err.Error())
@@ -310,6 +350,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
 			}
 		}
+		releaseCommittedStreamRequest(info)
 		if finalWriteOK && doneBuffer != nil {
 			if err := doneBuffer.flushBufferedDone(); err != nil {
 				finalWriteOK = false
@@ -327,6 +368,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonHandlerStop, err)
 		}
 	}
+	if info != nil && info.StreamGate != nil {
+		// Trailer-aware delayed completion must reach the gate before EOF.
+		service.StreamAttemptError(info)
+	}
 
 	if usage.TotalTokens <= 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
@@ -334,9 +379,83 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	// 软错误结束且未观察到有效输出（输出 token < responsesSoftErrorMinOutputTokens）时不计费：
 	// 返回 nil usage，使结算层将其视为无可信 usage，fixed_request 退预扣、usage-token 扣 0，且不注入 NewAPIBilling。
-	if info != nil && info.StreamStatus != nil && info.StreamStatus.HasErrors() && usage.OutputTokens < responsesSoftErrorMinOutputTokens {
+	if info != nil && info.StreamGate == nil && info.StreamStatus != nil && info.StreamStatus.HasErrors() && usage.OutputTokens < responsesSoftErrorMinOutputTokens {
 		return nil, nil
 	}
 
+	if info != nil && info.StreamGate != nil && !info.HasTrustedUsage {
+		return nil, nil
+	}
 	return usage, nil
+}
+
+func releaseCommittedStreamRequest(info *relaycommon.RelayInfo) {
+	if info == nil || info.StreamGate == nil || info.StreamGate.CanRetry() || info.StreamRequestCleanup == nil {
+		return
+	}
+	cleanup := info.StreamRequestCleanup
+	info.StreamRequestCleanup = nil
+	cleanup()
+}
+
+func responsesIncompleteFailure(eventType string, data []byte) bool {
+	if eventType != "response.incomplete" {
+		return false
+	}
+	switch gjson.GetBytes(data, "response.incomplete_details.reason").String() {
+	case "server_error", "overloaded", "rate_limit_exceeded", "timeout":
+		return true
+	}
+	return false
+}
+
+func observeResponsesProtocolOutcome(info *relaycommon.RelayInfo, eventType string, data []byte) {
+	if info == nil || info.StreamStatus == nil {
+		return
+	}
+	switch eventType {
+	case "response.completed", "response.done":
+		info.StreamStatus.MarkCompleted()
+		info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+	case "response.cancelled", "response.canceled":
+		info.StreamStatus.MarkCancelled()
+	case "response.incomplete":
+		reason := gjson.GetBytes(data, "response.incomplete_details.reason").String()
+		if responsesIncompleteFailure(eventType, data) {
+			info.StreamStatus.MarkFailed(reason, "upstream_error", http.StatusBadGateway)
+		} else {
+			info.StreamStatus.MarkIncomplete(reason)
+			info.StreamStatus.SetEndReason(relaycommon.StreamEndReasonDone, nil)
+		}
+	case "error", "response.error", "response.failed":
+		errValue := gjson.GetBytes(data, "response.error")
+		if !errValue.Exists() || errValue.Type == gjson.Null {
+			errValue = gjson.GetBytes(data, "error")
+		}
+		if !errValue.Exists() || errValue.Type == gjson.Null {
+			errValue = gjson.ParseBytes(data)
+		}
+		status := int(errValue.Get("status_code").Int())
+		if status < 400 || status > 599 {
+			status = http.StatusBadGateway
+		}
+		info.StreamStatus.MarkFailed(errValue.Get("code").String(), errValue.Get("type").String(), status)
+	}
+}
+
+func applyResponsesStreamUsage(usage *dto.Usage, response *dto.OpenAIResponsesResponse) {
+	if usage == nil || response == nil || response.Usage == nil {
+		return
+	}
+	usage.PromptTokens = response.Usage.InputTokens
+	usage.InputTokens = response.Usage.InputTokens
+	usage.CompletionTokens = response.Usage.OutputTokens
+	usage.OutputTokens = response.Usage.OutputTokens
+	usage.TotalTokens = response.Usage.TotalTokens
+	usage.CompletionTokenDetails = response.Usage.CompletionTokenDetails
+	if response.Usage.InputTokensDetails != nil {
+		usage.PromptTokensDetails.CachedTokens = response.Usage.InputTokensDetails.CachedTokens
+		usage.PromptTokensDetails.ImageTokens = response.Usage.InputTokensDetails.ImageTokens
+		usage.PromptTokensDetails.AudioTokens = response.Usage.InputTokensDetails.AudioTokens
+	}
 }

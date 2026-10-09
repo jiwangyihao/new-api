@@ -10,7 +10,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -329,4 +331,62 @@ func BenchmarkOaiResponsesToChatStreamToolArguments(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestGatedResponsesToChatFailureNeverSynthesizesSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name, event               string
+		retry, delivered, trusted bool
+	}{
+		{"prelude_error", `{"type":"response.created","response":{"id":"r","output":[]}}`, true, false, false},
+		{"one_character", `{"type":"response.output_text.delta","delta":"x"}`, false, true, true},
+		{"tool", `{"type":"response.output_item.added","item":{"id":"item","call_id":"call","type":"function_call","name":"lookup","arguments":""}}`, false, true, false},
+		{"dropped_reasoning", `{"type":"response.reasoning_text.delta","delta":"x"}`, false, false, false},
+		{"unknown_extension", `{"type":"response.created","response":{"id":"r","output":[],"vendor_extension":{"accepted":true}}}`, false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			gate := streamgate.New(ctx.Writer, string(types.RelayFormatOpenAI))
+			ctx.Writer = gate
+			info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, IsStream: true, DisablePing: true, StreamGate: gate, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+			failure := `{"type":"error","code":"overloaded","message":"busy"}`
+			if tc.trusted {
+				failure = `{"type":"response.failed","response":{"error":{"code":"overloaded","type":"server_error"},"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}}`
+			}
+			body := "data: " + tc.event + "\n\ndata: " + failure + "\n\ndata: [DONE]\n\n"
+			usage, apiErr := OaiResponsesToChatStreamHandler(ctx, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+			require.Nil(t, apiErr, "settlement must receive trustworthy usage before protocol reconciliation")
+			require.NotNil(t, service.StreamAttemptError(info))
+			require.Equal(t, tc.retry, gate.CanRetry())
+			require.Equal(t, tc.delivered, gate.Meaningful())
+			require.Equal(t, tc.trusted, usage != nil)
+			if tc.trusted {
+				require.Equal(t, 4, usage.TotalTokens)
+				require.True(t, info.HasTrustedUsage)
+			}
+			require.NotContains(t, recorder.Body.String(), `"finish_reason":"stop"`)
+			require.NotContains(t, recorder.Body.String(), "[DONE]")
+		})
+	}
+}
+
+func TestGatedResponsesToChatTokenLimitIsNormalTerminal(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	gate := streamgate.New(ctx.Writer, string(types.RelayFormatOpenAI))
+	ctx.Writer = gate
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAI, IsStream: true, DisablePing: true, StreamGate: gate, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"}}
+	body := "data: " + `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[]}}` + "\n\ndata: [DONE]\n\n"
+	usage, apiErr := OaiResponsesToChatStreamHandler(ctx, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 4, usage.TotalTokens)
+	require.Nil(t, service.StreamAttemptError(info))
+	require.False(t, info.StreamStatus.ResponseFailed())
+	require.False(t, info.StreamStatus.HasErrors())
+	require.False(t, gate.CanRetry())
+	require.Contains(t, recorder.Body.String(), `"finish_reason":"length"`)
 }

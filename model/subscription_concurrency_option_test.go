@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +75,38 @@ func TestUpdateOptionMapKyrenRejectsInvalidRuntimeValuesBeforeOptionMapUpdate(t 
 	assert.Equal(t, "https://api.kyren.top", setting.KyrenBaseURL)
 	_, exists := common.OptionMap["KyrenBaseURL"]
 	assert.False(t, exists)
+}
+
+func TestRouteHealthOptionRejectsInvalidValuesBeforeMutation(t *testing.T) {
+	old := *operation_setting.GetRouteHealthSetting()
+	oldMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() { *operation_setting.GetRouteHealthSetting() = old; common.OptionMap = oldMap })
+	for _, pair := range [][2]string{{"lease_seconds", "0"}, {"failure_ratio", "NaN"}, {"max_inflight", "-1"}, {"enabled", "maybe"}, {"failure_threshold", "1.5"}, {"unknown", "1"}} {
+		key := "route_health_setting." + pair[0]
+		require.Error(t, updateOptionMap(key, pair[1]))
+		require.Equal(t, old, *operation_setting.GetRouteHealthSetting())
+		require.NotContains(t, common.OptionMap, key)
+	}
+	require.NoError(t, updateOptionMap("route_health_setting.failure_threshold", "4"))
+	require.Equal(t, 4, operation_setting.GetRouteHealthSetting().FailureThreshold)
+}
+
+func TestRouteHealthPolicyReloadValidatesWholeConfiguration(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	require.NoError(t, db.AutoMigrate(&Option{}))
+	old := *operation_setting.GetRouteHealthSetting()
+	oldMap := common.OptionMap
+	common.OptionMap = map[string]string{}
+	t.Cleanup(func() { *operation_setting.GetRouteHealthSetting() = old; common.OptionMap = oldMap })
+	// The base exceeds the default maximum, but the persisted pair is valid.
+	require.NoError(t, db.Create(&[]Option{{Key: "route_health_setting.base_cooldown_seconds", Value: "400"}, {Key: "route_health_setting.max_cooldown_seconds", Value: "500"}}).Error)
+	loadOptionsFromDatabase()
+	require.Equal(t, 400, operation_setting.GetRouteHealthSetting().BaseCooldownSeconds)
+	require.Equal(t, 500, operation_setting.GetRouteHealthSetting().MaxCooldownSeconds)
+	loadOptionsFromDatabase()
+	require.Equal(t, 400, operation_setting.GetRouteHealthSetting().BaseCooldownSeconds)
+	require.NoError(t, db.Model(&Option{}).Where("key = ?", "route_health_setting.failure_ratio").FirstOrCreate(&Option{Key: "route_health_setting.failure_ratio", Value: "NaN"}).Error)
+	loadOptionsFromDatabase()
+	require.Equal(t, old.FailureRatio, operation_setting.GetRouteHealthSetting().FailureRatio)
 }

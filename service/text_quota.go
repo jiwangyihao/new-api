@@ -362,6 +362,9 @@ func hasExplicitZeroUsage(usage *dto.Usage) bool {
 }
 
 func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, usage *dto.Usage, extraContent []string) error {
+	if !PrepareRelaySettlement(ctx, relayInfo) {
+		return nil
+	}
 	originUsage := usage
 	usageEstimated := common.GetContextKeyBool(ctx, constant.ContextKeyLocalCountTokens)
 	rawMeteredTokens := SubscriptionMeteredTokens(usage)
@@ -534,6 +537,7 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		InjectTieredBillingInfo(other, relayInfo, tieredResult)
 	}
 
+	appendRelayAttemptAdminInfo(ctx, other)
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:        relayInfo.ChannelId,
 		PromptTokens:     summary.PromptTokens,
@@ -548,8 +552,11 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Group:            "",
 		Other:            other,
 	})
-	gopool.Go(func() {
-		perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
-	})
+	success := relaySettlementSucceeded(ctx, relayInfo)
+	if success {
+		gopool.Go(func() {
+			perfmetrics.RecordRelaySample(relayInfo, true, int64(summary.CompletionTokens))
+		})
+	}
 	return settleErr
 }

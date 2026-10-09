@@ -5,12 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -49,7 +49,7 @@ func (f *relayTokenLimitFake) ConsumeIncrement(tokens int64) (int64, *types.NewA
 	return 0, nil
 }
 func (f *relayTokenLimitFake) RefundIncrement(sequence int64, reason string) {}
-func (f *relayTokenLimitFake) CommitIncrement(sequence int64) {}
+func (f *relayTokenLimitFake) CommitIncrement(sequence int64)                {}
 func (f *relayTokenLimitFake) PreConsumedTokens() int64                      { return 10 }
 
 type relayBillingFake struct {
@@ -167,15 +167,29 @@ func TestRelayRealtimeTokenLimitErrorAfterResponseWritesWebSocketError(t *testin
 	assert.Contains(t, string(payload), string(types.ErrorCodeAPIKeyTokenLimitExhausted))
 }
 
-func TestRelayRegistersTokenLimitCleanupBeforePreConsume(t *testing.T) {
-	source, err := os.ReadFile("relay.go")
+func TestRelayPreludeFailureRefundsKeyCapAndWritesOneTerminal(t *testing.T) {
+	ctx, recorder := newRelayTokenLimitTestContext(t)
+	gate := streamgate.New(ctx.Writer, string(types.RelayFormatOpenAIResponses))
+	ctx.Writer = gate
+	ctx.Set("relay_stream_gate", gate)
+	gate.Header().Set("Content-Type", "text/event-stream")
+	tokenLimit := &relayTokenLimitFake{}
+	billing := &relayBillingFake{}
+	info := newRelayTokenLimitInfo(tokenLimit, billing)
+	info.StreamGate = gate
+	_, err := gate.Write([]byte("data: {\"type\":\"response.created\",\"response\":{\"id\":\"first\",\"status\":\"in_progress\"}}\n\n"))
 	require.NoError(t, err)
-	text := string(source)
-	cleanupIndex := strings.Index(text, "handleRelayPanicForTokenLimit")
-	preconsumeIndex := strings.Index(text, "relayInfo.TokenLimit = service.NewTokenLimitSession(relayInfo)")
-	require.NotEqual(t, -1, cleanupIndex)
-	require.NotEqual(t, -1, preconsumeIndex)
-	assert.Less(t, cleanupIndex, preconsumeIndex)
+	gate.Flush()
+	_, err = gate.Write([]byte("data: {\"type\":\"response.failed\",\"response\":{\"id\":\"first\",\"status\":\"failed\",\"error\":{\"type\":\"server_error\",\"code\":\"server_error\",\"message\":\"unavailable\"}}}\n\n"))
+	require.NoError(t, err)
+	apiErr := handleRelayErrorForTokenLimit(ctx, info, gate.AttemptError())
+	require.NotNil(t, apiErr)
+	assert.Equal(t, 1, billing.refundCount)
+	assert.Equal(t, []string{"server_error"}, tokenLimit.refundReasons)
+	assert.Empty(t, tokenLimit.markReasons)
+	assert.True(t, writeRelayErrorResponse(ctx, types.RelayFormatOpenAIResponses, nil, "prelude-failure", info, apiErr))
+	assert.False(t, writeRelayErrorResponse(ctx, types.RelayFormatOpenAIResponses, nil, "prelude-failure", info, apiErr))
+	assert.Equal(t, 1, strings.Count(recorder.Body.String(), `"type":"response.failed"`))
 }
 
 func TestRelayPanicAfterTokenLimitPreConsumeRefundsKeyCap(t *testing.T) {

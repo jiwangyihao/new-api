@@ -242,6 +242,106 @@ func (channel *Channel) GetKeys() []string {
 	return keys
 }
 
+type ChannelCredential struct {
+	Key   string
+	Index int
+}
+
+// EnabledCredentials snapshots administrative availability; health never edits it.
+func (channel *Channel) EnabledCredentials() []ChannelCredential {
+	if channel == nil || channel.Status != common.ChannelStatusEnabled {
+		return nil
+	}
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+	if !channel.ChannelInfo.IsMultiKey {
+		return []ChannelCredential{{Key: channel.Key}}
+	}
+	keys := channel.GetKeys()
+	result := make([]ChannelCredential, 0, len(keys))
+	for index, key := range keys {
+		status, exists := channel.ChannelInfo.MultiKeyStatusList[index]
+		if !exists || status == common.ChannelStatusEnabled {
+			result = append(result, ChannelCredential{Key: key, Index: index})
+		}
+	}
+	return result
+}
+
+// PreviewNextEnabledKey does not consume the polling cursor during enumeration.
+func (channel *Channel) PreviewNextEnabledKey() string {
+	if channel == nil || channel.Status != common.ChannelStatusEnabled {
+		return ""
+	}
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+	if !channel.ChannelInfo.IsMultiKey {
+		return channel.Key
+	}
+	keys := channel.GetKeys()
+	if len(keys) == 0 {
+		return ""
+	}
+	info, err := CacheGetChannelInfo(channel.Id)
+	if err != nil {
+		return ""
+	}
+	start := info.MultiKeyPollingIndex
+	if start < 0 || start >= len(keys) {
+		start = 0
+	}
+	for offset := range len(keys) {
+		index := (start + offset) % len(keys)
+		status, exists := info.MultiKeyStatusList[index]
+		if !exists || status == common.ChannelStatusEnabled {
+			return keys[index]
+		}
+	}
+	return ""
+}
+
+// CommitEnabledCredential validates the admitted exact key and advances only
+// that polling selection. It never randomly chooses another credential.
+func (channel *Channel) CommitEnabledCredential(key string, index int) *types.NewAPIError {
+	if channel == nil {
+		return types.NewError(errors.New("channel is unavailable"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	lock := GetChannelPollingLock(channel.Id)
+	lock.Lock()
+	defer lock.Unlock()
+	current, err := CacheGetChannel(channel.Id)
+	if err != nil || current == nil || current.Status != common.ChannelStatusEnabled {
+		return types.NewError(errors.New("admitted channel is no longer available"), types.ErrorCodeGetChannelFailed, types.ErrOptionWithSkipRetry())
+	}
+	if !current.ChannelInfo.IsMultiKey {
+		if index != 0 || current.Key != key {
+			return types.NewError(errors.New("admitted credential has changed"), types.ErrorCodeChannelInvalidKey, types.ErrOptionWithSkipRetry())
+		}
+		return nil
+	}
+	keys := current.GetKeys()
+	if index < 0 || index >= len(keys) || keys[index] != key {
+		return types.NewError(errors.New("admitted credential has changed"), types.ErrorCodeChannelInvalidKey, types.ErrOptionWithSkipRetry())
+	}
+	if status, exists := current.ChannelInfo.MultiKeyStatusList[index]; exists && status != common.ChannelStatusEnabled {
+		return types.NewError(errors.New("admitted credential is disabled"), types.ErrorCodeChannelNoAvailableKey, types.ErrOptionWithSkipRetry())
+	}
+	if current.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
+		previous := current.ChannelInfo.MultiKeyPollingIndex
+		current.ChannelInfo.MultiKeyPollingIndex = (index + 1) % len(keys)
+		if !common.MemoryCacheEnabled {
+			if err := current.SaveChannelInfo(); err != nil {
+				current.ChannelInfo.MultiKeyPollingIndex = previous
+				return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+			}
+		}
+		channel.ChannelInfo.MultiKeyPollingIndex = current.ChannelInfo.MultiKeyPollingIndex
+	}
+	return nil
+}
+
 func (channel *Channel) GetNextEnabledKey() (string, int, *types.NewAPIError) {
 	// If not in multi-key mode, return the original key string directly.
 	if !channel.ChannelInfo.IsMultiKey {

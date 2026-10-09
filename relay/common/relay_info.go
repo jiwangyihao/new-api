@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/creditbilling"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	"github.com/QuantumNous/new-api/pkg/tokenbilling"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -221,6 +222,9 @@ type RelayInfo struct {
 	FinalRequestRelayFormat types.RelayFormat
 
 	StreamStatus *StreamStatus
+	StreamGate   *streamgate.Gate
+	// StreamRequestCleanup releases retry-only request resources once replay ends.
+	StreamRequestCleanup func()
 
 	ThinkingContentInfo
 	TokenCountMeta
@@ -649,6 +653,34 @@ func dynamicBillingMultiplierValue(raw json.RawMessage) (float64, bool) {
 }
 
 func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
+	// Only attempt-local state is reset. Billing, subscription and token-cap
+	// reservations, frozen channel profiles and the logical stream gate survive.
+	info.StreamStatus = nil
+	info.FinalRequestRelayFormat = ""
+	info.RequestConversionChain = nil
+	info.InitRequestConversionChain()
+	info.ThinkingContentInfo = ThinkingContentInfo{IsFirstThinkingContent: true}
+	info.ClaudeConvertInfo = nil
+	info.SendResponseCount = 0
+	info.RuntimeHeadersOverride = nil
+	info.UseRuntimeHeadersOverride = false
+	info.ParamOverrideAudit = nil
+	info.AudioUsage = false
+	info.HasTrustedUsage = false
+	info.DynamicBillingMultiplier = 0
+	info.DynamicBillingMultiplierSource = ""
+	info.DynamicBillingMultiplierIgnoredReason = ""
+	info.ResetCodexProRuntimeState()
+	if info.ResponsesUsageInfo != nil {
+		for _, tool := range info.ResponsesUsageInfo.BuiltInTools {
+			if tool != nil {
+				tool.CallCount = 0
+			}
+		}
+	}
+	c.Set("image_generation_call", false)
+	c.Set("image_generation_call_quality", "")
+	c.Set("image_generation_call_size", "")
 	channelType := common.GetContextKeyInt(c, constant.ContextKeyChannelType)
 	paramOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelParamOverride)
 	headerOverride := common.GetContextKeyStringMap(c, constant.ContextKeyChannelHeaderOverride)

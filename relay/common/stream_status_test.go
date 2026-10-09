@@ -5,7 +5,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/QuantumNous/new-api/pkg/streamgate"
+	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"net/http/httptest"
 )
 
 func TestStreamStatus_SetEndReason_FirstWins(t *testing.T) {
@@ -229,4 +233,79 @@ func TestStreamStatus_ConcurrentCompletionAndQueries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStreamStatusProtocolOutcomePreservesTransportEvidence(t *testing.T) {
+	s := NewStreamStatus()
+	s.RequireTerminal()
+	s.FinalizeEOF()
+	s.MarkCompleted()
+	assert.Equal(t, ResponseOutcomeCompleted, s.OutcomeSnapshot().Response)
+	assert.True(t, s.OutcomeSnapshot().ExpectsTerminal)
+	assert.True(t, s.DrainedToEOF)
+	assert.False(t, s.Completed, "protocol outcome does not overwrite transport evidence")
+	s.SetEndReason(StreamEndReasonDone, nil)
+	assert.True(t, s.Completed)
+	assert.Equal(t, StreamEndReasonDone, s.EndReason)
+	s.MarkFailed("overloaded", "server_error", 503)
+	s.MarkFailed("", "", 0)
+	s.MarkCompleted()
+	outcome := s.OutcomeSnapshot()
+	assert.Equal(t, ResponseOutcomeFailed, outcome.Response)
+	assert.Equal(t, "overloaded", outcome.ErrorCode)
+	assert.Equal(t, "server_error", outcome.ErrorType)
+	assert.Equal(t, 503, outcome.ErrorStatus)
+	assert.True(t, s.Completed, "protocol failure must not erase transport completion")
+	s.MarkAvailabilityIncomplete()
+	assert.True(t, s.AvailabilityIncomplete())
+}
+
+func TestInitChannelMetaResetsAttemptButPreservesBillingReservation(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	g := streamgate.New(c.Writer, string(types.RelayFormatOpenAI))
+	cleanup := func() {}
+	info := &RelayInfo{
+		RelayFormat:                     types.RelayFormatOpenAI,
+		StreamGate:                      g,
+		StreamStatus:                    NewStreamStatus(),
+		StreamRequestCleanup:            cleanup,
+		RequestConversionChain:          []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatOpenAIResponses},
+		FinalRequestRelayFormat:         types.RelayFormatOpenAIResponses,
+		ClaudeConvertInfo:               &ClaudeConvertInfo{Done: true, Index: 7},
+		ThinkingContentInfo:             ThinkingContentInfo{HasSentThinkingContent: true},
+		CreditBillingMode:               "fixed_request",
+		ChannelTokenBillingMultiplier:   2,
+		FixedRequestCredits:             80,
+		InitialChannelId:                12,
+		DynamicBillingMultiplierEnabled: true,
+		FinalPreConsumedQuota:           80,
+		SubscriptionId:                  13,
+		SubscriptionPreConsumed:         80,
+		SubscriptionTokenLimit:          1000,
+		TokenGroups:                     []string{"actual"},
+		CodexProServed:                  true,
+		CodexProRequestSent:             true,
+	}
+	info.StreamStatus.MarkFailed("busy", "server_error", 503)
+	info.InitChannelMeta(c)
+	assert.Nil(t, info.StreamStatus)
+	assert.Same(t, g, info.StreamGate)
+	assert.NotNil(t, info.StreamRequestCleanup)
+	assert.Equal(t, []types.RelayFormat{types.RelayFormatOpenAI}, info.RequestConversionChain)
+	assert.Empty(t, info.FinalRequestRelayFormat)
+	assert.Nil(t, info.ClaudeConvertInfo)
+	assert.True(t, info.IsFirstThinkingContent)
+	assert.False(t, info.HasSentThinkingContent)
+	assert.False(t, info.CodexProServed)
+	assert.False(t, info.CodexProRequestSent)
+	assert.Equal(t, "fixed_request", info.CreditBillingMode)
+	assert.Equal(t, float64(2), info.ChannelTokenBillingMultiplier)
+	assert.Equal(t, int64(80), info.FixedRequestCredits)
+	assert.Equal(t, 12, info.InitialChannelId)
+	assert.True(t, info.DynamicBillingMultiplierEnabled)
+	assert.Equal(t, 80, info.FinalPreConsumedQuota)
+	assert.Equal(t, 13, info.SubscriptionId)
+	assert.Equal(t, int64(80), info.SubscriptionPreConsumed)
+	assert.Equal(t, int64(1000), info.SubscriptionTokenLimit)
+	assert.Equal(t, []string{"actual"}, info.TokenGroups)
 }

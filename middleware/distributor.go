@@ -78,6 +78,7 @@ func requestTiming(c *gin.Context, now time.Time) (time.Time, int) {
 
 func Distribute() func(c *gin.Context) {
 	return func(c *gin.Context) {
+		defer service.ReleaseRouteAttempt(c)
 		requestStartTime, requestBufferTimeMs := requestTiming(c, time.Now())
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, requestStartTime)
 		common.SetContextKey(c, constant.ContextKeyRequestBufferTimeMs, requestBufferTimeMs)
@@ -92,6 +93,21 @@ func Distribute() func(c *gin.Context) {
 		if shouldSelectChannel && modelRequest.Model != "" {
 			capture := service.BeginAvailability(c, modelRequest.Model, tokenGroupsFromContext(c))
 			defer capture.Finish(c)
+		}
+		if shouldSelectChannel {
+			previousID := ""
+			if request, exists := common.GetContextKeyType[*dto.OpenAIResponsesRequest](c, constant.ContextKeyOpenAIResponsesRequest); exists && request != nil {
+				previousID = request.PreviousResponseID
+			}
+			if request, exists := common.GetContextKeyType[*dto.OpenAIResponsesCompactionRequest](c, constant.ContextKeyOpenAIResponsesCompactionRequest); exists && request != nil {
+				previousID = request.PreviousResponseID
+			}
+			if previousID != "" {
+				if bindErr := service.ResponseRouteBinding(c, previousID, modelRequest.Model); bindErr != nil {
+					abortWithOpenAiMessage(c, bindErr.StatusCode, bindErr.Error(), bindErr.GetErrorCode())
+					return
+				}
+			}
 		}
 		if ok {
 			id, err := strconv.Atoi(channelId.(string))
@@ -111,6 +127,12 @@ func Distribute() func(c *gin.Context) {
 			if hasEndpointType && !model.ChannelSupportsEndpoint(channel, modelRequest.Model, endpointType) {
 				abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorChannelDisabled))
 				return
+			}
+			if shouldSelectChannel {
+				if admitErr := service.AdmitChannelRoute(c, channel, modelRequest.Model, endpointType); admitErr != nil {
+					abortWithOpenAiMessage(c, admitErr.StatusCode, admitErr.Error(), admitErr.GetErrorCode())
+					return
+				}
 			}
 		} else {
 			// Select a channel for the user
@@ -142,38 +164,46 @@ func Distribute() func(c *gin.Context) {
 				}
 				tokenGroups := tokenGroupsFromContext(c)
 
-				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, ""); found {
-					preferred, err := model.CacheGetChannel(preferredChannelID)
-					if err == nil && preferred != nil {
-						if preferred.Status != common.ChannelStatusEnabled {
-							if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+				param := &service.RetryParam{
+					Ctx: c, TokenGroups: tokenGroups, ModelName: modelRequest.Model,
+					Retry: common.GetPointer(0), EndpointType: endpointType, RequestPath: c.Request.URL.Path,
+				}
+				if _, bound := c.Get("response_route_binding"); !bound {
+					if preferredID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, ""); found {
+						param.PreferredChannelID = preferredID
+						if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
+							preferred, loadErr := model.CacheGetChannel(preferredID)
+							if loadErr != nil || preferred == nil || preferred.Status != common.ChannelStatusEnabled {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
-						} else if model.IsChannelEnabledForAnyGroupModel(tokenGroups, modelRequest.Model, preferred.Id) && (!hasEndpointType || model.ChannelSupportsEndpoint(preferred, modelRequest.Model, endpointType)) {
-							channel = preferred
-							service.MarkChannelAffinityUsed(c, "", preferred.Id)
+							channel, _, err = service.SelectRouteForChannel(c, preferred, param)
+							if err != nil || channel == nil {
+								abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "bound upstream route is temporarily unavailable", "route_temporarily_unavailable")
+								return
+							}
 						}
 					}
 				}
-
 				if channel == nil {
-					channel, _, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
-						Ctx:          c,
-						TokenGroups:  tokenGroups,
-						ModelName:    modelRequest.Model,
-						Retry:        common.GetPointer(0),
-						EndpointType: endpointType,
-					})
+					channel, _, err = service.CacheGetRandomSatisfiedChannel(param)
 					if err != nil {
-						message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": "", "Model": modelRequest.Model, "Error": err.Error()})
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+						var apiErr *types.NewAPIError
+						if errors.As(err, &apiErr) {
+							abortWithOpenAiMessage(c, apiErr.StatusCode, apiErr.Error(), apiErr.GetErrorCode())
+						} else {
+							message := i18n.T(c, i18n.MsgDistributorGetChannelFailed, map[string]any{"Group": "", "Model": modelRequest.Model, "Error": err.Error()})
+							abortWithOpenAiMessage(c, http.StatusServiceUnavailable, message, types.ErrorCodeModelNotFound)
+						}
 						return
 					}
 					if channel == nil {
-						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, i18n.T(c, i18n.MsgDistributorNoAvailableChannel, map[string]any{"Group": "", "Model": modelRequest.Model}), types.ErrorCodeModelNotFound)
+						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, "no eligible upstream route is currently available", "route_temporarily_unavailable")
 						return
 					}
+				}
+				if channel.Id == param.PreferredChannelID {
+					service.MarkChannelAffinityUsed(c, "", channel.Id)
 				}
 			}
 		}
@@ -183,8 +213,8 @@ func Distribute() func(c *gin.Context) {
 			return
 		}
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
-			service.RecordChannelAffinity(c, channel.Id)
+		if channel != nil && c.GetBool("relay_request_success") {
+			service.RecordChannelAffinity(c, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
 		}
 	}
 }
@@ -421,7 +451,11 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
 	// 解析生效计费 profile：生效分组覆盖渠道；分组 inherit（未配置）时回落渠道。
 	profile := channel.BillingProfile()
-	if group, err := model.ResolveEffectiveGroupForChannel(tokenGroupsFromContext(c), channel.Id); err == nil {
+	groups := tokenGroupsFromContext(c)
+	if value, bound := c.Get("response_route_binding"); bound {
+		groups = []string{value.(service.ResponseBinding).Group}
+	}
+	if group, err := model.ResolveEffectiveGroupForChannel(groups, channel.Id); err == nil {
 		profile = model.ResolveEffectiveBillingProfile(group, channel)
 	}
 	common.SetContextKey(c, constant.ContextKeyChannelTokenBillingMultiplier, profile.TokenBillingMultiplier)
@@ -445,7 +479,13 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
+	key, index, admitted := service.SelectedRouteCredential(c, channel.Id)
+	var newAPIError *types.NewAPIError
+	if admitted {
+		newAPIError = channel.CommitEnabledCredential(key, index)
+	} else {
+		key, index, newAPIError = channel.GetNextEnabledKey()
+	}
 	if newAPIError != nil {
 		return newAPIError
 	}

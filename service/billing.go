@@ -232,6 +232,11 @@ func PostSettleErrorToOpenAIError(relayInfo *relaycommon.RelayInfo, err error) *
 }
 
 func ResponseAlreadyWritten(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, explicit bool) bool {
+	// A stream prelude can be visible while generation is still retryable.
+	// Refund/accounting must depend on delivered output, not flushed headers.
+	if relayInfo != nil && relayInfo.StreamGate != nil {
+		return explicit || relayInfo.StreamGate.Meaningful()
+	}
 	relayStarted := relayInfo != nil && relayInfo.HasSendResponse()
 	ginStarted := ctx != nil && ctx.Writer != nil && ctx.Writer.Written()
 	return explicit || relayStarted || ginStarted

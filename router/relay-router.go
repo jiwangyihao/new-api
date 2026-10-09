@@ -66,6 +66,12 @@ func SetRelayRouter(router *gin.Engine) {
 	{
 		playgroundRouter.POST("/chat/completions", controller.Playground)
 	}
+	// Native Responses sessions authenticate the upgrade; every create runs
+	// fresh authentication and rate limits inside its own request context.
+	responsesWSRouter := router.Group("/v1")
+	responsesWSRouter.Use(middleware.RouteTag("relay"), middleware.SystemPerformanceCheck(), middleware.TokenAuth())
+	responsesWSRouter.GET("/responses", controller.ResponsesWebSocket)
+
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))
 	relayV1Router.Use(middleware.SystemPerformanceCheck())

@@ -2,7 +2,6 @@ package relay
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
@@ -101,67 +99,11 @@ func doResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo) (channel.Ad
 		)
 	}
 
-	request := responsesReq.CloneForRelay()
-	if err := helper.ModelMappedHelper(c, info, request); err != nil {
-		return nil, nil, types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
+	adaptor, requestBody, closer, apiErr := PrepareResponsesRequest(c, info, responsesReq)
+	if apiErr != nil {
+		return nil, nil, apiErr
 	}
-
-	adaptor := GetAdaptor(info.ApiType)
-	if adaptor == nil {
-		return nil, nil, types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
-	}
-	adaptor.Init(info)
-
-	var requestBody io.Reader
-	var replayBody relaycommon.ReplayableRequestBodyReader
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
-		storage, err := common.GetBodyStorage(c)
-		if err != nil {
-			return nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
-		}
-		requestBody = common.ReaderOnly(storage)
-	} else {
-		convertedRequest, err := adaptor.ConvertOpenAIResponsesRequest(c, info, *request)
-		if err != nil {
-			return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-		}
-		relaycommon.AppendRequestConversionFromRequest(info, convertedRequest)
-		directBody, direct, err := tryBuildDirectDiskResponsesBody(c, info, convertedRequest)
-		if err != nil {
-			return nil, nil, newAPIErrorFromParamOverride(err)
-		}
-		if direct {
-			replayBody = directBody
-			requestBody = directBody
-		} else {
-			jsonData, err := common.Marshal(convertedRequest)
-			if err != nil {
-				return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-			}
-			jsonData, err = relaycommon.RemoveDisabledFields(jsonData, info.ChannelOtherSettings, info.ChannelSetting.PassThroughBodyEnabled)
-			if err != nil {
-				return nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
-			}
-			if len(info.ParamOverride) > 0 {
-				jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
-				if err != nil {
-					return nil, nil, newAPIErrorFromParamOverride(err)
-				}
-			}
-			if common.DebugEnabled {
-				println("requestBody: ", string(jsonData))
-			}
-			replayBody = relaycommon.NewAdaptiveReplayableRequestBody(jsonData)
-			requestBody = replayBody
-			jsonData = nil
-		}
-	}
-	if replayBody != nil {
-		defer func() {
-			_ = replayBody.Close()
-			replayBody.Release()
-		}()
-	}
+	defer closer.Close()
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
@@ -197,7 +139,18 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		return newAPIError
 	}
 	statusCodeMappingStr := c.GetString("status_code_mapping")
-	releaseResponsesRequestResources(c, info, httpResp)
+	if info.StreamGate == nil {
+		releaseResponsesRequestResources(c, info, httpResp)
+	} else {
+		info.StreamRequestCleanup = func() { releaseResponsesRequestResources(c, info, httpResp) }
+		defer func() {
+			if !info.StreamGate.CanRetry() && info.StreamRequestCleanup != nil {
+				cleanup := info.StreamRequestCleanup
+				info.StreamRequestCleanup = nil
+				cleanup()
+			}
+		}()
+	}
 
 	if httpResp.StatusCode != http.StatusOK {
 		newAPIError = service.GPTAwareRelayErrorHandler(c, info, httpResp, false)
@@ -211,6 +164,9 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 		// reset status code 重置状态码
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
+	}
+	if streamErr := service.StreamAttemptError(info); streamErr != nil && info.StreamGate != nil && !info.StreamGate.Meaningful() {
+		return streamErr
 	}
 
 	usageDto, _ := usage.(*dto.Usage)

@@ -1,9 +1,18 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/pkg/routehealth"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/types"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -30,7 +39,7 @@ func setupChannelSelectEndpointTestDB(t *testing.T) *gorm.DB {
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
 	require.NoError(t, err)
 	model.DB = db
-	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Model{}))
+	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.Model{}, &model.ChannelGroup{}, &model.ChannelGroupChannel{}))
 	t.Cleanup(func() {
 		model.DB = oldDB
 		common.UsingSQLite = oldUsingSQLite
@@ -104,4 +113,131 @@ func TestCacheGetRandomSatisfiedChannelWithoutEndpointUsesLegacySelection(t *tes
 	require.NotNil(t, channel)
 	assert.Equal(t, "default", group)
 	assert.Equal(t, 2503, channel.Id)
+}
+
+func TestRouteHealthRetriesSamePriorityAndIsolatesCredential(t *testing.T) {
+	db := setupChannelSelectEndpointTestDB(t)
+	oldRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedis })
+	priority := int64(100)
+	lower := int64(1)
+	for _, ch := range []model.Channel{
+		{Id: 9101, Key: "a\nb", Models: "route-test", Status: common.ChannelStatusEnabled, Priority: &priority, ChannelInfo: model.ChannelInfo{IsMultiKey: true, MultiKeyMode: constant.MultiKeyModePolling}},
+		{Id: 9102, Key: "c", Models: "route-test", Status: common.ChannelStatusEnabled, Priority: &priority},
+		{Id: 9103, Key: "d", Models: "route-test", Status: common.ChannelStatusEnabled, Priority: &lower},
+	} {
+		require.NoError(t, db.Create(&ch).Error)
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "route-test", ChannelId: ch.Id, Enabled: true, Priority: ch.Priority}).Error)
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	defer ReleaseRouteAttempt(c)
+	param := &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "route-test", PreferredChannelID: 9101}
+	channel, _, err := CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.Equal(t, 9101, channel.Id)
+	key, _, ok := SelectedRouteCredential(c, 9101)
+	require.True(t, ok)
+	require.Equal(t, "a", key)
+	MarkRouteUpstreamStarted(c)
+	FinishRouteAttempt(c, nil, types.NewErrorWithStatusCode(errors.New("invalid key"), types.ErrorCodeBadResponse, 401))
+	param.UsedChannelIds = []int{9101}
+	channel, _, err = CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.Equal(t, 9101, channel.Id)
+	key, _, _ = SelectedRouteCredential(c, 9101)
+	require.Equal(t, "b", key)
+	MarkRouteUpstreamStarted(c)
+	FinishRouteAttempt(c, nil, types.NewErrorWithStatusCode(errors.New("unavailable"), types.ErrorCodeBadResponse, 503))
+	channel, _, err = CacheGetRandomSatisfiedChannel(param)
+	require.NoError(t, err)
+	require.Equal(t, 9102, channel.Id, "same-priority untried channel must beat lower priority")
+}
+
+func TestRouteHealthIdentityAndCancellation(t *testing.T) {
+	c := &gin.Context{}
+	mapping := `{"alias-a":"actual","alias-b":"actual"}`
+	ch := &model.Channel{Id: 9201, Key: "key", Status: common.ChannelStatusEnabled, ModelMapping: &mapping}
+	a, err := buildRouteSelections(c, []*model.Channel{ch}, "group-a", "alias-a", "/v1/responses", 0)
+	require.NoError(t, err)
+	b, err := buildRouteSelections(c, []*model.Channel{ch}, "group-b", "alias-b", "/v1/responses", 0)
+	require.NoError(t, err)
+	require.Equal(t, a[0].candidate.ID, b[0].candidate.ID)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.Equal(t, routehealth.VerdictIgnored, ClassifyRouteAttempt(ctx, nil, types.NewError(errors.New("transport"), types.ErrorCodeDoRequestFailed), true).Verdict)
+	require.Equal(t, routehealth.VerdictIgnored, ClassifyRouteAttempt(context.Background(), nil, types.NewError(errors.New("cap"), types.ErrorCodeAPIKeyTokenLimitExhausted), true).Verdict)
+	stream := &relaycommon.StreamStatus{}
+	stream.MarkFailed("server_error", "server_error", 503)
+	require.Equal(t, routehealth.VerdictFailure, ClassifyRouteAttempt(context.Background(), &relaycommon.RelayInfo{StreamStatus: stream}, nil, true).Verdict)
+	state := routeState(c)
+	state.started = time.Now().Add(-time.Duration(operation_setting.GetRouteHealthSetting().RetryBudgetSeconds+1) * time.Second)
+	require.False(t, RouteRetryBudgetAvailable(c))
+}
+
+func TestResponseRouteBindingPinsIdentityAndFailsClosed(t *testing.T) {
+	db := setupChannelSelectEndpointTestDB(t)
+	oldRedis, oldRDB := common.RedisEnabled, common.RDB
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled, common.RDB = oldRedis, oldRDB })
+	ch := &model.Channel{Id: 9301, Key: "secret-key", Models: "response-test", Status: common.ChannelStatusEnabled}
+	require.NoError(t, db.Create(ch).Error)
+	require.NoError(t, db.Create(&model.Ability{Group: "original", Model: "response-test", ChannelId: ch.Id, Enabled: true}).Error)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	common.SetContextKey(c, constant.ContextKeyUserId, 777)
+	common.SetContextKey(c, constant.ContextKeyTokenGroups, []string{"original"})
+	_, _, err := CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: c, TokenGroup: "original", ModelName: "response-test"})
+	require.NoError(t, err)
+	defer ReleaseRouteAttempt(c)
+	info := &relaycommon.RelayInfo{UserId: 777, OriginModelName: "response-test", ChannelMeta: &relaycommon.ChannelMeta{ChannelId: ch.Id, ApiKey: ch.Key}}
+	require.NoError(t, SaveResponseBinding(c, info, "resp_route_fixture", "resp_upstream_actual"))
+	entry, found, err := LoadResponseBinding(c, "resp_route_fixture")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "resp_upstream_actual", entry.UpstreamID)
+	require.NotEqual(t, ch.Key, entry.KeyFingerprint)
+	require.Nil(t, ResponseRouteBinding(c, "resp_route_fixture", "response-test"))
+	require.NotNil(t, ResponseRouteBinding(c, "resp_route_fixture", "other-model"))
+	common.SetContextKey(c, constant.ContextKeyTokenGroups, []string{"different"})
+	require.NotNil(t, ResponseRouteBinding(c, "resp_route_fixture", "response-test"))
+	common.SetContextKey(c, constant.ContextKeyUserId, 778)
+	require.Equal(t, 404, ResponseRouteBinding(c, "resp_route_fixture", "response-test").StatusCode)
+	require.Nil(t, ResponseRouteBinding(c, "resp_original_legacy", "response-test"))
+	common.RedisEnabled, common.RDB = true, nil
+	_, _, err = LoadResponseBinding(c, "resp_route_fixture")
+	require.Error(t, err)
+}
+
+func TestBoundRouteUnavailableDoesNotFallback(t *testing.T) {
+	db := setupChannelSelectEndpointTestDB(t)
+	oldRedis := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedis })
+	for _, id := range []int{9501, 9502} {
+		require.NoError(t, db.Create(&model.Channel{Id: id, Key: "key", Models: "bound-test", Status: common.ChannelStatusEnabled}).Error)
+		require.NoError(t, db.Create(&model.Ability{Group: "default", Model: "bound-test", ChannelId: id, Enabled: true}).Error)
+	}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ch, err := model.CacheGetChannel(9501)
+	require.NoError(t, err)
+	selections, err := buildRouteSelections(c, []*model.Channel{ch}, "default", "bound-test", "/v1/responses", 0)
+	require.NoError(t, err)
+	for _, resource := range selections[0].candidate.Resources {
+		if resource.Scope == routehealth.ScopeRoute {
+			routeState(c).excluded[resource.Key] = struct{}{}
+		}
+	}
+	selected, _, err := SelectRouteForChannel(c, ch, &RetryParam{Ctx: c, TokenGroup: "default", ModelName: "bound-test"})
+	require.Nil(t, selected)
+	var apiErr *types.NewAPIError
+	require.ErrorAs(t, err, &apiErr)
+	require.Equal(t, "route_temporarily_unavailable", string(apiErr.GetErrorCode()))
+	require.Equal(t, "1", c.Writer.Header().Get("Retry-After"))
+	selected, _, err = CacheGetRandomSatisfiedChannel(&RetryParam{Ctx: c, TokenGroup: "default", ModelName: "bound-test"})
+	require.NoError(t, err)
+	require.Equal(t, 9502, selected.Id)
+	ReleaseRouteAttempt(c)
 }

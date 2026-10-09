@@ -441,6 +441,7 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	FinalizeSubscriptionMarkerHeader(targetHeader, info)
+	service.MarkRouteUpstreamStarted(c)
 	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
 	if err != nil {
 		return nil, fmt.Errorf("dial failed to %s: %w", fullRequestURL, err)
@@ -586,6 +587,7 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	}
 
 	FinalizeSubscriptionMarkerHeader(req.Header, info)
+	service.MarkRouteUpstreamStarted(c)
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
@@ -594,16 +596,21 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 	if resp == nil {
 		return nil, errors.New("resp is nil")
 	}
+	service.ObserveRouteHTTPResponse(c, resp)
 
 	if upID := service.GPTUpstreamRequestID(resp.Header); upID != "" {
 		c.Set(common2.UpstreamRequestIdKey, upID)
 	}
 
-	_ = req.Body.Close()
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
 	if body, ok := req.Body.(common.ReplayableRequestBodyReader); ok {
 		body.Release()
 	}
-	_ = c.Request.Body.Close()
+	if c.Request.Body != nil {
+		_ = c.Request.Body.Close()
+	}
 	return resp, nil
 }
 

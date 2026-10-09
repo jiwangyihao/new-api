@@ -18,6 +18,8 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/pkg/routehealth"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	"github.com/QuantumNous/new-api/relay"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -72,12 +74,20 @@ func geminiRelayHandler(c *gin.Context, info *relaycommon.RelayInfo) *types.NewA
 func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 
 	requestId := c.GetString(common.RequestIdKey)
+	c.Set("relay_request_success", false)
 	//originalModel := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 
 	var (
 		newAPIError *types.NewAPIError
 		ws          *websocket.Conn
 	)
+	var gate *streamgate.Gate
+	if relayFormat != types.RelayFormatOpenAIRealtime {
+		gate = streamgate.New(c.Writer, string(relayFormat))
+		c.Writer = gate
+		c.Set("relay_stream_gate", gate)
+	}
+	defer service.ReleaseRouteAttempt(c)
 
 	var relayInfo *relaycommon.RelayInfo
 	var observationError *types.NewAPIError
@@ -88,6 +98,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		if observationError == nil {
 			observationError = newAPIError
+		}
+		service.FinishRouteAttempt(c, relayInfo, observationError)
+		if relayInfo != nil && relayInfo.StreamRequestCleanup != nil {
+			cleanup := relayInfo.StreamRequestCleanup
+			relayInfo.StreamRequestCleanup = nil
+			cleanup()
 		}
 		service.ObserveAvailabilityResult(c, relayInfo, observationError)
 		if recovered != nil {
@@ -111,6 +127,12 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
+	}
+	relayInfo.StreamGate = gate
+	if gate != nil && relayFormat == types.RelayFormatOpenAIResponses {
+		gate.BindResponseIdentity("resp_route_"+common.GetUUID(), func(publicID, upstreamID string) error {
+			return service.SaveResponseBinding(c, relayInfo, publicID, upstreamID)
+		})
 	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
@@ -210,6 +232,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		TokenGroups:                       relayInfo.TokenGroups,
 		Retry:                             common.GetPointer(0),
 		EndpointType:                      relayInfo.EndpointType(),
+		RequestPath:                       c.Request.URL.Path,
 		FrozenTokenBillingMultiplier:      relayInfo.FrozenChannelTokenBillingMultiplier(),
 		FrozenBillingProfile:              relayInfoBillingProfile(relayInfo),
 		UsedChannelIds:                    usedChannelIds(c),
@@ -220,6 +243,9 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		if retryParam.GetRetry() > 0 && !service.RouteRetryBudgetAvailable(c) {
+			break
+		}
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		if retryParam.GetRetry() > 0 {
 			if repeatedErr := service.CheckGPTAbuseRepeatBlock(c, relayInfo); repeatedErr != nil {
@@ -283,6 +309,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			break
 		}
 
+		relayInfo.StreamStatus = nil
+		if gate != nil {
+			gate.BeginAttempt()
+		}
 		service.AttemptAvailabilityChannel(c, channel.Id)
 		switch relayFormat {
 		case types.RelayFormatOpenAIRealtime:
@@ -294,8 +324,15 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		default:
 			newAPIError = relayHandler(c, relayInfo)
 		}
+		if streamErr := service.StreamAttemptError(relayInfo); streamErr != nil && newAPIError == nil {
+			newAPIError = streamErr
+		}
+		service.FinishRouteAttempt(c, relayInfo, newAPIError)
 
 		if newAPIError == nil {
+			if service.ClassifyRouteAttempt(c.Request.Context(), relayInfo, nil, true).Verdict == routehealth.VerdictSuccess {
+				c.Set("relay_request_success", true)
+			}
 			relayInfo.LastError = nil
 			return
 		}
@@ -315,7 +352,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		retryLogStr := fmt.Sprintf("重试：%s", strings.Trim(strings.Join(strings.Fields(fmt.Sprint(useChannel)), "->"), "[]"))
 		logger.LogInfo(c, retryLogStr)
 	}
-	if newAPIError != nil {
+	if newAPIError != nil && service.ClassifyRouteAttempt(c.Request.Context(), relayInfo, newAPIError, true).Verdict == routehealth.VerdictFailure {
 		gopool.Go(func() {
 			perfmetrics.RecordRelaySample(relayInfo, false, 0)
 		})
@@ -332,6 +369,14 @@ var upgrader = websocket.Upgrader{
 func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, ws *websocket.Conn, requestId string, relayInfo *relaycommon.RelayInfo, newAPIError *types.NewAPIError) bool {
 	if newAPIError == nil {
 		return false
+	}
+	if value, found := c.Get("relay_stream_gate"); found {
+		gate := value.(*streamgate.Gate)
+		if gate.Terminal() {
+			return false
+		}
+		logger.LogError(c, fmt.Sprintf("relay error: %s", newAPIError.MaskSensitiveError()))
+		return gate.Fail(newAPIError) == nil
 	}
 	alreadyWritten := service.ResponseAlreadyWritten(c, relayInfo, false)
 	allowRealtimeError := relayFormat == types.RelayFormatOpenAIRealtime && ws != nil && newAPIError.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted
@@ -363,6 +408,9 @@ func handleRelayErrorForTokenLimit(c *gin.Context, relayInfo *relaycommon.RelayI
 	newAPIError = service.NormalizeViolationFeeError(newAPIError)
 	if service.ResponseAlreadyWritten(c, relayInfo, false) {
 		service.MarkTokenLimitAfterResponseFailure(relayInfo, "error_after_response")
+		if relayInfo != nil && relayInfo.StreamGate != nil {
+			return newAPIError
+		}
 		if newAPIError.GetErrorCode() == types.ErrorCodeAPIKeyTokenLimitExhausted {
 			return newAPIError
 		}
@@ -528,35 +576,7 @@ func retryChannelSelectionErrorForResponse(info *relaycommon.RelayInfo, channelE
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
-	if openaiErr == nil {
-		return false
-	}
-	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
-		return false
-	}
-	if types.IsChannelError(openaiErr) {
-		return true
-	}
-	if types.IsSkipRetryError(openaiErr) {
-		return false
-	}
-	if retryTimes <= 0 {
-		return false
-	}
-	if _, ok := c.Get("specific_channel_id"); ok {
-		return false
-	}
-	code := openaiErr.StatusCode
-	if code >= 200 && code < 300 {
-		return false
-	}
-	if code < 100 || code > 599 {
-		return true
-	}
-	if operation_setting.IsAlwaysSkipRetryCode(openaiErr.GetErrorCode()) {
-		return false
-	}
-	return operation_setting.ShouldRetryByStatusCode(code)
+	return service.ShouldRetryRouteAttempt(c, nil, openaiErr, retryTimes)
 }
 
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
@@ -594,6 +614,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
+		service.AppendRouteHealthAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
@@ -689,6 +710,7 @@ func RelayTaskFetch(c *gin.Context) {
 }
 
 func RelayTask(c *gin.Context) {
+	defer service.ReleaseRouteAttempt(c)
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, &dto.TaskError{
@@ -721,18 +743,25 @@ func RelayTask(c *gin.Context) {
 		ModelName:   relayInfo.OriginModelName,
 		TokenGroups: relayInfo.TokenGroups,
 		Retry:       common.GetPointer(0),
+		RequestPath: c.Request.URL.Path,
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
+		if retryParam.GetRetry() > 0 && !service.RouteRetryBudgetAvailable(c) {
+			break
+		}
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
-			channel = lockedCh
-			if retryParam.GetRetry() > 0 {
-				if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
-					taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
-					break
-				}
+			var selectErr error
+			channel, _, selectErr = service.SelectRouteForChannel(c, lockedCh, retryParam)
+			if selectErr != nil || channel == nil {
+				taskErr = service.TaskErrorWrapperLocal(selectErr, "bound_route_unavailable", http.StatusServiceUnavailable)
+				break
+			}
+			if setupErr := middleware.SetupContextForSelectedChannel(c, channel, relayInfo.OriginModelName); setupErr != nil {
+				taskErr = service.TaskErrorWrapperLocal(setupErr.Err, "setup_locked_channel_failed", http.StatusInternalServerError)
+				break
 			}
 		} else {
 			var channelErr *types.NewAPIError
@@ -758,6 +787,15 @@ func RelayTask(c *gin.Context) {
 
 		service.AttemptAvailabilityChannel(c, channel.Id)
 		result, taskErr = relay.RelayTaskSubmit(c, relayInfo)
+		var attemptErr *types.NewAPIError
+		if taskErr != nil {
+			if taskErr.LocalError {
+				attemptErr = types.NewErrorWithStatusCode(taskErr.Error, types.ErrorCode(taskErr.Code), taskErr.StatusCode, types.ErrOptionWithSkipRetry())
+			} else {
+				attemptErr = types.NewOpenAIError(taskErr.Error, types.ErrorCodeBadResponseStatusCode, taskErr.StatusCode)
+			}
+		}
+		service.FinishRouteAttempt(c, relayInfo, attemptErr)
 		if taskErr == nil {
 			break
 		}
@@ -835,6 +873,13 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	if taskErr == nil {
 		return false
 	}
+	if taskErr.LocalError || c.Request.Context().Err() != nil || c.Writer.Written() || !service.RouteRetryBudgetAvailable(c) {
+		return false
+	}
+	// A task transport failure may have occurred after upstream accepted it.
+	if taskErr.Code == "do_request_failed" {
+		return false
+	}
 	if service.ShouldSkipRetryAfterChannelAffinityFailure(c) {
 		return false
 	}
@@ -862,9 +907,6 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	}
 	if taskErr.StatusCode == 408 {
 		// azure处理超时不重试
-		return false
-	}
-	if taskErr.LocalError {
 		return false
 	}
 	if taskErr.StatusCode/100 == 2 {

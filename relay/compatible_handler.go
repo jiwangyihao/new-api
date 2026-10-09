@@ -82,7 +82,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			return newApiErr
 		}
 
-		var containAudioTokens = usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0
+		containAudioTokens := usage != nil && (usage.CompletionTokenDetails.AudioTokens > 0 || usage.PromptTokensDetails.AudioTokens > 0)
 		var containsAudioRatios = ratio_setting.ContainsAudioRatio(info.OriginModelName) || ratio_setting.ContainsAudioCompletionRatio(info.OriginModelName)
 
 		if containAudioTokens && containsAudioRatios && info.BillingSource != service.BillingSourceSubscription {
@@ -92,7 +92,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 				return service.PostSettleErrorToOpenAIError(info, err)
 			}
 		}
-		return nil
+		return service.StreamAttemptError(info)
 	}
 
 	var requestBody io.Reader
@@ -223,5 +223,5 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 			return service.PostSettleErrorToOpenAIError(info, err)
 		}
 	}
-	return nil
+	return service.StreamAttemptError(info)
 }

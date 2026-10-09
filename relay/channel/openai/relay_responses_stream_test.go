@@ -13,8 +13,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/streamgate"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -776,4 +780,173 @@ func getCodexProBoolFieldForOpenAITest(t *testing.T, info *relaycommon.RelayInfo
 	field := reflect.ValueOf(info).Elem().FieldByName(fieldName)
 	require.Truef(t, field.IsValid(), "RelayInfo must expose %s", fieldName)
 	return field.Bool()
+}
+
+func newGatedResponsesContextForTest() (*gin.Context, *relaycommon.RelayInfo, *httptest.ResponseRecorder) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	gate := streamgate.New(c.Writer, string(types.RelayFormatOpenAIResponses))
+	c.Writer = gate
+	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatOpenAIResponses, IsStream: true, DisablePing: true, StreamGate: gate, ChannelMeta: &relaycommon.ChannelMeta{}}
+	return c, info, recorder
+}
+
+func TestGatedResponsesPreludeRetryPreservesIdentityAndTrailerBilling(t *testing.T) {
+	c, info, recorder := newGatedResponsesContextForTest()
+	cleanupCount := 0
+	info.StreamRequestCleanup = func() { cleanupCount++ }
+	first := "data: " + `{"type":"response.created","sequence_number":0,"response":{"id":"A","output":[]}}` + "\n\ndata: " + `{"type":"response.failed","sequence_number":1,"response":{"id":"A","error":{"type":"server_error","code":"overloaded","message":"busy"}}}` + "\n\ndata: [DONE]\n\n"
+	usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(first))})
+	require.Nil(t, apiErr)
+	require.Nil(t, usage)
+	require.True(t, info.StreamGate.Written())
+	require.True(t, info.StreamGate.CanRetry())
+	require.NotNil(t, service.StreamAttemptError(info))
+	require.False(t, service.PrepareRelaySettlement(c, info))
+	require.NotContains(t, recorder.Body.String(), "response.failed")
+	require.NotContains(t, recorder.Body.String(), "[DONE]")
+	require.Zero(t, cleanupCount)
+	info.InitChannelMeta(c)
+	info.StreamGate.BeginAttempt()
+	markCodexProRequestSentForOpenAITest(t, info, true)
+	second := "data: " + `{"type":"response.created","sequence_number":0,"response":{"id":"B","output":[]}}` + "\n\ndata: " + `{"type":"response.output_text.delta","sequence_number":1,"response_id":"B","delta":"x"}` + "\n\ndata: " + `{"type":"response.completed","sequence_number":2,"vendor_extension":{"preserved":true},"response":{"id":"B","status":"completed","usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[]}}` + "\n\ndata: [DONE]\n\n"
+	usage, apiErr = OaiResponsesStreamHandler(c, info, newCodexProTrailerResponseForOpenAITest(second, "codex-pro"))
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 4, usage.TotalTokens)
+	require.Nil(t, service.StreamAttemptError(info), "delayed completion must reach the gate before EndAttempt")
+	require.False(t, info.StreamStatus.ResponseFailed())
+	require.False(t, info.StreamStatus.HasErrors())
+	require.Equal(t, 1, cleanupCount)
+	require.Nil(t, info.StreamRequestCleanup)
+	result, _ := service.ClassifyAvailabilityResult(nil, info.StreamStatus, true, false)
+	require.Equal(t, model.AvailabilitySuccess, result)
+	output := recorder.Body.String()
+	require.Equal(t, 1, strings.Count(output, `"type":"response.created"`))
+	require.Equal(t, 1, strings.Count(output, `"type":"response.completed"`))
+	require.Equal(t, 1, strings.Count(output, "[DONE]"))
+	require.NotContains(t, output, "response.failed")
+	require.NotContains(t, output, `"id":"B"`)
+	require.NotContains(t, output, `"response_id":"B"`)
+	sequence := 0
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "data: ") || strings.TrimPrefix(line, "data: ") == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		require.NoError(t, common.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event))
+		require.Equal(t, float64(sequence), event["sequence_number"])
+		sequence++
+	}
+	require.Equal(t, 3, sequence)
+	completed := extractResponsesStreamEventForOpenAITest(t, output, "response.completed")
+	require.Equal(t, map[string]any{"preserved": true}, completed["vendor_extension"])
+	billing, ok := completed["newapi_billing"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, billing["codex_pro_served"])
+	require.Equal(t, float64(4), billing["metered_tokens"])
+	require.Less(t, strings.Index(output, `"type":"response.completed"`), strings.Index(output, "[DONE]"))
+}
+
+func TestGatedResponsesSingleCharacterFailureKeepsTrustedUsage(t *testing.T) {
+	c, info, recorder := newGatedResponsesContextForTest()
+	body := "data: " + `{"type":"response.output_text.delta","delta":"x"}` + "\n\ndata: " + `{"type":"response.failed","response":{"error":{"type":"server_error","code":"broken"},"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4}}}` + "\n\ndata: [DONE]\n\n"
+	usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 1, usage.OutputTokens)
+	require.True(t, info.HasTrustedUsage)
+	require.True(t, info.StreamGate.Meaningful())
+	require.False(t, info.StreamGate.CanRetry())
+	require.True(t, service.PrepareRelaySettlement(c, info))
+	require.Equal(t, 1, strings.Count(recorder.Body.String(), `"type":"response.failed"`))
+	result, _ := service.ClassifyAvailabilityResult(service.StreamAttemptError(info), info.StreamStatus, true, false)
+	require.Equal(t, model.AvailabilityFailure, result)
+}
+
+func TestGatedResponsesProtocolTerminalClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, event, availability string
+		retry, failure            bool
+	}{
+		{"top_level_error", `{"type":"error","code":"overloaded","message":"busy"}`, model.AvailabilityFailure, true, true},
+		{"failed", `{"type":"response.failed","response":{"error":{"type":"server_error","code":"broken"}}}`, model.AvailabilityFailure, true, true},
+		{"empty_success", `{"type":"response.completed","response":{"status":"completed","output":[]}}`, model.AvailabilitySuccess, false, false},
+		{"normal_token_limit", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"max_output_tokens"},"output":[]}}`, model.AvailabilitySuccess, false, false},
+		{"moderation", `{"type":"response.failed","response":{"error":{"type":"invalid_request_error","code":"content_filter"}}}`, model.AvailabilityExcluded, false, true},
+		{"incomplete_moderation", `{"type":"response.incomplete","response":{"incomplete_details":{"reason":"content_filter"},"output":[]}}`, model.AvailabilityExcluded, false, false},
+		{"cancelled", `{"type":"response.cancelled","response":{"output":[]}}`, model.AvailabilityExcluded, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, info, _ := newGatedResponsesContextForTest()
+			body := "data: " + tc.event + "\n\ndata: [DONE]\n\n"
+			_, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+			require.Nil(t, apiErr)
+			require.Equal(t, tc.retry, info.StreamGate.CanRetry())
+			require.Equal(t, tc.failure, info.StreamStatus.ResponseFailed())
+			result, _ := service.ClassifyAvailabilityResult(service.StreamAttemptError(info), info.StreamStatus, true, false)
+			require.Equal(t, tc.availability, result)
+		})
+	}
+}
+
+func TestGatedResponsesUnsafeAndUnknownPayloadsPreventReplay(t *testing.T) {
+	for _, event := range []string{
+		`{"type":"response.created","response":{"id":"r","output":[],"background":true}}`,
+		`{"type":"response.output_item.added","item":{"type":"function_call","name":"lookup","arguments":""}}`,
+		`{"type":"response.created","response":{"id":"r","output":[],"vendor_extension":{"accepted":true}}}`,
+		`{"type":"response.vendor.extension","payload":{}}`,
+	} {
+		t.Run(event, func(t *testing.T) {
+			c, info, _ := newGatedResponsesContextForTest()
+			body := "data: " + event + "\n\ndata: " + `{"type":"response.failed","response":{"error":{"type":"server_error","code":"broken"}}}` + "\n\ndata: [DONE]\n\n"
+			usage, apiErr := OaiResponsesStreamHandler(c, info, &http.Response{Body: io.NopCloser(strings.NewReader(body))})
+			require.Nil(t, apiErr)
+			require.Nil(t, usage, "do not estimate billable usage from visible bytes")
+			require.False(t, info.StreamGate.CanRetry())
+			require.NotNil(t, service.StreamAttemptError(info))
+		})
+	}
+}
+
+func TestGatedPlainResponsesFailureUsageDoesNotCommitBeforeRetry(t *testing.T) {
+	c, info, recorder := newGatedResponsesContextForTest()
+	info.IsStream = false
+	body := `{"id":"failed","status":"failed","error":{"type":"server_error","code":"broken","message":"busy"},"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[]}`
+	usage, apiErr := OaiResponsesHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, usage)
+	require.NotNil(t, apiErr)
+	require.Equal(t, http.StatusBadGateway, apiErr.StatusCode)
+	require.True(t, info.StreamGate.CanRetry())
+	require.False(t, info.StreamGate.Written())
+	require.Empty(t, recorder.Body.String())
+	require.NoError(t, info.StreamGate.Fail(apiErr))
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Contains(t, response, "error")
+	require.NotContains(t, recorder.Body.String(), "data:")
+	require.NotContains(t, recorder.Body.String(), "[DONE]")
+}
+
+func TestGatedPlainResponsesPartialFailureClosesOneJSONDocument(t *testing.T) {
+	c, info, recorder := newGatedResponsesContextForTest()
+	info.IsStream = false
+	body := `{"id":"partial","status":"failed","error":{"type":"server_error","code":"broken"},"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"output":[{"type":"message","content":[{"type":"output_text","text":"x"}]}]}`
+	usage, apiErr := OaiResponsesHandler(c, info, &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))})
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	require.Equal(t, 4, usage.TotalTokens)
+	require.True(t, info.StreamGate.Meaningful())
+	require.True(t, info.StreamGate.Terminal())
+	require.False(t, info.StreamGate.CanRetry())
+	require.NotNil(t, service.StreamAttemptError(info))
+	require.True(t, service.PrepareRelaySettlement(c, info))
+	before := recorder.Body.String()
+	require.NoError(t, info.StreamGate.Fail(service.StreamAttemptError(info)))
+	require.Equal(t, before, recorder.Body.String())
+	var response map[string]any
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.Equal(t, "failed", response["status"])
+	require.NotContains(t, recorder.Body.String(), "data:")
 }

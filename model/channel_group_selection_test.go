@@ -666,6 +666,10 @@ func TestRetrySameProfileUsesEffectiveGroupBillingMemoryCache(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, ch, "retry must select the other group member whose effective group billing matches")
 	assert.Equal(t, 8802, ch.Id)
+	candidates, err := GetSatisfiedChannelCandidates([]string{"paid-retry"}, model, "", []int{8801}, 1, false, frozen, true)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, 8802, candidates[0].Id)
 }
 
 func TestRetrySameProfileUsesEffectiveGroupBillingDatabaseFallback(t *testing.T) {
@@ -689,4 +693,44 @@ func TestRetrySameProfileUsesEffectiveGroupBillingDatabaseFallback(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, ch, "DB retry must select the other group member whose effective group billing matches")
 	assert.Equal(t, 8812, ch.Id)
+	candidates, err := GetSatisfiedChannelCandidates([]string{"paid-retry-db"}, model, "", []int{8811}, 1, false, frozen, true)
+	require.NoError(t, err)
+	require.Len(t, candidates, 1)
+	assert.Equal(t, 8812, candidates[0].Id)
+}
+
+func TestHealthCandidatesPreserveProductionGroupBoundaries(t *testing.T) {
+	db := setupChannelGroupSelectionTestDB(t)
+	seedSelectionChannel(t, db, 9401, "candidate-test")
+	require.NoError(t, db.Create(&Ability{Group: legacyAbilityGroup, Model: "candidate-test", ChannelId: 9401, Enabled: true}).Error)
+	InitChannelCache()
+	for _, memory := range []bool{false, true} {
+		common.MemoryCacheEnabled = memory
+		candidates, err := GetSatisfiedChannelCandidates([]string{DefaultChannelGroupName}, "candidate-test", "", nil, 0, false, ChannelBillingProfile{}, false)
+		require.NoError(t, err)
+		require.Len(t, candidates, 1)
+		candidates, err = GetSatisfiedChannelCandidates([]string{DisabledTokenGroupSentinel}, "candidate-test", "", nil, 0, false, ChannelBillingProfile{}, false)
+		require.NoError(t, err)
+		require.Empty(t, candidates)
+		profile := DefaultChannelBillingProfile()
+		profile.TokenBillingMultiplier = 99
+		candidates, err = GetSatisfiedChannelCandidates([]string{DefaultChannelGroupName}, "candidate-test", "", nil, 0, false, profile, true)
+		require.NoError(t, err)
+		require.Empty(t, candidates)
+	}
+}
+
+func TestCommitRouteCredentialUsesExactPollingSelection(t *testing.T) {
+	setupChannelGroupSelectionTestDB(t)
+	ch := &Channel{Id: 9402, Status: common.ChannelStatusEnabled, Key: "a\nb\nc", ChannelInfo: ChannelInfo{IsMultiKey: true, MultiKeyMode: constant.MultiKeyModePolling}}
+	channelsIDM = map[int]*Channel{ch.Id: ch}
+	require.Equal(t, "a", ch.PreviewNextEnabledKey())
+	require.Len(t, ch.EnabledCredentials(), 3)
+	require.Equal(t, 0, ch.ChannelInfo.MultiKeyPollingIndex)
+	require.Nil(t, ch.CommitEnabledCredential("b", 1))
+	require.Equal(t, 2, ch.ChannelInfo.MultiKeyPollingIndex)
+	require.NotNil(t, ch.CommitEnabledCredential("a", 1))
+	ch.ChannelInfo.MultiKeyStatusList = map[int]int{2: common.ChannelStatusManuallyDisabled}
+	require.NotNil(t, ch.CommitEnabledCredential("c", 2))
+	require.Equal(t, 2, ch.ChannelInfo.MultiKeyPollingIndex)
 }

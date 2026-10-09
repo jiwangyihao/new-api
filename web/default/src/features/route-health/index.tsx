@@ -21,10 +21,16 @@ import { useTranslation } from 'react-i18next'
 import { formatNumber, formatTimestampToDate } from '@/lib/format'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { ErrorState } from '@/components/error-state'
 import { SectionPageLayout } from '@/components/layout'
+import { LoadingState } from '@/components/loading-state'
 import { getRouteHealth } from './api'
-import { RouteHealthTable } from './components/route-health-table'
+import { ChannelHealthOverview } from './components/channel-health-overview'
 
 export function RouteHealth() {
   const { t } = useTranslation()
@@ -55,14 +61,8 @@ export function RouteHealth() {
         <div className='space-y-4'>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Live protection snapshot by actual upstream model and operation; this is not historical SLA or an active connectivity test.'
-            )}{' '}
-            {t(
-              'Unobserved does not mean tested successfully. Healthy is not a guarantee of future availability.'
+              'Channels first, problems first. Expand a channel to inspect its models and operations.'
             )}
-          </p>
-          <p className='text-muted-foreground text-xs'>
-            {t('Refreshes every 15 seconds while this page is visible.')}
           </p>
           {query.isError ? (
             <ErrorState
@@ -98,43 +98,58 @@ export function RouteHealth() {
                       </AlertDescription>
                     </Alert>
                   )}
-                  <div className='flex flex-wrap gap-x-6 gap-y-2 rounded-lg border p-3 text-sm'>
+                  <div className='text-muted-foreground flex flex-wrap items-center gap-x-5 gap-y-2 text-xs'>
                     <span>
                       {t('Snapshot time')}:{' '}
                       {formatTimestampToDate(report.generated_at)}
                     </span>
                     <span>
                       {t(
-                        'Maximum attempts: {{attempts}}; additional retries: {{retries}}',
-                        {
-                          attempts: formatNumber(report.max_attempts),
-                          retries: formatNumber(report.retry_times),
-                        }
+                        'Refreshes every 15 seconds while this page is visible.'
                       )}
                     </span>
-                    <span>
-                      {report.storage === 'memory'
-                        ? t('Storage: memory (this instance only)')
-                        : t('Storage: Redis')}
-                    </span>
-                    <span>
-                      {t('Sample window: {{seconds}} seconds', {
-                        seconds: formatNumber(report.sample_window_seconds),
-                      })}
-                    </span>
-                    <span>
-                      {t('Failure window: {{seconds}} seconds', {
-                        seconds: formatNumber(report.failure_window_seconds),
-                      })}
-                    </span>
+                    <Collapsible>
+                      <CollapsibleTrigger className='hover:text-foreground underline underline-offset-4'>
+                        {t('Protection settings')}
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className='space-y-2 py-3'>
+                        <p>
+                          {t(
+                            'Maximum attempts: {{attempts}}; additional retries: {{retries}}',
+                            {
+                              attempts: formatNumber(report.max_attempts),
+                              retries: formatNumber(report.retry_times),
+                            }
+                          )}
+                        </p>
+                        <p>
+                          {report.storage === 'memory'
+                            ? t('Storage: memory (this instance only)')
+                            : t('Storage: Redis')}
+                        </p>
+                        <p>
+                          {t('Sample window: {{seconds}} seconds', {
+                            seconds: formatNumber(report.sample_window_seconds),
+                          })}{' '}
+                          ·{' '}
+                          {t('Failure window: {{seconds}} seconds', {
+                            seconds: formatNumber(
+                              report.failure_window_seconds
+                            ),
+                          })}
+                        </p>
+                      </CollapsibleContent>
+                    </Collapsible>
                   </div>
+                  <ChannelHealthOverview report={report} />
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'Unobserved is not healthy. Counts represent models, not repeated operations or shared resource samples.'
+                    )}
+                  </p>
                 </>
               )}
-              <RouteHealthTable
-                report={report}
-                isLoading={query.isPending}
-                isFetching={query.isFetching}
-              />
+              {query.isPending && <LoadingState />}
             </>
           )}
         </div>

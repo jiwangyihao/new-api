@@ -33,7 +33,7 @@ const variants: Record<RouteHealthState, StatusVariant> = {
   protection_disabled: 'neutral',
 }
 
-export function useHealthStateLabels(): Record<RouteHealthState, string> {
+function useHealthStateLabels(): Record<RouteHealthState, string> {
   const { t } = useTranslation()
   return {
     healthy: t('Healthy'),

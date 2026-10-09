@@ -99,7 +99,9 @@ export function SystemBehaviorSection({
                   />
                 </FormControl>
                 <FormDescription>
-                  {t('Number of times to retry failed requests (0-10)')}
+                  {t(
+                    'Additional retries after the first attempt (0-10). Default: 2 retries, up to 3 attempts total.'
+                  )}
                 </FormDescription>
                 <FormMessage />
               </FormItem>
@@ -185,7 +187,9 @@ export function SystemBehaviorSection({
                     {t('Hide Codex Pro features')}
                   </FormLabel>
                   <FormDescription>
-                    {t('Hide subscription, API key, and help entries for Codex Pro')}
+                    {t(
+                      'Hide subscription, API key, and help entries for Codex Pro'
+                    )}
                   </FormDescription>
                 </div>
                 <FormControl>

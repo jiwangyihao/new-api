@@ -260,42 +260,80 @@ func (m *Manager) Acquire(ctx context.Context, candidates []Candidate, p Policy)
 }
 
 func (m *Manager) Inspect(ctx context.Context, resource Resource, p Policy) (Snapshot, error) {
-	if err := validateResource(resource); err != nil {
+	snapshots, err := m.InspectMany(ctx, []Resource{resource}, p)
+	if err != nil {
 		return Snapshot{}, err
 	}
+	return snapshots[0], nil
+}
+
+// InspectMany returns diagnostic snapshots for all requested resources. Resources
+// are de-duplicated for storage reads, while the result preserves input order.
+// Inspection only reads/prunes snapshots; it never acquires or creates leases.
+func (m *Manager) InspectMany(ctx context.Context, resources []Resource, p Policy, at ...time.Time) ([]Snapshot, error) {
 	if err := p.Validate(); err != nil {
-		return Snapshot{}, err
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := m.now()
+	if len(at) > 0 {
+		now = at[0]
+	}
+	if len(resources) == 0 {
+		return []Snapshot{}, nil
+	}
+	unique := make([]Resource, 0, len(resources))
+	seen := make(map[string]struct{}, len(resources))
+	for _, resource := range resources {
+		if err := validateResource(resource); err != nil {
+			return nil, err
+		}
+		key := resourceKey(resource)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, resource)
 	}
 	if !p.Enabled {
-		return Snapshot{Resource: resource}, nil
+		result := make([]Snapshot, len(resources))
+		for i, resource := range resources {
+			result[i] = Snapshot{Resource: resource}
+		}
+		return result, nil
 	}
-	resources := []Resource{resource}
 	var states map[string]*resourceState
 	degraded := false
 	if m.client != nil {
 		var err error
-		states, err = m.remoteSnapshot(ctx, resources, p)
+		states, err = m.remoteSnapshotAt(ctx, unique, p, now)
 		if err != nil {
 			var storage *storageError
 			if !errors.As(err, &storage) || ctx.Err() != nil {
-				return Snapshot{}, fmt.Errorf("routehealth inspect: %w", err)
+				return nil, fmt.Errorf("routehealth inspect: %w", err)
 			}
 			degraded = true
 		}
 	}
 	if states == nil {
-		states = m.localSnapshot(resources, p)
+		states = m.localSnapshotAt(unique, p, now)
 	}
-	s := states[resourceKey(resource)]
-	successes, failures := s.samples()
-	snapshot := Snapshot{Resource: resource, Generation: s.Generation, Open: s.Open,
-		Inflight: len(s.Active), Probe: s.ProbeID != "", RecoverySuccesses: s.Recovery,
-		ConsecutiveFailures: len(s.FailureTimes), Successes: successes, Failures: failures, Degraded: degraded}
-	if s.OpenedUntil != 0 {
-		snapshot.OpenedUntil = time.Unix(0, s.OpenedUntil)
+	result := make([]Snapshot, len(resources))
+	for i, resource := range resources {
+		s := states[resourceKey(resource)]
+		successes, failures := s.samples()
+		snapshot := Snapshot{Resource: resource, Generation: s.Generation, Open: s.Open,
+			Inflight: len(s.Active), Probe: s.ProbeID != "", RecoverySuccesses: s.Recovery,
+			ConsecutiveFailures: len(s.FailureTimes), Successes: successes, Failures: failures, Degraded: degraded}
+		if s.OpenedUntil != 0 {
+			snapshot.OpenedUntil = time.Unix(0, s.OpenedUntil)
+		}
+		if s.NextProbe != 0 {
+			snapshot.NextProbe = time.Unix(0, s.NextProbe)
+		}
+		result[i] = snapshot
 	}
-	if s.NextProbe != 0 {
-		snapshot.NextProbe = time.Unix(0, s.NextProbe)
-	}
-	return snapshot, nil
+	return result, nil
 }

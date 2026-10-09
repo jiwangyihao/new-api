@@ -104,6 +104,35 @@ func RouteConfigurationFingerprint(channel *model.Channel) string {
 	return routeFingerprint(strconv.Itoa(channel.Type), routeConfigValue(channel.OpenAIOrganization), channel.GetBaseURL(), channel.Other, channel.OtherSettings, channel.GetModelMapping(), channel.Key, routeConfigValue(channel.Setting), routeConfigValue(channel.ParamOverride), routeConfigValue(channel.HeaderOverride))
 }
 
+type routeResourceNamespace string
+
+func routeResources(channel *model.Channel) routeResourceNamespace {
+	return routeResourceNamespace(fmt.Sprintf("route-health:{%d}:%s", channel.Id, RouteConfigurationFingerprint(channel)))
+}
+
+func (namespace routeResourceNamespace) channel() routehealth.Resource {
+	return routehealth.Resource{Key: string(namespace) + ":channel", Scope: routehealth.ScopeChannel}
+}
+
+func (namespace routeResourceNamespace) route(mappedModel, operation string) routehealth.Resource {
+	return routehealth.Resource{Key: string(namespace) + ":route:" + routeFingerprint(mappedModel, operation), Scope: routehealth.ScopeRoute}
+}
+
+func (namespace routeResourceNamespace) credential(key string) routehealth.Resource {
+	return routehealth.Resource{Key: string(namespace) + ":credential:" + RouteCredentialFingerprint(key), Scope: routehealth.ScopeCredential}
+}
+
+func routeMappedModel(channel *model.Channel, modelName string) (string, error) {
+	mapped, _, err := common.ResolveModelMapping(modelName, channel.GetModelMapping(), nil)
+	if err != nil {
+		return "", err
+	}
+	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channel.GetSetting().PassThroughBodyEnabled {
+		mapped = modelName
+	}
+	return mapped, nil
+}
+
 func routeOperation(c *gin.Context, channel *model.Channel, modelName, path string) string {
 	if strings.Contains(path, "/models/") {
 		if _, operation, found := strings.Cut(path, ":"); found {
@@ -126,17 +155,13 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 		if channel == nil || channel.Status != common.ChannelStatusEnabled {
 			continue
 		}
-		mapped, _, err := common.ResolveModelMapping(modelName, channel.GetModelMapping(), nil)
+		mapped, err := routeMappedModel(channel, modelName)
 		if err != nil {
 			return nil, err
 		}
-		if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channel.GetSetting().PassThroughBodyEnabled {
-			mapped = modelName
-		}
-		configVersion := RouteConfigurationFingerprint(channel)
-		prefix := fmt.Sprintf("route-health:{%d}:%s", channel.Id, configVersion)
-		channelResource := routehealth.Resource{Key: prefix + ":channel", Scope: routehealth.ScopeChannel}
-		routeResource := routehealth.Resource{Key: prefix + ":route:" + routeFingerprint(mapped, routeOperation(c, channel, modelName, path)), Scope: routehealth.ScopeRoute}
+		namespace := routeResources(channel)
+		channelResource := namespace.channel()
+		routeResource := namespace.route(mapped, routeOperation(c, channel, modelName, path))
 		credentials := channel.EnabledCredentials()
 		preferredKey := channel.PreviewNextEnabledKey()
 		start := 0
@@ -153,7 +178,7 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 			}
 			seenCredentials[credential.Key] = struct{}{}
 			candidateID := routeResource.Key + ":" + routeFingerprint(credential.Key)
-			keyResource := routehealth.Resource{Key: prefix + ":credential:" + routeFingerprint(credential.Key), Scope: routehealth.ScopeCredential}
+			keyResource := namespace.credential(credential.Key)
 			resources := []routehealth.Resource{channelResource, keyResource, routeResource}
 			if _, blocked := state.excludedCandidates[candidateID]; blocked {
 				continue

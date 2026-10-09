@@ -2,6 +2,7 @@ package routehealth
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sync"
 	"sync/atomic"
@@ -487,4 +488,97 @@ func TestIdleStateTTLAndInvalidInputs(t *testing.T) {
 		_, _, err = f.manager.Acquire(cancelled, []Candidate{c}, p)
 		require.ErrorIs(t, err, context.Canceled)
 	})
+}
+
+func TestInspectManyIsReadOnlyAndPreservesProbe(t *testing.T) {
+	healthStores(t, func(t *testing.T, f *healthFixture) {
+		p := DefaultPolicy()
+		p.FailureThreshold = 1
+		candidate := testCandidate("observed", "channel", "model", "credential")
+		resources := append(append([]Resource{}, candidate.Resources...), candidate.Resources[0])
+		initial, err := f.manager.InspectMany(testContext, resources, p)
+		require.NoError(t, err)
+		require.Len(t, initial, 4)
+		assert.Empty(t, f.manager.local)
+		assert.Empty(t, f.manager.shadow)
+		if f.server != nil {
+			assert.Empty(t, f.server.Keys())
+		}
+		finish(t, take(t, f.manager, p, candidate), VerdictFailure, ScopeRoute)
+		f.advance(p.BaseCooldown + time.Second)
+		beforeLocal := make(map[string]*resourceState)
+		beforeShadow := make(map[string]*resourceState)
+		for key, state := range f.manager.local {
+			beforeLocal[key] = state.clone()
+		}
+		for key, state := range f.manager.shadow {
+			beforeShadow[key] = state.clone()
+		}
+		beforeRedis := make(map[string]string)
+		if f.server != nil {
+			for _, key := range f.server.Keys() {
+				beforeRedis[key], err = f.server.Get(key)
+				require.NoError(t, err)
+			}
+		}
+		batch, err := f.manager.InspectMany(testContext, resources, p)
+		require.NoError(t, err)
+		for i, resource := range resources {
+			assert.Equal(t, snapshot(t, f.manager, p, resource), batch[i])
+		}
+		assert.Equal(t, beforeLocal, f.manager.local)
+		assert.Equal(t, beforeShadow, f.manager.shadow)
+		if f.server != nil {
+			assert.Len(t, f.server.Keys(), len(beforeRedis))
+			for key, value := range beforeRedis {
+				actual, getErr := f.server.Get(key)
+				require.NoError(t, getErr)
+				assert.Equal(t, value, actual)
+			}
+		}
+		assert.True(t, batch[0].Open)
+		assert.False(t, batch[0].Probe)
+		probe := take(t, f.manager, p, candidate)
+		assert.True(t, probe.Probe, "inspection must not consume the due recovery permit")
+		finish(t, probe, VerdictSuccess, "")
+	})
+}
+
+func TestInspectManyBatchesWithoutInventoryTruncation(t *testing.T) {
+	server := miniredis.RunT(t)
+	m := New(testRedisClient(t, server))
+	resources := make([]Resource, maxResources+1)
+	for i := range resources {
+		resources[i] = Resource{Key: fmt.Sprintf("inventory:%d", i), Scope: ScopeRoute}
+	}
+	before := server.CommandCount()
+	got, err := m.InspectMany(testContext, append(resources, resources[0]), DefaultPolicy())
+	require.NoError(t, err)
+	require.Len(t, got, len(resources)+1)
+	assert.Equal(t, got[0], got[len(resources)])
+	assert.LessOrEqual(t, server.CommandCount()-before, (len(resources)+255)/256+4)
+	assert.Empty(t, server.Keys())
+	assert.Empty(t, m.shadow)
+	assert.Empty(t, m.local)
+}
+
+func TestInspectManyRedisFailureUsesLocalProtection(t *testing.T) {
+	server := miniredis.RunT(t)
+	m := New(testRedisClient(t, server))
+	p := DefaultPolicy()
+	p.FailureThreshold = 1
+	candidate := testCandidate("fallback", "channel", "model", "key")
+	finish(t, take(t, m, p, candidate), VerdictFailure, ScopeRoute)
+	server.Close()
+	got, err := m.InspectMany(testContext, candidate.Resources, p)
+	require.NoError(t, err)
+	for _, snapshot := range got {
+		assert.True(t, snapshot.Degraded)
+	}
+	assert.True(t, got[0].Open)
+	assert.Equal(t, uint64(1), got[0].Failures)
+	cancelled, cancel := context.WithCancel(testContext)
+	cancel()
+	_, err = m.InspectMany(cancelled, candidate.Resources, p)
+	require.ErrorIs(t, err, context.Canceled)
 }

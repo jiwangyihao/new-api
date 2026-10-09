@@ -59,19 +59,36 @@ func decodeStates(keys []string, values []any, now time.Time, p Policy) (map[str
 }
 
 func (m *Manager) remoteSnapshot(ctx context.Context, resources []Resource, p Policy) (map[string]*resourceState, error) {
-	ctx, cancel := context.WithTimeout(ctx, redisTimeout)
-	defer cancel()
-	keys := resourceKeys(resources)
-	values, err := m.client.MGet(ctx, keys...).Result()
-	if err != nil {
-		return nil, &storageError{err}
-	}
 	now := m.now()
-	states, err := decodeStates(keys, values, now, p)
+	states, err := m.remoteSnapshotAt(ctx, resources, p, now)
 	if err == nil {
 		m.remember(states, now, p)
 	}
 	return states, err
+}
+
+// remoteSnapshotAt shares the storage decoder without populating the shadow
+// cache. Administrative observation must not create state or extend retention.
+func (m *Manager) remoteSnapshotAt(ctx context.Context, resources []Resource, p Policy, now time.Time) (map[string]*resourceState, error) {
+	ctx, cancel := context.WithTimeout(ctx, redisTimeout)
+	defer cancel()
+	states := make(map[string]*resourceState, len(resources))
+	const batchSize = 256
+	for start := 0; start < len(resources); start += batchSize {
+		keys := resourceKeys(resources[start:min(start+batchSize, len(resources))])
+		values, err := m.client.MGet(ctx, keys...).Result()
+		if err != nil {
+			return nil, &storageError{err}
+		}
+		batch, err := decodeStates(keys, values, now, p)
+		if err != nil {
+			return nil, err
+		}
+		for key, state := range batch {
+			states[key] = state
+		}
+	}
+	return states, nil
 }
 
 func (m *Manager) remoteUpdate(ctx context.Context, resources []Resource, p Policy, mutate mutation) error {
@@ -188,12 +205,10 @@ func (m *Manager) expire(cache map[string]*resourceState, now time.Time) {
 func (m *Manager) localState(key string, now time.Time, p Policy) *resourceState {
 	s := m.local[key]
 	if s != nil && s.ExpiresAt <= now.UnixNano() {
-		delete(m.local, key)
 		s = nil
 	}
 	shadow := m.shadow[key]
 	if shadow != nil && shadow.ExpiresAt <= now.UnixNano() {
-		delete(m.shadow, key)
 		shadow = nil
 	}
 	if s == nil {
@@ -228,9 +243,13 @@ func (m *Manager) localState(key string, now time.Time, p Policy) *resourceState
 }
 
 func (m *Manager) localSnapshot(resources []Resource, p Policy) map[string]*resourceState {
+	return m.localSnapshotAt(resources, p, m.now())
+}
+
+func (m *Manager) localSnapshotAt(resources []Resource, p Policy, now time.Time) map[string]*resourceState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	now := m.now()
+	// localState ignores expired entries and clones only requested resources.
 	states := make(map[string]*resourceState, len(resources))
 	for _, r := range resources {
 		key := resourceKey(r)
@@ -250,6 +269,14 @@ func (m *Manager) localUpdate(ctx context.Context, resources []Resource, p Polic
 	missing := 0
 	for _, r := range resources {
 		key := resourceKey(r)
+		// Mutation retains the previous lazy cleanup behavior. Read-only
+		// snapshots merely ignore expired entries without altering either map.
+		if state := m.local[key]; state != nil && state.ExpiresAt <= now.UnixNano() {
+			delete(m.local, key)
+		}
+		if state := m.shadow[key]; state != nil && state.ExpiresAt <= now.UnixNano() {
+			delete(m.shadow, key)
+		}
 		states[key] = m.localState(key, now, p)
 		if _, exists := m.local[key]; !exists {
 			missing++

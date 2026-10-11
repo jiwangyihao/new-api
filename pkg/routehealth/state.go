@@ -6,14 +6,16 @@ import (
 )
 
 const (
-	maxResources          = 8192
-	maxActiveEntries      = 8192
-	maxCandidates         = 4096
-	maxCandidateResources = 64
-	maxSampleBuckets      = 128
-	maxRetryAfter         = 24 * time.Hour
-	redisTimeout          = 2 * time.Second
-	casAttempts           = 4
+	maxResources              = 8192
+	maxActiveEntries          = 8192
+	maxCandidates             = 4096
+	maxCandidateResources     = 64
+	maxSampleBuckets          = 128
+	maxRetryAfter             = 24 * time.Hour
+	redisTimeout              = 2 * time.Second
+	casAttempts               = 4
+	maxDiagnosticAttempts     = 8
+	credentialInvalidCooldown = 10 * time.Minute
 )
 
 type permit struct {
@@ -29,19 +31,23 @@ type sampleBucket struct {
 }
 
 type resourceState struct {
-	Generation   uint64
-	Open         bool
-	OpenedUntil  int64
-	NextProbe    int64
-	Backoff      uint32
-	Recovery     int
-	ProbeID      string
-	Active       map[string]permit
-	FailureTimes []int64
-	Buckets      []sampleBucket
-	BucketWidth  int64
-	ExpiresAt    int64
-	RemoteSeen   int64
+	Generation        uint64
+	Open              bool
+	OpenedUntil       int64
+	NextProbe         int64
+	Backoff           uint32
+	Recovery          int
+	ProbeID           string
+	Active            map[string]permit
+	FailureTimes      []int64
+	Buckets           []sampleBucket
+	BucketWidth       int64
+	ExpiresAt         int64
+	RemoteSeen        int64
+	CredentialInvalid bool
+	LastFailureAt     int64
+	LastFailureReason string
+	Attempts          []Attempt
 }
 
 func newState() *resourceState {
@@ -56,6 +62,7 @@ func (s *resourceState) clone() *resourceState {
 	}
 	copy.FailureTimes = append([]int64(nil), s.FailureTimes...)
 	copy.Buckets = append([]sampleBucket(nil), s.Buckets...)
+	copy.Attempts = append([]Attempt(nil), s.Attempts...)
 	return &copy
 }
 
@@ -135,6 +142,14 @@ func saturatedAdd(a, b uint64) uint64 {
 	return a + b
 }
 
+func (s *resourceState) recordAttempt(attempt Attempt) {
+	if len(s.Attempts) >= maxDiagnosticAttempts {
+		copy(s.Attempts, s.Attempts[1:])
+		s.Attempts = s.Attempts[:maxDiagnosticAttempts-1]
+	}
+	s.Attempts = append(s.Attempts, attempt)
+}
+
 func (s *resourceState) finish(now time.Time, p Policy, probe bool, scope Scope, result Result, random float64) {
 	if result.Verdict == VerdictIgnored || (result.Verdict == VerdictFailure && scope != result.Scope) {
 		return
@@ -146,6 +161,7 @@ func (s *resourceState) finish(now time.Time, p Policy, probe bool, scope Scope,
 			s.Recovery++
 			if s.Recovery >= p.RecoverySuccesses {
 				s.Open = false
+				s.CredentialInvalid = false
 				s.OpenedUntil = 0
 				s.NextProbe = 0
 				s.Backoff = 0
@@ -158,6 +174,13 @@ func (s *resourceState) finish(now time.Time, p Policy, probe bool, scope Scope,
 		return
 	}
 	s.addSample(now, true)
+	s.LastFailureAt = now.Unix()
+	s.LastFailureReason = result.Reason
+	if result.CredentialInvalid && scope == ScopeCredential {
+		s.CredentialInvalid = true
+		s.open(now, p, max(result.RetryAfter, credentialInvalidCooldown), random)
+		return
+	}
 	if len(s.FailureTimes) >= p.FailureThreshold {
 		copy(s.FailureTimes, s.FailureTimes[1:])
 		s.FailureTimes = s.FailureTimes[:p.FailureThreshold-1]

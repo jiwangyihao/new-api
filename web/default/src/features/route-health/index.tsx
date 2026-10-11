@@ -61,7 +61,7 @@ export function RouteHealth() {
         <div className='space-y-4'>
           <p className='text-muted-foreground text-sm'>
             {t(
-              'Channels first, problems first. Expand a channel to inspect its models and operations.'
+              'Health protection is evaluated per channel × model; operation is diagnostic information only.'
             )}
           </p>
           {query.isError ? (

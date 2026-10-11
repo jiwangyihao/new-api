@@ -23,7 +23,6 @@ type RouteHealthSetting struct {
 	LeaseSeconds         int     `json:"lease_seconds"`
 	RecoverySuccesses    int     `json:"recovery_successes"`
 	ProbeIntervalSeconds int     `json:"probe_interval_seconds"`
-	RetryBudgetSeconds   int     `json:"retry_budget_seconds"`
 }
 
 var routeHealthSetting = RouteHealthSetting{
@@ -31,7 +30,6 @@ var routeHealthSetting = RouteHealthSetting{
 	SampleWindowSeconds: 60, MinimumSamples: 20, FailureRatio: 0.5,
 	BaseCooldownSeconds: 30, MaxCooldownSeconds: 300, MaxInflight: 64,
 	LeaseSeconds: 30, RecoverySuccesses: 3, ProbeIntervalSeconds: 5,
-	RetryBudgetSeconds: 120,
 }
 
 func init() {
@@ -54,7 +52,7 @@ func (s RouteHealthSetting) Policy() routehealth.Policy {
 }
 
 func (s RouteHealthSetting) Validate() error {
-	for _, seconds := range []int{s.FailureWindowSeconds, s.SampleWindowSeconds, s.BaseCooldownSeconds, s.MaxCooldownSeconds, s.LeaseSeconds, s.ProbeIntervalSeconds, s.RetryBudgetSeconds} {
+	for _, seconds := range []int{s.FailureWindowSeconds, s.SampleWindowSeconds, s.BaseCooldownSeconds, s.MaxCooldownSeconds, s.LeaseSeconds, s.ProbeIntervalSeconds} {
 		if seconds < 1 || seconds > 86400 {
 			return fmt.Errorf("route health durations must be between 1 and 86400 seconds")
 		}
@@ -98,8 +96,6 @@ func (s RouteHealthSetting) WithOption(key, value string) (RouteHealthSetting, e
 			field = &s.RecoverySuccesses
 		case "probe_interval_seconds":
 			field = &s.ProbeIntervalSeconds
-		case "retry_budget_seconds":
-			field = &s.RetryBudgetSeconds
 		default:
 			return s, fmt.Errorf("unknown route health option %q", key)
 		}

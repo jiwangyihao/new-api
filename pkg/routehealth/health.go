@@ -13,7 +13,7 @@ import (
 type Scope string
 
 const (
-	ScopeRoute      Scope = "route"
+	ScopeModel      Scope = "model"
 	ScopeCredential Scope = "credential"
 	ScopeChannel    Scope = "channel"
 )
@@ -99,10 +99,29 @@ const (
 )
 
 type Result struct {
-	Verdict    Verdict
-	Scope      Scope
-	RetryAfter time.Duration
-	Reason     string
+	Verdict           Verdict
+	Scope             Scope
+	RetryAfter        time.Duration
+	Reason            string
+	CredentialInvalid bool
+	Attempt           *Attempt
+}
+
+type Attempt struct {
+	RequestID       string  `json:"request_id"`
+	Index           int     `json:"index"`
+	ChannelID       int     `json:"channel_id"`
+	MappedModel     string  `json:"mapped_model"`
+	Operation       string  `json:"operation"`
+	CredentialIndex int     `json:"credential_index"`
+	Verdict         Verdict `json:"verdict"`
+	Scope           Scope   `json:"scope"`
+	Reason          string  `json:"reason"`
+	StatusCode      int     `json:"status_code"`
+	StartedAt       int64   `json:"started_at"`
+	CompletedAt     int64   `json:"completed_at"`
+	DurationMS      int64   `json:"duration_ms"`
+	Probe           bool    `json:"probe"`
 }
 
 // ErrLeaseExpired 表示许可已到期；迟到结果不会成为新的健康样本。
@@ -167,6 +186,12 @@ func (l *Lease) Finish(ctx context.Context, result Result) error {
 			if permit.Generation != s.Generation {
 				continue
 			}
+			if result.Attempt != nil && r.Scope == ScopeModel {
+				attempt := *result.Attempt
+				attempt.Probe = l.Probe
+				attempt.Verdict, attempt.Scope, attempt.Reason = result.Verdict, result.Scope, result.Reason
+				s.recordAttempt(attempt)
+			}
 			s.finish(now, l.policy, permit.Probe, r.Scope, result, l.manager.random())
 		}
 		return true, nil
@@ -218,5 +243,9 @@ type Snapshot struct {
 	ConsecutiveFailures int
 	Successes           uint64
 	Failures            uint64
+	CredentialInvalid   bool
+	LastFailureAt       int64
+	LastFailureReason   string
+	Attempts            []Attempt
 	Degraded            bool
 }

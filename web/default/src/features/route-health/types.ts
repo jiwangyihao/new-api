@@ -26,10 +26,30 @@ export type RouteHealthState =
   | 'automatically_disabled'
   | 'no_credentials'
   | 'invalid_mapping'
+  | 'credential_invalid'
   | 'protection_disabled'
 
+export type RouteHealthResourceScope = 'channel' | 'model' | 'credential'
+
+export interface RouteHealthAttempt {
+  request_id: string
+  index: number
+  channel_id: number
+  mapped_model: string
+  operation: string
+  credential_index: number
+  verdict: 'success' | 'failure' | 'ignored'
+  scope: RouteHealthResourceScope
+  reason: string
+  status_code: number
+  started_at: number
+  completed_at: number
+  duration_ms: number
+  probe: boolean
+}
+
 export interface RouteHealthResource {
-  scope: 'channel' | 'route' | 'credential'
+  scope: RouteHealthResourceScope
   credential_index: number
   state: RouteHealthState
   successes: number
@@ -41,6 +61,9 @@ export interface RouteHealthResource {
   probe: boolean
   recovery_successes: number
   degraded: boolean
+  credential_invalid: boolean
+  last_failure_at: number
+  last_failure_reason: string
 }
 
 export interface RouteHealthRow {
@@ -50,11 +73,11 @@ export interface RouteHealthRow {
   channel_status: number
   models: string[]
   upstream_model: string
-  operation: string
   state: RouteHealthState
   ready_credentials: number
   total_credentials: number
   resources: RouteHealthResource[]
+  attempts: RouteHealthAttempt[]
 }
 
 export interface RouteHealthReport {

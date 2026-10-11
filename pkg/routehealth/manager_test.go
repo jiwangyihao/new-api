@@ -65,7 +65,7 @@ func (f *healthFixture) advance(delta time.Duration) {
 func testCandidate(id, channel, model, credential string) Candidate {
 	prefix := "{" + channel + "}:"
 	return Candidate{ID: id, Weight: 1, Resources: []Resource{
-		{Key: prefix + model + ":chat", Scope: ScopeRoute},
+		{Key: prefix + model + ":chat", Scope: ScopeModel},
 		{Key: prefix + credential, Scope: ScopeCredential},
 		{Key: prefix + "service", Scope: ScopeChannel},
 	}}
@@ -127,7 +127,7 @@ func TestRouteCooldownSharedAndModelIsolation(t *testing.T) {
 		p := DefaultPolicy()
 		bad := testCandidate("group-a", "channel-a", "bad-model", "key")
 		for range p.FailureThreshold {
-			finish(t, take(t, f.manager, p, bad), VerdictFailure, ScopeRoute)
+			finish(t, take(t, f.manager, p, bad), VerdictFailure, ScopeModel)
 		}
 		shared := bad
 		shared.ID = "group-b-alias"
@@ -180,11 +180,11 @@ func TestIgnoredIdempotentAndLateResults(t *testing.T) {
 		lateSuccess := take(t, f.manager, p, c)
 		lateFailure := take(t, f.other, p, c)
 		failed := take(t, f.manager, p, c)
-		finish(t, failed, VerdictFailure, ScopeRoute)
-		finish(t, failed, VerdictFailure, ScopeRoute)
+		finish(t, failed, VerdictFailure, ScopeModel)
+		finish(t, failed, VerdictFailure, ScopeModel)
 		opened := snapshot(t, f.other, p, c.Resources[0])
 		finish(t, lateSuccess, VerdictSuccess, "")
-		finish(t, lateFailure, VerdictFailure, ScopeRoute)
+		finish(t, lateFailure, VerdictFailure, ScopeModel)
 		s = snapshot(t, f.other, p, c.Resources[0])
 		assert.True(t, s.Open)
 		assert.Equal(t, opened.Generation, s.Generation)
@@ -201,10 +201,10 @@ func TestFailureWindowsAndRatio(t *testing.T) {
 	healthStores(t, func(t *testing.T, f *healthFixture) {
 		p := DefaultPolicy()
 		c := testCandidate("a", "channel", "model", "key")
-		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeModel)
 		f.advance(p.FailureWindow + time.Nanosecond)
-		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeRoute)
-		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeModel)
+		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeModel)
 		assert.False(t, snapshot(t, f.other, p, c.Resources[0]).Open)
 		assert.Equal(t, 2, snapshot(t, f.other, p, c.Resources[0]).ConsecutiveFailures)
 		finish(t, take(t, f.manager, p, c), VerdictSuccess, "")
@@ -213,19 +213,19 @@ func TestFailureWindowsAndRatio(t *testing.T) {
 		p.MinimumSamples = 4
 		p.FailureRatio = 0.5
 		ratio := testCandidate("ratio", "ratio-channel", "model", "key")
-		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeModel)
 		finish(t, take(t, f.manager, p, ratio), VerdictSuccess, "")
-		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeModel)
 		assert.False(t, snapshot(t, f.other, p, ratio.Resources[0]).Open)
-		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, ratio), VerdictFailure, ScopeModel)
 		assert.True(t, snapshot(t, f.other, p, ratio.Resources[0]).Open)
 		// 样本完整离开滑窗后不参与失败率。
 		window := testCandidate("window", "window-channel", "model", "key")
 		for range 3 {
-			finish(t, take(t, f.manager, p, window), VerdictFailure, ScopeRoute)
+			finish(t, take(t, f.manager, p, window), VerdictFailure, ScopeModel)
 		}
 		f.advance(p.SampleWindow + time.Second)
-		finish(t, take(t, f.manager, p, window), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, window), VerdictFailure, ScopeModel)
 		s := snapshot(t, f.other, p, window.Resources[0])
 		assert.False(t, s.Open)
 		assert.Equal(t, uint64(1), s.Failures)
@@ -237,7 +237,7 @@ func TestConcurrentSingleProbe(t *testing.T) {
 		p := DefaultPolicy()
 		p.FailureThreshold = 1
 		c := testCandidate("a", "channel", "model", "key")
-		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeModel)
 		f.advance(p.BaseCooldown)
 		const workers = 12
 		start := make(chan struct{})
@@ -301,9 +301,9 @@ func TestLeaseRenewExpiryAndAbandonedProbe(t *testing.T) {
 		f.advance(p.LeaseDuration - 2*time.Second)
 		fresh := take(t, f.other, p, c)
 		require.ErrorIs(t, old.Renew(testContext), ErrLeaseExpired)
-		finish(t, old, VerdictFailure, ScopeRoute)
+		finish(t, old, VerdictFailure, ScopeModel)
 		assert.False(t, snapshot(t, f.other, p, c.Resources[0]).Open)
-		finish(t, fresh, VerdictFailure, ScopeRoute)
+		finish(t, fresh, VerdictFailure, ScopeModel)
 		f.advance(p.BaseCooldown)
 		abandoned := take(t, f.manager, p, c)
 		assert.True(t, abandoned.Probe)
@@ -322,9 +322,9 @@ func TestGradualRecoveryAndBackoff(t *testing.T) {
 		p := DefaultPolicy()
 		p.FailureThreshold = 1
 		c := testCandidate("a", "channel", "model", "key")
-		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, c), VerdictFailure, ScopeModel)
 		f.advance(p.BaseCooldown)
-		finish(t, take(t, f.other, p, c), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.other, p, c), VerdictFailure, ScopeModel)
 		assert.Equal(t, 2*p.BaseCooldown, unavailable(t, f.manager, p, c))
 		f.advance(2 * p.BaseCooldown)
 		for i := range p.RecoverySuccesses {
@@ -343,7 +343,7 @@ func TestGradualRecoveryAndBackoff(t *testing.T) {
 		}
 		regular := take(t, f.manager, p, c)
 		assert.False(t, regular.Probe)
-		finish(t, regular, VerdictFailure, ScopeRoute)
+		finish(t, regular, VerdictFailure, ScopeModel)
 		assert.Equal(t, p.BaseCooldown, unavailable(t, f.other, p, c))
 	})
 }
@@ -354,15 +354,15 @@ func TestEarliestCooldownAndRetryAfter(t *testing.T) {
 		p.FailureThreshold = 1
 		one := testCandidate("one", "channel-one", "model", "key")
 		two := testCandidate("two", "channel-two", "model", "key")
-		finish(t, take(t, f.manager, p, one), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, one), VerdictFailure, ScopeModel)
 		require.NoError(t, take(t, f.manager, p, two).Finish(testContext,
-			Result{Verdict: VerdictFailure, Scope: ScopeRoute, RetryAfter: 10 * time.Minute}))
+			Result{Verdict: VerdictFailure, Scope: ScopeModel, RetryAfter: 10 * time.Minute}))
 		assert.Equal(t, p.BaseCooldown, unavailable(t, f.other, p, one, two))
 		assert.Equal(t, 10*time.Minute, unavailable(t, f.other, p, two))
 		f.advance(10 * time.Minute)
 		probe := take(t, f.other, p, two)
 		require.NoError(t, probe.Finish(testContext,
-			Result{Verdict: VerdictFailure, Scope: ScopeRoute, RetryAfter: 100 * time.Hour}))
+			Result{Verdict: VerdictFailure, Scope: ScopeModel, RetryAfter: 100 * time.Hour}))
 		assert.Equal(t, 24*time.Hour, unavailable(t, f.manager, p, two))
 	})
 }
@@ -383,7 +383,7 @@ func TestPriorityPreferenceLowPriorityProbeAndZeroWeights(t *testing.T) {
 		lease = take(t, f.manager, p, high, peer)
 		assert.Equal(t, peer.ID, lease.CandidateID)
 		finish(t, lease, VerdictSuccess, "")
-		finish(t, take(t, f.manager, p, low), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, low), VerdictFailure, ScopeModel)
 		lease = take(t, f.other, p, low, high)
 		assert.Equal(t, high.ID, lease.CandidateID)
 		finish(t, lease, VerdictSuccess, "")
@@ -414,7 +414,7 @@ func TestDisabledPolicyAndWeightedSelection(t *testing.T) {
 	m.random = func() float64 { v := values[i%len(values)]; i++; return v }
 	lease := take(t, m, Policy{}, one, two)
 	assert.Equal(t, two.ID, lease.CandidateID)
-	finish(t, lease, VerdictFailure, ScopeRoute)
+	finish(t, lease, VerdictFailure, ScopeModel)
 	require.ErrorIs(t, lease.Renew(testContext), ErrLeaseExpired, "a finished attempt cannot retain admission")
 	assert.False(t, snapshot(t, m, DefaultPolicy(), two.Resources[0]).Open)
 	two.Priority = -1
@@ -432,14 +432,14 @@ func TestRedisDisconnectedPreservesLocalProtection(t *testing.T) {
 	p := DefaultPolicy()
 	p.FailureThreshold = 1
 	cold := testCandidate("cold", "cold", "model", "key")
-	finish(t, take(t, m, p, cold), VerdictFailure, ScopeRoute)
+	finish(t, take(t, m, p, cold), VerdictFailure, ScopeModel)
 	server.Close()
 	assert.Equal(t, p.BaseCooldown, unavailable(t, m, p, cold))
 	assert.True(t, snapshot(t, m, p, cold.Resources[0]).Degraded)
 	unknown := testCandidate("unknown", "unknown", "model", "key")
 	lease := take(t, m, p, unknown)
 	assert.True(t, lease.Degraded)
-	finish(t, lease, VerdictFailure, ScopeRoute)
+	finish(t, lease, VerdictFailure, ScopeModel)
 	unavailable(t, m, p, unknown)
 }
 
@@ -459,7 +459,7 @@ func TestDegradedLeaseNeverWritesRecoveredRedis(t *testing.T) {
 	m.client = testRedisClient(t, server)
 	fresh := take(t, m, p, c)
 	finish(t, fresh, VerdictSuccess, "")
-	finish(t, lease, VerdictFailure, ScopeRoute)
+	finish(t, lease, VerdictFailure, ScopeModel)
 	s := snapshot(t, m, p, c.Resources[0])
 	assert.False(t, s.Open)
 	assert.Equal(t, uint64(1), s.Successes)
@@ -504,7 +504,7 @@ func TestInspectManyIsReadOnlyAndPreservesProbe(t *testing.T) {
 		if f.server != nil {
 			assert.Empty(t, f.server.Keys())
 		}
-		finish(t, take(t, f.manager, p, candidate), VerdictFailure, ScopeRoute)
+		finish(t, take(t, f.manager, p, candidate), VerdictFailure, ScopeModel)
 		f.advance(p.BaseCooldown + time.Second)
 		beforeLocal := make(map[string]*resourceState)
 		beforeShadow := make(map[string]*resourceState)
@@ -549,7 +549,7 @@ func TestInspectManyBatchesWithoutInventoryTruncation(t *testing.T) {
 	m := New(testRedisClient(t, server))
 	resources := make([]Resource, maxResources+1)
 	for i := range resources {
-		resources[i] = Resource{Key: fmt.Sprintf("inventory:%d", i), Scope: ScopeRoute}
+		resources[i] = Resource{Key: fmt.Sprintf("inventory:%d", i), Scope: ScopeModel}
 	}
 	before := server.CommandCount()
 	got, err := m.InspectMany(testContext, append(resources, resources[0]), DefaultPolicy())
@@ -568,7 +568,7 @@ func TestInspectManyRedisFailureUsesLocalProtection(t *testing.T) {
 	p := DefaultPolicy()
 	p.FailureThreshold = 1
 	candidate := testCandidate("fallback", "channel", "model", "key")
-	finish(t, take(t, m, p, candidate), VerdictFailure, ScopeRoute)
+	finish(t, take(t, m, p, candidate), VerdictFailure, ScopeModel)
 	server.Close()
 	got, err := m.InspectMany(testContext, candidate.Resources, p)
 	require.NoError(t, err)
@@ -581,4 +581,74 @@ func TestInspectManyRedisFailureUsesLocalProtection(t *testing.T) {
 	cancel()
 	_, err = m.InspectMany(cancelled, candidate.Resources, p)
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestInvalidCredentialIsolationRecoveryAndAudit(t *testing.T) {
+	healthStores(t, func(t *testing.T, f *healthFixture) {
+		p := DefaultPolicy()
+		bad := testCandidate("bad-key", "shared", "model", "bad")
+		good := testCandidate("good-key", "shared", "model", "good")
+		sibling := testCandidate("other-model", "shared", "other", "bad")
+		failed := take(t, f.manager, p, bad)
+		result := Result{Verdict: VerdictFailure, Scope: ScopeCredential, CredentialInvalid: true, Reason: "upstream_credential_invalid",
+			Attempt: &Attempt{RequestID: "credential-failure", Index: 1, Operation: "/v1/responses", StatusCode: 401}}
+		require.NoError(t, failed.Finish(testContext, result))
+		require.NoError(t, failed.Finish(testContext, result))
+		assert.Equal(t, 10*time.Minute, unavailable(t, f.other, p, sibling))
+		credential := snapshot(t, f.other, p, bad.Resources[1])
+		assert.True(t, credential.CredentialInvalid)
+		assert.Equal(t, uint64(1), credential.Failures)
+		model := snapshot(t, f.other, p, bad.Resources[0])
+		assert.False(t, model.Open)
+		assert.Zero(t, model.Failures)
+		require.Len(t, model.Attempts, 1)
+		assert.Equal(t, ScopeCredential, model.Attempts[0].Scope)
+		assert.Equal(t, VerdictFailure, model.Attempts[0].Verdict)
+		lease := take(t, f.other, p, bad, good)
+		assert.Equal(t, good.ID, lease.CandidateID)
+		finish(t, lease, VerdictSuccess, "")
+		f.advance(10 * time.Minute)
+		for i := range p.RecoverySuccesses {
+			probe := take(t, f.other, p, bad)
+			require.True(t, probe.Probe)
+			require.NoError(t, probe.Finish(testContext, Result{Verdict: VerdictSuccess, Scope: ScopeModel, Reason: "upstream_completed",
+				Attempt: &Attempt{RequestID: fmt.Sprintf("probe-%d", i), Index: 1}}))
+			model = snapshot(t, f.manager, p, bad.Resources[0])
+			require.NotEmpty(t, model.Attempts)
+			assert.True(t, model.Attempts[len(model.Attempts)-1].Probe, "credential probe must remain visible on the model audit")
+			credential = snapshot(t, f.manager, p, bad.Resources[1])
+			assert.Equal(t, i+1 < p.RecoverySuccesses, credential.CredentialInvalid)
+			if i+1 < p.RecoverySuccesses {
+				assert.Equal(t, p.ProbeInterval, unavailable(t, f.manager, p, bad))
+				f.advance(p.ProbeInterval)
+			}
+		}
+		assert.False(t, credential.Open)
+	})
+}
+
+func TestAttemptDiagnosticsAreBoundedAndIgnoreStaleGeneration(t *testing.T) {
+	healthStores(t, func(t *testing.T, f *healthFixture) {
+		p := DefaultPolicy()
+		candidate := testCandidate("audit", "channel", "model", "key")
+		for i := range 10 {
+			lease := take(t, f.manager, p, candidate)
+			require.NoError(t, lease.Finish(testContext, Result{Verdict: VerdictSuccess, Scope: ScopeModel,
+				Attempt: &Attempt{RequestID: fmt.Sprintf("request-%d", i), Index: 1}}))
+		}
+		state := snapshot(t, f.other, p, candidate.Resources[0])
+		require.Len(t, state.Attempts, 8)
+		assert.Equal(t, "request-2", state.Attempts[0].RequestID)
+		assert.Equal(t, "request-9", state.Attempts[7].RequestID)
+		state.Attempts[0].RequestID = "mutated-copy"
+		assert.Equal(t, "request-2", snapshot(t, f.other, p, candidate.Resources[0]).Attempts[0].RequestID)
+		p.FailureThreshold = 1
+		late := take(t, f.manager, p, candidate)
+		failed := take(t, f.other, p, candidate)
+		require.NoError(t, failed.Finish(testContext, Result{Verdict: VerdictFailure, Scope: ScopeModel, Attempt: &Attempt{RequestID: "trip"}}))
+		require.NoError(t, late.Finish(testContext, Result{Verdict: VerdictSuccess, Scope: ScopeModel, Attempt: &Attempt{RequestID: "late"}}))
+		state = snapshot(t, f.other, p, candidate.Resources[0])
+		assert.Equal(t, "trip", state.Attempts[len(state.Attempts)-1].RequestID)
+		assert.True(t, state.Open)
+	})
 }

@@ -30,6 +30,7 @@ const variants: Record<RouteHealthState, StatusVariant> = {
   automatically_disabled: 'danger',
   no_credentials: 'danger',
   invalid_mapping: 'danger',
+  credential_invalid: 'danger',
   protection_disabled: 'neutral',
 }
 
@@ -45,6 +46,7 @@ function useHealthStateLabels(): Record<RouteHealthState, string> {
     automatically_disabled: t('Automatically disabled'),
     no_credentials: t('No enabled credentials'),
     invalid_mapping: t('Invalid model mapping'),
+    credential_invalid: t('Credential unavailable'),
     protection_disabled: t('Health protection disabled'),
   }
 }
@@ -53,6 +55,7 @@ export function HealthStateBadge(props: { state: RouteHealthState }) {
   const labels = useHealthStateLabels()
   return (
     <StatusBadge
+      className='max-w-full whitespace-normal [&>span:last-child]:whitespace-normal'
       label={labels[props.state]}
       variant={variants[props.state]}
       copyable={false}

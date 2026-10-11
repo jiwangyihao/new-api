@@ -89,7 +89,7 @@ func normalizeCandidates(candidates []Candidate) ([]Candidate, []Resource, error
 }
 
 func validateResource(r Resource) error {
-	if r.Key == "" || len(r.Key) > 4096 || (r.Scope != ScopeRoute && r.Scope != ScopeCredential && r.Scope != ScopeChannel) {
+	if r.Key == "" || len(r.Key) > 4096 || (r.Scope != ScopeModel && r.Scope != ScopeCredential && r.Scope != ScopeChannel) {
 		return errors.New("routehealth: invalid resource")
 	}
 	return nil
@@ -326,7 +326,9 @@ func (m *Manager) InspectMany(ctx context.Context, resources []Resource, p Polic
 		successes, failures := s.samples()
 		snapshot := Snapshot{Resource: resource, Generation: s.Generation, Open: s.Open,
 			Inflight: len(s.Active), Probe: s.ProbeID != "", RecoverySuccesses: s.Recovery,
-			ConsecutiveFailures: len(s.FailureTimes), Successes: successes, Failures: failures, Degraded: degraded}
+			ConsecutiveFailures: len(s.FailureTimes), Successes: successes, Failures: failures,
+			CredentialInvalid: s.CredentialInvalid, LastFailureAt: s.LastFailureAt, LastFailureReason: s.LastFailureReason,
+			Attempts: append([]Attempt(nil), s.Attempts...), Degraded: degraded}
 		if s.OpenedUntil != 0 {
 			snapshot.OpenedUntil = time.Unix(0, s.OpenedUntil)
 		}

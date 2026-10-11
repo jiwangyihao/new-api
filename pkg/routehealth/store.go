@@ -45,7 +45,7 @@ func decodeStates(keys []string, values []any, now time.Time, p Policy) (map[str
 			if err := common.UnmarshalJsonStr(raw, s); err != nil {
 				return nil, fmt.Errorf("routehealth: decode stored state: %w", err)
 			}
-			if s.Generation == 0 || len(s.Active) > maxActiveEntries || len(s.FailureTimes) > maxActiveEntries || len(s.Buckets) > maxSampleBuckets+1 {
+			if s.Generation == 0 || len(s.Active) > maxActiveEntries || len(s.FailureTimes) > maxActiveEntries || len(s.Buckets) > maxSampleBuckets+1 || len(s.Attempts) > maxDiagnosticAttempts {
 				return nil, errors.New("routehealth: stored state exceeds safety bounds")
 			}
 			if s.Active == nil {

@@ -27,15 +27,16 @@ import (
 const routeAttemptContextKey = "route_health_attempts"
 
 type routeSelection struct {
-	channel   *model.Channel
-	group     string
-	key       string
-	index     int
-	candidate routehealth.Candidate
+	channel     *model.Channel
+	group       string
+	key         string
+	index       int
+	mappedModel string
+	operation   string
+	candidate   routehealth.Candidate
 }
 
 type routeAttemptState struct {
-	started            time.Time
 	selected           *routeSelection
 	lease              *routehealth.Lease
 	excluded           map[string]struct{}
@@ -44,9 +45,13 @@ type routeAttemptState struct {
 	cancel             context.CancelFunc
 	done               chan struct{}
 	startedUpstream    bool
+	attemptStarted     time.Time
+	attemptIndex       int
 	upstreamStatus     int
 	retryAfter         time.Duration
 	events             []map[string]any
+	attempts           []routehealth.Attempt
+	retryDecision      RouteRetryDecision
 }
 
 var routeManagers struct {
@@ -73,7 +78,6 @@ func routeState(c *gin.Context) *routeAttemptState {
 		return value.(*routeAttemptState)
 	}
 	state := &routeAttemptState{
-		started:            time.Now(),
 		excluded:           map[string]struct{}{},
 		excludedCandidates: map[string]struct{}{},
 		attempted:          map[int]bool{},
@@ -114,8 +118,8 @@ func (namespace routeResourceNamespace) channel() routehealth.Resource {
 	return routehealth.Resource{Key: string(namespace) + ":channel", Scope: routehealth.ScopeChannel}
 }
 
-func (namespace routeResourceNamespace) route(mappedModel, operation string) routehealth.Resource {
-	return routehealth.Resource{Key: string(namespace) + ":route:" + routeFingerprint(mappedModel, operation), Scope: routehealth.ScopeRoute}
+func (namespace routeResourceNamespace) model(mappedModel string) routehealth.Resource {
+	return routehealth.Resource{Key: string(namespace) + ":model:" + routeFingerprint(mappedModel), Scope: routehealth.ScopeModel}
 }
 
 func (namespace routeResourceNamespace) credential(key string) routehealth.Resource {
@@ -161,7 +165,8 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 		}
 		namespace := routeResources(channel)
 		channelResource := namespace.channel()
-		routeResource := namespace.route(mapped, routeOperation(c, channel, modelName, path))
+		operation := routeOperation(c, channel, modelName, path)
+		modelResource := namespace.model(mapped)
 		credentials := channel.EnabledCredentials()
 		preferredKey := channel.PreviewNextEnabledKey()
 		start := 0
@@ -177,9 +182,9 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 				continue
 			}
 			seenCredentials[credential.Key] = struct{}{}
-			candidateID := routeResource.Key + ":" + routeFingerprint(credential.Key)
+			candidateID := modelResource.Key + ":" + routeFingerprint(credential.Key)
 			keyResource := namespace.credential(credential.Key)
-			resources := []routehealth.Resource{channelResource, keyResource, routeResource}
+			resources := []routehealth.Resource{channelResource, keyResource, modelResource}
 			if _, blocked := state.excludedCandidates[candidateID]; blocked {
 				continue
 			}
@@ -197,7 +202,7 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 				Resources: resources,
 				Priority:  channel.GetPriority(),
 				Weight:    channel.GetWeight(),
-				Pool:      routeResource.Key,
+				Pool:      modelResource.Key,
 				Preferred: channel.Id == preferred,
 			}
 			if channel.ChannelInfo.MultiKeyMode == constant.MultiKeyModePolling {
@@ -205,7 +210,7 @@ func buildRouteSelections(c *gin.Context, channels []*model.Channel, group, mode
 			} else if channel.ChannelInfo.MultiKeyMode != constant.MultiKeyModeRandom {
 				candidate.CredentialOrder = i
 			}
-			selections = append(selections, routeSelection{channel: channel, group: group, key: credential.Key, index: credential.Index, candidate: candidate})
+			selections = append(selections, routeSelection{channel: channel, group: group, key: credential.Key, index: credential.Index, mappedModel: mapped, operation: operation, candidate: candidate})
 		}
 	}
 	return selections, nil
@@ -230,6 +235,7 @@ func acquireRoute(c *gin.Context, selections []routeSelection) (*model.Channel, 
 		return nil, "", err
 	}
 	if lease == nil {
+		state.retryDecision = RouteRetryDecision{Scope: routehealth.ScopeModel, Reason: "no_eligible_candidates"}
 		if retryAfter > 0 && c.Writer != nil {
 			c.Header("Retry-After", strconv.FormatInt(max(1, int64((retryAfter+time.Second-1)/time.Second)), 10))
 		}
@@ -241,8 +247,10 @@ func acquireRoute(c *gin.Context, selections []routeSelection) (*model.Channel, 
 			continue
 		}
 		state.selected, state.lease = selected, lease
+		state.attemptIndex++
+		state.attemptStarted = time.Now()
 		state.startedUpstream, state.upstreamStatus, state.retryAfter = false, 0, 0
-		state.cancel, state.done = nil, nil
+		state.retryDecision = RouteRetryDecision{}
 		if c.Request != nil {
 			leaseCtx, cancel := context.WithCancel(c.Request.Context())
 			state.cancel, state.done = cancel, make(chan struct{})
@@ -270,7 +278,7 @@ func acquireRoute(c *gin.Context, selections []routeSelection) (*model.Channel, 
 		if lease.Degraded {
 			health = "local_protection"
 		}
-		state.events = append(state.events, map[string]any{"channel_id": selected.channel.Id, "group": selected.group, "health": health, "action": "admit"})
+		state.events = append(state.events, map[string]any{"channel_id": selected.channel.Id, "group": selected.group, "model": selected.mappedModel, "operation": selected.operation, "credential_index": selected.index + 1, "attempt_index": state.attemptIndex, "health": health, "action": "admit"})
 		return selected.channel, selected.group, nil
 	}
 	_ = lease.Finish(ctx, routehealth.Result{Verdict: routehealth.VerdictIgnored})
@@ -303,11 +311,6 @@ func AdmitBoundRoute(c *gin.Context, channel *model.Channel, modelName, group, k
 		return routeUnavailableError()
 	}
 	return nil
-}
-
-func RouteRetryBudgetAvailable(c *gin.Context) bool {
-	state := routeState(c)
-	return (c.Request == nil || c.Request.Context().Err() == nil) && time.Since(state.started) < time.Duration(operation_setting.GetRouteHealthSetting().RetryBudgetSeconds)*time.Second
 }
 
 func MarkRouteUpstreamStarted(c *gin.Context) {
@@ -352,6 +355,7 @@ func FinishRouteAttempt(c *gin.Context, info *relaycommon.RelayInfo, apiErr *typ
 	}
 	result := ClassifyRouteAttempt(ctx, info, apiErr, state.startedUpstream)
 	result.RetryAfter = state.retryAfter
+	result.Attempt = routeAttemptAudit(c, state, info, apiErr, result)
 	if result.Verdict == routehealth.VerdictFailure && state.selected != nil {
 		state.attempted[state.selected.channel.Id] = true
 		state.excludedCandidates[state.selected.candidate.ID] = struct{}{}
@@ -362,11 +366,48 @@ func FinishRouteAttempt(c *gin.Context, info *relaycommon.RelayInfo, apiErr *typ
 		}
 	}
 	finishRouteLease(state, result)
-	channelID := 0
-	if state.selected != nil {
-		channelID = state.selected.channel.Id
+}
+
+func routeAttemptAudit(c *gin.Context, state *routeAttemptState, info *relaycommon.RelayInfo, apiErr *types.NewAPIError, result routehealth.Result) *routehealth.Attempt {
+	if state == nil || state.selected == nil || state.attemptStarted.IsZero() {
+		return nil
 	}
-	state.events = append(state.events, map[string]any{"channel_id": channelID, "health": string(result.Verdict), "reason": result.Reason, "action": "observe"})
+	completed := time.Now()
+	requestID := ""
+	if info != nil {
+		requestID = strings.TrimSpace(info.RequestId)
+	}
+	if requestID == "" && c != nil {
+		requestID = strings.TrimSpace(c.GetString(common.RequestIdKey))
+	}
+	statusCode := state.upstreamStatus
+	if apiErr != nil {
+		root := apiErr
+		for {
+			var inner *types.NewAPIError
+			if !errors.As(root.Unwrap(), &inner) || inner == root {
+				break
+			}
+			root = inner
+		}
+		if root.StatusCode != 0 {
+			statusCode = root.StatusCode
+		}
+	}
+	if info != nil && info.StreamStatus != nil {
+		outcome := info.StreamStatus.OutcomeSnapshot()
+		if outcome.Response == relaycommon.ResponseOutcomeFailed && outcome.ErrorStatus != 0 {
+			statusCode = outcome.ErrorStatus
+		}
+	}
+	return &routehealth.Attempt{
+		RequestID: requestID, Index: state.attemptIndex, ChannelID: state.selected.channel.Id,
+		MappedModel: state.selected.mappedModel, Operation: state.selected.operation,
+		CredentialIndex: state.selected.index + 1, Verdict: result.Verdict, Scope: result.Scope,
+		Reason: result.Reason, StatusCode: statusCode, StartedAt: state.attemptStarted.Unix(),
+		CompletedAt: completed.Unix(), DurationMS: completed.Sub(state.attemptStarted).Milliseconds(),
+		Probe: state.lease != nil && state.lease.Probe,
+	}
 }
 
 func ReleaseRouteAttempt(c *gin.Context) {
@@ -374,7 +415,16 @@ func ReleaseRouteAttempt(c *gin.Context) {
 		return
 	}
 	if value, found := c.Get(routeAttemptContextKey); found {
-		finishRouteLease(value.(*routeAttemptState), routehealth.Result{Verdict: routehealth.VerdictIgnored})
+		state := value.(*routeAttemptState)
+		if state.lease == nil {
+			return
+		}
+		result := routehealth.Result{Verdict: routehealth.VerdictIgnored, Scope: routehealth.ScopeModel, Reason: "attempt_released"}
+		if c.Request != nil && c.Request.Context().Err() != nil {
+			result.Reason = "client_cancelled"
+		}
+		result.Attempt = routeAttemptAudit(c, state, nil, nil, result)
+		finishRouteLease(state, result)
 	}
 }
 
@@ -392,12 +442,29 @@ func finishRouteLease(state *routeAttemptState, result routehealth.Result) {
 	if err := state.lease.Finish(ctx, result); err != nil {
 		common.SysError("route health result: " + err.Error())
 	}
+	if result.Attempt != nil {
+		state.attempts = append(state.attempts, *result.Attempt)
+		state.events = append(state.events, map[string]any{
+			"channel_id": result.Attempt.ChannelID, "model": result.Attempt.MappedModel,
+			"operation": result.Attempt.Operation, "credential_index": result.Attempt.CredentialIndex,
+			"attempt_index": result.Attempt.Index, "health": string(result.Verdict),
+			"reason": result.Reason, "action": "observe",
+		})
+	}
+	if result.Verdict != routehealth.VerdictFailure {
+		state.retryDecision = RouteRetryDecision{Scope: result.Scope, Reason: result.Reason}
+	}
 	state.lease = nil
 }
 
 func ClassifyRouteAttempt(ctx context.Context, info *relaycommon.RelayInfo, apiErr *types.NewAPIError, upstreamStarted bool) routehealth.Result {
-	ignored := routehealth.Result{Verdict: routehealth.VerdictIgnored, Scope: routehealth.ScopeRoute, Reason: "not_upstream_failure"}
-	if !upstreamStarted || (ctx != nil && errors.Is(ctx.Err(), context.Canceled)) {
+	ignored := routehealth.Result{Verdict: routehealth.VerdictIgnored, Scope: routehealth.ScopeModel, Reason: "not_upstream_failure"}
+	if !upstreamStarted {
+		ignored.Reason = "upstream_not_started"
+		return ignored
+	}
+	if ctx != nil && ctx.Err() != nil {
+		ignored.Reason = "client_cancelled"
 		return ignored
 	}
 	status, code, errorType := 0, "", ""
@@ -434,41 +501,43 @@ func ClassifyRouteAttempt(ctx context.Context, info *relaycommon.RelayInfo, apiE
 					return ignored
 				}
 				if stream.IncompleteReason != "max_output_tokens" && stream.IncompleteReason != "max_tokens" {
-					return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeRoute, Reason: "incomplete_upstream_response"}
+					return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeModel, Reason: "incomplete_upstream_response"}
 				}
 			}
 			if stream.HasErrors || stream.EndReason == relaycommon.StreamEndReasonTimeout || stream.EndReason == relaycommon.StreamEndReasonScannerErr || stream.EndReason == relaycommon.StreamEndReasonPanic || stream.ExpectsTerminal && stream.Response == relaycommon.ResponseOutcomeUnknown {
-				return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeRoute, Reason: "upstream_stream_interrupted"}
+				return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeModel, Reason: "upstream_stream_interrupted"}
 			}
-			return routehealth.Result{Verdict: routehealth.VerdictSuccess, Scope: routehealth.ScopeRoute, Reason: "upstream_completed"}
+			return routehealth.Result{Verdict: routehealth.VerdictSuccess, Scope: routehealth.ScopeModel, Reason: "upstream_completed"}
 		}
 	}
 	if apiErr == nil && code == "" {
-		return routehealth.Result{Verdict: routehealth.VerdictSuccess, Scope: routehealth.ScopeRoute, Reason: "upstream_completed"}
+		return routehealth.Result{Verdict: routehealth.VerdictSuccess, Scope: routehealth.ScopeModel, Reason: "upstream_completed"}
 	}
 	if protocolBusinessRejection(code, errorType) {
 		return ignored
 	}
 	for _, value := range []string{strings.ToLower(code), strings.ToLower(errorType)} {
 		switch value {
-		case "invalid_api_key", "api_key_invalid", "api_key_expired", "invalid_authentication", "authentication_error", "unauthenticated", "insufficient_quota", "quota_exceeded":
+		case "invalid_api_key", "api_key_invalid", "api_key_expired", "invalid_authentication", "authentication_error", "unauthenticated":
+			return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeCredential, CredentialInvalid: true, Reason: "upstream_credential_invalid"}
+		case "insufficient_quota", "quota_exceeded":
 			return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeCredential, Reason: "upstream_credential_unavailable"}
 		case "context_length_exceeded", "invalid_request", "invalid_request_error", "invalid_argument", "prompt_blocked", "content_filter", "content_policy_violation", "safety":
 			return ignored
 		case "model_not_found", "model_not_supported", "unsupported_model", "rate_limit_exceeded", "rate_limit_error", "resource_exhausted", "overloaded_error", "server_error", "internal_error", "service_unavailable":
-			return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeRoute, Reason: "upstream_route_unavailable"}
+			return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeModel, Reason: "upstream_route_unavailable"}
 		}
 	}
 	switch status {
 	case 400, 405, 409, 413, 415, 422:
 		return ignored
 	case 401:
-		return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeCredential, Reason: "upstream_credential_unavailable"}
+		return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeCredential, CredentialInvalid: true, Reason: "upstream_credential_invalid"}
 	}
 	if apiErr != nil && apiErr.GetErrorCode() == types.ErrorCodeDoRequestFailed {
 		return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeChannel, Reason: "upstream_transport_unavailable"}
 	}
-	return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeRoute, Reason: "upstream_route_unavailable"}
+	return routehealth.Result{Verdict: routehealth.VerdictFailure, Scope: routehealth.ScopeModel, Reason: "upstream_route_unavailable"}
 }
 
 // AppendRouteHealthAdminInfo adds non-secret per-attempt decisions to admin-only logs.
@@ -477,7 +546,20 @@ func AppendRouteHealthAdminInfo(c *gin.Context, admin map[string]any) {
 		return
 	}
 	if value, ok := c.Get(routeAttemptContextKey); ok {
-		admin["route_health"] = value.(*routeAttemptState).events
+		state := value.(*routeAttemptState)
+		admin["route_health"] = slices.Clone(state.events)
+		admin["attempts"] = slices.Clone(state.attempts)
+		admin["attempt_count"] = state.attemptIndex
+		admin["retry_count"] = max(0, state.attemptIndex-1)
+		if len(state.attempts) > 0 {
+			admin["final_attempt_verdict"] = string(state.attempts[len(state.attempts)-1].Verdict)
+		}
+		if state.retryDecision.Reason != "" {
+			admin["retry_decision"] = state.retryDecision
+		}
+		if len(state.attempts) > 0 && !state.retryDecision.Retry {
+			admin["final_outcome"] = string(state.attempts[len(state.attempts)-1].Verdict)
+		}
 	}
 }
 

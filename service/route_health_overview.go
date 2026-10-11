@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -15,7 +14,6 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/routehealth"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/gin-gonic/gin"
 )
 
 // These DTOs deliberately contain neither storage identities nor channel settings.
@@ -38,11 +36,28 @@ type RouteHealthRow struct {
 	ChannelStatus    int                   `json:"channel_status"`
 	Models           []string              `json:"models"`
 	UpstreamModel    string                `json:"upstream_model"`
-	Operation        string                `json:"operation"`
 	State            string                `json:"state"`
 	ReadyCredentials int                   `json:"ready_credentials"`
 	TotalCredentials int                   `json:"total_credentials"`
 	Resources        []RouteHealthResource `json:"resources"`
+	Attempts         []RouteHealthAttempt  `json:"attempts"`
+}
+
+type RouteHealthAttempt struct {
+	RequestID       string `json:"request_id"`
+	Index           int    `json:"index"`
+	ChannelID       int    `json:"channel_id"`
+	MappedModel     string `json:"mapped_model"`
+	Operation       string `json:"operation"`
+	CredentialIndex int    `json:"credential_index"`
+	Verdict         string `json:"verdict"`
+	Scope           string `json:"scope"`
+	Reason          string `json:"reason"`
+	StatusCode      int    `json:"status_code"`
+	StartedAt       int64  `json:"started_at"`
+	CompletedAt     int64  `json:"completed_at"`
+	DurationMS      int64  `json:"duration_ms"`
+	Probe           bool   `json:"probe"`
 }
 
 type RouteHealthResource struct {
@@ -57,6 +72,9 @@ type RouteHealthResource struct {
 	NextProbe           int64  `json:"next_probe"`
 	Probe               bool   `json:"probe"`
 	RecoverySuccesses   int    `json:"recovery_successes"`
+	CredentialInvalid   bool   `json:"credential_invalid"`
+	LastFailureAt       int64  `json:"last_failure_at"`
+	LastFailureReason   string `json:"last_failure_reason"`
 	Degraded            bool   `json:"degraded"`
 }
 
@@ -113,46 +131,17 @@ func routeHealthConfiguredCredentialCount(channel *model.Channel) int {
 	return len(seen)
 }
 
-type routeHealthOperation struct {
-	name   string
-	mapped bool
-}
-
-func routeHealthEndpointOperations(channel *model.Channel, modelName string, endpoint constant.EndpointType) []routeHealthOperation {
-	var paths []string
-	switch endpoint {
-	case constant.EndpointTypeGemini:
-		// The request URL.Path excludes query strings. Both /v1 and /v1beta
-		// native paths are normalized by the admission operation function.
-		for _, action := range []string{"generateContent", "streamGenerateContent", "embedContent", "batchEmbedContents", "predict"} {
-			paths = append(paths, "/v1beta/models/"+modelName+":"+action)
+func routeHealthHasSupportedEndpoint(channel *model.Channel, alias string) bool {
+	for _, endpoint := range model.GetChannelEndpointTypes(channel, alias) {
+		// Video admission supports both paths without a default endpoint entry.
+		if endpoint == constant.EndpointTypeOpenAIVideo {
+			return true
 		}
-		paths = append(paths, "/v1/engines/"+modelName+"/embeddings")
-	case constant.EndpointTypeOpenAI:
-		paths = []string{"/v1/chat/completions", "/v1/completions", "/pg/chat/completions", "/v1/moderations", "/v1/realtime", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/audio/translations", "/v1/embeddings"}
-	case constant.EndpointTypeImageGeneration:
-		paths = []string{"/v1/images/generations", "/v1/images/edits", "/v1/edits"}
-	case constant.EndpointTypeOpenAIVideo:
-		paths = []string{"/v1/videos", "/v1/video/generations"}
-	default:
-		if info, ok := common.GetDefaultEndpointInfo(endpoint); ok {
-			paths = []string{info.Path}
-		} else {
-			return []routeHealthOperation{{name: "endpoint:" + string(endpoint)}}
+		if _, supported := common.GetDefaultEndpointInfo(endpoint); supported {
+			return true
 		}
 	}
-	operations := make([]routeHealthOperation, 0, len(paths)+1)
-	for _, path := range paths {
-		operations = append(operations, routeHealthOperation{name: routeOperation(nil, channel, modelName, path), mapped: true})
-	}
-	if endpoint == constant.EndpointTypeOpenAIResponse {
-		apiType, supported := common.ChannelType2APIType(channel.Type)
-		if channel.GetSetting().ResponsesWebSocketEnabled && supported && (apiType == constant.APITypeOpenAI || apiType == constant.APITypeCodex) {
-			c := &gin.Context{Request: &http.Request{Method: http.MethodGet}}
-			operations = append(operations, routeHealthOperation{name: routeOperation(c, channel, modelName, "/v1/responses"), mapped: true})
-		}
-	}
-	return operations
+	return false
 }
 
 func BuildRouteHealthOverview(ctx context.Context) (*RouteHealthReport, error) {
@@ -192,6 +181,9 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 			models = []string{""}
 		}
 		for _, alias := range models {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			mapped := ""
 			invalid := !valid || strings.TrimSpace(alias) == ""
 			if !invalid {
@@ -199,48 +191,38 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 				mapped, err = routeMappedModel(channel, alias)
 				invalid = err != nil || strings.TrimSpace(mapped) == ""
 			}
-			operations := []routeHealthOperation{{name: "configuration"}}
 			if !invalid {
-				operations = nil
-				for _, endpoint := range model.GetChannelEndpointTypes(channel, alias) {
-					operations = append(operations, routeHealthEndpointOperations(channel, alias, endpoint)...)
-				}
-				if len(operations) == 0 {
-					operations = []routeHealthOperation{{name: "configuration"}}
-				}
+				invalid = !routeHealthHasSupportedEndpoint(channel, alias)
 			}
-			for _, operation := range operations {
-				// Length-delimited/public identity; no configuration/key fingerprint.
-				identityModel := mapped
-				if invalid {
-					identityModel = alias
-				}
-				id := fmt.Sprintf("%d/%s/%s", channel.Id, url.PathEscape(identityModel), url.PathEscape(operation.name))
-				if index, exists := rowIndex[id]; exists {
-					entries[index].row.Models = append(entries[index].row.Models, alias)
-					continue
-				}
-				entry := routeHealthOverviewEntry{row: RouteHealthRow{ID: id, ChannelID: channel.Id, ChannelName: channel.Name, ChannelStatus: channel.Status,
-					Models: []string{alias}, UpstreamModel: mapped, Operation: operation.name, TotalCredentials: totalCredentials, Resources: []RouteHealthResource{}}, invalid: invalid || !operation.mapped, enabledCredentials: len(credentials)}
-				entry.resources = append(entry.resources, namespace.channel())
+			// Separate public namespaces prevent invalid aliases colliding with actual models.
+			id := fmt.Sprintf("%d/model/%s", channel.Id, url.PathEscape(mapped))
+			if invalid {
+				id = fmt.Sprintf("%d/invalid/%s", channel.Id, url.PathEscape(alias))
+			}
+			if index, exists := rowIndex[id]; exists {
+				entries[index].row.Models = append(entries[index].row.Models, alias)
+				continue
+			}
+			entry := routeHealthOverviewEntry{row: RouteHealthRow{ID: id, ChannelID: channel.Id, ChannelName: channel.Name, ChannelStatus: channel.Status,
+				Models: []string{alias}, UpstreamModel: mapped, TotalCredentials: totalCredentials, Resources: []RouteHealthResource{}, Attempts: []RouteHealthAttempt{}}, invalid: invalid, enabledCredentials: len(credentials)}
+			entry.resources = append(entry.resources, namespace.channel())
+			entry.indices = append(entry.indices, 0)
+			if !entry.invalid {
+				entry.resources = append(entry.resources, namespace.model(mapped))
 				entry.indices = append(entry.indices, 0)
-				if !entry.invalid {
-					entry.resources = append(entry.resources, namespace.route(mapped, operation.name))
-					entry.indices = append(entry.indices, 0)
-				}
-				for _, credential := range credentials {
-					entry.resources = append(entry.resources, namespace.credential(credential.Key))
-					entry.indices = append(entry.indices, credential.Index+1)
-				}
-				for _, resource := range entry.resources {
-					if !seen[resource] {
-						seen[resource] = true
-						resources = append(resources, resource)
-					}
-				}
-				rowIndex[id] = len(entries)
-				entries = append(entries, entry)
 			}
+			for _, credential := range credentials {
+				entry.resources = append(entry.resources, namespace.credential(credential.Key))
+				entry.indices = append(entry.indices, credential.Index+1)
+			}
+			for _, resource := range entry.resources {
+				if !seen[resource] {
+					seen[resource] = true
+					resources = append(resources, resource)
+				}
+			}
+			rowIndex[id] = len(entries)
+			entries = append(entries, entry)
 		}
 	}
 	snapshots, err := manager.InspectMany(ctx, resources, policy, now)
@@ -256,6 +238,9 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 		report.Degraded = true
 	}
 	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		row := entry.row
 		sort.Strings(row.Models)
 		aliases := row.Models[:0]
@@ -267,7 +252,7 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 		row.Models = aliases
 		sharedReady := true
 		sharedState := "unobserved"
-		routeObserved := false
+		modelObserved := false
 		credentialState := "cooling"
 		credentialRank := -1
 		for index, resource := range entry.resources {
@@ -275,20 +260,26 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 			state := routeHealthDynamicState(snapshot, policy, now)
 			row.Resources = append(row.Resources, RouteHealthResource{Scope: string(resource.Scope), CredentialIndex: entry.indices[index], State: state,
 				Successes: snapshot.Successes, Failures: snapshot.Failures, ConsecutiveFailures: snapshot.ConsecutiveFailures, Inflight: snapshot.Inflight,
-				OpenedUntil: routeHealthUnix(snapshot.OpenedUntil), NextProbe: routeHealthUnix(snapshot.NextProbe), Probe: snapshot.Probe, RecoverySuccesses: snapshot.RecoverySuccesses, Degraded: snapshot.Degraded})
+				OpenedUntil: routeHealthUnix(snapshot.OpenedUntil), NextProbe: routeHealthUnix(snapshot.NextProbe), Probe: snapshot.Probe, RecoverySuccesses: snapshot.RecoverySuccesses,
+				CredentialInvalid: snapshot.CredentialInvalid, LastFailureAt: snapshot.LastFailureAt, LastFailureReason: snapshot.LastFailureReason, Degraded: snapshot.Degraded})
+			if resource.Scope == routehealth.ScopeModel {
+				row.Attempts = make([]RouteHealthAttempt, 0, len(snapshot.Attempts))
+				for _, attempt := range snapshot.Attempts {
+					row.Attempts = append(row.Attempts, RouteHealthAttempt{RequestID: attempt.RequestID, Index: attempt.Index, ChannelID: attempt.ChannelID, MappedModel: attempt.MappedModel, Operation: attempt.Operation, CredentialIndex: attempt.CredentialIndex, Verdict: string(attempt.Verdict), Scope: string(attempt.Scope), Reason: attempt.Reason, StatusCode: attempt.StatusCode, StartedAt: attempt.StartedAt, CompletedAt: attempt.CompletedAt, DurationMS: attempt.DurationMS, Probe: attempt.Probe})
+				}
+			}
 			if resource.Scope != routehealth.ScopeCredential {
 				sharedReady = sharedReady && routeHealthResourceReady(snapshot, policy, now)
 				if routeHealthRestriction(state) > routeHealthRestriction(sharedState) {
 					sharedState = state
 				}
-				if resource.Scope == routehealth.ScopeRoute {
-					routeObserved = snapshot.Successes > 0 || snapshot.Failures > 0
+				if resource.Scope == routehealth.ScopeModel {
+					modelObserved = snapshot.Successes > 0 || snapshot.Failures > 0
 				}
 			} else {
 				if routeHealthResourceReady(snapshot, policy, now) {
 					row.ReadyCredentials++
 				}
-				// Prefer an ordinary admissible key over another key's recovery.
 				rank := routeHealthCredentialRank(state)
 				if rank > credentialRank {
 					credentialState, credentialRank = state, rank
@@ -316,7 +307,7 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 			}
 			if routeHealthRestriction(row.State) == 0 {
 				row.State = "unobserved"
-				if routeObserved {
+				if modelObserved {
 					row.State = "healthy"
 				}
 			}
@@ -333,9 +324,6 @@ func buildRouteHealthOverview(ctx context.Context, channels []*model.Channel, ma
 		}
 		if a.UpstreamModel != b.UpstreamModel {
 			return a.UpstreamModel < b.UpstreamModel
-		}
-		if a.Operation != b.Operation {
-			return a.Operation < b.Operation
 		}
 		return a.ID < b.ID
 	})
@@ -355,6 +343,9 @@ func routeHealthDynamicState(snapshot routehealth.Snapshot, policy routehealth.P
 	}
 	if snapshot.Open {
 		if snapshot.OpenedUntil.After(now) {
+			if snapshot.CredentialInvalid {
+				return "credential_invalid"
+			}
 			return "cooling"
 		}
 		return "recovering"
@@ -377,6 +368,8 @@ func routeHealthResourceReady(snapshot routehealth.Snapshot, policy routehealth.
 
 func routeHealthRestriction(state string) int {
 	switch state {
+	case "credential_invalid":
+		return 4
 	case "cooling":
 		return 3
 	case "recovering":
@@ -391,10 +384,12 @@ func routeHealthRestriction(state string) int {
 func routeHealthCredentialRank(state string) int {
 	switch state {
 	case "healthy", "unobserved", "protection_disabled":
-		return 3
+		return 4
 	case "recovering":
-		return 2
+		return 3
 	case "saturated":
+		return 2
+	case "cooling":
 		return 1
 	default:
 		return 0

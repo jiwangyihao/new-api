@@ -321,9 +321,6 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 	common.SetContextKey(c, appconstant.ContextKeyOriginalModel, modelName)
 	capture = service.BeginAvailability(c, modelName, responsesWSTokenGroups(c))
 	for retry.GetRetry() <= common.RetryTimes {
-		if retry.GetRetry() > 0 && !service.RouteRetryBudgetAvailable(c) {
-			return info.LastError
-		}
 		var selected *appmodel.Channel
 		if s.lockedChannelID != 0 {
 			if apiErr = s.restoreConnectionContext(c, modelName); apiErr != nil {
@@ -401,7 +398,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 				service.ResetStatusCode(dialErr, c.GetString("status_code_mapping"))
 				service.FinishRouteAttempt(c, info, dialErr)
 				info.LastError = dialErr
-				if !boundAtStart && service.ShouldRetryRouteAttempt(c, info, dialErr, common.RetryTimes-retry.GetRetry()) {
+				if !boundAtStart && service.DecideRouteRetry(c, info, dialErr, common.RetryTimes-retry.GetRetry()).Retry {
 					retry.IncreaseRetry()
 					continue
 				}
@@ -418,7 +415,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			apiErr = types.NewOpenAIError(errors.New("upstream websocket write failed"), types.ErrorCodeDoRequestFailed, http.StatusBadGateway)
 			service.FinishRouteAttempt(c, info, apiErr)
 			info.LastError = apiErr
-			if !boundAtStart && service.ShouldRetryRouteAttempt(c, info, apiErr, common.RetryTimes-retry.GetRetry()) {
+			if !boundAtStart && service.DecideRouteRetry(c, info, apiErr, common.RetryTimes-retry.GetRetry()).Retry {
 				retry.IncreaseRetry()
 				continue
 			}
@@ -591,7 +588,7 @@ func (s *responsesWSSession) runCall(c *gin.Context, state *responsesWSCallState
 			apiErr = streamErr
 		}
 		service.FinishRouteAttempt(c, info, apiErr)
-		if !boundAtStart && service.ShouldRetryRouteAttempt(c, info, apiErr, common.RetryTimes-retry.GetRetry()) {
+		if !boundAtStart && service.DecideRouteRetry(c, info, apiErr, common.RetryTimes-retry.GetRetry()).Retry {
 			s.closeTarget()
 			s.lockedChannelID, s.lockedModel, s.lockedGroup = 0, "", ""
 			s.lockedKey, s.lockedConfig = "", ""

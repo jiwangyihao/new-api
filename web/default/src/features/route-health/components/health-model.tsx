@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatNumber, formatTimestampToDate } from '@/lib/format'
+import { formatNumber } from '@/lib/format'
 import { Button } from '@/components/ui/button'
 import {
   Collapsible,
@@ -27,12 +27,10 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { StatusBadge } from '@/components/status-badge'
-import {
-  routeNeedsAttention,
-  type ModelHealthGroup,
-} from '../lib/health-overview'
+import type { ModelHealthGroup } from '../lib/health-overview'
 import type { RouteHealthRow } from '../types'
 import { HealthStateBadge } from './health-state-badge'
+import { AttemptDiagnostics } from './resource-details'
 
 export function HealthModel(props: {
   model: ModelHealthGroup
@@ -41,108 +39,76 @@ export function HealthModel(props: {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const model = props.model
+  const row = model.row
+  const resource = row.resources.find((item) => item.scope === 'model')
   const aliases = model.aliases.filter((alias) => alias !== model.name)
   return (
     <Collapsible
       open={open}
       onOpenChange={setOpen}
-      className='rounded-lg border'
+      className='min-w-0 rounded-lg border'
     >
       <CollapsibleTrigger
-        aria-label={t('Show operations for {{model}}', { model: model.name })}
-        className='hover:bg-muted/50 focus-visible:ring-ring flex w-full items-center gap-3 rounded-lg p-3 text-left outline-none focus-visible:ring-2'
+        aria-label={t('Show model diagnostics for {{model}}', {
+          model: model.name,
+        })}
+        className='hover:bg-muted/50 focus-visible:ring-ring flex w-full flex-wrap items-start gap-3 rounded-lg p-3 text-left outline-none focus-visible:ring-2'
       >
         <ChevronRight
           aria-hidden='true'
-          className={`size-4 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
+          className={`mt-1 size-4 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
         />
         <span className='min-w-0 flex-1'>
           <span className='block font-medium break-all'>
             {model.name || '-'}
           </span>
           {aliases.length > 0 && (
-            <span
-              className='text-muted-foreground block truncate text-xs'
-              title={aliases.join(', ')}
-            >
-              {aliases.join(', ')}
+            <span className='text-muted-foreground block text-xs break-all'>
+              {t('Client model aliases')}: {aliases.join(', ')}
             </span>
           )}
         </span>
-        <span className='flex shrink-0 flex-col items-end gap-1 text-xs'>
-          {model.attention ? (
+        <span className='flex flex-wrap gap-1 text-xs'>
+          <HealthStateBadge state={row.state} />
+          {model.attention && (
             <StatusBadge copyable={false} variant='warning'>
               {t('Needs attention')}
             </StatusBadge>
-          ) : (
-            <span className='text-muted-foreground'>
-              {model.observed ? t('Recent activity') : t('Unobserved')}
-            </span>
           )}
-          <span className='text-muted-foreground'>
-            {t('{{count}} operations', { count: model.routes.length })}
-          </span>
         </span>
       </CollapsibleTrigger>
+      <div className='flex flex-wrap gap-x-4 gap-y-1 px-3 pb-3 text-xs tabular-nums'>
+        <span>
+          {t('Successes')}: {formatNumber(resource?.successes)}
+        </span>
+        <span>
+          {t('Failures')}: {formatNumber(resource?.failures)}
+        </span>
+        <span>
+          {t('Consecutive failures')}:{' '}
+          {formatNumber(resource?.consecutive_failures)}
+        </span>
+        <span>
+          {t('In flight')}: {formatNumber(resource?.inflight)}
+        </span>
+        <span>
+          {t('Ready / total credentials')}:{' '}
+          {formatNumber(row.ready_credentials)} /{' '}
+          {formatNumber(row.total_credentials)}
+        </span>
+      </div>
       <CollapsibleContent>
         {open && (
-          <ul className='space-y-2 border-t p-3'>
-            {model.routes.map((route) => {
-              const resource = route.resources.find(
-                (item) => item.scope === 'route'
-              )
-              return (
-                <li
-                  key={route.id}
-                  className='bg-muted/30 flex flex-wrap items-center gap-3 rounded-md p-3'
-                >
-                  <div className='min-w-0 flex-1 space-y-2'>
-                    <div className='flex flex-wrap items-center gap-x-3 gap-y-1'>
-                      <code className='text-xs break-all'>
-                        {route.operation}
-                      </code>
-                      <HealthStateBadge state={route.state} />
-                      {routeNeedsAttention(route) &&
-                        route.state === 'healthy' && (
-                          <StatusBadge copyable={false} variant='warning'>
-                            {t('Needs attention')}
-                          </StatusBadge>
-                        )}
-                    </div>
-                    <div className='text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs tabular-nums'>
-                      <span>
-                        {t('Successes')}: {formatNumber(resource?.successes)}
-                      </span>
-                      <span>
-                        {t('Failures')}: {formatNumber(resource?.failures)}
-                      </span>
-                      <span>
-                        {t('In flight')}: {formatNumber(resource?.inflight)}
-                      </span>
-                      <span>
-                        {t('Ready / total credentials')}:{' '}
-                        {formatNumber(route.ready_credentials)} /{' '}
-                        {formatNumber(route.total_credentials)}
-                      </span>
-                      {!!resource?.opened_until && (
-                        <span>
-                          {t('Cooling until')}:{' '}
-                          {formatTimestampToDate(resource.opened_until)}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    onClick={() => props.onDetails(route)}
-                  >
-                    {t('Details')}
-                  </Button>
-                </li>
-              )
-            })}
-          </ul>
+          <div className='min-w-0 space-y-3 border-t p-3'>
+            <AttemptDiagnostics attempts={row.attempts} />
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => props.onDetails(row)}
+            >
+              {t('Details')}
+            </Button>
+          </div>
         )}
       </CollapsibleContent>
     </Collapsible>

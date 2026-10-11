@@ -57,11 +57,8 @@ export function ChannelHealthOverview(props: { report: RouteHealthReport }) {
   const unobservedCount = included.filter((channel) =>
     channel.models.some((model) => !model.observed && !model.attention)
   ).length
-  const selectedRow = props.report.rows.find(
-    (row) =>
-      row.id === selectedId &&
-      (showManuallyDisabled || row.channel_status !== 2)
-  )
+  const selectedRow = props.report.rows.find((row) => row.id === selectedId)
+  if (selectedId !== null && !selectedRow) setSelectedId(null)
   const scopes: { id: HealthView; label: string; count: number }[] = [
     { id: 'all', label: t('All visible channels'), count: included.length },
     { id: 'attention', label: t('Needs attention'), count: attentionCount },
@@ -77,8 +74,8 @@ export function ChannelHealthOverview(props: { report: RouteHealthReport }) {
       <div className='flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
         <Input
           className='sm:max-w-sm'
-          aria-label={t('Search channels, models, or operations...')}
-          placeholder={t('Search channels, models, or operations...')}
+          aria-label={t('Search channels, models, operations, or reasons...')}
+          placeholder={t('Search channels, models, operations, or reasons...')}
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
@@ -149,7 +146,7 @@ export function ChannelHealthOverview(props: { report: RouteHealthReport }) {
               : t('No matching channels')
           }
           description={t(
-            'Search covers every model and operation. Manually disabled channels stay hidden until enabled above.'
+            'Search covers channels, aliases, upstream models, and diagnostic operation reasons. Manually disabled channels stay hidden until enabled above.'
           )}
           action={
             <Button

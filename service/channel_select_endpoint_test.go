@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/QuantumNous/new-api/pkg/routehealth"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
 	"net/http"
 	"net/http/httptest"
@@ -171,9 +170,6 @@ func TestRouteHealthIdentityAndCancellation(t *testing.T) {
 	stream := &relaycommon.StreamStatus{}
 	stream.MarkFailed("server_error", "server_error", 503)
 	require.Equal(t, routehealth.VerdictFailure, ClassifyRouteAttempt(context.Background(), &relaycommon.RelayInfo{StreamStatus: stream}, nil, true).Verdict)
-	state := routeState(c)
-	state.started = time.Now().Add(-time.Duration(operation_setting.GetRouteHealthSetting().RetryBudgetSeconds+1) * time.Second)
-	require.False(t, RouteRetryBudgetAvailable(c))
 }
 
 func TestResponseRouteBindingPinsIdentityAndFailsClosed(t *testing.T) {
@@ -226,7 +222,7 @@ func TestBoundRouteUnavailableDoesNotFallback(t *testing.T) {
 	selections, err := buildRouteSelections(c, []*model.Channel{ch}, "default", "bound-test", "/v1/responses", 0)
 	require.NoError(t, err)
 	for _, resource := range selections[0].candidate.Resources {
-		if resource.Scope == routehealth.ScopeRoute {
+		if resource.Scope == routehealth.ScopeModel {
 			routeState(c).excluded[resource.Key] = struct{}{}
 		}
 	}
@@ -240,4 +236,111 @@ func TestBoundRouteUnavailableDoesNotFallback(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 9502, selected.Id)
 	ReleaseRouteAttempt(c)
+}
+
+func TestRouteHealthAuditPreservesEarlierFailure(t *testing.T) {
+	for _, cancelSecond := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%t", cancelSecond), func(t *testing.T) {
+			oldRedis := common.RedisEnabled
+			common.RedisEnabled = false
+			routeManagers.Lock()
+			oldManager, oldClient := routeManagers.manager, routeManagers.client
+			routeManagers.manager, routeManagers.client = routehealth.New(nil), nil
+			routeManagers.Unlock()
+			t.Cleanup(func() {
+				common.RedisEnabled = oldRedis
+				routeManagers.Lock()
+				routeManagers.manager, routeManagers.client = oldManager, oldClient
+				routeManagers.Unlock()
+			})
+			channels := []*model.Channel{
+				{Id: 9901, Key: "audit-secret-one", Models: "model", Status: common.ChannelStatusEnabled},
+				{Id: 9902, Key: "audit-secret-two", Models: "model", Status: common.ChannelStatusEnabled},
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+			c.Set(common.RequestIdKey, "audit-request")
+			defer ReleaseRouteAttempt(c)
+			choices, err := buildRouteSelections(c, channels, "default", "model", "/v1/responses", 9901)
+			require.NoError(t, err)
+			first, _, err := acquireRoute(c, choices)
+			require.NoError(t, err)
+			require.Equal(t, 9901, first.Id)
+			MarkRouteUpstreamStarted(c)
+			// 已执行超过旧的 120 秒预算，仍允许下一次安全尝试。
+			routeState(c).attemptStarted = time.Now().Add(-3 * time.Minute)
+			failure := types.NewErrorWithStatusCode(errors.New("upstream unavailable"), types.ErrorCodeBadResponse, 503)
+			FinishRouteAttempt(c, nil, failure)
+			decision := DecideRouteRetry(c, nil, failure, 2)
+			assert.True(t, decision.Retry)
+			assert.Equal(t, routehealth.ScopeModel, decision.Scope)
+			choices, err = buildRouteSelections(c, channels, "default", "model", "/v1/chat/completions", 9901)
+			require.NoError(t, err)
+			second, _, err := acquireRoute(c, choices)
+			require.NoError(t, err)
+			require.Equal(t, 9902, second.Id)
+			MarkRouteUpstreamStarted(c)
+			if cancelSecond {
+				cancel()
+				cancelled := types.NewErrorWithStatusCode(context.Canceled, types.ErrorCodeDoRequestFailed, 499)
+				FinishRouteAttempt(c, nil, cancelled)
+				assert.False(t, DecideRouteRetry(c, nil, cancelled, 1).Retry)
+			} else {
+				ObserveRouteHTTPResponse(c, &http.Response{StatusCode: 200})
+				FinishRouteAttempt(c, nil, nil)
+			}
+			// 控制器、结算与 defer 重复完成同一次尝试不能重复计数。
+			FinishRouteAttempt(c, nil, nil)
+			ReleaseRouteAttempt(c)
+			policy := routehealth.DefaultPolicy()
+			bad, err := routeManager().Inspect(context.Background(), routeResources(first).model("model"), policy)
+			require.NoError(t, err)
+			assert.Equal(t, uint64(1), bad.Failures)
+			good, err := routeManager().Inspect(context.Background(), routeResources(second).model("model"), policy)
+			require.NoError(t, err)
+			assert.Zero(t, good.Failures)
+			admin := map[string]any{}
+			AppendRouteHealthAdminInfo(c, admin)
+			attempts := admin["attempts"].([]routehealth.Attempt)
+			require.Len(t, attempts, 2)
+			assert.Equal(t, []int{9901, 9902}, []int{attempts[0].ChannelID, attempts[1].ChannelID})
+			assert.Equal(t, []int{1, 2}, []int{attempts[0].Index, attempts[1].Index})
+			assert.Equal(t, "audit-request", attempts[0].RequestID)
+			assert.Equal(t, 1, attempts[0].CredentialIndex)
+			assert.Equal(t, 503, attempts[0].StatusCode)
+			assert.Equal(t, routehealth.VerdictFailure, attempts[0].Verdict)
+			assert.GreaterOrEqual(t, attempts[0].DurationMS, int64(180000))
+			assert.Equal(t, 1, admin["retry_count"])
+			if cancelSecond {
+				assert.Equal(t, routehealth.VerdictIgnored, attempts[1].Verdict)
+				assert.Equal(t, "client_cancelled", attempts[1].Reason)
+				assert.Zero(t, good.Successes)
+			} else {
+				assert.Equal(t, routehealth.VerdictSuccess, attempts[1].Verdict)
+				assert.Equal(t, uint64(1), good.Successes)
+			}
+			encoded, err := common.Marshal(admin)
+			require.NoError(t, err)
+			assert.NotContains(t, string(encoded), first.Key)
+			assert.NotContains(t, string(encoded), RouteCredentialFingerprint(first.Key))
+		})
+	}
+}
+
+func TestRouteRetryDecisionPreservesSafetyAndCredentialScope(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	expired := types.WithOpenAIError(types.OpenAIError{Type: "authentication_error", Code: "api_key_expired", Message: "expired"}, 403)
+	result := ClassifyRouteAttempt(c.Request.Context(), nil, expired, true)
+	assert.True(t, result.CredentialInvalid)
+	assert.Equal(t, routehealth.ScopeCredential, result.Scope)
+	assert.Equal(t, RouteRetryDecision{Retry: true, Scope: routehealth.ScopeCredential, Reason: "try_another_credential"}, DecideRouteRetry(c, nil, expired, 2))
+	c.Set(ginKeyChannelAffinitySkipRetry, true)
+	assert.Equal(t, "strict_session", DecideRouteRetry(c, nil, expired, 2).Reason)
+	c.Set(ginKeyChannelAffinitySkipRetry, false)
+	assert.Equal(t, "attempt_limit_reached", DecideRouteRetry(c, nil, expired, 0).Reason)
+	c.Set("response_route_binding", true)
+	assert.Equal(t, "response_binding", DecideRouteRetry(c, nil, expired, 2).Reason)
 }

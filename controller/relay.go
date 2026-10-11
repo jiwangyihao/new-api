@@ -243,9 +243,6 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 	relayInfo.LastError = nil
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		if retryParam.GetRetry() > 0 && !service.RouteRetryBudgetAvailable(c) {
-			break
-		}
 		relayInfo.RetryIndex = retryParam.GetRetry()
 		if retryParam.GetRetry() > 0 {
 			if repeatedErr := service.CheckGPTAbuseRepeatBlock(c, relayInfo); repeatedErr != nil {
@@ -340,9 +337,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = service.NormalizeViolationFeeError(newAPIError)
 		relayInfo.LastError = newAPIError
 
+		retryDecision := service.DecideRouteRetry(c, relayInfo, newAPIError, common.RetryTimes-retryParam.GetRetry())
 		processChannelError(c, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
 
-		if !shouldRetry(c, newAPIError, common.RetryTimes-retryParam.GetRetry()) {
+		if !retryDecision.Retry {
 			break
 		}
 	}
@@ -575,10 +573,6 @@ func retryChannelSelectionErrorForResponse(info *relaycommon.RelayInfo, channelE
 	return channelErr
 }
 
-func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
-	return service.ShouldRetryRouteAttempt(c, nil, openaiErr, retryTimes)
-}
-
 func processChannelError(c *gin.Context, channelError types.ChannelError, err *types.NewAPIError) {
 	logger.LogError(c, fmt.Sprintf("channel error (channel #%d, status code: %d): %s", channelError.ChannelId, err.StatusCode, err.Error()))
 	// 不要使用context获取渠道信息，异步处理时可能会出现渠道信息不一致的情况
@@ -747,9 +741,6 @@ func RelayTask(c *gin.Context) {
 	}
 
 	for ; retryParam.GetRetry() <= common.RetryTimes; retryParam.IncreaseRetry() {
-		if retryParam.GetRetry() > 0 && !service.RouteRetryBudgetAvailable(c) {
-			break
-		}
 		var channel *model.Channel
 
 		if lockedCh, ok := relayInfo.LockedChannel.(*model.Channel); ok && lockedCh != nil {
@@ -873,7 +864,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 	if taskErr == nil {
 		return false
 	}
-	if taskErr.LocalError || c.Request.Context().Err() != nil || c.Writer.Written() || !service.RouteRetryBudgetAvailable(c) {
+	if taskErr.LocalError || c.Request.Context().Err() != nil || c.Writer.Written() {
 		return false
 	}
 	// A task transport failure may have occurred after upstream accepted it.

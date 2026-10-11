@@ -217,9 +217,16 @@ func loadOptionsFromDatabase() {
 	// Validate the persisted policy as a whole: individually loading interdependent
 	// cooldown limits can reject a valid pair merely because of database row order.
 	routeValues := make(map[string]string)
+	// 只加载当前注册字段；退役选项不应使整组有效健康配置被丢弃。
+	routeFields, err := config.ConfigToMap(operation_setting.GetRouteHealthSetting())
+	if err != nil {
+		common.SysError("route health option schema: " + err.Error())
+	}
 	for _, option := range options {
-		if strings.HasPrefix(option.Key, "route_health_setting.") {
-			routeValues[strings.TrimPrefix(option.Key, "route_health_setting.")] = option.Value
+		if key, found := strings.CutPrefix(option.Key, "route_health_setting."); found {
+			if _, registered := routeFields[key]; registered {
+				routeValues[key] = option.Value
+			}
 		}
 	}
 	if len(routeValues) > 0 {

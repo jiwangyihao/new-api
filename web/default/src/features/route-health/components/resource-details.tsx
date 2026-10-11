@@ -28,15 +28,20 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import type { RouteHealthResource, RouteHealthRow } from '../types'
+import { EmptyState } from '@/components/empty-state'
+import type {
+  RouteHealthAttempt,
+  RouteHealthResource,
+  RouteHealthRow,
+} from '../types'
 import { HealthStateBadge } from './health-state-badge'
 
 function ResourceCard(props: { resource: RouteHealthResource }) {
   const { t } = useTranslation()
   const resource = props.resource
-  const scopeLabels = {
+  const scopeLabels: Record<RouteHealthResource['scope'], string> = {
     channel: t('Channel scope'),
-    route: t('Route scope'),
+    model: t('Model scope'),
     credential: t('Credential scope'),
   }
   const fields = [
@@ -55,6 +60,15 @@ function ResourceCard(props: { resource: RouteHealthResource }) {
     [t('Probe in progress'), resource.probe ? t('Yes') : t('No')],
     [t('Recovery successes'), formatNumber(resource.recovery_successes)],
     [t('Degraded'), resource.degraded ? t('Yes') : t('No')],
+    [
+      t('Credential unavailable'),
+      resource.credential_invalid ? t('Yes') : t('No'),
+    ],
+    [t('Last failure'), formatTimestampToDate(resource.last_failure_at)],
+    [
+      t('Last failure reason'),
+      resource.last_failure_reason || t('No reason reported'),
+    ],
   ]
   return (
     <section className='space-y-3 rounded-lg border p-3'>
@@ -64,12 +78,77 @@ function ResourceCard(props: { resource: RouteHealthResource }) {
       </div>
       <dl className='grid grid-cols-2 gap-3 text-xs sm:grid-cols-3'>
         {fields.map(([label, value]) => (
-          <div key={label}>
+          <div key={label} className='min-w-0'>
             <dt className='text-muted-foreground'>{label}</dt>
-            <dd className='mt-1 break-words tabular-nums'>{value}</dd>
+            <dd className='mt-1 break-all tabular-nums'>{value}</dd>
           </div>
         ))}
       </dl>
+    </section>
+  )
+}
+
+export function AttemptDiagnostics(props: { attempts: RouteHealthAttempt[] }) {
+  const { t } = useTranslation()
+  const verdictLabels: Record<RouteHealthAttempt['verdict'], string> = {
+    success: t('Success'),
+    failure: t('Failure'),
+    ignored: t('Ignored'),
+  }
+  const scopeLabels: Record<RouteHealthAttempt['scope'], string> = {
+    channel: t('Channel scope'),
+    model: t('Model scope'),
+    credential: t('Credential scope'),
+  }
+  return (
+    <section className='min-w-0 space-y-2'>
+      <h3 className='font-medium'>{t('Attempt diagnostics')}</h3>
+      {props.attempts.length === 0 ? (
+        <EmptyState
+          bordered
+          className='min-h-24'
+          title={t('No completed attempts')}
+        />
+      ) : (
+        <div className='space-y-2'>
+          {props.attempts.map((attempt) => {
+            const fields = [
+              [t('Request ID'), attempt.request_id || '-'],
+              [t('Attempt number'), formatNumber(attempt.index)],
+              [t('Channel ID'), formatNumber(attempt.channel_id)],
+              [t('Mapped model'), attempt.mapped_model || '-'],
+              [t('Operation'), attempt.operation || '-'],
+              [t('Credential number'), formatNumber(attempt.credential_index)],
+              [t('Verdict'), verdictLabels[attempt.verdict]],
+              [t('Scope'), scopeLabels[attempt.scope]],
+              [t('Reason'), attempt.reason || t('No reason reported')],
+              [
+                t('Status code'),
+                attempt.status_code ? formatNumber(attempt.status_code) : '-',
+              ],
+              [t('Started'), formatTimestampToDate(attempt.started_at)],
+              [t('Completed'), formatTimestampToDate(attempt.completed_at)],
+              [t('Duration (ms)'), formatNumber(attempt.duration_ms)],
+              [t('Probe attempt'), attempt.probe ? t('Yes') : t('No')],
+            ]
+            return (
+              <dl
+                key={`${attempt.request_id}:${attempt.index}`}
+                className='bg-muted/30 grid min-w-0 gap-3 rounded-md p-3 text-xs sm:grid-cols-2'
+              >
+                {fields.map(([label, value]) => (
+                  <div key={label} className='min-w-0'>
+                    <dt className='text-muted-foreground'>{label}</dt>
+                    <dd className='mt-1 break-all whitespace-pre-wrap tabular-nums'>
+                      {value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            )
+          })}
+        </div>
+      )}
     </section>
   )
 }
@@ -90,7 +169,7 @@ export function ResourceDetails(props: {
     >
       <DialogContent
         showCloseButton={false}
-        className='max-h-[90dvh] overflow-y-auto sm:max-w-2xl'
+        className='max-h-[90dvh] min-w-0 overflow-y-auto sm:max-w-2xl'
       >
         <DialogHeader>
           <DialogTitle>{t('Route health details')}</DialogTitle>
@@ -102,26 +181,22 @@ export function ResourceDetails(props: {
         </DialogHeader>
         {row && (
           <>
-            <dl className='grid gap-3 text-sm sm:grid-cols-2'>
-              <div>
+            <dl className='grid min-w-0 gap-3 text-sm sm:grid-cols-2'>
+              <div className='min-w-0'>
                 <dt className='text-muted-foreground'>{t('Channel')}</dt>
-                <dd className='break-words'>
+                <dd className='break-all'>
                   {row.channel_name} (#{row.channel_id})
                 </dd>
               </div>
               <div>
-                <dt className='text-muted-foreground'>{t('Operation')}</dt>
-                <dd className='break-all'>{row.operation || '-'}</dd>
+                <dt className='text-muted-foreground'>{t('Mapped model')}</dt>
+                <dd className='break-all'>{row.upstream_model || '-'}</dd>
               </div>
               <div>
                 <dt className='text-muted-foreground'>
                   {t('Client model aliases')}
                 </dt>
                 <dd className='break-all'>{row.models.join(', ') || '-'}</dd>
-              </div>
-              <div>
-                <dt className='text-muted-foreground'>{t('Upstream model')}</dt>
-                <dd className='break-all'>{row.upstream_model || '-'}</dd>
               </div>
               <div>
                 <dt className='text-muted-foreground'>
@@ -145,6 +220,7 @@ export function ResourceDetails(props: {
                 <dd>{formatTimestampToDate(props.generatedAt)}</dd>
               </div>
             </dl>
+            <AttemptDiagnostics attempts={row.attempts} />
             {row.resources.map((resource) => (
               <ResourceCard
                 key={`${resource.scope}-${resource.credential_index}`}

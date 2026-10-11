@@ -100,10 +100,15 @@ func TestRouteHealthPolicyReloadValidatesWholeConfiguration(t *testing.T) {
 	common.OptionMap = map[string]string{}
 	t.Cleanup(func() { *operation_setting.GetRouteHealthSetting() = old; common.OptionMap = oldMap })
 	// The base exceeds the default maximum, but the persisted pair is valid.
-	require.NoError(t, db.Create(&[]Option{{Key: "route_health_setting.base_cooldown_seconds", Value: "400"}, {Key: "route_health_setting.max_cooldown_seconds", Value: "500"}}).Error)
+	require.NoError(t, db.Create(&[]Option{
+		{Key: "route_health_setting.base_cooldown_seconds", Value: "400"},
+		{Key: "route_health_setting.max_cooldown_seconds", Value: "500"},
+		{Key: "route_health_setting.retry_budget_seconds", Value: "120"},
+	}).Error)
 	loadOptionsFromDatabase()
 	require.Equal(t, 400, operation_setting.GetRouteHealthSetting().BaseCooldownSeconds)
 	require.Equal(t, 500, operation_setting.GetRouteHealthSetting().MaxCooldownSeconds)
+	require.NotContains(t, common.OptionMap, "route_health_setting.retry_budget_seconds")
 	loadOptionsFromDatabase()
 	require.Equal(t, 400, operation_setting.GetRouteHealthSetting().BaseCooldownSeconds)
 	require.NoError(t, db.Model(&Option{}).Where("key = ?", "route_health_setting.failure_ratio").FirstOrCreate(&Option{Key: "route_health_setting.failure_ratio", Value: "NaN"}).Error)

@@ -124,9 +124,6 @@ func selectRouteCandidates(c *gin.Context, bound *model.Channel, param *RetryPar
 	if len(filtered) == 0 {
 		return nil, "", types.NewErrorWithStatusCode(errors.New("no channel supports the requested model and endpoint"), types.ErrorCodeModelNotFound, http.StatusServiceUnavailable, types.ErrOptionWithSkipRetry())
 	}
-	if !RouteRetryBudgetAvailable(c) {
-		return nil, "", routeUnavailableError()
-	}
 	selections := make([]routeSelection, 0, len(filtered))
 	for _, channel := range filtered {
 		group := model.DefaultChannelGroupName

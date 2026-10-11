@@ -24,7 +24,7 @@ export interface ModelHealthGroup {
   id: string
   name: string
   aliases: string[]
-  routes: RouteHealthRow[]
+  row: RouteHealthRow
   attention: boolean
   observed: boolean
 }
@@ -45,7 +45,9 @@ const attentionStates: Partial<Record<RouteHealthState, true>> = {
   automatically_disabled: true,
   no_credentials: true,
   invalid_mapping: true,
+  credential_invalid: true,
 }
+
 export function routeNeedsAttention(route: RouteHealthRow): boolean {
   if (route.channel_status === 2 || route.state === 'manually_disabled')
     return false
@@ -56,15 +58,15 @@ export function routeNeedsAttention(route: RouteHealthRow): boolean {
         attentionStates[resource.state] === true ||
         resource.failures > 0 ||
         resource.degraded
-    )
+    ) ||
+    route.attempts.some((attempt) => attempt.verdict === 'failure')
   )
 }
 
 export function routeHasObservations(route: RouteHealthRow): boolean {
-  // Shared channel/key successes do not prove this model was observed.
   return route.resources.some(
     (resource) =>
-      resource.scope === 'route' &&
+      resource.scope === 'model' &&
       (resource.successes > 0 ||
         resource.failures > 0 ||
         resource.inflight > 0 ||
@@ -72,13 +74,11 @@ export function routeHasObservations(route: RouteHealthRow): boolean {
   )
 }
 
-export function groupRouteHealth(rows: RouteHealthRow[]): ChannelHealthGroup[] {
+export function groupRouteHealth(
+  rows: readonly RouteHealthRow[]
+): ChannelHealthGroup[] {
   const channels = new Map<number, ChannelHealthGroup>()
-  const modelsByChannel = new Map<number, Map<string, ModelHealthGroup>>()
-  const seenRoutes = new Set<string>()
   for (const row of rows) {
-    if (seenRoutes.has(row.id)) continue
-    seenRoutes.add(row.id)
     let channel = channels.get(row.channel_id)
     if (!channel) {
       channel = {
@@ -90,55 +90,27 @@ export function groupRouteHealth(rows: RouteHealthRow[]): ChannelHealthGroup[] {
         observedModels: 0,
       }
       channels.set(channel.id, channel)
-      modelsByChannel.set(channel.id, new Map())
     }
-    const modelMap = modelsByChannel.get(channel.id)!
-    // Invalid mappings must not collapse unrelated configured aliases together.
-    const key = row.upstream_model
-      ? `model:${row.upstream_model}`
-      : `aliases:${JSON.stringify([...row.models].sort())}`
-    let model = modelMap.get(key)
-    if (!model) {
-      model = {
-        id: key,
-        name: row.upstream_model || row.models.join(', '),
-        aliases: [],
-        routes: [],
-        attention: false,
-        observed: false,
-      }
-      modelMap.set(key, model)
-      channel.models.push(model)
-    }
-    model.routes.push(row)
-    for (const alias of row.models) {
-      if (!model.aliases.includes(alias)) model.aliases.push(alias)
-    }
-    model.attention ||= routeNeedsAttention(row)
-    model.observed ||= routeHasObservations(row)
+    const attention = routeNeedsAttention(row)
+    const observed = routeHasObservations(row)
+    channel.models.push({
+      id: row.id,
+      name: row.upstream_model || row.models.join(', '),
+      aliases: [...new Set(row.models)].sort(),
+      row,
+      attention,
+      observed,
+    })
+    channel.attentionModels += Number(attention)
+    channel.observedModels += Number(observed)
   }
   for (const channel of channels.values()) {
-    for (const model of channel.models) {
-      model.aliases.sort()
-      model.routes.sort(
-        (a, b) =>
-          Number(routeNeedsAttention(b)) - Number(routeNeedsAttention(a)) ||
-          Number(routeHasObservations(b)) - Number(routeHasObservations(a)) ||
-          a.operation.localeCompare(b.operation)
-      )
-    }
     channel.models.sort(
       (a, b) =>
         Number(b.attention) - Number(a.attention) ||
         Number(b.observed) - Number(a.observed) ||
         a.name.localeCompare(b.name)
     )
-    channel.attentionModels = channel.models.filter(
-      (model) => model.attention
-    ).length
-    channel.observedModels = channel.models.filter(
-      (model) => model.observed
-    ).length
   }
   return [...channels.values()].sort(
     (a, b) =>
@@ -151,26 +123,24 @@ export function groupRouteHealth(rows: RouteHealthRow[]): ChannelHealthGroup[] {
 
 export function selectChannelHealth(
   channels: ChannelHealthGroup[],
-  options: {
-    search: string
-    view: HealthView
-    showManuallyDisabled: boolean
-  }
+  options: { search: string; view: HealthView; showManuallyDisabled: boolean }
 ): { channel: ChannelHealthGroup; models: ModelHealthGroup[] }[] {
   const terms = options.search.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  const result = []
+  const result: { channel: ChannelHealthGroup; models: ModelHealthGroup[] }[] =
+    []
   for (const channel of channels) {
     if (channel.status === 2 && !options.showManuallyDisabled) continue
     const models = channel.models.filter((model) => {
       if (options.view === 'attention' && !model.attention) return false
       if (options.view === 'unobserved' && (model.observed || model.attention))
         return false
+      const attempts = model.row.attempts
       const text = [
         channel.id,
         channel.name,
         model.name,
         ...model.aliases,
-        ...model.routes.map((route) => route.operation),
+        ...attempts.flatMap((attempt) => [attempt.operation, attempt.reason]),
       ]
         .join(' ')
         .toLowerCase()

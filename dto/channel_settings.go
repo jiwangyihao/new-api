@@ -28,6 +28,7 @@ const (
 
 type ChannelOtherSettings struct {
 	AzureResponsesVersion                 string                  `json:"azure_responses_version,omitempty"`
+	AccountGroup                          string                  `json:"account_group,omitempty"`   // OpenAI Responses 上游账号组
 	VertexKeyType                         VertexKeyType           `json:"vertex_key_type,omitempty"` // "json" or "api_key"
 	OpenRouterEnterprise                  *bool                   `json:"openrouter_enterprise,omitempty"`
 	ClaudeBetaQuery                       bool                    `json:"claude_beta_query,omitempty"`         // Claude 渠道是否强制追加 ?beta=true

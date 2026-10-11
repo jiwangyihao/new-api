@@ -253,6 +253,7 @@ function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
     values.priority ||
     values.weight ||
     values.proxy?.trim() ||
+    values.account_group?.trim() ||
     values.system_prompt?.trim() ||
     values.force_format ||
     values.thinking_to_content ||
@@ -3034,6 +3035,30 @@ export function ChannelMutateDrawer({
                           title={t('Field passthrough controls')}
                           icon={<SlidersHorizontal className='h-3.5 w-3.5' />}
                         />
+
+                        {currentType === 1 && (
+                          <FormField
+                            control={form.control}
+                            name='account_group'
+                            render={({ field }) => (
+                              <FormItem>
+                                <FormLabel>{t('Account Group')}</FormLabel>
+                                <FormControl>
+                                  <Input
+                                    placeholder={t('e.g. team-a')}
+                                    {...field}
+                                  />
+                                </FormControl>
+                                <FormDescription>
+                                  {t(
+                                    'Sent as X-Account-Group for Responses requests; leave empty for default routing.'
+                                  )}
+                                </FormDescription>
+                                <FormMessage />
+                              </FormItem>
+                            )}
+                          />
+                        )}
 
                         <div className='divide-border space-y-0 divide-y border-y'>
                           <FormField

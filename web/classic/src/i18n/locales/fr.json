@@ -1,5 +1,7 @@
 {
   "translation": {
+    "账号组": "Groupe de comptes",
+    "通过 X-Account-Group 指定 Responses 和 Compact 的上游账号组；留空使用上游默认选路，请求头覆盖优先。": "Sélectionnez le groupe de comptes en amont pour Responses et Compact via X-Account-Group. Laissez vide pour le routage par défaut ; les substitutions d’en-têtes sont prioritaires.",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_many": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Recherche Web {{count}} fois / 1K fois * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",

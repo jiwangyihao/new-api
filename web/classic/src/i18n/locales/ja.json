@@ -1,5 +1,7 @@
 {
   "translation": {
+    "账号组": "アカウントグループ",
+    "通过 X-Account-Group 指定 Responses 和 Compact 的上游账号组；留空使用上游默认选路，请求头覆盖优先。": "X-Account-Group で Responses と Compact の上流アカウントグループを指定します。空欄では上流の既定のルーティングを使用し、ヘッダーの上書き設定が優先されます。",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web検索 {{count}}回 / 1K回 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web検索 {{count}}回 / 1K回 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + 画像生成APIコール {{symbol}}{{price}} / 1回 * {{ratioType}} {{ratio}}",

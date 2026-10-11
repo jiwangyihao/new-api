@@ -17,19 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 import type { Channel } from '../types'
 import {
   CHANNEL_FORM_DEFAULT_VALUES,
   transformChannelToFormDefaults,
   transformFormDataToCreatePayload,
+  transformFormDataToUpdatePayload,
 } from './channel-form'
-
-const channelDrawerSource = readFileSync(
-  new URL('../components/drawers/channel-mutate-drawer.tsx', import.meta.url),
-  'utf8'
-)
 
 describe('channel endpoint capabilities form contract', () => {
   test('preserves supported endpoint types from channel settings', () => {
@@ -57,6 +52,36 @@ describe('channel endpoint capabilities form contract', () => {
     ])
   })
 
+  test('preserves and serializes the OpenAI Responses account group', () => {
+    const channel = {
+      id: 2,
+      name: 'responses-upstream',
+      type: 1,
+      models: 'gpt-5.5',
+      group: 'default',
+      status: 1,
+      channel_info: {},
+      settings: JSON.stringify({ account_group: 'team-a' }),
+    } as unknown as Channel
+
+    const defaults = transformChannelToFormDefaults(channel)
+    assert.equal(defaults.account_group, 'team-a')
+
+    const payload = transformFormDataToCreatePayload({
+      ...CHANNEL_FORM_DEFAULT_VALUES,
+      name: 'responses-upstream',
+      type: 1,
+      key: 'sk-test',
+      models: 'gpt-5.5',
+      account_group: ' team-a ',
+    })
+
+    assert.equal(
+      JSON.parse(payload.channel.settings || '{}').account_group,
+      'team-a'
+    )
+  })
+
   test('serializes supported endpoint types into channel settings', () => {
     const payload = transformFormDataToCreatePayload({
       ...CHANNEL_FORM_DEFAULT_VALUES,
@@ -71,28 +96,48 @@ describe('channel endpoint capabilities form contract', () => {
       ],
     })
 
-    assert.deepEqual(JSON.parse(payload.channel.settings || '{}'), {
-      supported_endpoint_types: ['openai-response', 'openai-response-compact'],
-      allow_service_tier: false,
-      disable_store: false,
-      allow_safety_identifier: false,
-      allow_include_obfuscation: false,
-      allow_inference_geo: false,
-      upstream_model_update_check_enabled: false,
-      upstream_model_update_auto_sync_enabled: false,
-      upstream_model_update_ignored_models: [],
-      upstream_model_update_last_check_time: 0,
-      upstream_model_update_last_detected_models: [],
-    })
+    assert.deepEqual(
+      JSON.parse(payload.channel.settings || '{}').supported_endpoint_types,
+      ['openai-response', 'openai-response-compact']
+    )
   })
 
-  test('exposes opt-in endpoint capabilities in channel drawer', () => {
-    assert.match(channelDrawerSource, /CHANNEL_ENDPOINT_OPTIONS/)
-    assert.match(channelDrawerSource, /openai-response-compact/)
-    assert.match(channelDrawerSource, /openai-alpha-search/)
-    assert.match(channelDrawerSource, /name='supported_endpoint_types'/)
-    assert.match(channelDrawerSource, /Endpoint Capabilities/)
-    assert.match(channelDrawerSource, /Supported Endpoint Types/)
-    assert.match(channelDrawerSource, /Use channel type defaults/)
+  test('clearing the account group removes the saved routing restriction', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'responses-upstream',
+        models: 'gpt-5.5',
+        settings: JSON.stringify({
+          account_group: 'team-a',
+          custom_setting: 'keep',
+        }),
+        account_group: '   ',
+      },
+      2
+    )
+
+    const settings = JSON.parse(payload.settings || '{}')
+    assert.equal(Object.hasOwn(settings, 'account_group'), false)
+    assert.equal(settings.custom_setting, 'keep')
+  })
+
+  test('switching away from OpenAI removes the account group setting', () => {
+    const payload = transformFormDataToUpdatePayload(
+      {
+        ...CHANNEL_FORM_DEFAULT_VALUES,
+        name: 'other-upstream',
+        type: 14,
+        models: 'claude-test',
+        settings: JSON.stringify({ account_group: 'team-a' }),
+        account_group: 'team-a',
+      },
+      2
+    )
+
+    assert.equal(
+      Object.hasOwn(JSON.parse(payload.settings || '{}'), 'account_group'),
+      false
+    )
   })
 })

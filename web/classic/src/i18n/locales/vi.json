@@ -1,5 +1,7 @@
 {
   "translation": {
+    "账号组": "Nhóm tài khoản",
+    "通过 X-Account-Group 指定 Responses 和 Compact 的上游账号组；留空使用上游默认选路，请求头覆盖优先。": "Chọn nhóm tài khoản thượng nguồn cho Responses và Compact qua X-Account-Group. Để trống để dùng định tuyến mặc định; cấu hình ghi đè tiêu đề được ưu tiên.",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Tìm kiếm Web {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Tìm kiếm Web {{count}} lần / 1K lần * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Gọi tạo hình ảnh {{symbol}}{{price}} / 1 lần * {{ratioType}} {{ratio}}",

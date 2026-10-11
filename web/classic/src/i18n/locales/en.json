@@ -1,5 +1,7 @@
 {
   "translation": {
+    "账号组": "Account Group",
+    "通过 X-Account-Group 指定 Responses 和 Compact 的上游账号组；留空使用上游默认选路，请求头覆盖优先。": "Select the upstream account group for Responses and Compact via X-Account-Group. Leave empty for upstream default routing; header overrides take precedence.",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_one": " + Web search {{count}} time / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + Web搜索 {{count}}次 / 1K 次 * {{symbol}}{{price}} * {{ratioType}} {{ratio}}_other": " + Web search {{count}} times / 1K times * {{symbol}}{{price}} * {{ratioType}} {{ratio}}",
     " + 图片生成调用 {{symbol}}{{price}} / 1次 * {{ratioType}} {{ratio}}": " + Image generation call {{symbol}}{{price}} / 1 time * {{ratioType}} {{ratio}}",

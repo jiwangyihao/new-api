@@ -178,6 +178,12 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 		header.Set("api-key", info.ApiKey)
 		return nil
 	}
+	if info.ChannelType == constant.ChannelTypeOpenAI &&
+		(info.RelayMode == relayconstant.RelayModeResponses || info.RelayMode == relayconstant.RelayModeResponsesCompact) {
+		if accountGroup := strings.TrimSpace(info.ChannelOtherSettings.AccountGroup); accountGroup != "" {
+			header.Set("X-Account-Group", accountGroup)
+		}
+	}
 	if info.ChannelType == constant.ChannelTypeOpenAI && "" != info.Organization {
 		header.Set("OpenAI-Organization", info.Organization)
 	}

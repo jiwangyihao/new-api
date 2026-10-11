@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	appconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -281,4 +283,46 @@ func TestOpenaiResponsesToChatStreamHandlerMissingUsageIsNotTrusted(t *testing.T
 	require.Nil(t, usage)
 	require.False(t, info.HasTrustedUsage)
 	require.NotContains(t, recorder.Body.String(), "newapi_billing")
+}
+
+func TestSetupRequestHeaderAccountGroupUsesResponsesOnly(t *testing.T) {
+	t.Parallel()
+
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name        string
+		relayMode   int
+		channelType int
+		group       string
+		want        string
+	}{
+		{name: "responses", relayMode: relayconstant.RelayModeResponses, channelType: appconstant.ChannelTypeOpenAI, group: " team-a ", want: "team-a"},
+		{name: "responses_compact", relayMode: relayconstant.RelayModeResponsesCompact, channelType: appconstant.ChannelTypeOpenAI, group: "team-a", want: "team-a"},
+		{name: "chat_completions", relayMode: relayconstant.RelayModeChatCompletions, channelType: appconstant.ChannelTypeOpenAI, group: "team-a"},
+		{name: "azure_responses", relayMode: relayconstant.RelayModeResponses, channelType: appconstant.ChannelTypeAzure, group: "team-a"},
+		{name: "empty_group", relayMode: relayconstant.RelayModeResponses, channelType: appconstant.ChannelTypeOpenAI},
+		{name: "whitespace_group", relayMode: relayconstant.RelayModeResponses, channelType: appconstant.ChannelTypeOpenAI, group: " \t "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			ctx, _ := gin.CreateTestContext(recorder)
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			ctx.Request.Header.Set("X-Account-Group", "client-group")
+			headers := make(http.Header)
+			info := &relaycommon.RelayInfo{
+				RelayMode: tc.relayMode,
+				ChannelMeta: &relaycommon.ChannelMeta{
+					ChannelType:          tc.channelType,
+					ApiKey:               "sk-test",
+					ChannelOtherSettings: dto.ChannelOtherSettings{AccountGroup: tc.group},
+				},
+			}
+
+			require.NoError(t, (&Adaptor{}).SetupRequestHeader(ctx, &headers, info))
+			require.Equal(t, tc.want, headers.Get("X-Account-Group"))
+			if tc.want == "" {
+				require.NotContains(t, headers, http.CanonicalHeaderKey("X-Account-Group"))
+			}
+		})
+	}
 }

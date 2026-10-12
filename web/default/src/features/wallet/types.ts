@@ -265,6 +265,8 @@ export interface TopupInfo {
   enable_kyren_topup?: boolean
   /** Whether Kyren subscription payment is enabled */
   enable_kyren_subscription?: boolean
+  /** Whether PQAPI hosted top-up is enabled */
+  enable_pqapi_topup?: boolean
   /** Available Kyren local top-up products */
   kyren_topup_products?: KyrenTopUpProduct[]
   /** Whether Waffo topup is enabled */

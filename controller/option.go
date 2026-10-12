@@ -159,6 +159,22 @@ func UpdateOption(c *gin.Context) {
 		}
 		option.Value = normalized
 	}
+	if strings.HasPrefix(option.Key, "PQAPI") {
+		value := strings.TrimSpace(option.Value.(string))
+		if option.Key == "PQAPIBaseURL" {
+			normalized, err := setting.NormalizePQAPIBaseURL(value)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+				return
+			}
+			value = normalized
+		}
+		if option.Key == "PQAPISecret" && value == "" {
+			c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
+			return
+		}
+		option.Value = value
+	}
 	if model.IsDeprecatedBusinessGroupOption(option.Key) {
 		err = model.UpdateOption(option.Key, option.Value.(string))
 		if err != nil {

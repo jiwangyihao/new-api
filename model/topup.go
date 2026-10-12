@@ -41,6 +41,7 @@ const (
 	PaymentMethodWaffo        = "waffo"
 	PaymentMethodWaffoPancake = "waffo_pancake"
 	PaymentMethodKyren        = "kyren"
+	PaymentMethodPQAPI        = "pqapi"
 )
 
 const (
@@ -50,6 +51,7 @@ const (
 	PaymentProviderWaffo        = "waffo"
 	PaymentProviderWaffoPancake = "waffo_pancake"
 	PaymentProviderKyren        = "kyren"
+	PaymentProviderPQAPI        = "pqapi"
 )
 
 const TopUpAmountUnitAccountBalanceCents = "account_balance_cents"
@@ -229,6 +231,36 @@ func Recharge(referenceId string, customerId string, callerIp string) (err error
 	amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
 	RecordTopupLog(completed.UserId, fmt.Sprintf("使用在线充值成功，充值金额: %s，支付金额：%.2f", amountCNY, completed.Money), callerIp, completed.PaymentMethod, PaymentMethodStripe)
 
+	return nil
+}
+
+// CompletePQAPITopUp applies a verified PQAPI payment exactly once.
+func CompletePQAPITopUp(tradeNo string, expectedAmountCents int64, providerTransactionID string, callerIP string) error {
+	var completed *completedTopUp
+	var claimed bool
+	err := DB.Transaction(func(tx *gorm.DB) error {
+		var order TopUp
+		if err := lockForUpdate(tx).Where("trade_no = ?", tradeNo).First(&order).Error; err != nil {
+			return ErrTopUpNotFound
+		}
+		actualAmount := decimal.NewFromFloat(order.Money).Mul(decimal.NewFromInt(100)).Round(0).IntPart()
+		if actualAmount != expectedAmountCents || expectedAmountCents <= 0 {
+			return errors.New("PQAPI payment amount mismatch")
+		}
+		updates := map[string]any{}
+		if strings.TrimSpace(providerTransactionID) != "" {
+			updates["payment_method"] = PaymentMethodPQAPI
+		}
+		var err error
+		completed, claimed, err = completePendingTopUpTx(tx, tradeNo, PaymentProviderPQAPI, updates)
+		return err
+	})
+	if err != nil || !claimed {
+		return err
+	}
+	invalidateUserCacheAfterCommittedTopUp(completed.UserId, tradeNo)
+	amountCNY := AccountBalanceCNYFromCents(completed.Amount).StringFixed(2)
+	RecordTopupLog(completed.UserId, fmt.Sprintf("PQAPI 充值成功，充值额度: %s，支付金额: %.2f", amountCNY, completed.Money), callerIP, PaymentMethodPQAPI, PaymentMethodPQAPI)
 	return nil
 }
 

@@ -149,6 +149,11 @@ const paymentSchema = z.object({
       })
     }
   }),
+  PQAPIBaseURL: z.string().url().refine((value) => value.startsWith('https://'), {
+    message: 'PQAPI base URL must use HTTPS',
+  }),
+  PQAPISiteID: z.string(),
+  PQAPISecret: z.string(),
   ServerAddress: z.string(),
 })
 
@@ -247,6 +252,9 @@ export function buildPaymentOptionUpdates(
     CreemWebhookSecret: values.CreemWebhookSecret.trim(),
     CreemTestMode: values.CreemTestMode,
     CreemProducts: values.CreemProducts.trim(),
+    PQAPIBaseURL: removeTrailingSlash(values.PQAPIBaseURL),
+    PQAPISiteID: values.PQAPISiteID.trim(),
+    PQAPISecret: values.PQAPISecret.trim(),
   }
 
   const initialValues = {
@@ -269,9 +277,22 @@ export function buildPaymentOptionUpdates(
     CreemWebhookSecret: initial.CreemWebhookSecret.trim(),
     CreemTestMode: initial.CreemTestMode,
     CreemProducts: initial.CreemProducts.trim(),
+    PQAPIBaseURL: removeTrailingSlash(initial.PQAPIBaseURL),
+    PQAPISiteID: initial.PQAPISiteID.trim(),
+    PQAPISecret: initial.PQAPISecret.trim(),
   }
 
   const updates: OptionUpdate[] = []
+
+  if (sanitized.PQAPIBaseURL !== initialValues.PQAPIBaseURL) {
+    updates.push({ key: 'PQAPIBaseURL', value: sanitized.PQAPIBaseURL })
+  }
+  if (sanitized.PQAPISiteID !== initialValues.PQAPISiteID) {
+    updates.push({ key: 'PQAPISiteID', value: sanitized.PQAPISiteID })
+  }
+  if (sanitized.PQAPISecret && sanitized.PQAPISecret !== initialValues.PQAPISecret) {
+    updates.push({ key: 'PQAPISecret', value: sanitized.PQAPISecret })
+  }
 
   if (sanitized.PayAddress !== initialValues.PayAddress) {
     updates.push({ key: 'PayAddress', value: sanitized.PayAddress })
@@ -991,6 +1012,71 @@ export function PaymentSettingsSection({
                 ? t('Saving...')
                 : t('Save general settings')}
             </Button>
+          </div>
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div>
+              <h3 className='text-lg font-medium'>{t('PQAPI Gateway')}</h3>
+              <p className='text-muted-foreground text-sm'>
+                {t('Hosted WeChat and Alipay checkout')}
+              </p>
+            </div>
+            <div className='rounded-md bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100'>
+              {t('Webhook URL:')}{' '}
+              <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
+                {serverAddress
+                  ? `${removeTrailingSlash(serverAddress)}/api/pqapi/webhook`
+                  : t('Server address is not configured')}
+              </code>
+            </div>
+            <div className='grid gap-6 md:grid-cols-3'>
+              <FormField
+                control={form.control}
+                name='PQAPIBaseURL'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Base URL')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder='https://shop.pqapi.shop' {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='PQAPISiteID'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Site ID')}</FormLabel>
+                    <FormControl>
+                      <Input placeholder='MAIN_SITE' {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name='PQAPISecret'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('API Secret')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='password'
+                        autoComplete='new-password'
+                        placeholder={t('Leave blank unless updating')}
+                        {...field}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
           </div>
 
           <Separator />
